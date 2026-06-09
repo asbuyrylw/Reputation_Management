@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets / config
+.env
+*.env
+!.env.example
+
+# Test / tooling caches
+.pytest_cache/
+.deepeval/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated client artifacts (regenerated; not source)
+output/*.docx
+reports/*.docx
+
+# OS
+.DS_Store
+Thumbs.db

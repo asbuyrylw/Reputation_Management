@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+output/*.docx
+reports/*.docx
+.venv/
+venv/
+.DS_Store

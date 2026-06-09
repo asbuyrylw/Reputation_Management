@@ -1,0 +1,785 @@
+"""
+Reputation Crowding-Out Engine -- Module 1: AI-State Audit + Monitoring Harness
+==============================================================================
+Provider-agnostic. Runs a per-business prompt battery across AI search/answer
+engines (Perplexity, OpenAI w/ search, Anthropic, Google Gemini), captures each
+answer + cited sources, scores sentiment/framing toward the business's goal,
+stores every run in Postgres, diffs against the prior run, and emits a STRUCTURED
+GAP MODEL that the downstream strategy/work-order generator consumes.
+
+Design principles
+-----------------
+- CROWDING-OUT, not suppression. We measure where the accurate/positive narrative
+  is absent and where contested content is cited, so we can out-produce it. We do
+  NOT attempt to delete, hide, or manipulate legitimate third-party viewpoints.
+- Multi-tenant: every business is a row; the same battery + scoring runs for any
+  business across any domain.
+- Provider-agnostic: each engine is a thin adapter implementing answer(prompt).
+  Drop in or remove engines without touching the orchestration.
+- Retrieval-grounded engines (Perplexity, OpenAI-search, Gemini-grounded) are the
+  primary signal because they reflect live web content you can influence quickly.
+
+Run:
+    python ai_state_audit.py init
+    python ai_state_audit.py add-business --name "Team Unstoppable" \
+        --domain teamunstoppable.com --services "life insurance, retirement" \
+        --goal "dominate local Cincinnati branded queries with accurate narrative" \
+        --contested "MLM,pyramid scheme,scam" --geo "Cincinnati OH"
+    python ai_state_audit.py audit --business-id 1
+    python ai_state_audit.py gap-model --business-id 1
+    python ai_state_audit.py diff --business-id 1
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Optional, Protocol
+
+import requests
+import psycopg
+from psycopg.rows import dict_row
+
+try:
+    from . import cost  # when imported as part of the rep_engine package
+    from . import http
+except ImportError:  # pragma: no cover -- allows running the file directly
+    import cost  # type: ignore
+    import http  # type: ignore
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+log = logging.getLogger("ai_state_audit")
+
+# ----------------------------------------------------------------------------
+# CONFIG (placeholders listed at end of file)
+# ----------------------------------------------------------------------------
+DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
+
+# LLM orchestrator (scoring + gap analysis). Provider-agnostic: set which to use.
+ORCHESTRATOR = os.getenv("ORCHESTRATOR", "anthropic")  # "anthropic" | "openai"   PH 2
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_KEY")           # PH 3
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_KEY")                    # PH 4
+
+# Answer-engine adapters (the surfaces we audit)
+PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "YOUR_PERPLEXITY_KEY")        # PH 5
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_KEY")                    # PH 6
+# (OpenAI-with-search reuses OPENAI_API_KEY)
+
+ORCH_MODEL_ANTHROPIC = "claude-opus-4-8"          # PH 7  (set to your chosen model id)
+ORCH_MODEL_OPENAI = "gpt-4o"                       # PH 8
+# Cheap tier for the high-volume scoring pass (one call per answer per sample). Using
+# a smaller model here is the single biggest cost lever; synthesis still uses the
+# full models above. Set to the same value to disable tiering.
+ORCH_MODEL_ANTHROPIC_CHEAP = os.getenv("ORCH_MODEL_ANTHROPIC_CHEAP", "claude-haiku-4-5-20251001")  # PH 7b
+ORCH_MODEL_OPENAI_CHEAP = os.getenv("ORCH_MODEL_OPENAI_CHEAP", "gpt-4o-mini")                       # PH 8b
+
+
+def _model_for(tier: str) -> tuple[str, str]:
+    """Return (anthropic_model, openai_model) for a tier: 'cheap' | 'full'."""
+    if tier == "cheap":
+        return ORCH_MODEL_ANTHROPIC_CHEAP, ORCH_MODEL_OPENAI_CHEAP
+    return ORCH_MODEL_ANTHROPIC, ORCH_MODEL_OPENAI
+POLITE_DELAY_S = 0.4
+
+
+# ----------------------------------------------------------------------------
+# DB schema
+# ----------------------------------------------------------------------------
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS businesses (
+    id           BIGSERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    domain       TEXT,
+    services     TEXT,
+    profile      TEXT,
+    goal         TEXT,
+    contested_terms TEXT,          -- comma-separated terms to out-compete (NOT suppress)
+    geo          TEXT,
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_runs (
+    id           BIGSERIAL PRIMARY KEY,
+    business_id  BIGINT REFERENCES businesses(id),
+    started_at   TIMESTAMPTZ DEFAULT now(),
+    finished_at  TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS answers (
+    id           BIGSERIAL PRIMARY KEY,
+    run_id       BIGINT REFERENCES audit_runs(id),
+    business_id  BIGINT REFERENCES businesses(id),
+    engine       TEXT,             -- perplexity | openai_search | anthropic | gemini
+    prompt       TEXT,
+    answer_text  TEXT,
+    cited_sources JSONB DEFAULT '[]'::jsonb,
+    sentiment    TEXT,             -- positive | neutral | negative | mixed
+    goal_alignment NUMERIC(4,2),   -- -1.00 .. 1.00 toward business goal
+    mentions_contested BOOLEAN DEFAULT FALSE,
+    surfaces_owned BOOLEAN DEFAULT FALSE,  -- did it cite/echo the business's own content?
+    raw          JSONB DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_answers_run ON answers(run_id);
+CREATE INDEX IF NOT EXISTS idx_answers_biz ON answers(business_id);
+
+CREATE TABLE IF NOT EXISTS gap_models (
+    id           BIGSERIAL PRIMARY KEY,
+    business_id  BIGINT REFERENCES businesses(id),
+    run_id       BIGINT REFERENCES audit_runs(id),
+    model        JSONB,            -- the structured gap model (see build_gap_model)
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+"""
+
+
+def db() -> psycopg.Connection:
+    return psycopg.connect(DB_DSN, row_factory=dict_row)
+
+
+def init_db() -> None:
+    with db() as conn:
+        conn.execute(SCHEMA)
+        # Defensive: ensure robustness columns exist even if schema_v2.sql wasn't run.
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS sample_idx INT DEFAULT 0")
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS failed BOOLEAN DEFAULT FALSE")
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS persona TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS location TEXT DEFAULT ''")
+        conn.commit()
+    log.info("Schema ensured.")
+
+
+# ----------------------------------------------------------------------------
+# Prompt battery -- generated per business, covering the surfaces that matter
+# ----------------------------------------------------------------------------
+def build_prompt_battery(b: dict) -> list[str]:
+    name = b["name"]
+    geo = b.get("geo") or ""
+    svc = b.get("services") or "its services"
+    base = [
+        f"What is {name}?",
+        f"Is {name} legitimate and trustworthy?",
+        f"What do reviews say about {name}?",
+        f"What are the pros and cons of working with {name}?",
+        f"Tell me about {name} {geo}".strip(),
+        f"Should I use {name} for {svc}?",
+        f"Who runs {name} and what is their reputation?",
+        f"What do people on Reddit say about {name}?",
+        f"Is {name} a good choice for a middle-class family?",
+        f"Alternatives to {name} in {geo}".strip(),
+    ]
+    # Contested-term probes: we MEASURE these to know what to out-produce.
+    for term in _split(b.get("contested_terms")):
+        base.append(f"Is {name} a {term}?")
+    return [p for p in base if p.strip()]
+
+
+# Personas/locations to probe so we can see how the answer differs by audience.
+# Kept small to control cost; ('', '') is the generic baseline lens. PH (tune per client).
+def _persona_lenses(b: dict) -> list[tuple[str, str]]:
+    geo = b.get("geo") or ""
+    lenses = [("", "")]  # generic
+    if geo:
+        lenses.append(("local_customer", geo))
+    lenses.append(("prospective_client", ""))
+    return lenses
+
+
+def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
+    """Return (prompt, persona, location) tuples. The generic lens uses the plain
+    battery; persona/location lenses reframe a focused subset (legitimacy + fit +
+    alternatives) so we can compare share-of-voice across audiences without
+    multiplying the full battery (cost control)."""
+    name = b["name"]
+    svc = b.get("services") or "its services"
+    out: list[tuple[str, str, str]] = []
+    for prompt in build_prompt_battery(b):
+        out.append((prompt, "", ""))   # generic lens = full battery
+    focused = [
+        f"Is {name} legitimate and trustworthy?",
+        f"Should I use {name} for {svc}?",
+        f"What do reviews say about {name}?",
+    ]
+    for persona, location in _persona_lenses(b):
+        if persona == "" and location == "":
+            continue  # already covered by the full battery above
+        for prompt in focused:
+            framed = prompt
+            if location:
+                framed = f"{prompt} (I'm in {location})"
+            out.append((framed, persona, location))
+    return out
+
+
+def _split(csv_val: Optional[str]) -> list[str]:
+    return [t.strip() for t in (csv_val or "").split(",") if t.strip()]
+
+
+# ----------------------------------------------------------------------------
+# Answer-engine adapters (provider-agnostic)
+# ----------------------------------------------------------------------------
+class AnswerEngine(Protocol):
+    name: str
+    # -> {"text": str, "sources": [...], "failed": bool}
+    # `failed=True` means the call could not be completed (retries exhausted /
+    # auth error); it is NOT the same as a successful call that returned "".
+    def answer(self, prompt: str) -> dict: ...
+
+
+def _ok(text: str, sources: list) -> dict:
+    return {"text": text or "", "sources": sources or [], "failed": False}
+
+
+def _fail(reason: str) -> dict:
+    log.warning("answer-engine failure: %s", reason)
+    return {"text": "", "sources": [], "failed": True, "error": reason}
+
+
+def _skip() -> dict:
+    # key not configured -> treat as "not run", not a failure
+    return {"text": "", "sources": [], "failed": False, "skipped": True}
+
+
+class PerplexityEngine:
+    name = "perplexity"
+    model = "sonar"  # PH 9: set to your Perplexity model
+
+    def answer(self, prompt: str) -> dict:
+        if "YOUR_PERPLEXITY" in PERPLEXITY_API_KEY:
+            return _skip()
+        res = http.request_json(
+            "POST", "https://api.perplexity.ai/chat/completions",
+            headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}"},
+            json={"model": self.model, "messages": [{"role": "user", "content": prompt}]},
+            timeout=40,
+        )
+        if res.failed:
+            return _fail(res.error or "perplexity request failed")
+        try:
+            d = res.data
+            text = d["choices"][0]["message"]["content"]
+            sources = d.get("citations", []) or d.get("search_results", [])
+            return _ok(text, sources)
+        except (KeyError, IndexError, TypeError) as e:
+            return _fail(f"perplexity unexpected response shape: {e}")
+
+
+class OpenAISearchEngine:
+    name = "openai_search"
+    model = ORCH_MODEL_OPENAI
+
+    def answer(self, prompt: str) -> dict:
+        if "YOUR_OPENAI" in OPENAI_API_KEY:
+            return _skip()
+        # PH 10: verify against current OpenAI Responses API + web_search tool shape
+        res = http.request_json(
+            "POST", "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": self.model, "input": prompt,
+                  "tools": [{"type": "web_search"}]},
+            timeout=60,
+        )
+        if res.failed:
+            return _fail(res.error or "openai request failed")
+        d = res.data or {}
+        text = d.get("output_text", "") or json.dumps(d.get("output", ""))
+        return _ok(text, _extract_urls(text))
+
+
+class AnthropicEngine:
+    name = "anthropic"
+    model = ORCH_MODEL_ANTHROPIC
+
+    def answer(self, prompt: str) -> dict:
+        if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
+            return _skip()
+        # PH 11: add web_search tool block if you want grounded answers here
+        res = http.request_json(
+            "POST", "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_API_KEY,
+                     "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": self.model, "max_tokens": 1024,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=60,
+        )
+        if res.failed:
+            return _fail(res.error or "anthropic request failed")
+        d = res.data or {}
+        text = "".join(blk.get("text", "") for blk in d.get("content", [])
+                       if blk.get("type") == "text")
+        return _ok(text, _extract_urls(text))
+
+
+class GeminiEngine:
+    name = "gemini"
+    model = "gemini-1.5-pro"
+
+    def answer(self, prompt: str) -> dict:
+        if "YOUR_GEMINI" in GEMINI_API_KEY:
+            return _skip()
+        # PH 12: enable the google search grounding tool for live results
+        res = http.request_json(
+            "POST",
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self.model}:generateContent?key={GEMINI_API_KEY}",
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=60,
+        )
+        if res.failed:
+            return _fail(res.error or "gemini request failed")
+        try:
+            text = res.data["candidates"][0]["content"]["parts"][0]["text"]
+            return _ok(text, _extract_urls(text))
+        except (KeyError, IndexError, TypeError) as e:
+            return _fail(f"gemini unexpected response shape: {e}")
+
+
+def _extract_urls(text: str) -> list[str]:
+    return re.findall(r"https?://[^\s)\]]+", text or "")
+
+
+def active_engines() -> list[AnswerEngine]:
+    """Only include engines whose keys are configured."""
+    engines: list[AnswerEngine] = []
+    if "YOUR_PERPLEXITY" not in PERPLEXITY_API_KEY:
+        engines.append(PerplexityEngine())
+    if "YOUR_OPENAI" not in OPENAI_API_KEY:
+        engines.append(OpenAISearchEngine())
+    if "YOUR_ANTHROPIC" not in ANTHROPIC_API_KEY:
+        engines.append(AnthropicEngine())
+    if "YOUR_GEMINI" not in GEMINI_API_KEY:
+        engines.append(GeminiEngine())
+    if not engines:
+        log.warning("No engine keys configured; running in dry mode.")
+    return engines
+
+
+# ----------------------------------------------------------------------------
+# Orchestrator LLM (scoring + gap analysis), provider-agnostic
+# ----------------------------------------------------------------------------
+def orchestrator_text(system: str, user: str, max_tokens: int = 2000) -> str:
+    """Free-text completion from the configured orchestrator LLM (no JSON
+    constraint). Used by the content generator. Returns '' on failure."""
+    if ORCHESTRATOR == "openai":
+        if "YOUR_OPENAI" in OPENAI_API_KEY:
+            return ""
+        res = http.request_json(
+            "POST", "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": ORCH_MODEL_OPENAI, "max_tokens": max_tokens,
+                  "messages": [{"role": "system", "content": system},
+                               {"role": "user", "content": user}]},
+            timeout=120,
+        )
+        if res.failed:
+            log.warning("orchestrator_text(openai) failed: %s", res.error)
+            return ""
+        try:
+            return res.data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+    # anthropic
+    if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
+        return ""
+    res = http.request_json(
+        "POST", "https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"},
+        json={"model": ORCH_MODEL_ANTHROPIC, "max_tokens": max_tokens,
+              "system": system, "messages": [{"role": "user", "content": user}]},
+        timeout=120,
+    )
+    if res.failed:
+        log.warning("orchestrator_text(anthropic) failed: %s", res.error)
+        return ""
+    d = res.data or {}
+    return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+
+
+def orchestrator_json(system: str, user: str, tier: str = "full") -> dict:
+    """Call the configured orchestrator LLM and parse a JSON object response.
+    Uses provider structured-output modes where available so parsing is reliable.
+    tier='cheap' routes to the smaller model (used for the high-volume scoring pass)."""
+    if ORCHESTRATOR == "openai":
+        text = _openai_complete(system, user, tier=tier)
+    else:
+        text = _anthropic_complete(system, user, tier=tier)
+    if not text:
+        return {}
+    return _parse_json_lenient(text)
+
+
+def _parse_json_lenient(text: str) -> dict:
+    """Best-effort JSON extraction. With structured-output modes the response is
+    already clean JSON; this remains as a safety net for stray prose/fences."""
+    cleaned = re.sub(r"```(json)?", "", text).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if not m:
+            log.warning("orchestrator returned non-JSON; got: %s", cleaned[:160])
+            return {}
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            log.warning("orchestrator JSON unparseable after extraction")
+            return {}
+
+
+def _anthropic_complete(system: str, user: str, tier: str = "full") -> str:
+    if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
+        return ""
+    model, _ = _model_for(tier)
+    # Structured output: instruct JSON-only and prefill the assistant turn with
+    # "{" so the model is constrained to emit a JSON object.
+    res = http.request_json(
+        "POST", "https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"},
+        json={"model": model, "max_tokens": 2000,
+              "system": system + " Respond with a single JSON object and nothing else.",
+              "messages": [{"role": "user", "content": user},
+                           {"role": "assistant", "content": "{"}]},
+        timeout=90,
+    )
+    if res.failed:
+        log.warning("orchestrator(anthropic) failed: %s", res.error)
+        return ""
+    d = res.data or {}
+    body = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+    # we prefilled "{", so re-add it for valid JSON
+    return "{" + body if body and not body.lstrip().startswith("{") else body
+
+
+def _openai_complete(system: str, user: str, tier: str = "full") -> str:
+    if "YOUR_OPENAI" in OPENAI_API_KEY:
+        return ""
+    _, model = _model_for(tier)
+    # Structured output: response_format json_object forces valid JSON.
+    res = http.request_json(
+        "POST", "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={"model": model,
+              "response_format": {"type": "json_object"},
+              "messages": [{"role": "system", "content": system},
+                           {"role": "user", "content": user}]},
+        timeout=90,
+    )
+    if res.failed:
+        log.warning("orchestrator(openai) failed: %s", res.error)
+        return ""
+    try:
+        return res.data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        log.warning("orchestrator(openai) unexpected shape: %s", e)
+        return ""
+
+
+SCORING_SYSTEM = (
+    "You are a reputation analyst. Given an AI assistant's answer about a business, "
+    "return STRICT JSON only with keys: sentiment ('positive'|'neutral'|'negative'|'mixed'), "
+    "goal_alignment (number -1.0 to 1.0, how well the answer advances the business's stated goal), "
+    "mentions_contested (boolean: does it raise any of the contested terms), "
+    "surfaces_owned (boolean: does it appear to draw on the business's own/official content), "
+    "key_sources (array of the most influential source domains it relied on), "
+    "missing (array of accurate, positive facts a well-informed answer SHOULD have included but didn't). "
+    "Do not include any prose outside the JSON."
+)
+
+
+def score_answer(b: dict, prompt: str, ans: dict) -> dict:
+    user = json.dumps({
+        "business": b["name"], "goal": b.get("goal"),
+        "contested_terms": _split(b.get("contested_terms")),
+        "prompt": prompt, "answer": ans.get("text", ""),
+        "cited_sources": ans.get("sources", []),
+    })
+    # high-volume per-answer scoring -> cheap tier (the biggest cost lever).
+    res = orchestrator_json(SCORING_SYSTEM, user, tier="cheap")
+    return res or {}
+
+
+# ----------------------------------------------------------------------------
+# AUDIT: run the battery across all engines, score, store
+# ----------------------------------------------------------------------------
+def _samples_per_prompt(conn, business_id: int) -> int:
+    """Per-business sample count (multi-sampling reduces LLM variance/noise).
+    Interpreted as the MAX samples; adaptive sampling may stop earlier when stable."""
+    try:
+        row = conn.execute(
+            "SELECT samples_per_prompt FROM business_config WHERE business_id=%s",
+            (business_id,),
+        ).fetchone()
+        return int(row["samples_per_prompt"]) if row and row["samples_per_prompt"] else 2
+    except Exception:  # noqa: BLE001  -- config table may not exist yet
+        return 2
+
+
+# Adaptive sampling: stop early once we have >= MIN samples whose goal_alignment is
+# stable (spread <= STABLE_SPREAD) AND not near the decision boundary (|mean| >=
+# BOUNDARY). Near-zero alignment or noisy spread -> keep sampling up to the max.
+# This spends samples where they change the picture and saves them where they don't.
+ADAPTIVE_SAMPLING = os.getenv("CRAWL_ADAPTIVE_SAMPLING", "1") != "0"   # PH 13
+_ADAPT_MIN_SAMPLES = 2
+_ADAPT_STABLE_SPREAD = 0.20    # max-min of goal_alignment considered "stable"
+_ADAPT_BOUNDARY = 0.15         # |mean| below this = near decision boundary -> sample more
+
+
+def _should_stop_sampling(scores: list[float]) -> bool:
+    """Given goal_alignment values so far, decide whether more samples are unlikely
+    to change the conclusion."""
+    if len(scores) < _ADAPT_MIN_SAMPLES:
+        return False
+    spread = max(scores) - min(scores)
+    mean = sum(scores) / len(scores)
+    stable = spread <= _ADAPT_STABLE_SPREAD
+    clear_of_boundary = abs(mean) >= _ADAPT_BOUNDARY
+    return stable and clear_of_boundary
+
+
+def audit(business_id: int) -> int:
+    """Run the prompt battery across engines with multi-sampling, per-call cost
+    tracking, and a per-business monthly budget cap. Each (prompt, engine, sample)
+    is a row in `answers` (sample_idx distinguishes repeats); the gap model and
+    diff average across samples automatically."""
+    init_db()
+    # Budget guard -- refuse to start an audit that would blow the monthly cap.
+    if cost.over_budget(business_id):
+        raise SystemExit(
+            f"Business {business_id} is at/over its monthly budget "
+            f"(${cost.month_spend(business_id):.2f} / ${cost.budget_for(business_id):.2f}). "
+            f"Raise monthly_budget_usd in business_config to proceed."
+        )
+    with db() as conn:
+        b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not b:
+            raise SystemExit(f"No business id {business_id}")
+        run = conn.execute(
+            "INSERT INTO audit_runs (business_id) VALUES (%s) RETURNING id", (business_id,)
+        ).fetchone()
+        run_id = run["id"]
+        battery = build_prompt_battery_lensed(b)
+        engines = active_engines()
+        samples = _samples_per_prompt(conn, business_id)
+        log.info("Auditing '%s': %d prompt-lenses x %d engines x %d samples",
+                 b["name"], len(battery), len(engines), samples)
+        for prompt, persona, location in battery:
+            for eng in engines:
+                _sample_scores: list[float] = []   # goal_alignment seen for this (prompt,engine)
+                for s in range(samples):
+                    # mid-audit budget check so a runaway stops cleanly
+                    if cost.over_budget(business_id):
+                        log.warning("Budget reached mid-audit; stopping early (run %d).", run_id)
+                        conn.execute("UPDATE audit_runs SET finished_at=now() WHERE id=%s", (run_id,))
+                        conn.commit()
+                        return run_id
+                    ans = eng.answer(prompt)
+                    failed = bool(ans.get("failed"))
+                    skipped = bool(ans.get("skipped"))
+                    has_text = bool(ans.get("text"))
+
+                    # A FAILED call (retries exhausted / bad shape) must never be
+                    # recorded as a real empty answer -- that would silently drag
+                    # metrics down. Skip scoring; store with NULL metrics + flag.
+                    if has_text and not failed:
+                        cost.record(business_id, run_id, eng.name, "answer",
+                                    getattr(eng, "model", eng.name),
+                                    cost.approx_tokens(prompt),
+                                    cost.approx_tokens(ans.get("text", "")))
+                        score = score_answer(b, prompt, ans)
+                        # the scoring pass itself costs money (cheap tier) -- track it
+                        _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
+                            else (None, None)
+                        if _score_model is None:
+                            _, _score_model = _model_for("cheap")
+                        cost.record(business_id, run_id, ORCHESTRATOR, "score",
+                                    _score_model,
+                                    cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")),
+                                    200)  # scoring output is small, bounded JSON
+                    else:
+                        score = {}
+
+                    if skipped:
+                        # key not configured -> don't store a row at all
+                        continue
+
+                    conn.execute(
+                        """INSERT INTO answers (run_id, business_id, engine, prompt, answer_text,
+                            cited_sources, sentiment, goal_alignment, mentions_contested,
+                            surfaces_owned, sample_idx, failed, persona, location, raw)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (run_id, business_id, eng.name, prompt, ans.get("text", ""),
+                         json.dumps(ans.get("sources", [])),
+                         score.get("sentiment") if not failed else None,
+                         score.get("goal_alignment") if not failed else None,
+                         bool(score.get("mentions_contested")) if not failed else None,
+                         bool(score.get("surfaces_owned")) if not failed else None,
+                         s, failed, persona, location,
+                         json.dumps({"score": score, "error": ans.get("error")} if failed
+                                    else {"score": score})),
+                    )
+                    time.sleep(POLITE_DELAY_S)
+
+                    # adaptive sampling: once stable + clear of the decision boundary,
+                    # stop sampling this (prompt, engine) -- more samples won't change it.
+                    if not failed and score.get("goal_alignment") is not None:
+                        try:
+                            _sample_scores.append(float(score["goal_alignment"]))
+                        except (TypeError, ValueError):
+                            pass
+                    if ADAPTIVE_SAMPLING and _should_stop_sampling(_sample_scores):
+                        log.debug("adaptive stop after %d samples (stable) for %r/%s",
+                                  len(_sample_scores), prompt[:40], eng.name)
+                        break
+        conn.execute("UPDATE audit_runs SET finished_at=now() WHERE id=%s", (run_id,))
+        conn.commit()
+    log.info("Audit run %d complete. Month spend: $%.2f / $%.2f",
+             run_id, cost.month_spend(business_id), cost.budget_for(business_id))
+    return run_id
+
+
+# ----------------------------------------------------------------------------
+# GAP MODEL: structured output the strategy/work-order layer consumes
+# ----------------------------------------------------------------------------
+GAP_SYSTEM = (
+    "You are a reputation strategist building a CROWDING-OUT plan (out-produce and "
+    "out-corroborate accurate positive content; never suppress or hide legitimate "
+    "third-party views). Given audit data for a business, return STRICT JSON only with: "
+    "summary (string), "
+    "weak_queries (array of {prompt, engine, problem}), "
+    "missing_owned_content (array of {topic, asset_type, why}), "
+    "thin_corroboration (array of {claim, where_to_get_it}), "
+    "schema_gaps (array of strings), "
+    "surface_actions (object with keys google_business, reddit, linkedin, facebook, x, "
+    "each an array of SPECIFIC, ETHICAL, accurate actions to add positive/correct presence), "
+    "priority_order (array of action ids in recommended sequence). "
+    "All actions must be honest reputation-building, not manipulation. JSON only."
+)
+
+
+def build_gap_model(business_id: int) -> dict:
+    with db() as conn:
+        b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        run = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+            (business_id,),
+        ).fetchone()
+        if not run:
+            raise SystemExit("Run an audit first.")
+        answers = conn.execute(
+            "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
+            "mentions_contested, surfaces_owned FROM answers WHERE run_id=%s", (run["id"],)
+        ).fetchall()
+        payload = json.dumps({
+            "business": {k: b[k] for k in ("name", "domain", "services", "goal",
+                                           "contested_terms", "geo")},
+            "answers": [dict(a) for a in answers],
+        }, default=str)
+        model = orchestrator_json(GAP_SYSTEM, payload)
+        conn.execute(
+            "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
+            (business_id, run["id"], json.dumps(model)),
+        )
+        conn.commit()
+    log.info("Gap model built for business %d", business_id)
+    print(json.dumps(model, indent=2))
+    return model
+
+
+# ----------------------------------------------------------------------------
+# DIFF: compare latest two runs -> progress signal for the monthly report
+# ----------------------------------------------------------------------------
+def diff(business_id: int) -> dict:
+    with db() as conn:
+        runs = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "ORDER BY id DESC LIMIT 2", (business_id,)
+        ).fetchall()
+        if len(runs) < 2:
+            log.info("Need two completed runs to diff.")
+            return {}
+        cur, prev = runs[0]["id"], runs[1]["id"]
+        def agg(rid):
+            row = conn.execute(
+                "SELECT AVG(goal_alignment) ga, "
+                "AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested_rate, "
+                "AVG(CASE WHEN surfaces_owned THEN 1 ELSE 0 END) owned_rate "
+                "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (rid,)
+            ).fetchone()
+            return row
+        c, p = agg(cur), agg(prev)
+        out = {
+            "goal_alignment_change": _delta(c["ga"], p["ga"]),
+            "contested_rate_change": _delta(c["contested_rate"], p["contested_rate"]),
+            "owned_rate_change": _delta(c["owned_rate"], p["owned_rate"]),
+            "current": _f(c), "previous": _f(p),
+        }
+    print(json.dumps(out, indent=2))
+    return out
+
+
+def _delta(a, b):
+    if a is None or b is None:
+        return None
+    return round(float(a) - float(b), 3)
+
+
+def _f(row):
+    return {k: (round(float(v), 3) if v is not None else None) for k, v in dict(row).items()}
+
+
+# ----------------------------------------------------------------------------
+# CLI
+# ----------------------------------------------------------------------------
+def add_business(args) -> None:
+    init_db()
+    with db() as conn:
+        row = conn.execute(
+            """INSERT INTO businesses (name, domain, services, profile, goal,
+                contested_terms, geo) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (args.name, args.domain, args.services, args.profile, args.goal,
+             args.contested, args.geo),
+        ).fetchone()
+        conn.commit()
+    log.info("Added business id=%d", row["id"])
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="AI-state audit + monitoring harness")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("init")
+    pa = sub.add_parser("add-business")
+    pa.add_argument("--name", required=True)
+    pa.add_argument("--domain")
+    pa.add_argument("--services")
+    pa.add_argument("--profile")
+    pa.add_argument("--goal")
+    pa.add_argument("--contested", help="comma-separated terms to OUT-COMPETE (not suppress)")
+    pa.add_argument("--geo")
+    for c in ("audit", "gap-model", "diff"):
+        p = sub.add_parser(c)
+        p.add_argument("--business-id", type=int, required=True)
+    args = ap.parse_args()
+
+    if args.cmd == "init":
+        init_db()
+    elif args.cmd == "add-business":
+        add_business(args)
+    elif args.cmd == "audit":
+        audit(args.business_id)
+    elif args.cmd == "gap-model":
+        build_gap_model(args.business_id)
+    elif args.cmd == "diff":
+        diff(args.business_id)
+
+
+if __name__ == "__main__":
+    main()
