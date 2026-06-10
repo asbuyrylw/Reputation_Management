@@ -19,9 +19,11 @@ import sys
 try:
     from . import ai_state_audit as m
     from . import cost
+    from . import db as _db
 except ImportError:  # pragma: no cover
     import ai_state_audit as m  # type: ignore
     import cost  # type: ignore
+    import db as _db  # type: ignore
 
 GREEN, RED, YEL, RST = "\033[92m", "\033[91m", "\033[93m", "\033[0m"
 
@@ -55,7 +57,7 @@ def check_db() -> bool:
     try:
         with m.db() as conn:
             conn.execute("SELECT 1")
-        ok(f"connected: {m.DB_DSN.split('@')[-1]}")
+        ok(f"connected: {_db.DB_DSN.split('@')[-1]}")
     except Exception as e:  # noqa: BLE001
         bad(f"cannot connect to REP_DB_DSN: {e}")
         return False

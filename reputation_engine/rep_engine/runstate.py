@@ -19,11 +19,13 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 from typing import Callable, Optional
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 try:
     from . import logging_setup
@@ -34,11 +36,8 @@ except ImportError:  # pragma: no cover
     def _bind(**kwargs):  # type: ignore
         pass
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 class RunState:

@@ -40,8 +40,11 @@ import re
 import time
 from typing import Optional, Protocol
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 from pydantic import ValidationError
 
 try:
@@ -59,7 +62,6 @@ log = logging.getLogger("ai_state_audit")
 # ----------------------------------------------------------------------------
 # CONFIG (placeholders listed at end of file)
 # ----------------------------------------------------------------------------
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 # LLM orchestrator (scoring + gap analysis). Provider-agnostic: set which to use.
 ORCHESTRATOR = os.getenv("ORCHESTRATOR", "anthropic")  # "anthropic" | "openai"   PH 2
@@ -195,8 +197,6 @@ CREATE TABLE IF NOT EXISTS gap_models (
 """
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def init_db() -> None:

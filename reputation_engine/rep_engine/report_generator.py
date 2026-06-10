@@ -26,13 +26,15 @@ import os
 import tempfile
 from datetime import date
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("report_generator")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 OUTPUT_DIR = os.getenv("REP_OUTPUT_DIR", "output")                                        # PH 2
 
 NAVY = "1F3A5F"
@@ -41,8 +43,6 @@ GREEN = "2E6B3E"
 RUST = "8A3B2E"
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _run_series(conn, business_id: int) -> list:

@@ -35,8 +35,11 @@ from typing import Optional
 from urllib.parse import urljoin, urlparse
 from urllib import robotparser
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 try:
     from . import http as _http
@@ -105,14 +108,11 @@ def _firecrawl_fetch(url: str) -> Optional[str]:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("site_crawl")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 USER_AGENT = os.getenv("CRAWL_UA", "ReputationEngineBot/1.0 (+audit)")                     # PH 2
 THIN_CONTENT_WORDS = 300  # pages under this word count are flagged thin
 RESPECT_ROBOTS = os.getenv("CRAWL_RESPECT_ROBOTS", "1") != "0"   # PH 3: set 0 to disable
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 # ----------------------------------------------------------------------------

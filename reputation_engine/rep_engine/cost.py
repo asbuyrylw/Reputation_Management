@@ -12,14 +12,15 @@ Costs are estimates for budgeting/COGS visibility, not billing-grade figures.
 from __future__ import annotations
 
 import logging
-import os
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 log = logging.getLogger("cost")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 # Approx USD per 1K tokens (input, output). UPDATE to current provider pricing.  PH 2
 PRICING = {
@@ -41,8 +42,6 @@ PRICING = {
 }
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 # Count of cost rows we failed to persist this process. While > 0 the ledger
