@@ -241,3 +241,19 @@ def test_fence_untrusted_wraps_and_strips_delimiter():
     assert out.count("</untrusted_content>") == 1
     # None-safety
     assert m._fence_untrusted(None) == "<untrusted_content></untrusted_content>"
+
+
+def test_usage_normalizes_provider_shapes():
+    from rep_engine import ai_state_audit as m
+    # Anthropic / OpenAI-Responses
+    assert m._usage({"usage": {"input_tokens": 12, "output_tokens": 5}}) == {"input": 12, "output": 5}
+    # OpenAI-chat / Perplexity
+    assert m._usage({"usage": {"prompt_tokens": 8, "completion_tokens": 3}}) == {"input": 8, "output": 3}
+    # Gemini
+    assert m._usage({"usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 7}}) == {"input": 20, "output": 7}
+    # no usage present -> None (caller falls back to approx_tokens)
+    assert m._usage({"choices": []}) is None
+    assert m._usage(None) is None
+    # _ok carries usage only when provided (preserves the legacy result shape)
+    assert "usage" not in m._ok("t", [])
+    assert m._ok("t", [], {"input": 1, "output": 2})["usage"] == {"input": 1, "output": 2}

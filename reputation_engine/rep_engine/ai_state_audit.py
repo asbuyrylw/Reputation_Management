@@ -293,8 +293,30 @@ class AnswerEngine(Protocol):
     def answer(self, prompt: str) -> dict: ...
 
 
-def _ok(text: str, sources: list) -> dict:
-    return {"text": text or "", "sources": sources or [], "failed": False}
+def _ok(text: str, sources: list, usage: Optional[dict] = None) -> dict:
+    d = {"text": text or "", "sources": sources or [], "failed": False}
+    if usage is not None:
+        d["usage"] = usage  # {"input": int, "output": int} -- real provider token counts
+    return d
+
+
+def _usage(data) -> Optional[dict]:
+    """Normalize a provider response's token usage to {'input':int,'output':int}.
+    Returns None when the response carries no usage (dry/mocked mode) so callers
+    fall back to cost.approx_tokens. Handles Anthropic + OpenAI-Responses
+    (input_tokens/output_tokens), OpenAI-chat + Perplexity (prompt_tokens/
+    completion_tokens), and Gemini (usageMetadata.promptTokenCount/
+    candidatesTokenCount)."""
+    if not isinstance(data, dict):
+        return None
+    u = data.get("usage") or data.get("usageMetadata")
+    if not isinstance(u, dict):
+        return None
+    inp = u.get("input_tokens") or u.get("prompt_tokens") or u.get("promptTokenCount")
+    out = u.get("output_tokens") or u.get("completion_tokens") or u.get("candidatesTokenCount")
+    if inp is None and out is None:
+        return None
+    return {"input": int(inp or 0), "output": int(out or 0)}
 
 
 def _fail(reason: str) -> dict:
@@ -326,7 +348,7 @@ class PerplexityEngine:
             d = res.data
             text = d["choices"][0]["message"]["content"]
             sources = d.get("citations", []) or d.get("search_results", [])
-            return _ok(text, sources)
+            return _ok(text, sources, _usage(d))
         except (KeyError, IndexError, TypeError) as e:
             return _fail(f"perplexity unexpected response shape: {e}")
 
@@ -350,7 +372,7 @@ class OpenAISearchEngine:
             return _fail(res.error or "openai request failed")
         d = res.data or {}
         text = d.get("output_text", "") or json.dumps(d.get("output", ""))
-        return _ok(text, _extract_urls(text))
+        return _ok(text, _extract_urls(text), _usage(d))
 
 
 class AnthropicEngine:
@@ -375,7 +397,7 @@ class AnthropicEngine:
         d = res.data or {}
         text = "".join(blk.get("text", "") for blk in d.get("content", [])
                        if blk.get("type") == "text")
-        return _ok(text, _extract_urls(text))
+        return _ok(text, _extract_urls(text), _usage(d))
 
 
 class GeminiEngine:
@@ -397,7 +419,7 @@ class GeminiEngine:
             return _fail(res.error or "gemini request failed")
         try:
             text = res.data["candidates"][0]["content"]["parts"][0]["text"]
-            return _ok(text, _extract_urls(text))
+            return _ok(text, _extract_urls(text), _usage(res.data))
         except (KeyError, IndexError, TypeError) as e:
             return _fail(f"gemini unexpected response shape: {e}")
 
@@ -683,10 +705,11 @@ def audit(business_id: int) -> int:
                     # recorded as a real empty answer -- that would silently drag
                     # metrics down. Skip scoring; store with NULL metrics + flag.
                     if has_text and not failed:
+                        _u = ans.get("usage")  # real provider tokens when available
                         cost.record(business_id, run_id, eng.name, "answer",
                                     getattr(eng, "model", eng.name),
-                                    cost.approx_tokens(prompt),
-                                    cost.approx_tokens(ans.get("text", "")))
+                                    _u["input"] if _u else cost.approx_tokens(prompt),
+                                    _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
                         score = score_answer(b, prompt, ans)
                         # the scoring pass itself costs money (cheap tier) -- track it
                         _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
