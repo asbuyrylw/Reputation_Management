@@ -68,7 +68,7 @@ def check_db() -> bool:
                 conn.execute(f"SELECT 1 FROM {t} LIMIT 1")
         ok("core tables present")
     except Exception:  # noqa: BLE001
-        bad("core tables missing -- run schema.sql, schema_v2..v5.sql")
+        bad("core tables missing -- run `alembic upgrade head` (or `make migrate`)")
         return False
     return True
 
