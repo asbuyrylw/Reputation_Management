@@ -77,12 +77,27 @@ def _before_after(conn, business_id: int, limit: int = 4) -> list:
         return []
     first, last = runs[0]["id"], runs[-1]["id"]
 
-    def best_answer(run_id, prompt):
+    def best_answer(run_id, prompt, engine):
         return conn.execute(
             "SELECT engine, answer_text, goal_alignment, mentions_contested FROM answers "
-            "WHERE run_id=%s AND prompt=%s AND answer_text <> '' "
-            "ORDER BY goal_alignment DESC NULLS LAST LIMIT 1", (run_id, prompt),
+            "WHERE run_id=%s AND prompt=%s AND engine=%s AND answer_text <> '' "
+            "ORDER BY goal_alignment DESC NULLS LAST LIMIT 1", (run_id, prompt, engine),
         ).fetchone()
+
+    def common_engine(prompt):
+        # Pick ONE engine that answered this prompt in BOTH the first and last run so
+        # Before/Now is an honest like-for-like comparison (the old code took the
+        # max-goal_alignment answer per run regardless of engine, so "Before" could be
+        # Perplexity while "Now" was ChatGPT). Prefer the engine with the strongest
+        # latest answer among those present in both runs.
+        row = conn.execute(
+            "SELECT a1.engine FROM answers a0 JOIN answers a1 USING (engine) "
+            "WHERE a0.run_id=%s AND a1.run_id=%s AND a0.prompt=%s AND a1.prompt=%s "
+            "AND a0.answer_text <> '' AND a1.answer_text <> '' "
+            "ORDER BY a1.goal_alignment DESC NULLS LAST LIMIT 1",
+            (first, last, prompt, prompt),
+        ).fetchone()
+        return row["engine"] if row else None
 
     prompts = conn.execute(
         "SELECT DISTINCT prompt FROM answers WHERE run_id=%s AND answer_text <> ''", (first,),
@@ -90,10 +105,14 @@ def _before_after(conn, business_id: int, limit: int = 4) -> list:
     pairs = []
     for p in prompts:
         prompt = p["prompt"]
-        a0, a1 = best_answer(first, prompt), best_answer(last, prompt)
+        eng = common_engine(prompt)
+        if not eng:
+            continue  # no engine answered this prompt in both runs -> no honest pair
+        a0, a1 = best_answer(first, prompt, eng), best_answer(last, prompt, eng)
         if a0 and a1:
             improvement = ((a1["goal_alignment"] or 0) - (a0["goal_alignment"] or 0))
-            pairs.append({"prompt": prompt, "before": a0, "after": a1, "improvement": improvement})
+            pairs.append({"prompt": prompt, "engine": eng, "before": a0, "after": a1,
+                          "improvement": improvement})
     pairs.sort(key=lambda x: x["improvement"], reverse=True)
     return pairs[:limit]
 
@@ -225,14 +244,40 @@ def generate(business_id: int) -> str:
     n_runs = len(series)
     if n_runs >= 2:
         first, last = series[0], series[-1]
-        ga_change = (last["goal_alignment"] or 0) - (first["goal_alignment"] or 0)
-        con_change = (last["contested_rate"] or 0) - (first["contested_rate"] or 0)
-        direction = "improving" if ga_change > 0 else ("flat" if abs(ga_change) < 0.02 else "down")
-        body(f"Over {n_runs} audits, how AI assistants describe {b.get('name','your business')} "
-             f"is {direction}. The accurate, positive narrative is being surfaced more often, and "
-             f"mentions of contested framing have moved by {con_change:+.0%}. The pages, reviews, "
-             f"and third-party coverage we've published are increasingly what the AI engines draw on "
-             f"when someone asks about you. Details and the month's work follow.")
+        # round to the data's precision (goal_alignment is NUMERIC(4,2)) so the
+        # notability boundary is deterministic, not subject to float representation.
+        ga_change = round((last["goal_alignment"] or 0) - (first["goal_alignment"] or 0), 4)
+        con_change = round((last["contested_rate"] or 0) - (first["contested_rate"] or 0), 4)
+        # Honesty gate: only claim a trend when the move clears a notability floor,
+        # never say "improving" when goal-alignment hasn't actually risen, and don't
+        # quote a contested-framing delta that is statistically negligible.
+        NOTABLE = 0.02
+        improving = ga_change >= NOTABLE
+        slipping = ga_change <= -NOTABLE
+        direction = ("improving" if improving
+                     else "slipping and needs attention" if slipping
+                     else "holding roughly steady")
+        con_clause = (f" Mentions of contested framing have moved by {con_change:+.0%}."
+                      if abs(con_change) >= NOTABLE else "")
+        if not improving and not slipping and not con_clause:
+            body(f"Over {n_runs} audits, how AI assistants describe {b.get('name','your business')} "
+                 f"is {direction} -- it is still early to call a trend from the data so far. The plan "
+                 f"below keeps building the owned content, reviews, and third-party coverage the AI "
+                 f"engines increasingly draw on. Details and the month's work follow.")
+        else:
+            lead = ("The accurate, positive narrative is being surfaced more often."
+                    if improving else
+                    "Some answers have moved the wrong way; the plan below targets those gaps."
+                    if slipping else
+                    "The accurate story is roughly holding while we keep building coverage.")
+            # Don't pair an optimistic provenance claim with a slipping trend.
+            trailer = ("We're prioritizing the owned content, reviews, and coverage that move these "
+                       "answers back in your favor."
+                       if slipping else
+                       "The pages, reviews, and third-party coverage we've published are increasingly "
+                       "what the AI engines draw on when someone asks about you.")
+            body(f"Over {n_runs} audits, how AI assistants describe {b.get('name','your business')} "
+                 f"is {direction}. {lead}{con_clause} {trailer} Details and the month's work follow.")
     else:
         body(f"This is the baseline audit for {b.get('name','your business')}. It captures exactly "
              f"how the major AI assistants describe you today and where the accurate story is thin. "
@@ -279,7 +324,8 @@ def generate(business_id: int) -> str:
         heading("How the AI Answers Changed")
         body("Real examples of how assistants answered key questions at baseline versus now:")
         for pair in ba[:3]:
-            qp = doc.add_paragraph(); qr = qp.add_run(f"Q: \u201C{pair['prompt']}\u201D")
+            via = f"  (same engine: {pair['engine']})" if pair.get("engine") else ""
+            qp = doc.add_paragraph(); qr = qp.add_run(f"Q: \u201C{pair['prompt']}\u201D{via}")
             qr.bold = True; qr.font.color.rgb = RGBColor.from_string(NAVY)
             before_txt = (pair["before"]["answer_text"] or "")[:280]
             after_txt = (pair["after"]["answer_text"] or "")[:280]

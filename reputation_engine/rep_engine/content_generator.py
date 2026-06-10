@@ -286,11 +286,15 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
 
-    # self-eval + bounded auto-revision
+    # self-eval + bounded auto-revision. KEEP-BEST: _revise is not guaranteed to
+    # improve a draft -- a later revision can score LOWER than an earlier one -- so
+    # track the highest-scoring usable candidate across the original and every
+    # revision and persist THAT, not merely whatever the last round produced.
     revisions = 0
     evaluation = _evaluate(asset_type, wo.get("target_query", ""), body)
     eval_unavailable = not evaluation  # {} => LLM unavailable OR validation failed
     score = float(evaluation.get("score", 0) or 0)
+    best_body, best_score, best_eval, best_unavailable = body, score, evaluation, eval_unavailable
     while (not eval_unavailable and score < QUALITY_THRESHOLD
            and revisions < MAX_REVISIONS and evaluation.get("fixes")):
         body = _revise(body, evaluation.get("fixes", [])) or body
@@ -298,6 +302,13 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         evaluation = _evaluate(asset_type, wo.get("target_query", ""), body)
         eval_unavailable = not evaluation
         score = float(evaluation.get("score", 0) or 0)
+        if not eval_unavailable and score > best_score:
+            best_body, best_score, best_eval, best_unavailable = body, score, evaluation, False
+    # Persist the best candidate seen (not the last). best_unavailable carries the
+    # original-eval state: if the first eval was usable, the persisted draft has a
+    # real eval even when a later round's eval was malformed; if no eval was ever
+    # usable, eval_unavailable stays True and the draft still routes to a human.
+    body, score, evaluation, eval_unavailable = best_body, best_score, best_eval, best_unavailable
 
     # compliance gate
     comp = _compliance(body)

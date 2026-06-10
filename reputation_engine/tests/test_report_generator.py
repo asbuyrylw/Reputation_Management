@@ -44,6 +44,11 @@ def _answer(conn, rid, bid, prompt, text, ga, contested, owned):
     )
 
 
+def _doc_text(path):
+    from docx import Document
+    return "\n".join(p.text for p in Document(path).paragraphs)
+
+
 @requires_db
 def test_generate_produces_nonempty_docx(fresh_schema, tmp_path, monkeypatch):
     conn = fresh_schema
@@ -79,3 +84,93 @@ def test_generate_produces_nonempty_docx(fresh_schema, tmp_path, monkeypatch):
     full_text = "\n".join(p.text for p in Document(path).paragraphs)
     assert "Reportco LLC" in full_text
     assert "Executive Summary" in full_text
+
+
+@requires_db
+def test_before_after_compares_same_engine(fresh_schema):
+    """Before/Now must compare the SAME engine -- not the max-goal_alignment answer
+    per run (which could put Perplexity 'Before' against ChatGPT 'Now')."""
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    p = "Is Reportco LLC trustworthy?"
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    # run1: engineA weak (0.2), engineB strong (0.6); run2: engineA strong (0.9),
+    # engineB weak (0.3). A naive max-per-run would pair engineB(before) vs engineA(now).
+    for rid, eng, ga in [(r1, "engineA", 0.2), (r1, "engineB", 0.6),
+                         (r2, "engineA", 0.9), (r2, "engineB", 0.3)]:
+        conn.execute("INSERT INTO answers (run_id,business_id,engine,prompt,answer_text,"
+                     "goal_alignment,failed) VALUES (%s,%s,%s,%s,'ans',%s,false)",
+                     (rid, bid, eng, p, ga))
+    conn.commit()
+    pairs = rg._before_after(conn, bid)
+    assert pairs, "expected a before/after pair"
+    pair = pairs[0]
+    assert pair["before"]["engine"] == pair["after"]["engine"]   # honest like-for-like
+    assert pair["engine"] in {"engineA", "engineB"}
+
+
+@requires_db
+def test_exec_summary_does_not_overclaim_on_thin_change(fresh_schema, tmp_path, monkeypatch):
+    """With a sub-threshold change, the exec summary must not claim 'improving' --
+    it should hedge that it is too early to call a trend."""
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    p = "Is Reportco LLC trustworthy?"
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    # near-identical metrics (ga 0.40 -> 0.41 = +0.01, below the 0.02 floor)
+    _answer(conn, r1, bid, p, "ans baseline", 0.40, False, True)
+    _answer(conn, r2, bid, p, "ans now", 0.41, False, True)
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    path = rg.generate(bid)
+    text = _doc_text(path)
+    assert "still early to call a trend" in text
+    assert "is improving." not in text                           # no over-claim
+
+
+@requires_db
+def test_exec_summary_slipping_uses_honest_tone(fresh_schema, tmp_path, monkeypatch):
+    """A declining trend must read as slipping/needs-attention, never paired with an
+    optimistic 'increasingly what the AI engines draw on' provenance claim."""
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    p = "Is Reportco LLC trustworthy?"
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    _answer(conn, r1, bid, p, "ans baseline", 0.60, False, True)
+    _answer(conn, r2, bid, p, "ans now", 0.40, False, True)   # ga -0.20 -> slipping
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    text = _doc_text(rg.generate(bid))
+    assert "slipping and needs attention" in text
+    assert "moved the wrong way" in text
+    assert "move these answers back in your favor" in text     # honest forward-looking trailer
+    assert "is improving." not in text
+
+
+@requires_db
+def test_exec_summary_reports_contested_move_when_alignment_holds(fresh_schema, tmp_path, monkeypatch):
+    """goal_alignment flat but contested framing jumps: the else-branch must fire,
+    report the contested move, and NOT hedge with 'still early to call a trend'."""
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    p = "Is Reportco LLC trustworthy?"
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    _answer(conn, r1, bid, p, "ans baseline", 0.50, False, True)
+    _answer(conn, r2, bid, p, "ans now", 0.50, True, True)    # ga flat, contested 0->100%
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    text = _doc_text(rg.generate(bid))
+    assert "holding roughly steady" in text
+    assert "contested framing have moved by" in text           # con_clause fired (else branch)
+    assert "still early to call a trend" not in text

@@ -242,6 +242,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS failed BOOLEAN DEFAULT FALSE")
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS persona TEXT DEFAULT ''")
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS location TEXT DEFAULT ''")
+        # scoring metadata promoted from the raw blob to first-class columns
+        # (see alembic 0002): the influential source domains the scorer relied on,
+        # and the gaps it noticed. jsonb to match cited_sources/compliance_flags.
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS key_sources JSONB DEFAULT '[]'::jsonb")
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS missing JSONB DEFAULT '[]'::jsonb")
         # status distinguishes a budget-aborted partial run from a complete one
         # (see schema_v9.sql). Aborted runs keep finished_at NULL so they are excluded
         # from every downstream metric (all gate on finished_at IS NOT NULL).
@@ -782,14 +787,17 @@ def audit(business_id: int) -> int:
                     conn.execute(
                         """INSERT INTO answers (run_id, business_id, engine, prompt, answer_text,
                             cited_sources, sentiment, goal_alignment, mentions_contested,
-                            surfaces_owned, sample_idx, failed, persona, location, raw)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                            surfaces_owned, key_sources, missing, sample_idx, failed,
+                            persona, location, raw)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (run_id, business_id, eng.name, prompt, ans.get("text", ""),
                          json.dumps(ans.get("sources", [])),
                          score.get("sentiment") if not row_failed else None,
                          score.get("goal_alignment") if not row_failed else None,
                          bool(score.get("mentions_contested")) if not row_failed else None,
                          bool(score.get("surfaces_owned")) if not row_failed else None,
+                         json.dumps(score.get("key_sources", [])) if not row_failed else None,
+                         json.dumps(score.get("missing", [])) if not row_failed else None,
                          s, row_failed, persona, location,
                          json.dumps({"score": score, "error": ans.get("error")} if failed
                                     else ({"score": score, "scoring_failed": True} if scoring_failed
@@ -846,17 +854,23 @@ def build_gap_model(business_id: int) -> dict:
             raise SystemExit("Run an audit first.")
         answers = conn.execute(
             "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
-            "mentions_contested, surfaces_owned FROM answers WHERE run_id=%s", (run["id"],)
+            "mentions_contested, surfaces_owned, key_sources, missing "
+            "FROM answers WHERE run_id=%s", (run["id"],)
         ).fetchall()
         # answer_text + cited_sources are attacker-controllable (engine output /
-        # cited pages). Fence them as untrusted DATA so a hostile answer stored in
-        # a prior run cannot inject instructions into the strategy synthesis. All
-        # other columns are first-party scores and pass through unchanged.
+        # cited pages). key_sources + missing are the SCORER LLM's free-text
+        # derivations OF that untrusted content (SCORING_SYSTEM asks it to name the
+        # influential domains and the missing facts) -- NOT first-party scores -- so
+        # they are equally untrusted and fenced too, lest a hostile answer launder an
+        # instruction into the strategy synthesis. The remaining columns are
+        # first-party numeric/categorical scores and pass through unchanged.
         fenced_answers = []
         for a in answers:
             row = dict(a)
             row["answer_text"] = _fence_untrusted(row.get("answer_text", ""))
             row["cited_sources"] = _fence_untrusted(json.dumps(row.get("cited_sources", []), default=str))
+            row["key_sources"] = _fence_untrusted(json.dumps(row.get("key_sources") or [], default=str))
+            row["missing"] = _fence_untrusted(json.dumps(row.get("missing") or [], default=str))
             fenced_answers.append(row)
         payload = json.dumps({
             "business": {k: b[k] for k in ("name", "domain", "services", "goal",

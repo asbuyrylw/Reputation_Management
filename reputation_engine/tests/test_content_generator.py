@@ -203,3 +203,35 @@ def test_deterministic_compliance_overrides_llm_pass(fresh_schema, monkeypatch):
     assert d["compliance_pass"] is False                 # deterministic override
     assert d["status"] == "needs_fix"
     assert "guaranteed" in json.dumps(d["compliance_flags"]).lower()
+
+
+@requires_db
+def test_keep_best_persists_highest_scoring_revision(fresh_schema, monkeypatch):
+    """A later revision can score LOWER than an earlier one; the persisted draft
+    must be the highest-scoring candidate seen across rounds, not merely the last."""
+    import itertools
+    conn = fresh_schema
+    from rep_engine import content_generator as cg
+    bid = _seed_business(conn)
+    _seed_workorder(conn, bid)
+
+    # distinct body per generate/revise call so we can tell which one is kept
+    bodies = itertools.chain(["ROUND1 original draft", "ROUND2 BEST draft"],
+                             (f"ROUND{n} worse draft" for n in itertools.count(3)))
+    monkeypatch.setattr(cg.llm, "orchestrator_text",
+                        lambda system, user, max_tokens=2200, tier="full": next(bodies))
+    # eval scores climb then fall: 0.50 -> 0.70 -> 0.40...  all < 0.75 with fixes so
+    # the loop runs to MAX_REVISIONS; round 2 (0.70) is the best. compliance passes.
+    scores = itertools.chain([0.50, 0.70], itertools.repeat(0.40))
+    def fake_json(system, user, tier="full"):
+        if "QA reviewer" in system:
+            return {"score": next(scores), "fixes": ["tighten"]}
+        return {"pass": True, "flags": []}
+    monkeypatch.setattr(cg.llm, "orchestrator_json", fake_json)
+
+    created = cg.generate(bid)
+    d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
+    assert float(d["quality_score"]) == pytest.approx(0.70)   # the best, NOT the last (0.40)
+    assert "ROUND2 BEST" in d["body"]                          # best body kept
+    assert "worse draft" not in d["body"]
+    assert d["revision_count"] == cg.MAX_REVISIONS             # revisions ATTEMPTED, unchanged
