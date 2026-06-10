@@ -31,16 +31,18 @@ import argparse
 import json
 import logging
 import os
-from datetime import datetime
 from typing import Optional
 
 import psycopg
 from psycopg.rows import dict_row
+from pydantic import ValidationError
 
 try:
     from . import ai_state_audit as llm   # reuse the orchestrator LLM plumbing
+    from .llm_schemas import ComplianceResult, EvalResult
 except ImportError:  # pragma: no cover
     import ai_state_audit as llm  # type: ignore
+    from llm_schemas import ComplianceResult, EvalResult  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("content_generator")
@@ -151,7 +153,9 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str) -> str:
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str) -> str:
-    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type), max_tokens=2200)
+    # creative long-form generation -> mid tier (Sonnet/gpt-4o), not full Opus.
+    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type),
+                                 max_tokens=2200, tier="mid")
 
 
 # ----------------------------------------------------------------------------
@@ -170,8 +174,17 @@ EVAL_SYSTEM = (
 
 def _evaluate(asset_type: str, target_query: str, body: str) -> dict:
     user = json.dumps({"asset_type": asset_type, "target_query": target_query, "draft": body})
-    res = llm.orchestrator_json(EVAL_SYSTEM, user)
-    return res or {}
+    # rubric scoring is classification/QA -> cheap tier (Haiku/gpt-4o-mini).
+    res = llm.orchestrator_json(EVAL_SYSTEM, user, tier="cheap")
+    if not res:
+        return {}
+    try:
+        # Garbled/out-of-range eval JSON is 'could not evaluate', NOT a real score of 0.
+        return EvalResult.model_validate(res).model_dump()
+    except ValidationError as e:
+        log.warning("_evaluate: eval JSON failed validation (treating as unscored): %s",
+                    str(e).splitlines()[0] if str(e) else e)
+        return {}
 
 
 REVISE_SYSTEM = (
@@ -182,8 +195,9 @@ REVISE_SYSTEM = (
 
 
 def _revise(body: str, fixes: list) -> str:
-    user = f"Issues/fixes to address:\n- " + "\n- ".join(fixes or []) + f"\n\nCurrent draft:\n{body}"
-    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=2200)
+    user = "Issues/fixes to address:\n- " + "\n- ".join(fixes or []) + f"\n\nCurrent draft:\n{body}"
+    # creative rewrite -> mid tier (Sonnet/gpt-4o).
+    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=2200, tier="mid")
 
 
 # ----------------------------------------------------------------------------
@@ -202,11 +216,21 @@ COMPLIANCE_SYSTEM = (
 
 
 def _compliance(body: str) -> dict:
-    res = llm.orchestrator_json(COMPLIANCE_SYSTEM, json.dumps({"content": body}))
+    # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini).
+    res = llm.orchestrator_json(COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
     # default-safe: if the screener couldn't run (no keys), mark unknown -> needs human
     if not res:
         return {"pass": None, "flags": ["compliance screener unavailable (no LLM) -- human must review"]}
-    return res
+    try:
+        validated = ComplianceResult.model_validate(res)
+    except ValidationError as e:
+        # A garbled compliance response is 'unknown', NOT an auto-pass and NOT an auto-fail.
+        log.warning("_compliance: screen JSON failed validation (routing to human): %s",
+                    str(e).splitlines()[0] if str(e) else e)
+        return {"pass": None,
+                "flags": ["compliance screen returned malformed output -- human must review"]}
+    # by_alias=True restores the literal 'pass' key the DB column + callers expect.
+    return validated.model_dump(by_alias=True)
 
 
 # ----------------------------------------------------------------------------
@@ -230,11 +254,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     # self-eval + bounded auto-revision
     revisions = 0
     evaluation = _evaluate(asset_type, wo.get("target_query", ""), body)
+    eval_unavailable = not evaluation  # {} => LLM unavailable OR validation failed
     score = float(evaluation.get("score", 0) or 0)
-    while score < QUALITY_THRESHOLD and revisions < MAX_REVISIONS and evaluation.get("fixes"):
+    while (not eval_unavailable and score < QUALITY_THRESHOLD
+           and revisions < MAX_REVISIONS and evaluation.get("fixes")):
         body = _revise(body, evaluation.get("fixes", [])) or body
         revisions += 1
         evaluation = _evaluate(asset_type, wo.get("target_query", ""), body)
+        eval_unavailable = not evaluation
         score = float(evaluation.get("score", 0) or 0)
 
     # compliance gate
@@ -242,9 +269,17 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     comp_pass = comp.get("pass")
     comp_flags = comp.get("flags", [])
 
-    # status: anything failing quality or compliance -> needs_fix, else pending_review
+    # status:
+    #  - a REAL evaluation below threshold, or a REAL compliance failure -> needs_fix
+    #  - could-not-evaluate (eval JSON malformed/unavailable) must NOT become a false
+    #    needs_fix; it stays pending_review with a flag so a human looks at it.
     status = "pending_review"
-    if score < QUALITY_THRESHOLD or comp_pass is False:
+    if eval_unavailable:
+        comp_flags = list(comp_flags) + [
+            "quality evaluation unavailable/malformed -- human must review"]
+    elif score < QUALITY_THRESHOLD:
+        status = "needs_fix"
+    if comp_pass is False:
         status = "needs_fix"
 
     _ensure_table()

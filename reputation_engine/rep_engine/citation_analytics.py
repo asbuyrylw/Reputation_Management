@@ -32,7 +32,6 @@ import argparse
 import json
 import logging
 import os
-import re
 from collections import defaultdict
 from urllib.parse import urlparse
 

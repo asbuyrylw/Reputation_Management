@@ -67,15 +67,40 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
                  json: dict | None = None, params: dict | None = None,
                  timeout: int = DEFAULT_TIMEOUT, max_retries: int = DEFAULT_MAX_RETRIES,
                  base_delay: float = DEFAULT_BASE_DELAY,
-                 parse_json: bool = True) -> HttpResult:
+                 parse_json: bool = True, guard_redirects: bool = False) -> HttpResult:
     """Make an HTTP request with retries. Returns HttpResult; never raises for
-    network/HTTP errors (raises only on programmer error)."""
+    network/HTTP errors (raises only on programmer error).
+
+    When guard_redirects=True, redirects are followed manually (max 5 hops) and
+    every hop URL is re-validated by netguard.assert_url_allowed, preventing a
+    30x response from redirecting an outbound crawl fetch to an internal address."""
     last_err = None
+    follow = not guard_redirects
     for attempt in range(max_retries + 1):
         try:
             resp = requests.request(
-                method, url, headers=headers, json=json, params=params, timeout=timeout
+                method, url, headers=headers, json=json, params=params,
+                timeout=timeout, allow_redirects=follow,
             )
+            if guard_redirects:
+                hops = 0
+                while resp.is_redirect and resp.next is not None and hops < 5:
+                    nxt = resp.next.url
+                    try:
+                        from . import netguard as _ng
+                    except ImportError:  # pragma: no cover
+                        import netguard as _ng  # type: ignore
+                    try:
+                        _ng.assert_url_allowed(nxt)
+                    except _ng.UnsafeURLError as e:
+                        return HttpResult(ok=False, status=resp.status_code,
+                                          error=f"redirect blocked by SSRF guard: {e}",
+                                          attempts=attempt + 1)
+                    resp = requests.request(
+                        "GET", nxt, headers=headers, params=params,
+                        timeout=timeout, allow_redirects=False,
+                    )
+                    hops += 1
             status = resp.status_code
             if status in RETRYABLE_STATUS and attempt < max_retries:
                 delay = _sleep_for(attempt, resp.headers.get("Retry-After"), base_delay)

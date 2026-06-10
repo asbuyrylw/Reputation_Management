@@ -129,7 +129,6 @@ def advise(business_id: int, quiet: bool = False) -> dict:
 
     # ---- per-lever marginal effect (add the LOW and HIGH of its typical range) ----
     per_lever = []
-    floor_weeks = round(base_expected["months"] * 0.4 * 4.345)
     for key, spec in LEVERS.items():
         weight, weight_basis = eff_weight(key, spec)
         lo, hi = spec["typical"]

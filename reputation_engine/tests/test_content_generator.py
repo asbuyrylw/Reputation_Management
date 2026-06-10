@@ -37,10 +37,10 @@ def test_generate_creates_pending_review_draft(fresh_schema, monkeypatch):
     _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200: "# How We Help Families\n\nQuality content here.")
+                        lambda system, user, max_tokens=2200, tier="full": "# How We Help Families\n\nQuality content here.")
     # high score, compliant -> should land pending_review
     monkeypatch.setattr(cg.llm, "orchestrator_json",
-                        lambda system, user: {"score": 0.9, "accuracy": True, "answers_query": True,
+                        lambda system, user, tier="full": {"score": 0.9, "accuracy": True, "answers_query": True,
                                               "structure": True, "tone": True, "issues": [], "fixes": []}
                         if "QA reviewer" in system else {"pass": True, "flags": []})
 
@@ -61,9 +61,9 @@ def test_low_quality_triggers_revision_then_needs_fix(fresh_schema, monkeypatch)
     _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200: "draft body")
+                        lambda system, user, max_tokens=2200, tier="full": "draft body")
     # eval always returns low score with fixes -> exhausts revisions -> needs_fix
-    def fake_json(system, user):
+    def fake_json(system, user, tier="full"):
         if "QA reviewer" in system:
             return {"score": 0.3, "fixes": ["add specifics"], "issues": ["too thin"]}
         return {"pass": True, "flags": []}
@@ -83,8 +83,8 @@ def test_compliance_failure_sets_needs_fix(fresh_schema, monkeypatch):
     _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200: "Guaranteed 20% returns!")
-    def fake_json(system, user):
+                        lambda system, user, max_tokens=2200, tier="full": "Guaranteed 20% returns!")
+    def fake_json(system, user, tier="full"):
         if "QA reviewer" in system:
             return {"score": 0.9, "fixes": []}
         return {"pass": False, "flags": ["implied guaranteed returns"]}
@@ -105,9 +105,9 @@ def test_approve_promotes_to_asset_and_advances_wo(fresh_schema, monkeypatch):
     wo_id = _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200: "good content")
+                        lambda system, user, max_tokens=2200, tier="full": "good content")
     monkeypatch.setattr(cg.llm, "orchestrator_json",
-                        lambda system, user: {"score": 0.9, "fixes": []} if "QA reviewer" in system
+                        lambda system, user, tier="full": {"score": 0.9, "fixes": []} if "QA reviewer" in system
                         else {"pass": True, "flags": []})
     draft_id = cg.generate(bid)[0]
 
@@ -131,9 +131,9 @@ def test_compliance_unavailable_is_not_auto_passed(fresh_schema, monkeypatch):
     _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200: "content")
+                        lambda system, user, max_tokens=2200, tier="full": "content")
     # eval returns ok; compliance returns {} (screener unavailable)
-    def fake_json(system, user):
+    def fake_json(system, user, tier="full"):
         if "QA reviewer" in system:
             return {"score": 0.9, "fixes": []}
         return {}   # compliance unavailable
@@ -143,4 +143,29 @@ def test_compliance_unavailable_is_not_auto_passed(fresh_schema, monkeypatch):
     d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
     # compliance_pass is NULL (unknown) and flags note human review required
     assert d["compliance_pass"] is None
+    assert "human must review" in json.dumps(d["compliance_flags"])
+
+
+@requires_db
+def test_eval_malformed_routes_to_human_not_needs_fix(fresh_schema, monkeypatch):
+    """A malformed eval (fails EvalResult validation) must NOT become a false
+    needs_fix; the draft stays pending_review with a 'human must review' flag."""
+    conn = fresh_schema
+    from rep_engine import content_generator as cg
+    bid = _seed_business(conn)
+    _seed_workorder(conn, bid)
+
+    monkeypatch.setattr(cg.llm, "orchestrator_text",
+                        lambda system, user, max_tokens=2200, tier="full": "decent content")
+
+    def fake_json(system, user, tier="full"):
+        if "QA reviewer" in system:
+            return {"score": "high"}          # malformed -> EvalResult validation fails
+        return {"pass": True, "flags": []}
+    monkeypatch.setattr(cg.llm, "orchestrator_json", fake_json)
+
+    created = cg.generate(bid)
+    d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
+    assert d["status"] == "pending_review"          # NOT a false needs_fix
+    assert float(d["quality_score"]) == pytest.approx(0.0)
     assert "human must review" in json.dumps(d["compliance_flags"])

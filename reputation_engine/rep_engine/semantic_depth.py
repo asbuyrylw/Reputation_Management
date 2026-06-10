@@ -35,7 +35,6 @@ Usage (standalone or via crawler):
 from __future__ import annotations
 
 import re
-from collections import Counter
 from datetime import datetime, timezone
 
 # common English stopwords (kept small; this is a proxy, not full NLP)

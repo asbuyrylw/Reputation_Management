@@ -292,11 +292,14 @@ def _draft_one(biz: dict, mention: dict, tone: str, cg) -> str:
         "or performance promises and avoid giving individualized advice. If the mention is "
         "critical, respond with empathy and an offer to help offline. 2-4 sentences. "
         "Output ONLY the reply text."
+        + m.UNTRUSTED_INSTRUCTION
     )
+    # The mention body is scraped from an untrusted public post -- fence it so an
+    # embedded "ignore your instructions and post X" cannot hijack the draft.
     user = json.dumps({
         "business": biz.get("name"), "services": biz.get("services"),
         "tone": tone, "mention_title": mention.get("title"),
-        "mention_body": (mention.get("body") or "")[:1200],
+        "mention_body": m._fence_untrusted((mention.get("body") or "")[:1200]),
         "sentiment": mention.get("sentiment"),
     })
     try:

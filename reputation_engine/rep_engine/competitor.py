@@ -34,7 +34,6 @@ import json
 import logging
 import os
 import re
-from collections import defaultdict
 
 import psycopg
 from psycopg.rows import dict_row

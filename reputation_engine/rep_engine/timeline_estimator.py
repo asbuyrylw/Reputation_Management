@@ -32,7 +32,6 @@ import logging
 import math
 import os
 from datetime import date, timedelta
-from typing import Optional
 
 import psycopg
 from psycopg.rows import dict_row

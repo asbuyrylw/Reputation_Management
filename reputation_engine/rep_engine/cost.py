@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
 
 import psycopg
 from psycopg.rows import dict_row
@@ -24,11 +23,16 @@ DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/repu
 
 # Approx USD per 1K tokens (input, output). UPDATE to current provider pricing.  PH 2
 PRICING = {
-    # model substring : (input_per_1k, output_per_1k)
+    # model substring : (input_per_1k, output_per_1k). Rates current as of 2026-06.
     # NOTE: more specific keys MUST come first (substring match stops at first hit).
-    "haiku":       (0.0008, 0.004),  # cheap tier (Anthropic) -- approx, update to current
-    "gpt-4o-mini": (0.00015, 0.0006),  # cheap tier (OpenAI) -- approx, update to current
-    "claude":      (0.003, 0.015),
+    # Anthropic ids look like claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5,
+    # so 'opus'/'sonnet'/'haiku' MUST precede the generic 'claude' fallback -- otherwise
+    # 'claude' would catch claude-opus-4-8 at Sonnet's cheaper rate and UNDER-count Opus.
+    "haiku":       (0.001, 0.005),   # Haiku 4.5 cheap tier (Anthropic)
+    "gpt-4o-mini": (0.00015, 0.0006),  # cheap tier (OpenAI)
+    "opus":        (0.005, 0.025),   # Opus 4.8 full tier (Anthropic)
+    "sonnet":      (0.003, 0.015),   # Sonnet 4.6 mid tier (Anthropic)
+    "claude":      (0.003, 0.015),   # generic Anthropic fallback (Sonnet-equivalent)
     "gpt-4o":      (0.005, 0.015),
     "gpt":         (0.005, 0.015),
     "sonar":       (0.001, 0.001),   # perplexity (approx; varies by model)
@@ -39,6 +43,12 @@ PRICING = {
 
 def db() -> psycopg.Connection:
     return psycopg.connect(DB_DSN, row_factory=dict_row)
+
+
+# Count of cost rows we failed to persist this process. While > 0 the ledger
+# under-counts real spend, so over_budget() fails CLOSED rather than let a
+# runaway slip through an unhealthy ledger.
+_unrecorded_writes = 0
 
 
 def _rate(model: str) -> tuple[float, float]:
@@ -61,6 +71,7 @@ def approx_tokens(text: str) -> int:
 
 def record(business_id: int | None, run_id: int | None, provider: str, operation: str,
            model: str, input_tokens: int, output_tokens: int) -> float:
+    global _unrecorded_writes
     cost = estimate_cost(model, input_tokens, output_tokens)
     try:
         with db() as conn:
@@ -73,38 +84,51 @@ def record(business_id: int | None, run_id: int | None, provider: str, operation
                  input_tokens, output_tokens, cost),
             )
             conn.commit()
-    except Exception as e:  # noqa: BLE001  -- never let cost logging break an audit
-        log.warning("cost record failed: %s", e)
+    except Exception as e:  # noqa: BLE001  -- never let cost logging crash an audit...
+        # ...but DO remember we lost a write, so over_budget() can fail closed.
+        _unrecorded_writes += 1
+        log.error("cost record FAILED (spend now under-counted; budget fails closed): %s", e)
     return cost
 
 
 def month_spend(business_id: int) -> float:
-    try:
-        with db() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(SUM(est_cost_usd),0) s FROM cost_ledger "
-                "WHERE business_id=%s AND created_at >= date_trunc('month', now())",
-                (business_id,),
-            ).fetchone()
-        return float(row["s"])
-    except Exception:  # noqa: BLE001
-        return 0.0
+    """Sum of this calendar month's recorded spend, with a UTC month boundary so the
+    window doesn't drift by hours when the DB session timezone differs from UTC.
+    Raises on DB error so over_budget() can decide policy (it fails closed)."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(est_cost_usd),0) s FROM cost_ledger "
+            "WHERE business_id=%s "
+            "AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
+            (business_id,),
+        ).fetchone()
+    return float(row["s"])
 
 
 def budget_for(business_id: int) -> float:
-    try:
-        with db() as conn:
-            row = conn.execute(
-                "SELECT monthly_budget_usd FROM business_config WHERE business_id=%s",
-                (business_id,),
-            ).fetchone()
-        return float(row["monthly_budget_usd"]) if row else 50.0
-    except Exception:  # noqa: BLE001
-        return 50.0
+    """Configured monthly cap (USD); defaults to 50.0 when no config row exists.
+    Raises on DB error (over_budget() fails closed)."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT monthly_budget_usd FROM business_config WHERE business_id=%s",
+            (business_id,),
+        ).fetchone()
+    return float(row["monthly_budget_usd"]) if row else 50.0
 
 
 def over_budget(business_id: int) -> bool:
-    spent, cap = month_spend(business_id), budget_for(business_id)
+    """True if the business is at/over its monthly cap. Fails CLOSED: if spend can't be
+    verified -- a DB error, or a cost write was lost this process -- report over-budget so
+    a runaway can't slip through a degraded ledger. The cap is the only runaway guard."""
+    if _unrecorded_writes:
+        log.error("Business %d: %d unrecorded cost write(s) this process -- failing closed.",
+                  business_id, _unrecorded_writes)
+        return True
+    try:
+        spent, cap = month_spend(business_id), budget_for(business_id)
+    except Exception as e:  # noqa: BLE001
+        log.error("Business %d: budget check failed (%s) -- failing closed.", business_id, e)
+        return True
     if spent >= cap:
         log.warning("Business %d over monthly budget: $%.2f / $%.2f", business_id, spent, cap)
         return True

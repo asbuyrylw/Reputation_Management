@@ -67,6 +67,7 @@ def test_recommendations_are_actionable():
 
 
 def test_crawler_attaches_semantic_scorecard(monkeypatch):
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")  # mocked HTTP layer; skip real DNS on x.com
     from rep_engine import site_crawl as sc
     rich = ("<html><head><title>Cincinnati Term Life & Retirement</title></head>"
             "<body><h1>Plans</h1><p>" + ("term life retirement planning Cincinnati " * 30)

@@ -20,6 +20,7 @@ def _rich_html(words=200):
 
 
 def test_firecrawl_triggers_on_thin_page(monkeypatch):
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")  # mocked HTTP layer; skip real DNS on x.com
     from rep_engine import site_crawl as sc
     monkeypatch.setattr(sc, "FIRECRAWL_MODE", "auto")
     monkeypatch.setattr(sc, "FIRECRAWL_API_KEY", "fc-test")
@@ -32,6 +33,7 @@ def test_firecrawl_triggers_on_thin_page(monkeypatch):
 
 
 def test_firecrawl_not_used_when_page_is_rich(monkeypatch):
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")  # mocked HTTP layer; skip real DNS on x.com
     from rep_engine import site_crawl as sc
     monkeypatch.setattr(sc, "FIRECRAWL_MODE", "auto")
     monkeypatch.setattr(sc, "FIRECRAWL_API_KEY", "fc-test")

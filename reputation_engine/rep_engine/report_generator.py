@@ -167,6 +167,7 @@ def _trend_chart(series: list):
     fig.autofmt_xdate(rotation=30)
     fig.tight_layout()
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp.close()  # close our handle first: Windows can't unlink a still-open temp file
     fig.savefig(tmp.name)
     plt.close(fig)
     return tmp.name
@@ -244,7 +245,10 @@ def generate(business_id: int) -> str:
         doc.add_picture(chart, width=Inches(6.2))
         body("Higher goal-alignment and owned-content lines are better; the contested-mentions "
              "line going down is better.", italic=True)
-        os.unlink(chart)
+        try:
+            os.unlink(chart)  # best-effort; never let temp-file cleanup fail the report
+        except OSError as e:
+            log.warning("could not remove temp chart %s: %s", chart, e)
 
     heading("Metrics This Period")
     if n_runs >= 1:

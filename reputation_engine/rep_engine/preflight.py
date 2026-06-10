@@ -14,7 +14,6 @@ Exit code 0 = ready. Non-zero = something to fix (printed). Safe to run repeated
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 try:
@@ -174,7 +173,7 @@ def main() -> None:
     print("=" * 64)
     print(" Reputation Engine -- First-Live-Run Preflight")
     print("=" * 64)
-    cfg_ok = check_config()
+    check_config()  # prints config status (advisory; readiness is gated on db/engines/json below)
     db_ok = check_db()
     status = check_keys()
     eng_ok = check_engines(status) if any(status.values()) else False

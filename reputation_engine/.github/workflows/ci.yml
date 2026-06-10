@@ -40,13 +40,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest ruff mypy
+          pip install pytest pytest-cov ruff mypy
 
-      - name: Lint (ruff)
-        run: ruff check rep_engine/ || true   # advisory until clean
+      - name: Lint -- real-error rules (BLOCKING)
+        run: ruff check --select F,E9 rep_engine/   # undefined names, unused imports, syntax errors
 
-      - name: Type check (mypy)
-        run: mypy rep_engine/ --ignore-missing-imports || true   # advisory until clean
+      - name: Lint -- full ruleset (advisory; ratchet toward blocking)
+        run: ruff check rep_engine/ || true
 
-      - name: Run tests
-        run: pytest -q
+      - name: Type check (mypy, advisory until clean)
+        run: mypy rep_engine/ --ignore-missing-imports || true
+
+      - name: Run tests with coverage
+        # Baseline measured at 57.5% (full suite vs. Postgres). Floor set just below
+        # with headroom; ratchet up toward ~70% as the untested hubs get covered.
+        run: pytest -q --cov=rep_engine --cov-report=term-missing --cov-fail-under=50
