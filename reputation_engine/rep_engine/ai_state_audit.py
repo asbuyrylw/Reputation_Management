@@ -86,6 +86,41 @@ ORCH_MODEL_OPENAI_CHEAP = os.getenv("ORCH_MODEL_OPENAI_CHEAP", "gpt-4o-mini")   
 ORCH_MODEL_ANTHROPIC_MID = os.getenv("ORCH_MODEL_ANTHROPIC_MID", "claude-sonnet-4-6")               # PH 7c
 ORCH_MODEL_OPENAI_MID = os.getenv("ORCH_MODEL_OPENAI_MID", "gpt-4o")                                # PH 8c
 
+# LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
+# observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
+# Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
+# e.g. {"Helicone-Auth": "Bearer sk-..."}) for gateways that need an auth header.
+# Applied via _llm_http(), which is scoped to LLM calls so the proxy auth header
+# is never sent to a crawled customer page.
+ANTHROPIC_BASE = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+OPENAI_BASE = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
+PERPLEXITY_BASE = os.getenv("PERPLEXITY_BASE_URL", "https://api.perplexity.ai")
+GEMINI_BASE = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")
+
+
+def _obs_headers() -> dict:
+    """Optional headers merged into every LLM call (LLM_PROXY_HEADERS, a JSON env) --
+    e.g. {"Helicone-Auth": "Bearer sk-..."} when routing through a gateway. Empty by
+    default; read at call time so it can be toggled without reimporting."""
+    raw = os.getenv("LLM_PROXY_HEADERS", "")
+    if not raw:
+        return {}
+    try:
+        h = json.loads(raw)
+        return h if isinstance(h, dict) else {}
+    except json.JSONDecodeError:
+        log.warning("LLM_PROXY_HEADERS is not valid JSON; ignoring")
+        return {}
+
+
+def _llm_http(method: str, url: str, *, headers: Optional[dict] = None, **kw):
+    """LLM HTTP call -- like http.request_json but merges the optional proxy /
+    observability headers from _obs_headers(), so the whole LLM layer can be routed
+    through a gateway via env. Scoped to LLM calls so the gateway auth header is
+    never sent to a crawled customer page (crawl uses http.request_json directly)."""
+    merged = {**(headers or {}), **_obs_headers()}
+    return http.request_json(method, url, headers=merged or None, **kw)
+
 
 def _model_for(tier: str) -> tuple[str, str]:
     """Return (anthropic_model, openai_model) for a tier: 'cheap' | 'mid' | 'full'."""
@@ -336,8 +371,8 @@ class PerplexityEngine:
     def answer(self, prompt: str) -> dict:
         if "YOUR_PERPLEXITY" in PERPLEXITY_API_KEY:
             return _skip()
-        res = http.request_json(
-            "POST", "https://api.perplexity.ai/chat/completions",
+        res = _llm_http(
+            "POST", f"{PERPLEXITY_BASE}/chat/completions",
             headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}"},
             json={"model": self.model, "messages": [{"role": "user", "content": prompt}]},
             timeout=40,
@@ -361,8 +396,8 @@ class OpenAISearchEngine:
         if "YOUR_OPENAI" in OPENAI_API_KEY:
             return _skip()
         # PH 10: verify against current OpenAI Responses API + web_search tool shape
-        res = http.request_json(
-            "POST", "https://api.openai.com/v1/responses",
+        res = _llm_http(
+            "POST", f"{OPENAI_BASE}/v1/responses",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
             json={"model": self.model, "input": prompt,
                   "tools": [{"type": "web_search"}]},
@@ -383,8 +418,8 @@ class AnthropicEngine:
         if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
             return _skip()
         # PH 11: add web_search tool block if you want grounded answers here
-        res = http.request_json(
-            "POST", "https://api.anthropic.com/v1/messages",
+        res = _llm_http(
+            "POST", f"{ANTHROPIC_BASE}/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY,
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
@@ -408,9 +443,9 @@ class GeminiEngine:
         if "YOUR_GEMINI" in GEMINI_API_KEY:
             return _skip()
         # PH 12: enable the google search grounding tool for live results
-        res = http.request_json(
+        res = _llm_http(
             "POST",
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{GEMINI_BASE}/v1beta/models/"
             f"{self.model}:generateContent?key={GEMINI_API_KEY}",
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=60,
@@ -457,8 +492,8 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
     if ORCHESTRATOR == "openai":
         if "YOUR_OPENAI" in OPENAI_API_KEY:
             return ""
-        res = http.request_json(
-            "POST", "https://api.openai.com/v1/chat/completions",
+        res = _llm_http(
+            "POST", f"{OPENAI_BASE}/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
             json={"model": openai_model, "max_tokens": max_tokens,
                   "messages": [{"role": "system", "content": system},
@@ -475,8 +510,8 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
     # anthropic
     if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
         return ""
-    res = http.request_json(
-        "POST", "https://api.anthropic.com/v1/messages",
+    res = _llm_http(
+        "POST", f"{ANTHROPIC_BASE}/v1/messages",
         headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                  "content-type": "application/json"},
         json={"model": anthropic_model, "max_tokens": max_tokens,
@@ -538,8 +573,8 @@ def _anthropic_complete(system: str, user: str, tier: str = "full") -> str:
     # includes the Haiku cheap-scoring tier (the reproducibility-critical path).
     if _supports_temperature(model):
         body["temperature"] = 0
-    res = http.request_json(
-        "POST", "https://api.anthropic.com/v1/messages",
+    res = _llm_http(
+        "POST", f"{ANTHROPIC_BASE}/v1/messages",
         headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                  "content-type": "application/json"},
         json=body,
@@ -563,8 +598,8 @@ def _openai_complete(system: str, user: str, tier: str = "full") -> str:
                          {"role": "user", "content": user}]}
     if _supports_temperature(model):  # gpt-4o* accept temperature; o-series/gpt-5 400
         body["temperature"] = 0
-    res = http.request_json(
-        "POST", "https://api.openai.com/v1/chat/completions",
+    res = _llm_http(
+        "POST", f"{OPENAI_BASE}/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         json=body,
         timeout=90,

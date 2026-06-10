@@ -257,3 +257,21 @@ def test_usage_normalizes_provider_shapes():
     # _ok carries usage only when provided (preserves the legacy result shape)
     assert "usage" not in m._ok("t", [])
     assert m._ok("t", [], {"input": 1, "output": 2})["usage"] == {"input": 1, "output": 2}
+
+
+def test_obs_headers_proxy_routing(monkeypatch):
+    from rep_engine import ai_state_audit as m
+    monkeypatch.delenv("LLM_PROXY_HEADERS", raising=False)
+    assert m._obs_headers() == {}                                  # default: no proxy headers
+    monkeypatch.setenv("LLM_PROXY_HEADERS", '{"Helicone-Auth": "Bearer sk-x"}')
+    assert m._obs_headers() == {"Helicone-Auth": "Bearer sk-x"}
+    monkeypatch.setenv("LLM_PROXY_HEADERS", "not json")
+    assert m._obs_headers() == {}                                  # invalid JSON -> ignored, no crash
+    # _llm_http merges proxy headers into the request and forwards everything else
+    captured = {}
+    monkeypatch.setattr(m.http, "request_json",
+                        lambda method, url, **kw: captured.update(method=method, url=url, **kw))
+    monkeypatch.setenv("LLM_PROXY_HEADERS", '{"Helicone-Auth": "Bearer k"}')
+    m._llm_http("POST", "http://x", headers={"x-api-key": "a"}, json={"m": 1}, timeout=5)
+    assert captured["headers"] == {"x-api-key": "a", "Helicone-Auth": "Bearer k"}
+    assert captured["url"] == "http://x" and captured["json"] == {"m": 1}
