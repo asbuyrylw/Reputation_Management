@@ -31,6 +31,7 @@ import argparse
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 
@@ -215,11 +216,39 @@ COMPLIANCE_SYSTEM = (
 )
 
 
+# Hard financial-marketing prohibitions, matched deterministically. Unlike the LLM
+# screen these cannot be talked out of their verdict by a hostile/garbled draft, so
+# a hit here is AUTHORITATIVE: the content is non-compliant regardless of the LLM.
+_COMPLIANCE_RULES: list[tuple[str, str]] = [
+    (r"\bguarantee[ds]?\b[^.\n]{0,40}\b(returns?|profits?|income|results?|gains?|growth)\b",
+     "implies guaranteed returns/results"),
+    (r"\b(risk[-\s]?free|no[-\s]?risk|zero[-\s]?risk)\b", "claims risk-free"),
+    (r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b",
+     "unverifiable superlative (#1 / best)"),
+    (r"\b\d{1,3}\s?%[^.\n]{0,30}\b(guaranteed|returns?|profits?|gains?)\b",
+     "specific performance promise"),
+]
+_COMPLIANCE_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _COMPLIANCE_RULES]
+
+
+def _deterministic_compliance(body: str) -> list[str]:
+    """Non-LLM, non-prompt-injectable screen for hard financial-marketing rules.
+    Returns the list of triggered-rule descriptions (empty == nothing tripped)."""
+    text = body or ""
+    return [msg for pat, msg in _COMPLIANCE_PATTERNS if pat.search(text)]
+
+
 def _compliance(body: str) -> dict:
+    # Deterministic, non-injectable screen first -- its verdict is authoritative.
+    det_flags = _deterministic_compliance(body)
     # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini).
     res = llm.orchestrator_json(COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
-    # default-safe: if the screener couldn't run (no keys), mark unknown -> needs human
+    # default-safe: if the screener couldn't run (no keys), mark unknown -> needs
+    # human; but if the deterministic rules tripped, FAIL CLOSED regardless of LLM.
     if not res:
+        if det_flags:
+            return {"pass": False,
+                    "flags": det_flags + ["compliance screener unavailable -- deterministic rules tripped"]}
         return {"pass": None, "flags": ["compliance screener unavailable (no LLM) -- human must review"]}
     try:
         validated = ComplianceResult.model_validate(res)
@@ -228,9 +257,15 @@ def _compliance(body: str) -> dict:
         log.warning("_compliance: screen JSON failed validation (routing to human): %s",
                     str(e).splitlines()[0] if str(e) else e)
         return {"pass": None,
-                "flags": ["compliance screen returned malformed output -- human must review"]}
+                "flags": det_flags + ["compliance screen returned malformed output -- human must review"]}
     # by_alias=True restores the literal 'pass' key the DB column + callers expect.
-    return validated.model_dump(by_alias=True)
+    result = validated.model_dump(by_alias=True)
+    # Deterministic rules are authoritative and cannot be prompt-injected: if they
+    # trip, the content is NOT compliant no matter what the LLM verdict claimed.
+    if det_flags:
+        result["pass"] = False
+        result["flags"] = list(result.get("flags", [])) + det_flags
+    return result
 
 
 # ----------------------------------------------------------------------------

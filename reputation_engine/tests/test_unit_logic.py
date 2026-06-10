@@ -232,6 +232,17 @@ def test_classify_owned_survives_www_on_both_sides():
     assert ca._classify("forbes.com", biz) == "neutral"
 
 
+def test_classify_term_matches_label_not_raw_substring():
+    from rep_engine import citation_analytics as ca
+    biz = {"domain": "mybiz.com", "contested_terms": "fraudster"}
+    # a legit domain that merely CONTAINS the term as a substring is NOT contested
+    assert ca._classify("fraudsterwatchlist.com", biz) == "neutral"
+    # the same term as a real domain label IS contested
+    assert ca._classify("mybiz-fraudster.com", biz) == "contested"
+    # curated complaint-site markers stay broad (substring) -- still caught
+    assert ca._classify("ripoffreport.com", {"domain": "x.com"}) == "contested"
+
+
 def test_fence_untrusted_wraps_and_strips_delimiter():
     from rep_engine import ai_state_audit as m
     assert m._fence_untrusted("hi") == "<untrusted_content>hi</untrusted_content>"
@@ -275,3 +286,31 @@ def test_obs_headers_proxy_routing(monkeypatch):
     m._llm_http("POST", "http://x", headers={"x-api-key": "a"}, json={"m": 1}, timeout=5)
     assert captured["headers"] == {"x-api-key": "a", "Helicone-Auth": "Bearer k"}
     assert captured["url"] == "http://x" and captured["json"] == {"m": 1}
+
+
+def test_gemini_uses_header_not_url_for_key(monkeypatch):
+    from rep_engine import ai_state_audit as m
+    monkeypatch.delenv("LLM_PROXY_HEADERS", raising=False)
+    monkeypatch.setattr(m, "GEMINI_API_KEY", "SECRET-GEMINI-KEY")
+    captured: dict = {}
+
+    class _R:
+        failed = True
+        error = "boom"
+
+    monkeypatch.setattr(m.http, "request_json",
+                        lambda method, url, **kw: captured.update(url=url, **kw) or _R())
+    m.GeminiEngine().answer("hello")
+    assert "SECRET-GEMINI-KEY" not in captured["url"]                 # key never in the URL
+    assert captured["headers"]["x-goog-api-key"] == "SECRET-GEMINI-KEY"  # key in the header
+
+
+def test_http_redacts_secrets_in_errors():
+    from rep_engine import http
+    # query-string keys and bearer tokens are scrubbed before logging / returning
+    assert "SEKRIT" not in http._redact("conn failed: https://g/v1?key=SEKRIT123 timed out")
+    assert "REDACTED" in http._redact("https://g/v1beta?api_key=SEKRIT123")
+    assert "SEKRIT" not in http._redact("Authorization: Bearer SEKRIT123")
+    assert "SEKRIT" not in http._redact("x-goog-api-key: SEKRIT123")
+    # ordinary error text is left untouched
+    assert http._redact("plain connection error") == "plain connection error"

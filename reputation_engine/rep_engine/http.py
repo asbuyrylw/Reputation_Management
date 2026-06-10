@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -123,15 +124,15 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
             return HttpResult(ok=True, status=status, data=data,
                               text=resp.text, attempts=attempt + 1)
         except (requests.Timeout, requests.ConnectionError) as e:
-            last_err = str(e)
+            last_err = _redact(str(e))
             if attempt < max_retries:
                 delay = _sleep_for(attempt, None, base_delay)
                 log.warning("Network error on %s (attempt %d/%d): %s -> retry in %.1fs",
-                            _short(url), attempt + 1, max_retries, e, delay)
+                            _short(url), attempt + 1, max_retries, last_err, delay)
                 time.sleep(delay)
                 continue
         except requests.RequestException as e:
-            last_err = str(e)
+            last_err = _redact(str(e))
             break
     return HttpResult(ok=False, error=f"exhausted retries: {last_err}",
                       attempts=max_retries + 1)
@@ -139,3 +140,20 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
 
 def _short(url: str) -> str:
     return url.split("?")[0]
+
+
+# Scrub credentials that can ride along in an exception/URL string before they are
+# logged or returned in an error (e.g. ?key=..., Bearer ..., x-api-key=...).
+_SECRET_RE = re.compile(
+    r"(key=|api[_-]?key=|access_token=|token=)[^&\s'\")]+"
+    r"|(Bearer\s+)\S+"
+    r"|(x-(?:api|goog-api)-key['\"]?\s*[:=]\s*['\"]?)[^\s'\",}]+",
+    re.I,
+)
+
+
+def _redact(s: str) -> str:
+    """Replace secret-bearing query params / auth tokens in a string with REDACTED."""
+    return _SECRET_RE.sub(
+        lambda m: (m.group(1) or m.group(2) or m.group(3) or "") + "REDACTED", s or ""
+    )

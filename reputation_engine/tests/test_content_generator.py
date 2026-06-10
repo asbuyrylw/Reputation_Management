@@ -169,3 +169,37 @@ def test_eval_malformed_routes_to_human_not_needs_fix(fresh_schema, monkeypatch)
     assert d["status"] == "pending_review"          # NOT a false needs_fix
     assert float(d["quality_score"]) == pytest.approx(0.0)
     assert "human must review" in json.dumps(d["compliance_flags"])
+
+
+def test_deterministic_compliance_rules():
+    """The non-LLM screen flags hard financial-marketing violations and is quiet on
+    ordinary copy -- no DB / no LLM needed."""
+    from rep_engine import content_generator as cg
+    assert cg._deterministic_compliance("We guarantee 30% returns") != []
+    assert cg._deterministic_compliance("A totally risk-free plan") != []
+    assert cg._deterministic_compliance("We are the best-in-class agency") != []
+    assert cg._deterministic_compliance("Helpful, factual content for local families.") == []
+    assert cg._deterministic_compliance(None) == []
+
+
+@requires_db
+def test_deterministic_compliance_overrides_llm_pass(fresh_schema, monkeypatch):
+    """A draft that trips the non-injectable deterministic rules is non-compliant
+    even when the LLM screen is coaxed into 'pass: true'."""
+    conn = fresh_schema
+    from rep_engine import content_generator as cg
+    bid = _seed_business(conn)
+    _seed_workorder(conn, bid)
+
+    monkeypatch.setattr(cg.llm, "orchestrator_text",
+                        lambda system, user, max_tokens=2200, tier="full": "We guarantee 30% returns, risk-free.")
+    # eval passes; the LLM compliance screen is spoofed to 'pass' -- deterministic wins
+    monkeypatch.setattr(cg.llm, "orchestrator_json",
+                        lambda system, user, tier="full": {"score": 0.9, "fixes": []}
+                        if "QA reviewer" in system else {"pass": True, "flags": []})
+
+    created = cg.generate(bid)
+    d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
+    assert d["compliance_pass"] is False                 # deterministic override
+    assert d["status"] == "needs_fix"
+    assert "guaranteed" in json.dumps(d["compliance_flags"]).lower()

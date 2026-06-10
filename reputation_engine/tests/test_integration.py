@@ -161,3 +161,45 @@ def test_failed_rows_excluded_from_kpi_aggregation(fresh_schema):
     metrics = tr._run_metrics(conn, run_id)
     assert float(metrics["contested_rate"]) == pytest.approx(1.0, abs=1e-9)
     assert float(metrics["owned_rate"]) == pytest.approx(1.0, abs=1e-9)
+
+
+@requires_db
+def test_audit_refuses_concurrent_run(fresh_schema):
+    """Two audits for the same business must not run at once (they would race the
+    monthly-budget check). The second refuses while the per-business advisory lock
+    is held by another session."""
+    conn = fresh_schema
+    from rep_engine import ai_state_audit as m
+    from rep_engine.db import db
+    bid = _seed_business(conn)
+    with db() as holder:                       # a separate session holds the lock
+        holder.execute("SELECT pg_advisory_lock(%s)", (bid,))
+        holder.commit()
+        with pytest.raises(SystemExit):
+            m.audit(bid)                       # cannot acquire -> refuses
+        holder.execute("SELECT pg_advisory_unlock(%s)", (bid,))
+        holder.commit()
+
+
+@requires_db
+def test_log_asset_explicit_go_live_lands_in_window(fresh_schema):
+    """An asset logged with an explicit go-live timestamp is bucketed by that real
+    publish time -- so a back-filled asset lands in the attribution window."""
+    from datetime import datetime, timedelta
+    conn = fresh_schema
+    from rep_engine import tracking as tr
+    bid = _seed_business(conn)
+    r1 = conn.execute("INSERT INTO audit_runs (business_id, finished_at) "
+                      "VALUES (%s, now()-interval '20 days') RETURNING id", (bid,)).fetchone()["id"]
+    r2 = conn.execute("INSERT INTO audit_runs (business_id, finished_at) "
+                      "VALUES (%s, now()) RETURNING id", (bid,)).fetchone()["id"]
+    for rid, ga in [(r1, 0.0), (r2, 0.6)]:
+        conn.execute("INSERT INTO answers (run_id,business_id,engine,prompt,answer_text,"
+                     "goal_alignment,mentions_contested,surfaces_owned) "
+                     "VALUES (%s,%s,'e','p','t',%s,false,true)", (rid, bid, ga))
+    conn.commit()
+    # went live 10 days ago -- inside [r1, r2); pass the real go-live time explicitly
+    go_live = datetime.now() - timedelta(days=10)
+    aid = tr.log_asset(bid, "owned_page", "Backfilled", None, "own_site", None, published_at=go_live)
+    out = tr.attribute(bid)
+    assert aid in [a["id"] for a in out["assets_in_window"]]

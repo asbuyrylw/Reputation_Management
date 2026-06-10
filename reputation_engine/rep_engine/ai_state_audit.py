@@ -442,11 +442,13 @@ class GeminiEngine:
     def answer(self, prompt: str) -> dict:
         if "YOUR_GEMINI" in GEMINI_API_KEY:
             return _skip()
-        # PH 12: enable the google search grounding tool for live results
+        # PH 12: enable the google search grounding tool for live results.
+        # Auth via the x-goog-api-key header (NOT ?key=) so the secret never lands
+        # in a URL that could be logged in an exception / proxy / error trace.
         res = _llm_http(
             "POST",
-            f"{GEMINI_BASE}/v1beta/models/"
-            f"{self.model}:generateContent?key={GEMINI_API_KEY}",
+            f"{GEMINI_BASE}/v1beta/models/{self.model}:generateContent",
+            headers={"x-goog-api-key": GEMINI_API_KEY},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=60,
         )
@@ -706,6 +708,13 @@ def audit(business_id: int) -> int:
             f"Raise monthly_budget_usd in business_config to proceed."
         )
     with db() as conn:
+        # Serialize audits per business: a concurrent audit for the same business
+        # races the monthly-budget check (both read spend < cap, both proceed) and
+        # can overspend. Take a session-level advisory lock and refuse to double-run
+        # if another audit holds it. The lock auto-releases when this connection
+        # closes at the end of the audit -- no separate unlock needed.
+        if not conn.execute("SELECT pg_try_advisory_lock(%s) AS ok", (business_id,)).fetchone()["ok"]:
+            raise SystemExit(f"Another audit is already running for business {business_id}.")
         b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not b:
             raise SystemExit(f"No business id {business_id}")

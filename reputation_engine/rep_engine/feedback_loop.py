@@ -119,10 +119,11 @@ def learn(business_id: int, quiet: bool = False) -> dict:
             n_windows += 1
             total_monthly_gain += monthly_gain
 
-            # assets shipped in this window, grouped to levers
+            # assets shipped in the half-open window [prev, cur), grouped to levers
+            # (same boundary convention as tracking.attribute -- no double-count).
             assets = conn.execute(
                 "SELECT asset_type, COUNT(*) n FROM assets WHERE business_id=%s "
-                "AND published_at > %s AND published_at <= %s GROUP BY asset_type",
+                "AND published_at >= %s AND published_at < %s GROUP BY asset_type",
                 (business_id, prev["finished_at"], cur["finished_at"]),
             ).fetchall()
             window_units = defaultdict(int)

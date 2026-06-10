@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from collections import defaultdict
 from urllib.parse import urlparse
 
@@ -84,11 +85,17 @@ def _classify(domain: str, biz: dict) -> str:
     own = _strip_www((biz.get("domain") or "").lower())
     if own and own in domain:
         return "owned"
-    contested_terms = [t.strip().lower() for t in (biz.get("contested_terms") or "").split(",") if t.strip()]
-    # crude: contested if the domain string contains a contested token (e.g. a
-    # complaint/ripoff site). Real deployments can maintain an explicit list.
+    # Curated complaint-site markers stay broad (raw substring) -- a deliberate
+    # heuristic (e.g. 'ripoff' must still catch 'ripoffreport.com').
     contested_markers = ["ripoff", "complaint", "scam", "pissedconsumer", "mlmwatch"]
-    if any(m in domain for m in contested_markers) or any(t in domain for t in contested_terms):
+    if any(m in domain for m in contested_markers):
+        return "contested"
+    # User-supplied contested terms match on whole domain LABELS/tokens, not raw
+    # substring, so an arbitrary term ('mlm', 'scam', ...) no longer mis-flags a
+    # legitimate domain that merely contains it (e.g. 'scamadviser.com').
+    contested_terms = [t.strip().lower() for t in (biz.get("contested_terms") or "").split(",") if t.strip()]
+    tokens = set(re.findall(r"[a-z0-9]+", domain.lower()))
+    if any(t in tokens for t in contested_terms):
         return "contested"
     return "neutral"
 
