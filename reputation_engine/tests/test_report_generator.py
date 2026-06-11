@@ -174,3 +174,31 @@ def test_exec_summary_reports_contested_move_when_alignment_holds(fresh_schema, 
     assert "holding roughly steady" in text
     assert "contested framing have moved by" in text           # con_clause fired (else branch)
     assert "still early to call a trend" not in text
+
+
+@requires_db
+def test_report_surfaces_root_cause_and_incidents(fresh_schema, tmp_path, monkeypatch):
+    """When the agentic layer has run, the report shows the root-cause + flagged
+    incidents; otherwise the section is a no-op (verified by the smoke test)."""
+    import json
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    _answer(conn, r1, bid, "Is Reportco trustworthy?", "Some call it an MLM.", 0.10, True, False)
+    _answer(conn, r2, bid, "Is Reportco trustworthy?", "Trusted local firm.", 0.80, False, True)
+    conn.execute("INSERT INTO root_cause (business_id, model) VALUES (%s,%s)",
+                 (bid, json.dumps({"summary": "The MLM narrative is driven by ripoffreport.com",
+                                   "primary_sources": [{"url": "https://ripoffreport.com/x",
+                                                        "why": "top contested citation"}],
+                                   "recommended_counters": ["3 owned blog posts"]})))
+    conn.execute("INSERT INTO incidents (business_id, mention_url, severity, status) "
+                 "VALUES (%s,'https://r/1','high','pending_human_review')", (bid,))
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    text = _doc_text(rg.generate(bid))
+    assert "Why the Contested Narrative Surfaces" in text
+    assert "ripoffreport.com" in text
+    assert "New Contested Mentions Flagged This Period" in text

@@ -103,11 +103,28 @@ def fetch_text(url: str, *, timeout: int = 20, deadline: Optional[float] = 45.0)
 
 
 def web_search(query: str, *, limit: int = 15) -> list:
-    """Keyless web search via Google News RSS -- the default discovery backend for
-    finding industry/geo journalists, outlets and coverage. Returns
-    [{title, url, outlet, snippet}]. Fixed host (SSRF-safe); a richer backend
-    (Serper/Tavily) can be slotted in behind an env key later. Results are
-    attacker-influenced -- the caller MUST fence() snippets before any prompt."""
+    """Web search for discovery (industry/geo journalists, outlets, coverage). Uses
+    Serper (google.serper.dev) when SERPER_API_KEY is set -- richer, structured
+    results -- otherwise keyless Google News RSS. Returns [{title, url, outlet,
+    snippet}]. Results are attacker-influenced -- the caller MUST fence() snippets
+    before any prompt. Both backends hit a FIXED host (SSRF-safe)."""
+    key = os.getenv("SERPER_API_KEY", "")
+    return _serper_news(query, key, limit) if key else _rss_news(query, limit)
+
+
+def _serper_news(query: str, key: str, limit: int) -> list:
+    res = _http.request_json("POST", "https://google.serper.dev/news",
+                             headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                             json={"q": query, "num": min(limit, 20)},
+                             timeout=20, deadline=30.0)
+    if res.failed or not isinstance(res.data, dict):
+        return []
+    return [{"title": it.get("title", ""), "url": it.get("link", ""),
+             "outlet": it.get("source", ""), "snippet": it.get("snippet", "")}
+            for it in (res.data.get("news") or [])[:limit] if isinstance(it, dict)]
+
+
+def _rss_news(query: str, limit: int) -> list:
     from urllib.parse import quote
     url = f"https://news.google.com/rss/search?q={quote(query)}"
     res = _http.request_json("GET", url, parse_json=False, timeout=20, max_retries=2,
