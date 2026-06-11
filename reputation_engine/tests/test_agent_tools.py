@@ -74,6 +74,36 @@ def test_fence_wraps_untrusted_text():
     assert out.startswith("<untrusted_content>") and out.endswith("</untrusted_content>")
 
 
+def test_web_search_uses_serper_when_keyed(monkeypatch):
+    from rep_engine import agent_tools as at
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    cap = {}
+
+    class R:
+        failed = False
+        data = {"news": [{"title": "T", "link": "https://u", "source": "Outlet", "snippet": "s"}]}
+
+    monkeypatch.setattr(at._http, "request_json",
+                        lambda method, url, **k: cap.update(method=method, url=url, **k) or R())
+    out = at.web_search("acme journalist")
+    assert cap["method"] == "POST" and cap["url"] == "https://google.serper.dev/news"
+    assert out == [{"title": "T", "url": "https://u", "outlet": "Outlet", "snippet": "s"}]
+
+
+def test_web_search_falls_back_to_rss_without_key(monkeypatch):
+    from rep_engine import agent_tools as at
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+
+    class R:
+        failed = False
+        text = ("<rss><item><title>News</title><link>http://x</link>"
+                "<source>Outlet</source><description>d</description></item></rss>")
+
+    monkeypatch.setattr(at._http, "request_json", lambda method, url, **k: R())
+    out = at.web_search("acme")
+    assert out and out[0]["url"] == "http://x" and out[0]["outlet"] == "Outlet"
+
+
 def test_make_checkpointer_defaults_to_in_memory(monkeypatch):
     from langgraph.checkpoint.memory import InMemorySaver
     from rep_engine import agent_tools as at

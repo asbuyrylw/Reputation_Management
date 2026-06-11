@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 
 
 try:
@@ -46,6 +47,59 @@ from . import runstate as m_rs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("orchestrator")
+
+
+# ----------------------------------------------------------------------------
+# Optional LangGraph agentic steps -- OFF by default so the verified cycle's cost
+# and behavior are unchanged; opt in per-graph via env. Agent modules are imported
+# lazily (the orchestrator stays importable without langgraph) and a graph failure
+# can never break the core cycle.
+# ----------------------------------------------------------------------------
+def _agent_enabled(flag: str) -> bool:
+    return os.getenv(flag, "").lower() in ("1", "true", "yes")
+
+
+def _safe_agentic(label: str, fn):
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 -- an optional agent must never break the cycle
+        log.warning("agentic step %s skipped: %s", label, e)
+        return {"skipped": str(e)}
+
+
+def _maybe_agentic_steps(rs, bid: int) -> None:
+    """Append the opt-in agentic graphs as cycle steps (each gated by its own env
+    flag). Graphs 1/2/4 are read-only/queue-only; Graph 3 drafts a bundle that still
+    requires the existing per-asset human approval -- nothing is auto-published."""
+    if (_agent_enabled("AGENT_INCIDENT_IN_CYCLE") or _agent_enabled("AGENT_REMEDIATION_IN_CYCLE")) \
+            and not _agent_enabled("AGENT_CHECKPOINT_PG"):
+        log.warning("In-cycle incident/remediation enabled WITHOUT AGENT_CHECKPOINT_PG: human-gate "
+                    "interrupts use an in-memory checkpointer and won't be resumable after this "
+                    "process exits. Set AGENT_CHECKPOINT_PG=1 for durable cross-process review.")
+    if _agent_enabled("AGENT_ROOTCAUSE_IN_CYCLE"):
+        def _run():
+            from . import agent_rootcause as a
+            return a.investigate(bid)
+        rs.step("root_cause", lambda: _safe_agentic("root_cause", _run),
+                "CYCLE root-cause / source-intelligence (Graph 1)")
+    if _agent_enabled("AGENT_DISCOVERY_IN_CYCLE"):
+        def _run():
+            from . import agent_discovery as a
+            return a.discover(bid)
+        rs.step("discovery", lambda: _safe_agentic("discovery", _run),
+                "CYCLE discovery of outreach targets (Graph 2)")
+    if _agent_enabled("AGENT_INCIDENT_IN_CYCLE"):
+        def _run():
+            from . import agent_incident as a
+            return a.scan(bid)
+        rs.step("incident_scan", lambda: _safe_agentic("incident_scan", _run),
+                "CYCLE reactive-incident scan (Graph 4)")
+    if _agent_enabled("AGENT_REMEDIATION_IN_CYCLE"):
+        def _run():
+            from . import agent_content as a
+            return a.remediate(bid)
+        rs.step("remediation", lambda: _safe_agentic("remediation", _run),
+                "CYCLE multi-channel content remediation (Graph 3)")
 
 
 
@@ -76,6 +130,7 @@ def run_full(args) -> None:
     rs.step("sync_tracking", lambda: m5.sync_plan(bid), "STEP sync work orders")
     if getattr(args, "generate_drafts", False):
         rs.step("generate_drafts", lambda: m6.generate(bid), "STEP generate content drafts (pending review)")
+    _maybe_agentic_steps(rs, bid)
     rs.step("report", lambda: m4.generate(bid), "STEP client report")
     rs.finish()
     log.info("DONE. Business id=%d fully processed.", bid)
@@ -107,6 +162,7 @@ def run_cycle(args) -> None:
     rs.step("learn", lambda: m9.learn(bid, quiet=True), "CYCLE learn from outcomes")
     rs.step("timeline", lambda: m7.estimate(bid, quiet=True), "CYCLE timeline estimate")
     rs.step("accelerate", lambda: m8.advise(bid, quiet=True), "CYCLE acceleration options")
+    _maybe_agentic_steps(rs, bid)
     rs.step("report", lambda: m4.generate(bid), "CYCLE report")
     rs.finish()
     log.info("Cycle complete for business id=%d", bid)

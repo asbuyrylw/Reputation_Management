@@ -324,6 +324,42 @@ def _save_report(doc, b) -> str:
     return path
 
 
+def _section_root_cause_and_incidents(heading, body, bullet, business_id):
+    """Surface the agentic layer's output -- Graph 1 root-cause + Graph 4 pending
+    incidents -- when present. Read-only and a NO-OP when those tables are empty or
+    absent (so the report is unchanged unless the agents have run)."""
+    try:
+        with db() as conn:
+            rc = conn.execute("SELECT model FROM root_cause WHERE business_id=%s "
+                              "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+            inc = conn.execute("SELECT severity, COUNT(*) n FROM incidents WHERE business_id=%s "
+                               "AND status='pending_human_review' GROUP BY severity",
+                               (business_id,)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- tables may be absent on an un-migrated DB
+        log.warning("report: agentic-findings section unavailable (%s)", e)
+        return
+    model = (rc.get("model") if rc else None) or {}
+    if not isinstance(model, dict):       # tolerate a hand-edited / schema-drifted row
+        model = {}
+    summary = str(model.get("summary") or "")
+    if summary and "No contested sources" not in summary:
+        heading("Why the Contested Narrative Surfaces")
+        body(summary[:1500])              # bound a pathological injected string
+        sources = model.get("primary_sources")
+        for s in (sources if isinstance(sources, list) else [])[:3]:
+            if isinstance(s, dict):
+                bullet(f"{s.get('url', '')} — {s.get('why', '')}")
+        counters = model.get("recommended_counters")
+        counters = counters if isinstance(counters, list) else []
+        if counters:
+            body("Recommended counters: " + "; ".join(str(c) for c in counters[:5]) + ".", italic=True)
+    if inc:
+        heading("New Contested Mentions Flagged This Period")
+        for r in inc:
+            bullet(f"{r['severity']}: {r['n']} awaiting review")
+        body("These were auto-triaged with a drafted response pending your approval.", italic=True)
+
+
 def generate(business_id: int) -> str:
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
@@ -506,6 +542,8 @@ def generate(business_id: int) -> str:
     if shown == 0:
         for w in wos[:6]:
             bullet(w.get("title", ""))
+
+    _section_root_cause_and_incidents(heading, body, bullet, business_id)
 
     heading("How These Results Are Achieved", size=12, color=GOLD)
     body("This program works by out-producing and out-corroborating accurate, positive content so "
