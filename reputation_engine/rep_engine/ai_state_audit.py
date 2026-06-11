@@ -51,10 +51,12 @@ try:
     from . import cost  # when imported as part of the rep_engine package
     from . import http
     from .llm_schemas import ScoreResult
+    from .textutils import split_terms
 except ImportError:  # pragma: no cover -- allows running the file directly
     import cost  # type: ignore
     import http  # type: ignore
     from llm_schemas import ScoreResult  # type: ignore
+    from textutils import split_terms  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("ai_state_audit")
@@ -319,7 +321,8 @@ def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
 
 
 def _split(csv_val: Optional[str]) -> list[str]:
-    return [t.strip() for t in (csv_val or "").split(",") if t.strip()]
+    # comma-only split (contested_terms / battery inputs); see textutils.split_terms
+    return split_terms(csv_val)
 
 
 # ----------------------------------------------------------------------------
@@ -352,11 +355,22 @@ def _usage(data) -> Optional[dict]:
     u = data.get("usage") or data.get("usageMetadata")
     if not isinstance(u, dict):
         return None
-    inp = u.get("input_tokens") or u.get("prompt_tokens") or u.get("promptTokenCount")
-    out = u.get("output_tokens") or u.get("completion_tokens") or u.get("candidatesTokenCount")
+
+    def _first(*keys):
+        # resolve by `is not None` (NOT `or`) so a legitimate 0-token count is
+        # kept rather than silently skipped to the next field / dropped to None.
+        for k in keys:
+            v = u.get(k)
+            if v is not None:
+                return v
+        return None
+
+    inp = _first("input_tokens", "prompt_tokens", "promptTokenCount")
+    out = _first("output_tokens", "completion_tokens", "candidatesTokenCount")
     if inp is None and out is None:
         return None
-    return {"input": int(inp or 0), "output": int(out or 0)}
+    return {"input": int(inp) if inp is not None else 0,
+            "output": int(out) if out is not None else 0}
 
 
 def _fail(reason: str) -> dict:

@@ -38,8 +38,12 @@ from urllib.parse import urlparse
 
 try:
     from .db import db
+    from .textutils import split_terms
+    from .textutils import strip_www as _strip_www
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    from textutils import split_terms  # type: ignore
+    from textutils import strip_www as _strip_www  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("citation_analytics")
@@ -57,12 +61,6 @@ def _ensure() -> None:
             cite_count INT, share NUMERIC(6,4), classification TEXT,
             first_seen_run BIGINT, last_seen_run BIGINT, created_at TIMESTAMPTZ DEFAULT now())""")
         conn.commit()
-
-
-def _strip_www(d: str) -> str:
-    """Strip a leading 'www.' prefix. NOT str.lstrip('www.'), which strips any
-    leading run of the chars {w,.} and would mangle e.g. 'weather.com' -> 'eather.com'."""
-    return d[4:] if d.startswith("www.") else d
 
 
 def _domain(src) -> str:
@@ -93,7 +91,7 @@ def _classify(domain: str, biz: dict) -> str:
     # User-supplied contested terms match on whole domain LABELS/tokens, not raw
     # substring, so an arbitrary term ('mlm', 'scam', ...) no longer mis-flags a
     # legitimate domain that merely contains it (e.g. 'scamadviser.com').
-    contested_terms = [t.strip().lower() for t in (biz.get("contested_terms") or "").split(",") if t.strip()]
+    contested_terms = [t.lower() for t in split_terms(biz.get("contested_terms"))]
     tokens = set(re.findall(r"[a-z0-9]+", domain.lower()))
     if any(t in tokens for t in contested_terms):
         return "contested"

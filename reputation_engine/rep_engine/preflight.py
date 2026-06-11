@@ -65,7 +65,8 @@ def check_db() -> bool:
     try:
         with m.db() as conn:
             for t in ["businesses", "audit_runs", "answers"]:
-                conn.execute(f"SELECT 1 FROM {t} LIMIT 1")
+                # B608 false positive: t is from this literal allowlist, never user input.
+                conn.execute(f"SELECT 1 FROM {t} LIMIT 1")  # nosec B608
         ok("core tables present")
     except Exception:  # noqa: BLE001
         bad("core tables missing -- run `alembic upgrade head` (or `make migrate`)")

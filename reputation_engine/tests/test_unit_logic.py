@@ -314,3 +314,85 @@ def test_http_redacts_secrets_in_errors():
     assert "SEKRIT" not in http._redact("x-goog-api-key: SEKRIT123")
     # ordinary error text is left untouched
     assert http._redact("plain connection error") == "plain connection error"
+
+
+def _fake_resp(status=200, body='{"ok": true}', headers=None):
+    import json as _json
+
+    class _R:
+        status_code = status
+        text = body
+        is_redirect = False
+        next = None
+
+        def __init__(self):
+            self.headers = headers or {}
+
+        def json(self):
+            return _json.loads(body)
+
+    return _R()
+
+
+def test_http_attempts_accurate_on_success_and_exhaustion(monkeypatch):
+    from rep_engine import http
+    monkeypatch.setattr(http.time, "sleep", lambda *a, **k: None)
+    # success on the first try -> attempts == 1
+    monkeypatch.setattr(http.requests, "request", lambda *a, **k: _fake_resp(200))
+    r = http.request_json("GET", "http://x", max_retries=3)
+    assert r.ok and r.attempts == 1
+    # always 503 -> failed, status 503, exactly max_retries+1 attempts made
+    calls = {"n": 0}
+
+    def always_503(*a, **k):
+        calls["n"] += 1
+        return _fake_resp(503, body="busy")
+
+    monkeypatch.setattr(http.requests, "request", always_503)
+    r = http.request_json("GET", "http://x", max_retries=3, parse_json=False)
+    assert r.failed and r.status == 503
+    assert r.attempts == 4 and calls["n"] == 4
+
+
+def test_http_attempts_correct_on_immediate_request_exception(monkeypatch):
+    """Regression: a non-Timeout RequestException on attempt 0 must report attempts==1
+    (not max_retries+1) and make exactly one request, with no 'None' in the error."""
+    from rep_engine import http
+    monkeypatch.setattr(http.time, "sleep", lambda *a, **k: None)
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise http.requests.TooManyRedirects("too many redirects")
+
+    monkeypatch.setattr(http.requests, "request", boom)
+    r = http.request_json("GET", "http://x", max_retries=4)
+    assert r.failed and r.attempts == 1 and calls["n"] == 1
+    assert "None" not in (r.error or "")
+
+
+def test_http_deadline_bounds_retries(monkeypatch):
+    from rep_engine import http
+    monkeypatch.setattr(http.time, "sleep", lambda *a, **k: None)
+    calls = {"n": 0}
+
+    def always_503(*a, **k):
+        calls["n"] += 1
+        return _fake_resp(503, body="busy")
+
+    monkeypatch.setattr(http.requests, "request", always_503)
+    # a backoff far larger than the deadline -> no retry, return the 503 after 1 call
+    r = http.request_json("GET", "http://x", max_retries=5, base_delay=10.0,
+                          parse_json=False, deadline=0.001)
+    assert r.status == 503 and r.attempts == 1 and calls["n"] == 1
+    # deadline=None -> the full retry budget is used
+    calls["n"] = 0
+    r2 = http.request_json("GET", "http://x", max_retries=5, parse_json=False)
+    assert r2.attempts == 6 and calls["n"] == 6
+
+
+def test_http_no_attempts_message_is_not_none(monkeypatch):
+    from rep_engine import http
+    monkeypatch.setattr(http.requests, "request", lambda *a, **k: _fake_resp(200))
+    r = http.request_json("GET", "http://x", max_retries=-1)   # defensive edge: 0 attempts
+    assert r.failed and r.attempts == 0 and "None" not in (r.error or "")

@@ -37,8 +37,10 @@ import re
 
 try:
     from .db import db
+    from .textutils import strip_www as _strip_www
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    from textutils import strip_www as _strip_www  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("competitor")
@@ -73,12 +75,6 @@ def register_competitor(business_id: int, name: str, domain: str = "") -> int:
         conn.commit()
     log.info("Registered competitor '%s' for business %d", name, business_id)
     return row["id"]
-
-
-def _strip_www(d: str) -> str:
-    """Strip a leading 'www.' prefix. NOT str.lstrip('www.'), which strips any
-    leading run of the chars {w,.} and would mangle e.g. 'weather.com' -> 'eather.com'."""
-    return d[4:] if d.startswith("www.") else d
 
 
 def _mentions(text: str, sources, name: str, domain: str) -> bool:

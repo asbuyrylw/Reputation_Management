@@ -51,6 +51,11 @@ try:
 except ImportError:  # pragma: no cover
     import netguard as _netguard  # type: ignore
 
+try:
+    from .textutils import split_terms
+except ImportError:  # pragma: no cover
+    from textutils import split_terms  # type: ignore
+
 # Optional fast HTML parser; falls back to regex if unavailable.
 try:
     from selectolax.parser import HTMLParser as _HTMLParser  # type: ignore
@@ -526,7 +531,7 @@ def crawl_cmd(business_id: int, max_pages: int) -> None:
     # build semantic targets from the business: services/geo/contested terms as the
     # entities AI answers would expect; the prompt battery as target questions.
     def _split(v):
-        return [t.strip() for t in (v or "").replace(";", ",").split(",") if t.strip()]
+        return split_terms(v, extra_seps=";")   # seeds split on ';' AND ',' (see textutils)
     terms = _split(b.get("services")) + _split(b.get("geo")) + _split(b.get("contested_terms"))
     terms = [t for t in terms if t][:20]
     try:

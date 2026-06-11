@@ -113,7 +113,9 @@ def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None)
         sets.append("verified_at=%s"); params.append(now)
     params.append(wo_id)
     with db() as conn:
-        conn.execute(f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s", tuple(params))
+        # B608 false positive: every element of `sets` is a literal "col=%s" fragment
+        # built above (no user input in the SQL text); all values are bound parameters.
+        conn.execute(f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s", tuple(params))  # nosec B608
         conn.commit()
     log.info("WO %d -> %s", wo_id, status)
 

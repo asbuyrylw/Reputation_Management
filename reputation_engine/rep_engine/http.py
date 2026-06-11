@@ -68,20 +68,39 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
                  json: dict | None = None, params: dict | None = None,
                  timeout: int = DEFAULT_TIMEOUT, max_retries: int = DEFAULT_MAX_RETRIES,
                  base_delay: float = DEFAULT_BASE_DELAY,
-                 parse_json: bool = True, guard_redirects: bool = False) -> HttpResult:
+                 parse_json: bool = True, guard_redirects: bool = False,
+                 deadline: float | None = None) -> HttpResult:
     """Make an HTTP request with retries. Returns HttpResult; never raises for
     network/HTTP errors (raises only on programmer error).
 
     When guard_redirects=True, redirects are followed manually (max 5 hops) and
     every hop URL is re-validated by netguard.assert_url_allowed, preventing a
-    30x response from redirecting an outbound crawl fetch to an internal address."""
+    30x response from redirecting an outbound crawl fetch to an internal address.
+
+    deadline is an optional TOTAL wall-clock budget (seconds) across all retries:
+    when set, the call stops retrying once the next backoff would overrun it and
+    each attempt's socket timeout is bounded by the remaining budget. Default None
+    preserves the prior behavior exactly (per-attempt `timeout` only, worst-case
+    total ~= (max_retries+1)*timeout + sum(backoffs))."""
     last_err = None
     follow = not guard_redirects
+    attempts_made = 0
+    start = time.monotonic()
     for attempt in range(max_retries + 1):
+        # With a deadline set, stop once it's spent and bound each attempt's socket
+        # timeout by the remaining budget. This whole block is inert when deadline
+        # is None, so existing callers' timing is byte-for-byte unchanged.
+        eff_timeout: float = timeout
+        if deadline is not None:
+            remaining = deadline - (time.monotonic() - start)
+            if remaining <= 0:
+                break
+            eff_timeout = max(1.0, min(float(timeout), remaining))
+        attempts_made = attempt + 1
         try:
             resp = requests.request(
                 method, url, headers=headers, json=json, params=params,
-                timeout=timeout, allow_redirects=follow,
+                timeout=eff_timeout, allow_redirects=follow,
             )
             if guard_redirects:
                 hops = 0
@@ -96,23 +115,26 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
                     except _ng.UnsafeURLError as e:
                         return HttpResult(ok=False, status=resp.status_code,
                                           error=f"redirect blocked by SSRF guard: {e}",
-                                          attempts=attempt + 1)
+                                          attempts=attempts_made)
                     resp = requests.request(
                         "GET", nxt, headers=headers, params=params,
-                        timeout=timeout, allow_redirects=False,
+                        timeout=eff_timeout, allow_redirects=False,
                     )
                     hops += 1
             status = resp.status_code
             if status in RETRYABLE_STATUS and attempt < max_retries:
                 delay = _sleep_for(attempt, resp.headers.get("Retry-After"), base_delay)
-                log.warning("HTTP %s on %s (attempt %d/%d) -> retrying in %.1fs",
-                            status, _short(url), attempt + 1, max_retries, delay)
-                time.sleep(delay)
-                continue
+                # only retry if the backoff fits the remaining wall-clock budget
+                if deadline is None or (time.monotonic() - start) + delay <= deadline:
+                    log.warning("HTTP %s on %s (attempt %d/%d) -> retrying in %.1fs",
+                                status, _short(url), attempt + 1, max_retries, delay)
+                    time.sleep(delay)
+                    continue
+                # else: out of budget -> fall through and return the status below
             if status >= 400:
                 return HttpResult(ok=False, status=status, text=resp.text[:500],
                                   error=f"HTTP {status}: {resp.text[:200]}",
-                                  attempts=attempt + 1)
+                                  attempts=attempts_made)
             data = None
             if parse_json:
                 try:
@@ -120,22 +142,26 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
                 except ValueError:
                     return HttpResult(ok=False, status=status, text=resp.text[:500],
                                       error="response was not valid JSON",
-                                      attempts=attempt + 1)
+                                      attempts=attempts_made)
             return HttpResult(ok=True, status=status, data=data,
-                              text=resp.text, attempts=attempt + 1)
+                              text=resp.text, attempts=attempts_made)
         except (requests.Timeout, requests.ConnectionError) as e:
             last_err = _redact(str(e))
-            if attempt < max_retries:
-                delay = _sleep_for(attempt, None, base_delay)
-                log.warning("Network error on %s (attempt %d/%d): %s -> retry in %.1fs",
-                            _short(url), attempt + 1, max_retries, last_err, delay)
-                time.sleep(delay)
-                continue
+            if attempt >= max_retries:
+                break
+            delay = _sleep_for(attempt, None, base_delay)
+            if deadline is not None and (time.monotonic() - start) + delay > deadline:
+                break  # out of wall-clock budget
+            log.warning("Network error on %s (attempt %d/%d): %s -> retry in %.1fs",
+                        _short(url), attempt + 1, max_retries, last_err, delay)
+            time.sleep(delay)
         except requests.RequestException as e:
             last_err = _redact(str(e))
             break
-    return HttpResult(ok=False, error=f"exhausted retries: {last_err}",
-                      attempts=max_retries + 1)
+    return HttpResult(ok=False,
+                      error=(f"exhausted retries: {last_err}" if last_err
+                             else f"exhausted retries after {attempts_made} attempt(s)"),
+                      attempts=attempts_made)
 
 
 def _short(url: str) -> str:
