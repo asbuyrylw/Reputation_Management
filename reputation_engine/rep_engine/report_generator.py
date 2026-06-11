@@ -192,18 +192,10 @@ def _trend_chart(series: list):
     return tmp.name
 
 
-def generate(business_id: int) -> str:
-    from docx import Document
-    from docx.shared import Pt, RGBColor, Inches
-
-    d = _load(business_id)
-    b, gap, plan = d["business"], d["gap"], d["plan"]
-    series = d["series"]
-
-    doc = Document()
-    normal = doc.styles["Normal"]
-    normal.font.name = "Arial"
-    normal.font.size = Pt(11)
+def _doc_helpers(doc):
+    """The heading / body / bullet paragraph helpers, bound to `doc`. Extracted
+    from generate() unchanged so sections can be built by standalone helpers."""
+    from docx.shared import Pt, RGBColor
 
     def heading(text, size=15, color=NAVY, space_before=12):
         p = doc.add_paragraph()
@@ -222,6 +214,130 @@ def generate(business_id: int) -> str:
 
     def bullet(text):
         doc.add_paragraph(text, style="List Bullet")
+
+    return heading, body, bullet
+
+
+def _section_timeline(heading, body, business_id):
+    # ---- Projected timeline (range-based; clearly a projection) ----
+    try:
+        heading("Projected Timeline")
+        from . import timeline_estimator as _te
+        proj = _te.estimate(business_id, quiet=True)
+        p = proj["projection"]
+        body(f"Estimated time for the accurate narrative to dominate (confidence: "
+             f"{proj['confidence']}): expected ~{p['expected']['months']} months "
+             f"(range {p['optimistic']['months']}–{p['conservative']['months']} months).")
+        body("This is a projection, not a guarantee — it reflects how much accurate "
+             "content is being shipped and this business's own measured rate of change, "
+             "which sharpens the estimate as more audits accumulate.", italic=True)
+    except Exception as e:  # noqa: BLE001  -- never let the projection break the report
+        log.warning("report: timeline section unavailable (%s)", e)
+        body("A timeline projection is not available for this reporting period.", italic=True)
+
+
+def _section_acceleration(heading, body, business_id):
+    # ---- Ways to accelerate (third-party / human levers) ----
+    try:
+        heading("Ways to Accelerate")
+        from . import acceleration_advisor as _aa
+        adv = _aa.advise(business_id, quiet=True)
+        body("These are third-party / human actions (which we can't automate for you) "
+             "that would compress the expected window. Quantities are per month.")
+        for lv in adv["levers_ranked_by_impact"][:4]:
+            sm = lv["suggested_per_month"]; ws = lv["weeks_saved_range"]
+            body(f"• {sm['low']}–{sm['high']} {lv['unit']}: est. {ws['low']}–{ws['high']} weeks faster. {lv['note']}")
+        agg = adv["scenarios"]["aggressive_lift"]["window"]
+        mod = adv["scenarios"]["moderate_lift"]["window"]
+        body(f"Bundled: a moderate monthly lift lands around ~{mod['months']} months; "
+             f"an aggressive lift around ~{agg['months']} months (vs ~"
+             f"{adv['baseline_expected_window']['months']} on the current plan alone).")
+        body("Reviews and placements must be genuine and within each platform's rules — "
+             "never fabricated or incentivized against policy.", italic=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: acceleration section unavailable (%s)", e)
+        body("Acceleration levers are not available for this reporting period.", italic=True)
+
+
+def _section_share_of_voice(heading, body, business_id):
+    # ---- Share of voice (which sources AI engines cite) ----
+    try:
+        from . import citation_analytics as _ca
+        sov = _ca.analyze(business_id, quiet=True)
+        if sov and sov.get("total_citations"):
+            heading("Share of Voice (AI Citations)")
+            parts = ", ".join(f"{k} {round(v*100)}%" for k, v in sov["share_of_voice"].items())
+            body(f"Across {sov['total_citations']} citations AI engines made about you, "
+                 f"the split was: {parts}.")
+            body("The aim is to grow the owned + neutral share so accurate sources dominate "
+                 "what AI surfaces — not to remove contested ones.", italic=True)
+            mom = _ca.momentum(business_id, quiet=True)
+            if mom and mom.get("summary"):
+                gain = mom["summary"].get("owned_or_neutral_gainers", [])
+                loss = mom["summary"].get("contested_losers", [])
+                if gain:
+                    body(f"Gaining ground: {', '.join(gain[:5])}.")
+                if loss:
+                    body(f"Contested sources losing ground: {', '.join(loss[:5])}.")
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: share-of-voice section unavailable (%s)", e)
+
+
+def _section_competitor(heading, body, bullet, business_id):
+    # ---- Competitor benchmarking (only if a benchmark has been run) ----
+    try:
+        from . import competitor as _comp
+        cmp = _comp.compare(business_id, quiet=True)
+        if cmp and cmp.get("prompts_compared"):
+            heading("How You Compare (AI Share of Voice vs. Competitors)")
+            rank = cmp.get("subject_rank")
+            field = cmp.get("field_size")
+            body(f"Across {cmp['prompts_compared']} category questions, here's how often "
+                 f"each name shows up in AI answers. You currently rank #{rank} of {field}.")
+            for s in cmp.get("standings", []):
+                marker = "  ← you" if s["is_subject"] else ""
+                bullet(f"{s['name']}: appears in {round(s['appearance_rate']*100)}% of "
+                       f"category questions{marker}")
+            # one head-to-head line for the strongest rival, if any gap exists
+            h2h = cmp.get("head_to_head", [])
+            gap_lines = [h for h in h2h if h.get("competitor_only_prompts", 0) > 0]
+            if gap_lines:
+                top = max(gap_lines, key=lambda h: h["competitor_only_prompts"])
+                body(f"Biggest opportunity: {top['competitor']} appears in "
+                     f"{top['competitor_only_prompts']} questions where you don't yet — "
+                     f"those are the queries to target with accurate, owned content.", italic=True)
+            body("Appearance rate = share of category questions where the name is "
+                 "mentioned or its site is cited (a transparent heuristic, not a "
+                 "judgment of quality).", italic=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: competitor section unavailable (%s)", e)
+
+
+def _save_report(doc, b) -> str:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    safe = "".join(c for c in b.get("name", "business") if c.isalnum() or c in " -_").strip().replace(" ", "_")
+    path = os.path.join(OUTPUT_DIR, f"{safe}_AI_Visibility_Report_{date.today().isoformat()}.docx")
+    doc.save(path)
+    _fix_settings_zoom(path)
+    log.info("Report written: %s", path)
+    print(path)
+    return path
+
+
+def generate(business_id: int) -> str:
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Inches
+
+    d = _load(business_id)
+    b, gap, plan = d["business"], d["gap"], d["plan"]
+    series = d["series"]
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(11)
+
+    heading, body, bullet = _doc_helpers(doc)
 
     t = doc.add_paragraph()
     tr = t.add_run("AI Visibility \u2014 Monthly Progress Report")
@@ -371,92 +487,11 @@ def generate(business_id: int) -> str:
         if deltas:
             body(f"Metric changes over the same window: {deltas}.")
 
-    # ---- Projected timeline (range-based; clearly a projection) ----
-    try:
-        heading("Projected Timeline")
-        from . import timeline_estimator as _te
-        proj = _te.estimate(business_id, quiet=True)
-        p = proj["projection"]
-        body(f"Estimated time for the accurate narrative to dominate (confidence: "
-             f"{proj['confidence']}): expected ~{p['expected']['months']} months "
-             f"(range {p['optimistic']['months']}–{p['conservative']['months']} months).")
-        body("This is a projection, not a guarantee — it reflects how much accurate "
-             "content is being shipped and this business's own measured rate of change, "
-             "which sharpens the estimate as more audits accumulate.", italic=True)
-    except Exception as e:  # noqa: BLE001  -- never let the projection break the report
-        log.warning("report: timeline section unavailable (%s)", e)
-        body("A timeline projection is not available for this reporting period.", italic=True)
+    _section_timeline(heading, body, business_id)
+    _section_acceleration(heading, body, business_id)
+    _section_share_of_voice(heading, body, business_id)
+    _section_competitor(heading, body, bullet, business_id)
 
-    # ---- Ways to accelerate (third-party / human levers) ----
-    try:
-        heading("Ways to Accelerate")
-        from . import acceleration_advisor as _aa
-        adv = _aa.advise(business_id, quiet=True)
-        body("These are third-party / human actions (which we can't automate for you) "
-             "that would compress the expected window. Quantities are per month.")
-        for lv in adv["levers_ranked_by_impact"][:4]:
-            sm = lv["suggested_per_month"]; ws = lv["weeks_saved_range"]
-            body(f"• {sm['low']}–{sm['high']} {lv['unit']}: est. {ws['low']}–{ws['high']} weeks faster. {lv['note']}")
-        agg = adv["scenarios"]["aggressive_lift"]["window"]
-        mod = adv["scenarios"]["moderate_lift"]["window"]
-        body(f"Bundled: a moderate monthly lift lands around ~{mod['months']} months; "
-             f"an aggressive lift around ~{agg['months']} months (vs ~"
-             f"{adv['baseline_expected_window']['months']} on the current plan alone).")
-        body("Reviews and placements must be genuine and within each platform's rules — "
-             "never fabricated or incentivized against policy.", italic=True)
-    except Exception as e:  # noqa: BLE001
-        log.warning("report: acceleration section unavailable (%s)", e)
-        body("Acceleration levers are not available for this reporting period.", italic=True)
-
-    # ---- Share of voice (which sources AI engines cite) ----
-    try:
-        from . import citation_analytics as _ca
-        sov = _ca.analyze(business_id, quiet=True)
-        if sov and sov.get("total_citations"):
-            heading("Share of Voice (AI Citations)")
-            parts = ", ".join(f"{k} {round(v*100)}%" for k, v in sov["share_of_voice"].items())
-            body(f"Across {sov['total_citations']} citations AI engines made about you, "
-                 f"the split was: {parts}.")
-            body("The aim is to grow the owned + neutral share so accurate sources dominate "
-                 "what AI surfaces — not to remove contested ones.", italic=True)
-            mom = _ca.momentum(business_id, quiet=True)
-            if mom and mom.get("summary"):
-                gain = mom["summary"].get("owned_or_neutral_gainers", [])
-                loss = mom["summary"].get("contested_losers", [])
-                if gain:
-                    body(f"Gaining ground: {', '.join(gain[:5])}.")
-                if loss:
-                    body(f"Contested sources losing ground: {', '.join(loss[:5])}.")
-    except Exception as e:  # noqa: BLE001
-        log.warning("report: share-of-voice section unavailable (%s)", e)
-
-    # ---- Competitor benchmarking (only if a benchmark has been run) ----
-    try:
-        from . import competitor as _comp
-        cmp = _comp.compare(business_id, quiet=True)
-        if cmp and cmp.get("prompts_compared"):
-            heading("How You Compare (AI Share of Voice vs. Competitors)")
-            rank = cmp.get("subject_rank")
-            field = cmp.get("field_size")
-            body(f"Across {cmp['prompts_compared']} category questions, here's how often "
-                 f"each name shows up in AI answers. You currently rank #{rank} of {field}.")
-            for s in cmp.get("standings", []):
-                marker = "  \u2190 you" if s["is_subject"] else ""
-                bullet(f"{s['name']}: appears in {round(s['appearance_rate']*100)}% of "
-                       f"category questions{marker}")
-            # one head-to-head line for the strongest rival, if any gap exists
-            h2h = cmp.get("head_to_head", [])
-            gap_lines = [h for h in h2h if h.get("competitor_only_prompts", 0) > 0]
-            if gap_lines:
-                top = max(gap_lines, key=lambda h: h["competitor_only_prompts"])
-                body(f"Biggest opportunity: {top['competitor']} appears in "
-                     f"{top['competitor_only_prompts']} questions where you don't yet — "
-                     f"those are the queries to target with accurate, owned content.", italic=True)
-            body("Appearance rate = share of category questions where the name is "
-                 "mentioned or its site is cited (a transparent heuristic, not a "
-                 "judgment of quality).", italic=True)
-    except Exception as e:  # noqa: BLE001
-        log.warning("report: competitor section unavailable (%s)", e)
     wos = plan.get("work_orders", []) or []
     order_ids = gap.get("priority_order", []) or [w.get("wo_id") for w in wos[:6]]
     wo_by_id = {w.get("wo_id"): w for w in wos}
@@ -493,14 +528,7 @@ def generate(business_id: int) -> str:
         except Exception:  # noqa: BLE001
             pass
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe = "".join(c for c in b.get("name", "business") if c.isalnum() or c in " -_").strip().replace(" ", "_")
-    path = os.path.join(OUTPUT_DIR, f"{safe}_AI_Visibility_Report_{date.today().isoformat()}.docx")
-    doc.save(path)
-    _fix_settings_zoom(path)
-    log.info("Report written: %s", path)
-    print(path)
-    return path
+    return _save_report(doc, b)
 
 
 def _fix_settings_zoom(path: str) -> None:

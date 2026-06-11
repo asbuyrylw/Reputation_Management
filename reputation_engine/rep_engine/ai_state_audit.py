@@ -713,12 +713,7 @@ def _should_stop_sampling(scores: list[float]) -> bool:
     return stable and clear_of_boundary
 
 
-def audit(business_id: int) -> int:
-    """Run the prompt battery across engines with multi-sampling, per-call cost
-    tracking, and a per-business monthly budget cap. Each (prompt, engine, sample)
-    is a row in `answers` (sample_idx distinguishes repeats); the gap model and
-    diff average across samples automatically."""
-    init_db()
+def _audit_check_budget_or_exit(business_id: int) -> None:
     # Budget guard -- refuse to start an audit that would blow the monthly cap.
     if cost.over_budget(business_id):
         raise SystemExit(
@@ -726,6 +721,40 @@ def audit(business_id: int) -> int:
             f"(${cost.month_spend(business_id):.2f} / ${cost.budget_for(business_id):.2f}). "
             f"Raise monthly_budget_usd in business_config to proceed."
         )
+
+
+def _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans, score,
+                          row_failed, scoring_failed, failed, s, persona, location) -> None:
+    """Write one answers row. Metric columns are NULL on a failed/unscored row so a
+    failed call never pollutes downstream aggregates; `raw` keeps the full payload."""
+    conn.execute(
+        """INSERT INTO answers (run_id, business_id, engine, prompt, answer_text,
+            cited_sources, sentiment, goal_alignment, mentions_contested,
+            surfaces_owned, key_sources, missing, sample_idx, failed,
+            persona, location, raw)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (run_id, business_id, eng.name, prompt, ans.get("text", ""),
+         json.dumps(ans.get("sources", [])),
+         score.get("sentiment") if not row_failed else None,
+         score.get("goal_alignment") if not row_failed else None,
+         bool(score.get("mentions_contested")) if not row_failed else None,
+         bool(score.get("surfaces_owned")) if not row_failed else None,
+         json.dumps(score.get("key_sources", [])) if not row_failed else None,
+         json.dumps(score.get("missing", [])) if not row_failed else None,
+         s, row_failed, persona, location,
+         json.dumps({"score": score, "error": ans.get("error")} if failed
+                    else ({"score": score, "scoring_failed": True} if scoring_failed
+                          else {"score": score}))),
+    )
+
+
+def audit(business_id: int) -> int:
+    """Run the prompt battery across engines with multi-sampling, per-call cost
+    tracking, and a per-business monthly budget cap. Each (prompt, engine, sample)
+    is a row in `answers` (sample_idx distinguishes repeats); the gap model and
+    diff average across samples automatically."""
+    init_db()
+    _audit_check_budget_or_exit(business_id)
     with db() as conn:
         # Serialize audits per business: a concurrent audit for the same business
         # races the monthly-budget check (both read spend < cap, both proceed) and
@@ -798,25 +827,9 @@ def audit(business_id: int) -> int:
                     scoring_failed = (has_text and not failed and not score)
                     row_failed = failed or scoring_failed
 
-                    conn.execute(
-                        """INSERT INTO answers (run_id, business_id, engine, prompt, answer_text,
-                            cited_sources, sentiment, goal_alignment, mentions_contested,
-                            surfaces_owned, key_sources, missing, sample_idx, failed,
-                            persona, location, raw)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                        (run_id, business_id, eng.name, prompt, ans.get("text", ""),
-                         json.dumps(ans.get("sources", [])),
-                         score.get("sentiment") if not row_failed else None,
-                         score.get("goal_alignment") if not row_failed else None,
-                         bool(score.get("mentions_contested")) if not row_failed else None,
-                         bool(score.get("surfaces_owned")) if not row_failed else None,
-                         json.dumps(score.get("key_sources", [])) if not row_failed else None,
-                         json.dumps(score.get("missing", [])) if not row_failed else None,
-                         s, row_failed, persona, location,
-                         json.dumps({"score": score, "error": ans.get("error")} if failed
-                                    else ({"score": score, "scoring_failed": True} if scoring_failed
-                                          else {"score": score}))),
-                    )
+                    _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans,
+                                          score, row_failed, scoring_failed, failed, s,
+                                          persona, location)
                     time.sleep(POLITE_DELAY_S)
 
                     # adaptive sampling: once stable + clear of the decision boundary,
