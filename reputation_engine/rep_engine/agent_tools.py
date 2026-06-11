@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 try:
@@ -98,6 +99,28 @@ def fetch_text(url: str, *, timeout: int = 20, deadline: Optional[float] = 45.0)
     res = _http.request_json("GET", url, parse_json=False, timeout=timeout,
                              guard_redirects=True, deadline=deadline)
     return res.text if not res.failed else None
+
+
+def web_search(query: str, *, limit: int = 15) -> list:
+    """Keyless web search via Google News RSS -- the default discovery backend for
+    finding industry/geo journalists, outlets and coverage. Returns
+    [{title, url, outlet, snippet}]. Fixed host (SSRF-safe); a richer backend
+    (Serper/Tavily) can be slotted in behind an env key later. Results are
+    attacker-influenced -- the caller MUST fence() snippets before any prompt."""
+    from urllib.parse import quote
+    url = f"https://news.google.com/rss/search?q={quote(query)}"
+    res = _http.request_json("GET", url, parse_json=False, timeout=20, max_retries=2,
+                             deadline=30.0, guard_redirects=True)
+    if res.failed or not res.text:
+        return []
+    out = []
+    for it in re.findall(r"<item>(.*?)</item>", res.text, re.DOTALL)[:limit]:
+        def _tag(t: str) -> str:
+            m = re.search(rf"<{t}>(.*?)</{t}>", it, re.DOTALL)
+            return re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", m.group(1)).strip() if m else ""
+        out.append({"title": _tag("title"), "url": _tag("link"),
+                    "outlet": _tag("source"), "snippet": _tag("description")})
+    return out
 
 
 def citation_readiness(text: str, *, title: str = "", target_terms: Optional[list] = None,
