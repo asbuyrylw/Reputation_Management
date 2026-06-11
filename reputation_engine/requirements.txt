@@ -9,3 +9,7 @@ pyseoanalyzer>=2024.0   # richer SEO/keyword analysis, run on HTML we fetch ours
 #   Screaming Frog SEO Spider (CLI)  (deep crawl/export; optional)
 pydantic>=2.0
 alembic>=1.13          # database migrations -- single source of truth for the schema
+langgraph>=1.0,<2      # agentic layer (Graph 1+): root-cause/source-intelligence, ...
+langchain-core>=1.0,<2  # message/graph types used by the LangGraph layer
+langgraph-checkpoint-postgres>=3.0,<4   # durable human-gate checkpointer (AGENT_CHECKPOINT_PG=1)
+psycopg-pool>=3.2      # connection pool for the Postgres checkpointer
