@@ -83,6 +83,7 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
     preserves the prior behavior exactly (per-attempt `timeout` only, worst-case
     total ~= (max_retries+1)*timeout + sum(backoffs))."""
     last_err = None
+    last_status = None
     follow = not guard_redirects
     attempts_made = 0
     start = time.monotonic()
@@ -122,6 +123,7 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
                     )
                     hops += 1
             status = resp.status_code
+            last_status = status
             if status in RETRYABLE_STATUS and attempt < max_retries:
                 delay = _sleep_for(attempt, resp.headers.get("Retry-After"), base_delay)
                 # only retry if the backoff fits the remaining wall-clock budget
@@ -158,10 +160,14 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
         except requests.RequestException as e:
             last_err = _redact(str(e))
             break
-    return HttpResult(ok=False,
-                      error=(f"exhausted retries: {last_err}" if last_err
-                             else f"exhausted retries after {attempts_made} attempt(s)"),
-                      attempts=attempts_made)
+    # last_status carries the most recent observed HTTP status so a deadline that
+    # expires DURING a retry backoff still reports the 5xx it saw, rather than a
+    # bare status=None. It stays None on pure network-error / no-attempt paths.
+    msg = (f"exhausted retries: {last_err}" if last_err
+           else f"exhausted retries after {attempts_made} attempt(s)")
+    if last_err is None and last_status is not None:
+        msg += f" (last status {last_status})"
+    return HttpResult(ok=False, status=last_status, error=msg, attempts=attempts_made)
 
 
 def _short(url: str) -> str:

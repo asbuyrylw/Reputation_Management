@@ -396,3 +396,18 @@ def test_http_no_attempts_message_is_not_none(monkeypatch):
     monkeypatch.setattr(http.requests, "request", lambda *a, **k: _fake_resp(200))
     r = http.request_json("GET", "http://x", max_retries=-1)   # defensive edge: 0 attempts
     assert r.failed and r.attempts == 0 and "None" not in (r.error or "")
+
+
+def test_http_deadline_preserves_last_observed_status(monkeypatch):
+    """If the wall-clock deadline expires AFTER a retryable response (during the
+    backoff), the result must carry the observed status, not drop it to None."""
+    from rep_engine import http
+    clock = {"t": 0.0}
+    monkeypatch.setattr(http.time, "monotonic", lambda: clock["t"])
+    # the backoff "sleep" pushes the clock past the 1.0s deadline before the next loop
+    monkeypatch.setattr(http.time, "sleep", lambda *a, **k: clock.__setitem__("t", clock["t"] + 5.0))
+    monkeypatch.setattr(http.requests, "request", lambda *a, **k: _fake_resp(503, body="busy"))
+    r = http.request_json("GET", "http://x", max_retries=3, base_delay=0.01,
+                          parse_json=False, deadline=1.0)
+    assert r.failed and r.status == 503           # observed status preserved (was None before fix)
+    assert r.attempts == 1 and "503" in (r.error or "")
