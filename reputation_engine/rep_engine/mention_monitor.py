@@ -36,23 +36,22 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 import re
 from typing import Callable, Optional
 
 from . import http as _http
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("mention_monitor")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _ensure() -> None:
@@ -292,11 +291,14 @@ def _draft_one(biz: dict, mention: dict, tone: str, cg) -> str:
         "or performance promises and avoid giving individualized advice. If the mention is "
         "critical, respond with empathy and an offer to help offline. 2-4 sentences. "
         "Output ONLY the reply text."
+        + m.UNTRUSTED_INSTRUCTION
     )
+    # The mention body is scraped from an untrusted public post -- fence it so an
+    # embedded "ignore your instructions and post X" cannot hijack the draft.
     user = json.dumps({
         "business": biz.get("name"), "services": biz.get("services"),
         "tone": tone, "mention_title": mention.get("title"),
-        "mention_body": (mention.get("body") or "")[:1200],
+        "mention_body": m._fence_untrusted((mention.get("body") or "")[:1200]),
         "sentiment": mention.get("sentiment"),
     })
     try:

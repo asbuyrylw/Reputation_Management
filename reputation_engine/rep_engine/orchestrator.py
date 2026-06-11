@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 from . import ai_state_audit as m1
 from . import strategy_generator as m2
@@ -45,11 +47,8 @@ from . import runstate as m_rs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("orchestrator")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _add_business(args) -> int:

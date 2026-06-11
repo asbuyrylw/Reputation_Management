@@ -20,6 +20,7 @@ def _rich_html(words=200):
 
 
 def test_firecrawl_triggers_on_thin_page(monkeypatch):
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")  # mocked HTTP layer; skip real DNS on x.com
     from rep_engine import site_crawl as sc
     monkeypatch.setattr(sc, "FIRECRAWL_MODE", "auto")
     monkeypatch.setattr(sc, "FIRECRAWL_API_KEY", "fc-test")
@@ -32,6 +33,7 @@ def test_firecrawl_triggers_on_thin_page(monkeypatch):
 
 
 def test_firecrawl_not_used_when_page_is_rich(monkeypatch):
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")  # mocked HTTP layer; skip real DNS on x.com
     from rep_engine import site_crawl as sc
     monkeypatch.setattr(sc, "FIRECRAWL_MODE", "auto")
     monkeypatch.setattr(sc, "FIRECRAWL_API_KEY", "fc-test")
@@ -57,6 +59,23 @@ def test_firecrawl_off_mode_skips(monkeypatch):
     monkeypatch.setattr(sc, "FIRECRAWL_MODE", "off")
     monkeypatch.setattr(sc, "FIRECRAWL_API_KEY", "")
     assert sc._firecrawl_fetch("https://x.com") is None
+
+
+def test_audit_page_forwards_page_fetch_deadline(monkeypatch):
+    """The per-page fetch carries a wall-clock deadline so one slow page can't
+    stall the crawl through retries."""
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")
+    from rep_engine import site_crawl as sc
+    cap = {}
+
+    class R:
+        failed = True
+        error = "boom"
+
+    monkeypatch.setattr(sc._http, "request_json", lambda *a, **k: cap.update(k) or R())
+    sc.audit_page("https://x.com", "https://x.com/p")
+    assert cap.get("deadline") == sc.PAGE_FETCH_DEADLINE
+    assert sc.PAGE_FETCH_DEADLINE == 45.0          # active by default (CRAWL_PAGE_DEADLINE_S)
 
 
 def test_info_marker_excluded_from_issue_counts():

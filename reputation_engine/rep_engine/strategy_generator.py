@@ -26,19 +26,20 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Optional
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("strategy_generator")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 
 # ----------------------------------------------------------------------------
@@ -292,8 +293,6 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
 # ----------------------------------------------------------------------------
 # DB + CLI
 # ----------------------------------------------------------------------------
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _latest_gap(business_id: int) -> tuple[dict, dict]:

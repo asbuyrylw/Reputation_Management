@@ -1,0 +1,24 @@
+# Pre-commit hooks. Install once from the repo root:
+#   pip install -r reputation_engine/requirements-dev.txt
+#   pre-commit install
+#
+# The ruff hook enforces the SAME rules as the blocking CI gate (F,E9) so a clean
+# pre-commit guarantees a green lint gate -- it intentionally does NOT enforce the
+# stylistic E-rules the codebase opts out of (e.g. compact `a; b` statements).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff (F,E9 -- matches the CI gate)
+        args: ["--select", "F,E9", "--fix"]
+        files: ^reputation_engine/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict

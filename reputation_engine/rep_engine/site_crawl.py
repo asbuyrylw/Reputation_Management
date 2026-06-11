@@ -35,14 +35,26 @@ from typing import Optional
 from urllib.parse import urljoin, urlparse
 from urllib import robotparser
 
-import requests
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 try:
     from . import http as _http
 except ImportError:  # pragma: no cover
     import http as _http  # type: ignore
+
+try:
+    from . import netguard as _netguard
+except ImportError:  # pragma: no cover
+    import netguard as _netguard  # type: ignore
+
+try:
+    from .textutils import split_terms
+except ImportError:  # pragma: no cover
+    from textutils import split_terms  # type: ignore
 
 # Optional fast HTML parser; falls back to regex if unavailable.
 try:
@@ -77,6 +89,11 @@ def _firecrawl_fetch(url: str) -> Optional[str]:
     """Fetch fully-rendered HTML via Firecrawl. Returns HTML or None on failure/not-configured."""
     if not FIRECRAWL_API_KEY or FIRECRAWL_MODE == "off":
         return None
+    try:
+        _netguard.assert_url_allowed(url)
+    except _netguard.UnsafeURLError as e:
+        log.warning("Firecrawl target blocked by SSRF guard (%s): %s", url, e)
+        return None
     res = _http.request_json(
         "POST", f"{FIRECRAWL_BASE}/v2/scrape",
         headers={"Authorization": f"Bearer {FIRECRAWL_API_KEY}", "Content-Type": "application/json"},
@@ -96,14 +113,15 @@ def _firecrawl_fetch(url: str) -> Optional[str]:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("site_crawl")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 USER_AGENT = os.getenv("CRAWL_UA", "ReputationEngineBot/1.0 (+audit)")                     # PH 2
 THIN_CONTENT_WORDS = 300  # pages under this word count are flagged thin
 RESPECT_ROBOTS = os.getenv("CRAWL_RESPECT_ROBOTS", "1") != "0"   # PH 3: set 0 to disable
+# Per-page wall-clock budget across retries so one slow page can't stall the crawl
+# (bounds total fetch time incl. backoff; "0"/"" disables). See http.request_json.
+_PAGE_DEADLINE_RAW = os.getenv("CRAWL_PAGE_DEADLINE_S", "45")
+PAGE_FETCH_DEADLINE = float(_PAGE_DEADLINE_RAW) if _PAGE_DEADLINE_RAW not in ("", "0") else None
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 # ----------------------------------------------------------------------------
@@ -212,6 +230,11 @@ def _load_robots(seed_url: str):
         return None
     p = urlparse(seed_url)
     robots_url = f"{p.scheme}://{p.netloc}/robots.txt"
+    try:
+        _netguard.assert_url_allowed(robots_url)
+    except _netguard.UnsafeURLError as e:
+        log.warning("robots.txt fetch blocked by SSRF guard (%s): %s", robots_url, e)
+        return None
     rp = robotparser.RobotFileParser()
     res = _http.request_json("GET", robots_url, parse_json=False, max_retries=1, timeout=15)
     if res.ok and res.text:
@@ -258,8 +281,14 @@ def _seo_enrich(pa: "PageAudit", url: str, html: str) -> None:
 
 def audit_page(seed: str, url: str, targets: dict | None = None) -> tuple[PageAudit, list[str]]:
     pa = PageAudit(url=url)
+    try:
+        _netguard.assert_url_allowed(url)
+    except _netguard.UnsafeURLError as e:
+        pa.issues.append(f"fetch_failed: blocked_by_ssrf_guard: {e}")
+        return pa, []
     res = _http.request_json("GET", url, headers={"User-Agent": USER_AGENT},
-                             parse_json=False, timeout=20)
+                             parse_json=False, timeout=20, guard_redirects=True,
+                             deadline=PAGE_FETCH_DEADLINE)
     if res.failed:
         pa.issues.append(f"fetch_failed: {res.error}")
         return pa, []
@@ -381,6 +410,11 @@ def lighthouse(url: str) -> dict:
                  "Install: npm i -g lighthouse")
         return {}
     try:
+        _netguard.assert_url_allowed(url)
+    except _netguard.UnsafeURLError as e:
+        log.warning("lighthouse target blocked by SSRF guard (%s): %s", url, e)
+        return {}
+    try:
         out = subprocess.run(
             ["lighthouse", url, "--quiet", "--chrome-flags=--headless",
              "--only-categories=performance,seo,accessibility,best-practices",
@@ -495,10 +529,14 @@ def crawl_cmd(business_id: int, max_pages: int) -> None:
     if not domain:
         raise SystemExit("Business has no domain set.")
     seed = domain if domain.startswith("http") else f"https://{domain}"
+    try:
+        _netguard.assert_url_allowed(seed)
+    except _netguard.UnsafeURLError as e:
+        raise SystemExit(f"Business domain rejected by SSRF guard: {e}")
     # build semantic targets from the business: services/geo/contested terms as the
     # entities AI answers would expect; the prompt battery as target questions.
     def _split(v):
-        return [t.strip() for t in (v or "").replace(";", ",").split(",") if t.strip()]
+        return split_terms(v, extra_seps=";")   # seeds split on ';' AND ',' (see textutils)
     terms = _split(b.get("services")) + _split(b.get("geo")) + _split(b.get("contested_terms"))
     terms = [t for t in terms if t][:20]
     try:

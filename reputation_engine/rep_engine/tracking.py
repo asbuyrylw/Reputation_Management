@@ -35,20 +35,19 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from datetime import date, datetime
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("tracking")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 VALID_STATUS = {"pending", "in_progress", "done", "verified", "skipped", "blocked"}
@@ -114,7 +113,9 @@ def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None)
         sets.append("verified_at=%s"); params.append(now)
     params.append(wo_id)
     with db() as conn:
-        conn.execute(f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s", tuple(params))
+        # B608 false positive: every element of `sets` is a literal "col=%s" fragment
+        # built above (no user input in the SQL text); all values are bound parameters.
+        conn.execute(f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s", tuple(params))  # nosec B608
         conn.commit()
     log.info("WO %d -> %s", wo_id, status)
 
@@ -123,13 +124,24 @@ def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None)
 # log-asset: record what actually shipped
 # ----------------------------------------------------------------------------
 def log_asset(business_id: int, asset_type: str, title: str, url: str | None,
-              surface: str | None, work_order_id: int | None) -> int:
+              surface: str | None, work_order_id: int | None,
+              published_at: datetime | None = None) -> int:
+    # published_at is the asset's real GO-LIVE moment. Pass it explicitly when
+    # back-filling or when an asset went live earlier than the row is logged, so
+    # attribution windows bucket it correctly; default (None) uses the DB's now().
     with db() as conn:
-        row = conn.execute(
-            """INSERT INTO assets (business_id, work_order_id, asset_type, title, url, surface)
-               VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
-            (business_id, work_order_id, asset_type, title, url, surface),
-        ).fetchone()
+        if published_at is not None:
+            row = conn.execute(
+                """INSERT INTO assets (business_id, work_order_id, asset_type, title, url, surface, published_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (business_id, work_order_id, asset_type, title, url, surface, published_at),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """INSERT INTO assets (business_id, work_order_id, asset_type, title, url, surface)
+                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (business_id, work_order_id, asset_type, title, url, surface),
+            ).fetchone()
         # if tied to a work order, auto-advance it to done if still open
         if work_order_id:
             conn.execute(
@@ -168,12 +180,13 @@ def attribute(business_id: int) -> dict:
         to_run, from_run = runs[0], runs[1]
         cur, prev = _run_metrics(conn, to_run["id"]), _run_metrics(conn, from_run["id"])
 
-        # assets published between the two runs
+        # assets published in the half-open window [from_run, to_run): an asset at
+        # exactly a run boundary belongs to the window it STARTS, never both/neither.
         window_start = from_run["finished_at"]
         window_end = to_run["finished_at"]
         assets = conn.execute(
             "SELECT id, asset_type, title, surface, published_at FROM assets "
-            "WHERE business_id=%s AND published_at > %s AND published_at <= %s "
+            "WHERE business_id=%s AND published_at >= %s AND published_at < %s "
             "ORDER BY published_at",
             (business_id, window_start, window_end),
         ).fetchall()
@@ -278,6 +291,7 @@ def main() -> None:
     p.add_argument("--url")
     p.add_argument("--surface")
     p.add_argument("--wo", type=int)
+    p.add_argument("--published-at", help="ISO-8601 go-live timestamp (default: now)")
     for c in ("attribute", "check-alert", "status"):
         p = sub.add_parser(c); p.add_argument("--business-id", type=int, required=True)
 
@@ -287,7 +301,8 @@ def main() -> None:
     elif args.cmd == "set-status":
         set_status(args.wo, args.status, args.assignee, args.notes)
     elif args.cmd == "log-asset":
-        log_asset(args.business_id, args.type, args.title, args.url, args.surface, args.wo)
+        pub = datetime.fromisoformat(args.published_at) if args.published_at else None
+        log_asset(args.business_id, args.type, args.title, args.url, args.surface, args.wo, pub)
     elif args.cmd == "attribute":
         attribute(args.business_id)
     elif args.cmd == "check-alert":

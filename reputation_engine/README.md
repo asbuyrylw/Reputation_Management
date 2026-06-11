@@ -54,15 +54,10 @@ fact-checking). Flip any tool off with its `enabled` flag.
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Database (Postgres)
+# 2. Database (Postgres) -- the schema is managed by Alembic (single source of truth,
+#    replacing the old hand-applied schema.sql + schema_v2..v9.sql files).
 createdb reputation                      # or use an existing instance
-psql "$REP_DB_DSN" -f schema.sql
-psql "$REP_DB_DSN" -f schema_v2.sql      # execution tracking, attribution, cost, config
-psql "$REP_DB_DSN" -f schema_v3.sql      # generated content drafts (Module 6)
-psql "$REP_DB_DSN" -f schema_v4.sql      # learned effectiveness (Module 9 feedback loop)
-psql "$REP_DB_DSN" -f schema_v5.sql      # citation/persona/location metrics (Module 10)
-psql "$REP_DB_DSN" -f schema_v6.sql      # resumable run checkpointing
-psql "$REP_DB_DSN" -f schema_v7.sql      # competitor benchmarking (Module 11)
+alembic upgrade head                     # builds/updates the full schema  (or: make migrate)
 
 # 3. Config
 cp .env.example .env                      # then fill in keys

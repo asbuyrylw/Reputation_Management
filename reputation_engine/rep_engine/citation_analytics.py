@@ -31,22 +31,25 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 from collections import defaultdict
 from urllib.parse import urlparse
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+    from .textutils import split_terms
+    from .textutils import strip_www as _strip_www
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
+    from textutils import split_terms  # type: ignore
+    from textutils import strip_www as _strip_www  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("citation_analytics")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _ensure() -> None:
@@ -58,12 +61,6 @@ def _ensure() -> None:
             cite_count INT, share NUMERIC(6,4), classification TEXT,
             first_seen_run BIGINT, last_seen_run BIGINT, created_at TIMESTAMPTZ DEFAULT now())""")
         conn.commit()
-
-
-def _strip_www(d: str) -> str:
-    """Strip a leading 'www.' prefix. NOT str.lstrip('www.'), which strips any
-    leading run of the chars {w,.} and would mangle e.g. 'weather.com' -> 'eather.com'."""
-    return d[4:] if d.startswith("www.") else d
 
 
 def _domain(src) -> str:
@@ -86,11 +83,17 @@ def _classify(domain: str, biz: dict) -> str:
     own = _strip_www((biz.get("domain") or "").lower())
     if own and own in domain:
         return "owned"
-    contested_terms = [t.strip().lower() for t in (biz.get("contested_terms") or "").split(",") if t.strip()]
-    # crude: contested if the domain string contains a contested token (e.g. a
-    # complaint/ripoff site). Real deployments can maintain an explicit list.
+    # Curated complaint-site markers stay broad (raw substring) -- a deliberate
+    # heuristic (e.g. 'ripoff' must still catch 'ripoffreport.com').
     contested_markers = ["ripoff", "complaint", "scam", "pissedconsumer", "mlmwatch"]
-    if any(m in domain for m in contested_markers) or any(t in domain for t in contested_terms):
+    if any(m in domain for m in contested_markers):
+        return "contested"
+    # User-supplied contested terms match on whole domain LABELS/tokens, not raw
+    # substring, so an arbitrary term ('mlm', 'scam', ...) no longer mis-flags a
+    # legitimate domain that merely contains it (e.g. 'scamadviser.com').
+    contested_terms = [t.lower() for t in split_terms(biz.get("contested_terms"))]
+    tokens = set(re.findall(r"[a-z0-9]+", domain.lower()))
+    if any(t in tokens for t in contested_terms):
         return "contested"
     return "neutral"
 

@@ -34,16 +34,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from collections import defaultdict
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("feedback_loop")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 # Map raw asset_type / capability values onto the advisor's lever vocabulary so the
 # learned signal can recalibrate the advisor directly. PH 2 (extend as types grow).
@@ -61,8 +62,6 @@ TYPE_TO_LEVER = {
 MIN_GAIN_FLOOR = 0.0   # we don't learn negative per-unit gains (treat as 0 contribution)
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _ensure_tables() -> None:
@@ -120,10 +119,11 @@ def learn(business_id: int, quiet: bool = False) -> dict:
             n_windows += 1
             total_monthly_gain += monthly_gain
 
-            # assets shipped in this window, grouped to levers
+            # assets shipped in the half-open window [prev, cur), grouped to levers
+            # (same boundary convention as tracking.attribute -- no double-count).
             assets = conn.execute(
                 "SELECT asset_type, COUNT(*) n FROM assets WHERE business_id=%s "
-                "AND published_at > %s AND published_at <= %s GROUP BY asset_type",
+                "AND published_at >= %s AND published_at < %s GROUP BY asset_type",
                 (business_id, prev["finished_at"], cur["finished_at"]),
             ).fetchall()
             window_units = defaultdict(int)

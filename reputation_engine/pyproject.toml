@@ -1,0 +1,34 @@
+# Consolidated tooling config for the reputation engine.
+#
+# The BLOCKING CI lint gate stays an explicit CLI flag
+# (`ruff check --select F,E9 rep_engine/`), which OVERRIDES the [tool.ruff.lint]
+# select below -- so the hard gate is UNCHANGED (F and E9 are line-length-
+# independent). The select + line-length here govern only the *advisory* full
+# ruff run and local `make lint`. line-length = 120 (vs ruff's default 88)
+# intentionally quiets the ~500 advisory E501 hits the codebase opts into; that
+# run is `|| true`, so this is presentational and never affects a gate.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["rep_engine"]
+
+[tool.ruff.lint]
+select = ["E", "F"]   # ruff defaults; do NOT broaden -- keeps advisory output stable
+
+[tool.pytest.ini_options]
+# moved verbatim from pytest.ini (now deleted). Coverage flags deliberately stay
+# in CI only (see ci.yml) so `make test` / `make test-unit` run fast and uninstrumented.
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra -q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["rep_engine"]            # == --cov=rep_engine
+
+[tool.coverage.report]
+show_missing = true                # == --cov-report=term-missing
+fail_under = 50                    # == --cov-fail-under=50 (baseline measured ~57.5%)

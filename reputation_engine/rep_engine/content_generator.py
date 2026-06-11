@@ -31,21 +31,26 @@ import argparse
 import json
 import logging
 import os
-from datetime import datetime
+import re
 from typing import Optional
 
-import psycopg
-from psycopg.rows import dict_row
+
+try:
+    from .db import db
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
+from pydantic import ValidationError
 
 try:
     from . import ai_state_audit as llm   # reuse the orchestrator LLM plumbing
+    from .llm_schemas import ComplianceResult, EvalResult
 except ImportError:  # pragma: no cover
     import ai_state_audit as llm  # type: ignore
+    from llm_schemas import ComplianceResult, EvalResult  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("content_generator")
 
-DB_DSN = os.getenv("REP_DB_DSN", "postgresql://USER:PASSWORD@localhost:5432/reputation")  # PH 1
 
 QUALITY_THRESHOLD = float(os.getenv("CONTENT_QUALITY_THRESHOLD", "0.75"))   # PH 2
 MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "2"))                # PH 3
@@ -63,8 +68,6 @@ TITLE_HINTS = [
 ]
 
 
-def db() -> psycopg.Connection:
-    return psycopg.connect(DB_DSN, row_factory=dict_row)
 
 
 def _ensure_table() -> None:
@@ -151,7 +154,9 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str) -> str:
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str) -> str:
-    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type), max_tokens=2200)
+    # creative long-form generation -> mid tier (Sonnet/gpt-4o), not full Opus.
+    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type),
+                                 max_tokens=2200, tier="mid")
 
 
 # ----------------------------------------------------------------------------
@@ -170,8 +175,17 @@ EVAL_SYSTEM = (
 
 def _evaluate(asset_type: str, target_query: str, body: str) -> dict:
     user = json.dumps({"asset_type": asset_type, "target_query": target_query, "draft": body})
-    res = llm.orchestrator_json(EVAL_SYSTEM, user)
-    return res or {}
+    # rubric scoring is classification/QA -> cheap tier (Haiku/gpt-4o-mini).
+    res = llm.orchestrator_json(EVAL_SYSTEM, user, tier="cheap")
+    if not res:
+        return {}
+    try:
+        # Garbled/out-of-range eval JSON is 'could not evaluate', NOT a real score of 0.
+        return EvalResult.model_validate(res).model_dump()
+    except ValidationError as e:
+        log.warning("_evaluate: eval JSON failed validation (treating as unscored): %s",
+                    str(e).splitlines()[0] if str(e) else e)
+        return {}
 
 
 REVISE_SYSTEM = (
@@ -182,8 +196,9 @@ REVISE_SYSTEM = (
 
 
 def _revise(body: str, fixes: list) -> str:
-    user = f"Issues/fixes to address:\n- " + "\n- ".join(fixes or []) + f"\n\nCurrent draft:\n{body}"
-    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=2200)
+    user = "Issues/fixes to address:\n- " + "\n- ".join(fixes or []) + f"\n\nCurrent draft:\n{body}"
+    # creative rewrite -> mid tier (Sonnet/gpt-4o).
+    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=2200, tier="mid")
 
 
 # ----------------------------------------------------------------------------
@@ -201,12 +216,56 @@ COMPLIANCE_SYSTEM = (
 )
 
 
+# Hard financial-marketing prohibitions, matched deterministically. Unlike the LLM
+# screen these cannot be talked out of their verdict by a hostile/garbled draft, so
+# a hit here is AUTHORITATIVE: the content is non-compliant regardless of the LLM.
+_COMPLIANCE_RULES: list[tuple[str, str]] = [
+    (r"\bguarantee[ds]?\b[^.\n]{0,40}\b(returns?|profits?|income|results?|gains?|growth)\b",
+     "implies guaranteed returns/results"),
+    (r"\b(risk[-\s]?free|no[-\s]?risk|zero[-\s]?risk)\b", "claims risk-free"),
+    (r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b",
+     "unverifiable superlative (#1 / best)"),
+    (r"\b\d{1,3}\s?%[^.\n]{0,30}\b(guaranteed|returns?|profits?|gains?)\b",
+     "specific performance promise"),
+]
+_COMPLIANCE_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _COMPLIANCE_RULES]
+
+
+def _deterministic_compliance(body: str) -> list[str]:
+    """Non-LLM, non-prompt-injectable screen for hard financial-marketing rules.
+    Returns the list of triggered-rule descriptions (empty == nothing tripped)."""
+    text = body or ""
+    return [msg for pat, msg in _COMPLIANCE_PATTERNS if pat.search(text)]
+
+
 def _compliance(body: str) -> dict:
-    res = llm.orchestrator_json(COMPLIANCE_SYSTEM, json.dumps({"content": body}))
-    # default-safe: if the screener couldn't run (no keys), mark unknown -> needs human
+    # Deterministic, non-injectable screen first -- its verdict is authoritative.
+    det_flags = _deterministic_compliance(body)
+    # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini).
+    res = llm.orchestrator_json(COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
+    # default-safe: if the screener couldn't run (no keys), mark unknown -> needs
+    # human; but if the deterministic rules tripped, FAIL CLOSED regardless of LLM.
     if not res:
+        if det_flags:
+            return {"pass": False,
+                    "flags": det_flags + ["compliance screener unavailable -- deterministic rules tripped"]}
         return {"pass": None, "flags": ["compliance screener unavailable (no LLM) -- human must review"]}
-    return res
+    try:
+        validated = ComplianceResult.model_validate(res)
+    except ValidationError as e:
+        # A garbled compliance response is 'unknown', NOT an auto-pass and NOT an auto-fail.
+        log.warning("_compliance: screen JSON failed validation (routing to human): %s",
+                    str(e).splitlines()[0] if str(e) else e)
+        return {"pass": None,
+                "flags": det_flags + ["compliance screen returned malformed output -- human must review"]}
+    # by_alias=True restores the literal 'pass' key the DB column + callers expect.
+    result = validated.model_dump(by_alias=True)
+    # Deterministic rules are authoritative and cannot be prompt-injected: if they
+    # trip, the content is NOT compliant no matter what the LLM verdict claimed.
+    if det_flags:
+        result["pass"] = False
+        result["flags"] = list(result.get("flags", [])) + det_flags
+    return result
 
 
 # ----------------------------------------------------------------------------
@@ -227,24 +286,46 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
 
-    # self-eval + bounded auto-revision
+    # self-eval + bounded auto-revision. KEEP-BEST: _revise is not guaranteed to
+    # improve a draft -- a later revision can score LOWER than an earlier one -- so
+    # track the highest-scoring usable candidate across the original and every
+    # revision and persist THAT, not merely whatever the last round produced.
     revisions = 0
     evaluation = _evaluate(asset_type, wo.get("target_query", ""), body)
+    eval_unavailable = not evaluation  # {} => LLM unavailable OR validation failed
     score = float(evaluation.get("score", 0) or 0)
-    while score < QUALITY_THRESHOLD and revisions < MAX_REVISIONS and evaluation.get("fixes"):
+    best_body, best_score, best_eval, best_unavailable = body, score, evaluation, eval_unavailable
+    while (not eval_unavailable and score < QUALITY_THRESHOLD
+           and revisions < MAX_REVISIONS and evaluation.get("fixes")):
         body = _revise(body, evaluation.get("fixes", [])) or body
         revisions += 1
         evaluation = _evaluate(asset_type, wo.get("target_query", ""), body)
+        eval_unavailable = not evaluation
         score = float(evaluation.get("score", 0) or 0)
+        if not eval_unavailable and score > best_score:
+            best_body, best_score, best_eval, best_unavailable = body, score, evaluation, False
+    # Persist the best candidate seen (not the last). best_unavailable carries the
+    # original-eval state: if the first eval was usable, the persisted draft has a
+    # real eval even when a later round's eval was malformed; if no eval was ever
+    # usable, eval_unavailable stays True and the draft still routes to a human.
+    body, score, evaluation, eval_unavailable = best_body, best_score, best_eval, best_unavailable
 
     # compliance gate
     comp = _compliance(body)
     comp_pass = comp.get("pass")
     comp_flags = comp.get("flags", [])
 
-    # status: anything failing quality or compliance -> needs_fix, else pending_review
+    # status:
+    #  - a REAL evaluation below threshold, or a REAL compliance failure -> needs_fix
+    #  - could-not-evaluate (eval JSON malformed/unavailable) must NOT become a false
+    #    needs_fix; it stays pending_review with a flag so a human looks at it.
     status = "pending_review"
-    if score < QUALITY_THRESHOLD or comp_pass is False:
+    if eval_unavailable:
+        comp_flags = list(comp_flags) + [
+            "quality evaluation unavailable/malformed -- human must review"]
+    elif score < QUALITY_THRESHOLD:
+        status = "needs_fix"
+    if comp_pass is False:
         status = "needs_fix"
 
     _ensure_table()

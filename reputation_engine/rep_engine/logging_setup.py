@@ -18,7 +18,7 @@ import json
 import logging
 import os
 from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Any
 
 _JSON = os.getenv("REP_LOG_JSON", "0") not in ("0", "false", "", "no")
 _LEVEL = os.getenv("REP_LOG_LEVEL", "INFO").upper()

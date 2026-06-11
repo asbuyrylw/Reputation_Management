@@ -14,15 +14,16 @@ Exit code 0 = ready. Non-zero = something to fix (printed). Safe to run repeated
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 try:
     from . import ai_state_audit as m
     from . import cost
+    from . import db as _db
 except ImportError:  # pragma: no cover
     import ai_state_audit as m  # type: ignore
     import cost  # type: ignore
+    import db as _db  # type: ignore
 
 GREEN, RED, YEL, RST = "\033[92m", "\033[91m", "\033[93m", "\033[0m"
 
@@ -56,7 +57,7 @@ def check_db() -> bool:
     try:
         with m.db() as conn:
             conn.execute("SELECT 1")
-        ok(f"connected: {m.DB_DSN.split('@')[-1]}")
+        ok(f"connected: {_db.DB_DSN.split('@')[-1]}")
     except Exception as e:  # noqa: BLE001
         bad(f"cannot connect to REP_DB_DSN: {e}")
         return False
@@ -64,10 +65,11 @@ def check_db() -> bool:
     try:
         with m.db() as conn:
             for t in ["businesses", "audit_runs", "answers"]:
-                conn.execute(f"SELECT 1 FROM {t} LIMIT 1")
+                # B608 false positive: t is from this literal allowlist, never user input.
+                conn.execute(f"SELECT 1 FROM {t} LIMIT 1")  # nosec B608
         ok("core tables present")
     except Exception:  # noqa: BLE001
-        bad("core tables missing -- run schema.sql, schema_v2..v5.sql")
+        bad("core tables missing -- run `alembic upgrade head` (or `make migrate`)")
         return False
     return True
 
@@ -174,7 +176,7 @@ def main() -> None:
     print("=" * 64)
     print(" Reputation Engine -- First-Live-Run Preflight")
     print("=" * 64)
-    cfg_ok = check_config()
+    check_config()  # prints config status (advisory; readiness is gated on db/engines/json below)
     db_ok = check_db()
     status = check_keys()
     eng_ok = check_engines(status) if any(status.values()) else False
