@@ -28,7 +28,6 @@ try:
 except ImportError:  # pragma: no cover
     from typing_extensions import TypedDict  # type: ignore
 
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -237,16 +236,10 @@ def build_graph(checkpointer=None):
     return g.compile(checkpointer=checkpointer)
 
 
-_CHECKPOINTER = None
-
-
 def _checkpointer():
-    """Default in-memory checkpointer (durable resume within a process). For
-    cross-process human review, pass a PostgresSaver (langgraph-checkpoint-postgres)."""
-    global _CHECKPOINTER
-    if _CHECKPOINTER is None:
-        _CHECKPOINTER = InMemorySaver()
-    return _CHECKPOINTER
+    """Shared checkpointer (durable PostgresSaver when AGENT_CHECKPOINT_PG is set,
+    else in-memory). See agent_tools.make_checkpointer."""
+    return tools.make_checkpointer()
 
 
 def _thread_id(business_id: int, mention: dict) -> str:

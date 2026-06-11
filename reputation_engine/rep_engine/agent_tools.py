@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -121,6 +122,43 @@ def web_search(query: str, *, limit: int = 15) -> list:
         out.append({"title": _tag("title"), "url": _tag("link"),
                     "outlet": _tag("source"), "snippet": _tag("description")})
     return out
+
+
+_CHECKPOINTER = None
+
+
+def make_checkpointer():
+    """Shared checkpointer for the human-gated graphs (incident / remediation).
+
+    With AGENT_CHECKPOINT_PG set, a DURABLE PostgresSaver (reusing REP_DB_DSN) so a
+    human can resume an interrupted incident/bundle in a DIFFERENT process; otherwise
+    an in-memory saver (resume only within the same process). Cached as a singleton so
+    a graph's pause and its later resume share the same store. Tests pass an explicit
+    checkpointer and don't touch this."""
+    global _CHECKPOINTER
+    if _CHECKPOINTER is None:
+        if os.getenv("AGENT_CHECKPOINT_PG", "").lower() in ("1", "true", "yes"):
+            _CHECKPOINTER = _pg_saver()
+        else:
+            from langgraph.checkpoint.memory import InMemorySaver
+            _CHECKPOINTER = InMemorySaver()
+    return _CHECKPOINTER
+
+
+def _pg_saver():
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+    try:
+        from .db import DB_DSN
+    except ImportError:  # pragma: no cover
+        from db import DB_DSN  # type: ignore
+    # PostgresSaver requires autocommit + dict_row on its connections.
+    pool = ConnectionPool(conninfo=DB_DSN, min_size=1, max_size=4, open=True,
+                          kwargs={"autocommit": True, "row_factory": dict_row})
+    saver = PostgresSaver(pool)
+    saver.setup()   # idempotent: creates the langgraph checkpoint tables if absent
+    return saver
 
 
 def citation_readiness(text: str, *, title: str = "", target_terms: Optional[list] = None,

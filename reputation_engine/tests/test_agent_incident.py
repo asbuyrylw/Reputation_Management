@@ -102,3 +102,45 @@ def test_scan_triages_negative_mentions_idempotently(fresh_schema, monkeypatch):
     g.scan(bid)
     assert conn.execute("SELECT COUNT(*) n FROM incidents WHERE business_id=%s",
                         (bid,)).fetchone()["n"] == 1
+
+
+@requires_db
+def test_incident_postgres_checkpointer_resumes_across_savers(fresh_schema, monkeypatch):
+    """Durability: an incident paused by one PostgresSaver instance can be resumed by
+    a SEPARATE instance (simulating a human reviewing in a different process)."""
+    import os
+
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    conn = fresh_schema
+    from rep_engine import agent_incident as g
+    bid = _biz(conn)
+    monkeypatch.setattr(g.tools, "llm_text", lambda *a, **k: "We are a licensed local insurer.")
+    dsn = os.environ["REP_TEST_DSN"]
+    mention = {"source_url": "https://ripoffreport.com/acme", "sentiment": "negative",
+               "relevance": 0.9, "external_id": "rr-pg", "body": "MLM scam"}
+
+    pool_a = ConnectionPool(conninfo=dsn, min_size=1, max_size=2, open=True,
+                            kwargs={"autocommit": True, "row_factory": dict_row})
+    saver_a = PostgresSaver(pool_a)
+    saver_a.setup()
+    # clean any checkpoint left by a prior LOCAL run (CI always uses a fresh DB)
+    for t in conn.execute("SELECT tablename FROM pg_tables WHERE tablename LIKE 'checkpoint%' "
+                          "AND tablename <> 'checkpoint_migrations'").fetchall():
+        conn.execute(f"TRUNCATE {t['tablename']} CASCADE")  # nosec B608 -- pg_tables, not user input
+    conn.commit()
+
+    res = g.handle_incident(bid, mention, checkpointer=saver_a)
+    assert res["status"] == "pending_human_review"
+    pool_a.close()                                  # "process A" ends
+
+    pool_b = ConnectionPool(conninfo=dsn, min_size=1, max_size=2, open=True,
+                            kwargs={"autocommit": True, "row_factory": dict_row})
+    saver_b = PostgresSaver(pool_b)                 # "process B": a brand-new saver
+    g.resume_incident(bid, mention, {"approved": True}, checkpointer=saver_b)
+    pool_b.close()
+
+    row = conn.execute("SELECT status FROM incidents WHERE id=%s", (res["incident_id"],)).fetchone()
+    assert row["status"] == "approved"              # resumed from the DURABLE checkpoint
