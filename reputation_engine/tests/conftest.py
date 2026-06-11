@@ -60,8 +60,8 @@ _ALL_TABLES = [
     "answers", "assets", "attribution", "audit_runs", "business_config",
     "businesses", "citation_momentum", "competitor_answers", "competitors",
     "content_drafts", "cost_ledger", "discovery_targets", "gap_models",
-    "learned_baseline", "learned_effectiveness", "mention_replies", "mentions",
-    "monitor_keywords", "pipeline_runs", "pipeline_steps", "root_cause",
+    "incidents", "learned_baseline", "learned_effectiveness", "mention_replies",
+    "mentions", "monitor_keywords", "pipeline_runs", "pipeline_steps", "root_cause",
     "site_audits", "strategy_plans", "work_orders",
 ]
 
