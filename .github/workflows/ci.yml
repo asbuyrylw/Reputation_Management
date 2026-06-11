@@ -73,7 +73,7 @@ jobs:
         with:
           fetch-depth: 0   # full history so the scan covers every commit
       - name: gitleaks (secret scan; advisory first run, ratchet to blocking)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2 (pinned to commit)
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

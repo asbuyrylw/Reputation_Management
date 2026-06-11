@@ -116,6 +116,10 @@ log = logging.getLogger("site_crawl")
 USER_AGENT = os.getenv("CRAWL_UA", "ReputationEngineBot/1.0 (+audit)")                     # PH 2
 THIN_CONTENT_WORDS = 300  # pages under this word count are flagged thin
 RESPECT_ROBOTS = os.getenv("CRAWL_RESPECT_ROBOTS", "1") != "0"   # PH 3: set 0 to disable
+# Per-page wall-clock budget across retries so one slow page can't stall the crawl
+# (bounds total fetch time incl. backoff; "0"/"" disables). See http.request_json.
+_PAGE_DEADLINE_RAW = os.getenv("CRAWL_PAGE_DEADLINE_S", "45")
+PAGE_FETCH_DEADLINE = float(_PAGE_DEADLINE_RAW) if _PAGE_DEADLINE_RAW not in ("", "0") else None
 
 
 
@@ -283,7 +287,8 @@ def audit_page(seed: str, url: str, targets: dict | None = None) -> tuple[PageAu
         pa.issues.append(f"fetch_failed: blocked_by_ssrf_guard: {e}")
         return pa, []
     res = _http.request_json("GET", url, headers={"User-Agent": USER_AGENT},
-                             parse_json=False, timeout=20, guard_redirects=True)
+                             parse_json=False, timeout=20, guard_redirects=True,
+                             deadline=PAGE_FETCH_DEADLINE)
     if res.failed:
         pa.issues.append(f"fetch_failed: {res.error}")
         return pa, []

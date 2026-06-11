@@ -61,6 +61,23 @@ def test_firecrawl_off_mode_skips(monkeypatch):
     assert sc._firecrawl_fetch("https://x.com") is None
 
 
+def test_audit_page_forwards_page_fetch_deadline(monkeypatch):
+    """The per-page fetch carries a wall-clock deadline so one slow page can't
+    stall the crawl through retries."""
+    monkeypatch.setenv("CRAWL_SSRF_GUARD", "0")
+    from rep_engine import site_crawl as sc
+    cap = {}
+
+    class R:
+        failed = True
+        error = "boom"
+
+    monkeypatch.setattr(sc._http, "request_json", lambda *a, **k: cap.update(k) or R())
+    sc.audit_page("https://x.com", "https://x.com/p")
+    assert cap.get("deadline") == sc.PAGE_FETCH_DEADLINE
+    assert sc.PAGE_FETCH_DEADLINE == 45.0          # active by default (CRAWL_PAGE_DEADLINE_S)
+
+
 def test_info_marker_excluded_from_issue_counts():
     from rep_engine import site_crawl as sc
     p1 = sc.PageAudit(url="https://a.com")
