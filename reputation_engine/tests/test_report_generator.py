@@ -202,3 +202,42 @@ def test_report_surfaces_root_cause_and_incidents(fresh_schema, tmp_path, monkey
     assert "Why the Contested Narrative Surfaces" in text
     assert "ripoffreport.com" in text
     assert "New Contested Mentions Flagged This Period" in text
+
+
+@requires_db
+def test_report_surfaces_production_briefs(fresh_schema, tmp_path, monkeypatch):
+    """When production briefs exist (status to_produce), the report lists what to
+    create off-platform; absent any, the section is a no-op (smoke test covers that)."""
+    import json
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    _answer(conn, r1, bid, "Is Reportco trustworthy?", "Some call it an MLM.", 0.10, True, False)
+    _answer(conn, r2, bid, "Is Reportco trustworthy?", "Trusted local firm.", 0.80, False, True)
+    conn.execute(
+        "INSERT INTO production_briefs (business_id, channel, platform, title, target_query, brief, status) "
+        "VALUES (%s,'video','youtube','Is Reportco an MLM? Honest answer','is reportco an mlm',%s,'to_produce')",
+        (bid, json.dumps({"format": "talking-head", "target_length_seconds": 90,
+                          "keywords": ["Reportco", "licensed insurance"], "hook": "Straight answer.",
+                          "outline": ["state the answer", "show proof"], "cta": "Visit reportco.com"})))
+    conn.execute(
+        "INSERT INTO production_briefs (business_id, channel, platform, title, target_query, brief, status) "
+        "VALUES (%s,'social','linkedin','How to vet an agency','how to vet an insurance agency',%s,'to_produce')",
+        (bid, json.dumps({"format": "carousel", "target_length": "5-slide carousel",
+                          "keywords": ["#insurance"], "cta": "Follow for more"})))
+    # a superseded brief must NOT appear
+    conn.execute(
+        "INSERT INTO production_briefs (business_id, channel, platform, title, brief, status) "
+        "VALUES (%s,'video','tiktok','OLD superseded idea',%s,'superseded')",
+        (bid, json.dumps({"keywords": ["old"]})))
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    text = _doc_text(rg.generate(bid))
+    assert "Content to Produce This Period" in text
+    assert "Videos to Produce" in text and "Social Posts to Produce" in text
+    assert "Is Reportco an MLM?" in text
+    assert "Reportco, licensed insurance" in text          # keywords rendered
+    assert "OLD superseded idea" not in text               # superseded excluded

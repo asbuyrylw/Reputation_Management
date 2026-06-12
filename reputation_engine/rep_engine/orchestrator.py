@@ -100,6 +100,12 @@ def _maybe_agentic_steps(rs, bid: int) -> None:
             return a.remediate(bid)
         rs.step("remediation", lambda: _safe_agentic("remediation", _run),
                 "CYCLE multi-channel content remediation (Graph 3)")
+    if _agent_enabled("AGENT_PRODUCTION_BRIEFS_IN_CYCLE"):
+        def _run():
+            from . import production_brief as a
+            return a.plan(bid)
+        rs.step("production_briefs", lambda: _safe_agentic("production_briefs", _run),
+                "CYCLE video/social production briefs (off-platform specs)")
 
 
 

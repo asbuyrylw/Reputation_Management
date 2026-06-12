@@ -360,6 +360,72 @@ def _section_root_cause_and_incidents(heading, body, bullet, business_id):
         body("These were auto-triaged with a drafted response pending your approval.", italic=True)
 
 
+def _render_brief(body, bullet, row):
+    """Render one production brief as a compact, human-actionable card. Shape-robust:
+    a hand-edited / schema-drifted JSONB row never raises (bounded strings, isinstance
+    guards) -- same hardening as _section_root_cause_and_incidents."""
+    brief = row.get("brief") if isinstance(row.get("brief"), dict) else {}
+    title = str(row.get("title") or brief.get("title") or "(untitled)")[:160]
+    platform = str(row.get("platform") or brief.get("platform") or "")[:40]
+    fmt = str(brief.get("format") or "")[:60]
+    length = brief.get("target_length") or brief.get("target_length_seconds")
+    length = str(length) if length not in (None, "") else ""
+    if length and row.get("channel") == "video" and length.isdigit():
+        length = f"{length}s"
+    meta = " · ".join(x for x in (platform, fmt, length) if x)
+    body(title + (f"  ({meta})" if meta else ""), bold=True)
+    tq = str(row.get("target_query") or brief.get("target_query") or "")
+    if tq:
+        bullet(f"Targets the query: {tq[:200]}")
+    kws = brief.get("keywords")
+    kws = kws if isinstance(kws, list) else []
+    if kws:
+        bullet("Keywords: " + ", ".join(str(k) for k in kws[:12])[:300])
+    hook = str(brief.get("hook") or "")
+    if hook:
+        bullet(f"Hook: {hook[:200]}")
+    outline = brief.get("outline")
+    outline = outline if isinstance(outline, list) else []
+    if outline:
+        bullet("Outline: " + " → ".join(str(o) for o in outline[:8])[:400])
+    cta = str(brief.get("cta") or "")
+    if cta:
+        bullet(f"Call to action: {cta[:200]}")
+
+
+def _section_production_briefs(heading, body, bullet, business_id):
+    """Surface the video + social PRODUCTION BRIEFS (production_brief.plan) -- the
+    specs for content the client/team produces OFF-platform. Read-only and a NO-OP
+    when there are no open briefs (so the report is unchanged unless that step ran)."""
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT channel, platform, title, target_query, brief FROM production_briefs "
+                "WHERE business_id=%s AND status='to_produce' ORDER BY channel, id",
+                (business_id,)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
+        log.warning("report: production-briefs section unavailable (%s)", e)
+        return
+    if not rows:
+        return
+    vids = [r for r in rows if r.get("channel") == "video"][:8]
+    socs = [r for r in rows if r.get("channel") == "social"][:8]
+    if not vids and not socs:
+        return
+    heading("Content to Produce This Period")
+    body("Specs for video and social content to create off-platform. Each item lists the "
+         "AI/search query it targets, the keywords to hit, the length and format, the hook, "
+         "and the call to action — everything a producer needs to make it.", italic=True)
+    if vids:
+        heading("Videos to Produce", size=12)
+        for r in vids:
+            _render_brief(body, bullet, r)
+    if socs:
+        heading("Social Posts to Produce", size=12)
+        for r in socs:
+            _render_brief(body, bullet, r)
+
+
 def generate(business_id: int) -> str:
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
@@ -544,6 +610,7 @@ def generate(business_id: int) -> str:
             bullet(w.get("title", ""))
 
     _section_root_cause_and_incidents(heading, body, bullet, business_id)
+    _section_production_briefs(heading, body, bullet, business_id)
 
     heading("How These Results Are Achieved", size=12, color=GOLD)
     body("This program works by out-producing and out-corroborating accurate, positive content so "
