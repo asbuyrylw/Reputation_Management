@@ -61,7 +61,8 @@ _ALL_TABLES = [
     "businesses", "citation_momentum", "competitor_answers", "competitors",
     "content_drafts", "cost_ledger", "discovery_targets", "gap_models",
     "incidents", "learned_baseline", "learned_effectiveness", "mention_replies",
-    "mentions", "monitor_keywords", "pipeline_runs", "pipeline_steps", "root_cause",
+    "mentions", "monitor_keywords", "pipeline_runs", "pipeline_steps",
+    "production_briefs", "root_cause",
     "site_audits", "strategy_plans", "work_orders",
 ]
 

@@ -4,7 +4,8 @@ default-off, env-gated, lazy-imported, and a graph failure can't break the cycle
 from __future__ import annotations
 
 _FLAGS = ("AGENT_ROOTCAUSE_IN_CYCLE", "AGENT_DISCOVERY_IN_CYCLE",
-          "AGENT_INCIDENT_IN_CYCLE", "AGENT_REMEDIATION_IN_CYCLE")
+          "AGENT_INCIDENT_IN_CYCLE", "AGENT_REMEDIATION_IN_CYCLE",
+          "AGENT_PRODUCTION_BRIEFS_IN_CYCLE")
 
 
 class _FakeRS:
@@ -40,6 +41,19 @@ def test_enabled_agentic_steps_added_and_run(monkeypatch):
     o._maybe_agentic_steps(rs, 42)
     assert rs.keys == ["root_cause", "incident_scan"]    # only the enabled ones, in order
     assert ("rc", 42) in ran and ("inc", 42) in ran      # called with the right business id
+
+
+def test_production_briefs_step_enabled_and_run(monkeypatch):
+    from rep_engine import orchestrator as o
+    from rep_engine import production_brief as pb
+    for f in _FLAGS:
+        monkeypatch.delenv(f, raising=False)
+    monkeypatch.setenv("AGENT_PRODUCTION_BRIEFS_IN_CYCLE", "1")
+    ran = []
+    monkeypatch.setattr(pb, "plan", lambda bid: ran.append(bid) or {"n": 0})
+    rs = _FakeRS()
+    o._maybe_agentic_steps(rs, 7)
+    assert rs.keys == ["production_briefs"] and ran == [7]
 
 
 def test_agentic_step_failure_does_not_break_cycle(monkeypatch):
