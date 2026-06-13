@@ -13,3 +13,8 @@ venv/
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
+
+# Generated eval labeling worksheets (scraped answer text; the labels live in
+# eval_data/golden.jsonl once ingested). The empty template IS committed.
+*_labeling_sheet*.csv
+label_input.json
