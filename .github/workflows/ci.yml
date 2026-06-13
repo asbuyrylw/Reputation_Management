@@ -72,14 +72,16 @@ jobs:
         # degrade scoring. Self-skips (passes) without an orchestrator key, so it is a
         # no-op until ANTHROPIC_API_KEY is a repo secret.
         #
-        # Floors reflect the MEASURED 2026-06-13 baseline vs the human answer key:
-        #   sentiment agreement 98% -> floor 0.85 (HARD guard; a real regression trips it)
-        #   goal_alignment band  34% -> floor 0.00 (TRACKED, not gated: the judge currently
-        #     over-penalizes goal_alignment ~0.2-0.4 vs the human labels). After the scoring
-        #     prompt is recalibrated and the band rate rises, RAISE --min-band to lock it in.
+        # Floors reflect the MEASURED baseline vs the 44-case human answer key, AFTER the
+        # 2026-06-13 scoring recalibration (SCORING_SYSTEM goal_alignment scale):
+        #   sentiment agreement 95% -> floor 0.85 (HARD guard)
+        #   goal_alignment band  ~75-84% -> floor 0.60 (HARD guard, now LOCKED IN: this caught
+        #     and fixed the judge's goal_alignment harshness, which was only 34% before). The
+        #     band rate is non-deterministic +/- a few points; 0.60 leaves headroom. Raise both
+        #     as the golden set grows and the judge improves.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m rep_engine.eval_harness gate --min-sentiment 0.85 --min-band 0.0
+        run: python -m rep_engine.eval_harness gate --min-sentiment 0.85 --min-band 0.6
 
   secret-scan:
     runs-on: ubuntu-latest
