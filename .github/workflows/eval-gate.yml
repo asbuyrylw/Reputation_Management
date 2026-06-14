@@ -1,0 +1,44 @@
+name: Eval gate (weekly)
+
+# The scoring-judge regression gate runs the LIVE judge over the 44-case golden set
+# and fails if scoring has drifted below the measured baseline. Each run makes ~44
+# Anthropic calls (~8-15 cents of API usage), so it runs on a WEEKLY schedule -- to
+# catch model/provider drift over time -- rather than on every push/PR. You can also
+# run it on demand from the Actions tab ("Run workflow"). It self-skips (passes) when
+# ANTHROPIC_API_KEY is not set, so removing the secret turns it off cleanly.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"   # Mondays 13:00 UTC (~9am US Eastern)
+  workflow_dispatch:        # manual "Run workflow" button
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: reputation_engine
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Eval -- scoring-judge regression gate
+        # Floors are the MEASURED post-recalibration baseline vs the human answer key:
+        #   sentiment agreement 95-98% -> floor 0.85
+        #   goal_alignment band  75-84% -> floor 0.60 (locked in; the band rate is
+        #     non-deterministic +/- a few points, so 0.60 leaves headroom).
+        # Raise both as the golden set grows / the judge improves.
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m rep_engine.eval_harness gate --min-sentiment 0.85 --min-band 0.6
