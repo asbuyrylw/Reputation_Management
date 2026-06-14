@@ -56,3 +56,9 @@ class UpdateBusinessRequest(BaseModel):
     goal: Optional[str] = None
     contested_terms: Optional[str] = None
     geo: Optional[str] = None
+
+
+class IngestSignalRequest(BaseModel):
+    source: str               # tool name, e.g. "siteguru"
+    signal_type: str          # technical_seo|keywords|serp_rank|backlinks|brand|visitors|other
+    content: str              # the pasted / uploaded report text

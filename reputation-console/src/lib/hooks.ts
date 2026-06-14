@@ -15,6 +15,7 @@ import type {
   ContentDraft,
   Dashboard,
   DiscoveryTarget,
+  ExternalSignal,
   GapModel,
   Incident,
   JobsResponse,
@@ -213,5 +214,26 @@ export function useCreateBusiness() {
     () => "/admin/businesses",
     (v) => v,
     [["businesses"]],
+  );
+}
+
+// ---- external data ingestion ----
+export function useExternalSignals(businessId: number | null) {
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ["external-signals", businessId],
+    queryFn: () => apiFetch<ExternalSignal[]>(`/businesses/${businessId}/external-signals`, { token }),
+    enabled: !!token && !!businessId,
+    // poll while anything is still awaiting AI normalization
+    refetchInterval: (q) =>
+      (q.state.data as ExternalSignal[] | undefined)?.some((s) => s.status === "raw") ? 4000 : false,
+  });
+}
+
+export function useIngestSignal(businessId: number | null) {
+  return useApiMutation<{ source: string; signal_type: string; content: string }>(
+    () => `/businesses/${businessId}/external-signals`,
+    (v) => v,
+    [["external-signals", businessId]],
   );
 }

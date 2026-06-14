@@ -56,11 +56,20 @@ def _run_citation_analyze(business_id: int, args: dict) -> None:
     c.analyze(business_id, quiet=True)
 
 
+def _run_normalize_signals(business_id: int, args: dict) -> None:
+    try:
+        from .. import external_signals as es
+    except ImportError:  # pragma: no cover
+        import external_signals as es  # type: ignore
+    es.normalize_pending(business_id)
+
+
 JOB_DISPATCH = {
     "audit": _run_audit,
     "cycle": _run_cycle,
     "production_briefs": _run_production_briefs,
     "citation_analyze": _run_citation_analyze,
+    "normalize_signals": _run_normalize_signals,
 }
 
 

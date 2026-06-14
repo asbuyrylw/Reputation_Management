@@ -43,6 +43,7 @@ const NAV: NavGroup[] = [
       { href: "/sustain/levers", label: "What's working" },
     ],
   },
+  { group: "External Data", items: [{ href: "/integrations", label: "Integrations" }] },
 ];
 
 const ADMIN_GROUP: NavGroup = {

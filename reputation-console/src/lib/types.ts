@@ -213,6 +213,16 @@ export interface JobsResponse {
   pipeline_runs: PipelineRun[];
 }
 
+export interface ExternalSignal {
+  id: number;
+  source: string | null;
+  signal_type: string | null;
+  raw: Record<string, unknown>;
+  normalized: Record<string, unknown> | null;
+  status: string;
+  created_at: string | null;
+}
+
 export interface Dashboard {
   business: Business & Record<string, unknown>;
   gap: Record<string, unknown>;

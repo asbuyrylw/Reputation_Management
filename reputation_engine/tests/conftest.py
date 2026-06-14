@@ -59,7 +59,8 @@ def conn(db_dsn):
 _ALL_TABLES = [
     "answers", "api_jobs", "assets", "attribution", "audit_runs", "business_access",
     "business_config", "businesses", "citation_momentum", "competitor_answers",
-    "competitors", "content_drafts", "cost_ledger", "discovery_targets", "gap_models",
+    "competitors", "content_drafts", "cost_ledger", "discovery_targets",
+    "external_signals", "gap_models",
     "incidents", "learned_baseline", "learned_effectiveness", "mention_replies",
     "mentions", "monitor_keywords", "pipeline_runs", "pipeline_steps",
     "production_briefs", "root_cause",

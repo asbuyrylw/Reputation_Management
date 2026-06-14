@@ -23,6 +23,7 @@ from .routers import (
     businesses,
     content,
     insights,
+    integrations,
     jobs_router,
     rankings,
     sustain,
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(sustain.router)
     app.include_router(jobs_router.router)
     app.include_router(admin.router)
+    app.include_router(integrations.router)
     return app
 
 
