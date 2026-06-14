@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./api";
 import { useAuth } from "./auth";
 import type {
+  AdminUser,
   AuditRun,
   Answer,
   AttributionRow,
@@ -16,6 +17,7 @@ import type {
   DiscoveryTarget,
   GapModel,
   Incident,
+  JobsResponse,
   LearnedLevers,
   Mention,
   ProductionBrief,
@@ -159,5 +161,57 @@ export function useResumeIncident(businessId: number | null) {
     ({ incidentId }) => `/businesses/${businessId}/incidents/${incidentId}/resume`,
     ({ approved, edited_response }) => ({ approved, edited_response: edited_response ?? null }),
     [["incidents", businessId], ["dashboard", businessId]],
+  );
+}
+
+// ---- jobs + admin ----
+export function useJobs(businessId: number | null, poll = true) {
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ["jobs", businessId],
+    queryFn: () => apiFetch<JobsResponse>(`/businesses/${businessId}/jobs`, { token }),
+    enabled: !!token && !!businessId,
+    refetchInterval: poll ? 3000 : false,
+  });
+}
+
+export function useTriggerJob(businessId: number | null) {
+  return useApiMutation<{ jobType: string }>(
+    ({ jobType }) => `/businesses/${businessId}/jobs/${jobType}`,
+    () => undefined,
+    [["jobs", businessId]],
+  );
+}
+
+export function useAdminUsers() {
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ["admin-users"],
+    queryFn: () => apiFetch<AdminUser[]>("/admin/users", { token }),
+    enabled: !!token,
+  });
+}
+
+export function useCreateUser() {
+  return useApiMutation<{ email: string; password: string; full_name?: string; role: string }>(
+    () => "/admin/users",
+    (v) => v,
+    [["admin-users"]],
+  );
+}
+
+export function useGrantAccess() {
+  return useApiMutation<{ userId: number; business_id: number; access_role: string }>(
+    ({ userId }) => `/admin/users/${userId}/access`,
+    ({ business_id, access_role }) => ({ business_id, access_role }),
+    [["admin-users"]],
+  );
+}
+
+export function useCreateBusiness() {
+  return useApiMutation<{ name: string; domain?: string; goal?: string; contested_terms?: string; geo?: string; services?: string }>(
+    () => "/admin/businesses",
+    (v) => v,
+    [["businesses"]],
   );
 }

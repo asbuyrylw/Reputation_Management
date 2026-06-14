@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth";
 
 // Nav grouped by the client's mental model (not the DB). Items flagged `soon`
 // are wired in later phases.
@@ -44,13 +45,24 @@ const NAV: NavGroup[] = [
   },
 ];
 
+const ADMIN_GROUP: NavGroup = {
+  group: "Admin",
+  items: [
+    { href: "/admin/jobs", label: "Run jobs" },
+    { href: "/admin/users", label: "Users" },
+    { href: "/admin/businesses", label: "Businesses" },
+  ],
+};
+
 export function Sidebar() {
   const path = usePathname();
+  const { user } = useAuth();
+  const groups = user?.role === "admin" ? [...NAV, ADMIN_GROUP] : NAV;
   return (
     <aside className="w-60 shrink-0 border-r border-gray-200 bg-white p-4">
       <div className="mb-6 px-2 text-lg font-semibold text-gray-900">Reputation Console</div>
       <nav className="space-y-5">
-        {NAV.map((g) => (
+        {groups.map((g) => (
           <div key={g.group}>
             <div className="px-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
               {g.group}

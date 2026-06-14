@@ -26,3 +26,33 @@ class StatusRequest(BaseModel):
 class ResumeRequest(BaseModel):
     approved: bool
     edited_response: Optional[str] = None
+
+
+class CreateUserRequest(BaseModel):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+    role: str = "client"
+
+
+class GrantAccessRequest(BaseModel):
+    business_id: int
+    access_role: str = "viewer"
+
+
+class CreateBusinessRequest(BaseModel):
+    name: str
+    domain: Optional[str] = None
+    services: Optional[str] = None
+    goal: Optional[str] = None
+    contested_terms: Optional[str] = None
+    geo: Optional[str] = None
+
+
+class UpdateBusinessRequest(BaseModel):
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    services: Optional[str] = None
+    goal: Optional[str] = None
+    contested_terms: Optional[str] = None
+    geo: Optional[str] = None

@@ -172,6 +172,47 @@ export interface LearnedLevers {
   levers: Record<string, number>;
 }
 
+export interface AdminUser {
+  id: number;
+  email: string;
+  full_name: string | null;
+  role: Role;
+  is_active: boolean;
+  created_at?: string;
+  last_login_at?: string | null;
+  access: { business_id: number; access_role: string }[];
+}
+
+export interface ApiJob {
+  id: number;
+  job_type: string;
+  status: string;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface PipelineStep {
+  step_key: string;
+  status: string;
+  error: string | null;
+}
+
+export interface PipelineRun {
+  id: number;
+  kind: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: PipelineStep[];
+}
+
+export interface JobsResponse {
+  jobs: ApiJob[];
+  pipeline_runs: PipelineRun[];
+}
+
 export interface Dashboard {
   business: Business & Record<string, unknown>;
   gap: Record<string, unknown>;

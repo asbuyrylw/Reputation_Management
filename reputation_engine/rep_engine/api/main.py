@@ -16,7 +16,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from .pool import close_pool, get_pool
 from .settings import api_settings
 from . import auth
-from .routers import audits, auth_router, businesses, content, insights, rankings, sustain
+from .routers import (
+    admin,
+    audits,
+    auth_router,
+    businesses,
+    content,
+    insights,
+    jobs_router,
+    rankings,
+    sustain,
+)
 
 log = logging.getLogger("rep_engine.api")
 
@@ -55,6 +65,8 @@ def create_app() -> FastAPI:
     app.include_router(content.router)
     app.include_router(rankings.router)
     app.include_router(sustain.router)
+    app.include_router(jobs_router.router)
+    app.include_router(admin.router)
     return app
 
 
