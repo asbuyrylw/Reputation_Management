@@ -30,11 +30,11 @@ import type {
 type Json = Record<string, unknown>;
 
 function useApiQuery<T>(key: unknown[], path: string | null) {
-  const { token } = useAuth();
+  const { user } = useAuth();
   return useQuery({
     queryKey: key,
-    queryFn: () => apiFetch<T>(path as string, { token }),
-    enabled: !!token && !!path,
+    queryFn: () => apiFetch<T>(path as string),
+    enabled: !!user && !!path,
   });
 }
 
@@ -91,11 +91,10 @@ function useApiMutation<TVars>(
   bodyFor: (vars: TVars) => unknown,
   invalidate: unknown[][],
 ) {
-  const { token } = useAuth();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: TVars) =>
-      apiFetch(pathFor(vars), { method: "POST", body: bodyFor(vars), token }),
+      apiFetch(pathFor(vars), { method: "POST", body: bodyFor(vars) }),
     onSuccess: () => {
       for (const key of invalidate) qc.invalidateQueries({ queryKey: key });
     },
@@ -167,11 +166,11 @@ export function useResumeIncident(businessId: number | null) {
 
 // ---- jobs + admin ----
 export function useJobs(businessId: number | null, poll = true) {
-  const { token } = useAuth();
+  const { user } = useAuth();
   return useQuery({
     queryKey: ["jobs", businessId],
-    queryFn: () => apiFetch<JobsResponse>(`/businesses/${businessId}/jobs`, { token }),
-    enabled: !!token && !!businessId,
+    queryFn: () => apiFetch<JobsResponse>(`/businesses/${businessId}/jobs`),
+    enabled: !!user && !!businessId,
     refetchInterval: poll ? 3000 : false,
   });
 }
@@ -185,11 +184,11 @@ export function useTriggerJob(businessId: number | null) {
 }
 
 export function useAdminUsers() {
-  const { token } = useAuth();
+  const { user } = useAuth();
   return useQuery({
     queryKey: ["admin-users"],
-    queryFn: () => apiFetch<AdminUser[]>("/admin/users", { token }),
-    enabled: !!token,
+    queryFn: () => apiFetch<AdminUser[]>("/admin/users"),
+    enabled: !!user,
   });
 }
 
@@ -219,11 +218,11 @@ export function useCreateBusiness() {
 
 // ---- external data ingestion ----
 export function useExternalSignals(businessId: number | null) {
-  const { token } = useAuth();
+  const { user } = useAuth();
   return useQuery({
     queryKey: ["external-signals", businessId],
-    queryFn: () => apiFetch<ExternalSignal[]>(`/businesses/${businessId}/external-signals`, { token }),
-    enabled: !!token && !!businessId,
+    queryFn: () => apiFetch<ExternalSignal[]>(`/businesses/${businessId}/external-signals`),
+    enabled: !!user && !!businessId,
     // poll while anything is still awaiting AI normalization
     refetchInterval: (q) =>
       (q.state.data as ExternalSignal[] | undefined)?.some((s) => s.status === "raw") ? 4000 : false,

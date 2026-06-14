@@ -41,8 +41,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
                 )}
               </span>
               <button
-                onClick={() => {
-                  logout();
+                onClick={async () => {
+                  await logout();
                   router.replace("/login");
                 }}
                 className="rounded-md border border-gray-300 px-3 py-1 text-gray-700 hover:bg-gray-100"

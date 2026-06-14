@@ -75,6 +75,24 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    _CSRF_EXEMPT = {"/auth/login", "/auth/logout"}
+
+    @app.middleware("http")
+    async def _csrf_protect(request, call_next):
+        # Double-submit CSRF: cookie-authenticated writes must echo the csrf_token cookie
+        # in the X-CSRF-Token header. Bearer (API/script) clients are exempt (a bearer is
+        # never auto-sent cross-site), as are login/logout.
+        if request.method in ("POST", "PATCH", "PUT", "DELETE"):
+            has_bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+            has_cookie = bool(request.cookies.get("rc_token"))
+            if has_cookie and not has_bearer and request.url.path not in _CSRF_EXEMPT:
+                from fastapi.responses import JSONResponse
+                header = request.headers.get("x-csrf-token")
+                cookie = request.cookies.get("csrf_token")
+                if not header or not cookie or header != cookie:
+                    return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
+        return await call_next(request)
+
     @app.middleware("http")
     async def _audit_writes(request, call_next):
         response = await call_next(request)
