@@ -4,25 +4,29 @@ Two pieces: the **FastAPI backend** (`reputation_engine/rep_engine/api/`) and th
 **Next.js console** (`reputation-console/`). They talk over HTTP; the engine CLI is
 untouched.
 
-## Run locally (no Docker)
+## Run locally
 
-```bash
-# 1) API + worker (terminal A) — needs the engine's Postgres + an Anthropic key for audits
+Config lives in **`reputation_engine/.env`** (REP_DB_DSN, JWT_SECRET, ADMIN_SEED_EMAIL,
+ADMIN_SEED_PASSWORD, API_CORS_ORIGINS, JOB_WORKER). The API **auto-loads that .env,
+auto-runs migrations, and seeds the admin on startup** — so there is no separate env-export
+or `alembic` step. (.env is gitignored; ANTHROPIC_API_KEY there enables audits.)
+
+**Windows PowerShell** (two terminals):
+
+```powershell
+# 1) API  (terminal A)
 cd reputation_engine
-export REP_DB_DSN=postgresql://postgres:postgres@localhost:5432/reputation \
-       JWT_SECRET=$(openssl rand -hex 32) \
-       ADMIN_SEED_EMAIL=admin@local ADMIN_SEED_PASSWORD=change-me \
-       API_CORS_ORIGINS=http://localhost:3000
-alembic upgrade head                       # apply migrations (incl. 0007 auth, 0008 jobs)
-python -m uvicorn rep_engine.api.main:app --reload          # http://localhost:8000
-# Durable background jobs (optional, terminal A2): JOB_WORKER defaults to 'inline' for dev.
-# For production set JOB_WORKER=worker and run:  python -m rep_engine.api.worker
+python -m uvicorn rep_engine.api.main:app --reload     # http://localhost:8000
 
-# 2) Console (terminal B)
+# 2) Console  (terminal B)
 cd reputation-console
-npm install
-npm run dev                                # http://localhost:3000 — log in with the seed admin
+npm install        # first time only
+npm run dev        # http://localhost:3000 — log in with ADMIN_SEED_EMAIL / ADMIN_SEED_PASSWORD
 ```
+
+macOS/Linux is identical (same two commands). For durable background jobs set
+`JOB_WORKER=worker` in `.env` and run a third process: `python -m rep_engine.api.worker`
+(with `AGENT_CHECKPOINT_PG=1` so human-gated agent reviews resume across processes).
 
 ## Run the backend with Docker
 
@@ -40,6 +44,10 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   use a managed Postgres, and run the **worker** process (`JOB_WORKER=worker`) so
   long jobs survive web restarts and human-gated agent reviews can resume
   (`AGENT_CHECKPOINT_PG=1`).
-- **Hardening still to add**: move the SPA token from localStorage to an httpOnly
-  refresh cookie, add request/audit logging of writes + triggers, and a login
-  rate-limit. These are tracked as the remaining deploy-readiness items.
+- **Hardening done**: the API sets an **httpOnly `rc_token` cookie** on login and
+  accepts it for auth (defense-in-depth vs. XSS token theft); **every write/trigger is
+  audit-logged** (`audit_log` table, via middleware, attributed to the acting user); and
+  **login is rate-limited** (per-IP sliding window).
+- **Hardening remaining**: switch the SPA to cookie-only auth (drop the localStorage
+  bearer) + add CSRF protection; ship the rate-limit via a shared store for multi-process
+  deployments. (The backend already supports cookie auth, so this is a frontend slice.)

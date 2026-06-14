@@ -8,7 +8,9 @@ guard bug cannot leak across tenants.
 
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import auth
@@ -25,12 +27,15 @@ def get_conn():
 
 def get_current_user(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
+    rc_token: Optional[str] = Cookie(None),
     conn=Depends(get_conn),
 ) -> dict:
-    if creds is None:
+    # Bearer header (SPA today) OR the httpOnly rc_token cookie (hardened path).
+    token = creds.credentials if creds else rc_token
+    if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     try:
-        payload = auth.decode_token(creds.credentials)
+        payload = auth.decode_token(token)
     except Exception:  # noqa: BLE001 -- any decode/expiry failure is a 401
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
     user = auth.get_user_by_id(conn, int(payload["sub"]))

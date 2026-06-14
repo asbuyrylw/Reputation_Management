@@ -121,6 +121,21 @@ def normalize_pending(business_id: int) -> dict:
     return {"business_id": business_id, "normalized": done, "pending": len(rows)}
 
 
+def normalized_for_gap(business_id: int, limit: int = 20) -> list:
+    """Latest NORMALIZED external signals for feeding the gap synthesis. Returns
+    [{source, signal_type, normalized}]; the caller MUST fence these (they are derived
+    from untrusted third-party reports). Empty list when none."""
+    _ensure_table()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT source, signal_type, normalized FROM external_signals "
+            "WHERE business_id=%s AND status='normalized' AND normalized IS NOT NULL "
+            "ORDER BY id DESC LIMIT %s",
+            (business_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_signals(business_id: int) -> list:
     _ensure_table()
     with db() as conn:
