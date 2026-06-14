@@ -88,6 +88,13 @@ ORCH_MODEL_OPENAI_CHEAP = os.getenv("ORCH_MODEL_OPENAI_CHEAP", "gpt-4o-mini")   
 ORCH_MODEL_ANTHROPIC_MID = os.getenv("ORCH_MODEL_ANTHROPIC_MID", "claude-sonnet-4-6")               # PH 7c
 ORCH_MODEL_OPENAI_MID = os.getenv("ORCH_MODEL_OPENAI_MID", "gpt-4o")                                # PH 8c
 
+# Answer-engine model ids -- env-overridable so a retired/renamed id can be fixed in ops
+# without a code change. Gemini's 1.5 line is RETIRED, so the default points at a current
+# model; always verify the exact id against the provider's live model list for your account
+# (preflight_engines() logs the active ids before a paid audit so a stale one is visible).
+PERPLEXITY_MODEL = os.getenv("PERPLEXITY_MODEL", "sonar")                                           # PH 9
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")                                        # PH 12
+
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
 # Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
@@ -385,7 +392,7 @@ def _skip() -> dict:
 
 class PerplexityEngine:
     name = "perplexity"
-    model = "sonar"  # PH 9: set to your Perplexity model
+    model = PERPLEXITY_MODEL
 
     def answer(self, prompt: str) -> dict:
         if "YOUR_PERPLEXITY" in PERPLEXITY_API_KEY:
@@ -456,7 +463,7 @@ class AnthropicEngine:
 
 class GeminiEngine:
     name = "gemini"
-    model = "gemini-1.5-pro"
+    model = GEMINI_MODEL
 
     def answer(self, prompt: str) -> dict:
         if "YOUR_GEMINI" in GEMINI_API_KEY:
@@ -498,6 +505,40 @@ def active_engines() -> list[AnswerEngine]:
     if not engines:
         log.warning("No engine keys configured; running in dry mode.")
     return engines
+
+
+def preflight_engines() -> list:
+    """Pre-audit sanity check that fails (or warns) LOUDLY before a paid audit spends:
+
+      * No active answer-engine -> the run would be empty. Hard-fail (SystemExit).
+      * The orchestrator (scorer) key is a placeholder -> every answer would score as
+        'failed' and the audit would yield no usable metrics. Warn loudly (we don't
+        hard-fail so mocked/offline tests still run).
+      * Log each active engine's model id + base URL so a stale/retired id (the kind that
+        silently 404s mid-run and wastes a paid audit) is visible up front.
+
+    Returns the active engines."""
+    engines = active_engines()
+    if not engines:
+        raise SystemExit(
+            "Preflight: no answer-engine keys configured -- the audit would be empty. "
+            "Set at least one of PERPLEXITY_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / "
+            "GEMINI_API_KEY before running a paid audit."
+        )
+    orch_key = ANTHROPIC_API_KEY if ORCHESTRATOR == "anthropic" else OPENAI_API_KEY
+    if "YOUR_" in orch_key:
+        log.warning("Preflight: orchestrator '%s' has no real API key -- answers will not be "
+                    "scored and the audit will produce no metrics. Configure the key.",
+                    ORCHESTRATOR)
+    for e in engines:
+        log.info("Preflight: engine=%s model=%s base=%s",
+                 e.name, getattr(e, "model", "?"), _engine_base(e.name))
+    return engines
+
+
+def _engine_base(name: str) -> str:
+    return {"perplexity": PERPLEXITY_BASE, "openai_search": OPENAI_BASE,
+            "anthropic": ANTHROPIC_BASE, "gemini": GEMINI_BASE}.get(name, "?")
 
 
 # ----------------------------------------------------------------------------
@@ -774,6 +815,7 @@ def audit(business_id: int) -> int:
     diff average across samples automatically."""
     init_db()
     _audit_check_budget_or_exit(business_id)
+    preflight_engines()   # fail/warn loudly on misconfig BEFORE spending on a paid audit
     with db() as conn:
         # Serialize audits per business: a concurrent audit for the same business
         # races the monthly-budget check (both read spend < cap, both proceed) and
@@ -789,81 +831,105 @@ def audit(business_id: int) -> int:
             "INSERT INTO audit_runs (business_id) VALUES (%s) RETURNING id", (business_id,)
         ).fetchone()
         run_id = run["id"]
-        battery = build_prompt_battery_lensed(b)
-        engines = active_engines()
-        samples = _samples_per_prompt(conn, business_id)
-        log.info("Auditing '%s': %d prompt-lenses x %d engines x %d samples",
-                 b["name"], len(battery), len(engines), samples)
-        for prompt, persona, location in battery:
-            for eng in engines:
-                _sample_scores: list[float] = []   # goal_alignment seen for this (prompt,engine)
-                for s in range(samples):
-                    # mid-audit budget check so a runaway stops cleanly
-                    if cost.over_budget(business_id):
-                        log.warning("Budget reached mid-audit; stopping early (run %d).", run_id)
-                        # Mark aborted but leave finished_at NULL: this partial run is
-                        # non-representative, so it must be excluded from every trend/
-                        # attribution/learning query (all gate on finished_at IS NOT NULL).
-                        conn.execute("UPDATE audit_runs SET status='aborted' WHERE id=%s", (run_id,))
-                        conn.commit()
-                        return run_id
-                    ans = eng.answer(prompt)
-                    failed = bool(ans.get("failed"))
-                    skipped = bool(ans.get("skipped"))
-                    has_text = bool(ans.get("text"))
-
-                    # A FAILED call (retries exhausted / bad shape) must never be
-                    # recorded as a real empty answer -- that would silently drag
-                    # metrics down. Skip scoring; store with NULL metrics + flag.
-                    if has_text and not failed:
-                        _u = ans.get("usage")  # real provider tokens when available
-                        cost.record(business_id, run_id, eng.name, "answer",
-                                    getattr(eng, "model", eng.name),
-                                    _u["input"] if _u else cost.approx_tokens(prompt),
-                                    _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
-                        score = score_answer(b, prompt, ans)
-                        # the scoring pass itself costs money (cheap tier) -- track it
-                        _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
-                            else (None, None)
-                        if _score_model is None:
-                            _, _score_model = _model_for("cheap")
-                        cost.record(business_id, run_id, ORCHESTRATOR, "score",
-                                    _score_model,
-                                    cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")),
-                                    200)  # scoring output is small, bounded JSON
-                    else:
-                        score = {}
-
-                    if skipped:
-                        # key not configured -> don't store a row at all
-                        continue
-
-                    # A successful engine call whose answer could not be SCORED (LLM
-                    # returned nothing parseable, or the JSON failed ScoreResult
-                    # validation -> score == {}) must be treated like a failed row:
-                    # store NULL metrics + failed=True so it is excluded from every KPI
-                    # (contested_rate/owned_rate/avg all gate on NOT failed).
-                    scoring_failed = (has_text and not failed and not score)
-                    row_failed = failed or scoring_failed
-
-                    _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans,
-                                          score, row_failed, scoring_failed, failed, s,
-                                          persona, location)
-                    time.sleep(POLITE_DELAY_S)
-
-                    # adaptive sampling: once stable + clear of the decision boundary,
-                    # stop sampling this (prompt, engine) -- more samples won't change it.
-                    if not row_failed and score.get("goal_alignment") is not None:
-                        try:
-                            _sample_scores.append(float(score["goal_alignment"]))
-                        except (TypeError, ValueError):
-                            pass
-                    if ADAPTIVE_SAMPLING and _should_stop_sampling(_sample_scores):
-                        log.debug("adaptive stop after %d samples (stable) for %r/%s",
-                                  len(_sample_scores), prompt[:40], eng.name)
-                        break
-        conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
+        # Make the run row durable up-front so a mid-run crash leaves a visible 'failed'
+        # marker (see the handler below) instead of an invisible rolled-back run. The
+        # per-business advisory lock is held by the SESSION, not the transaction, so this
+        # commit does not release it.
         conn.commit()
+        try:
+            battery = build_prompt_battery_lensed(b)
+            engines = active_engines()
+            samples = _samples_per_prompt(conn, business_id)
+            log.info("Auditing '%s': %d prompt-lenses x %d engines x %d samples",
+                     b["name"], len(battery), len(engines), samples)
+            for prompt, persona, location in battery:
+                for eng in engines:
+                    _sample_scores: list[float] = []   # goal_alignment seen for this (prompt,engine)
+                    for s in range(samples):
+                        # mid-audit budget check so a runaway stops cleanly
+                        if cost.over_budget(business_id):
+                            log.warning("Budget reached mid-audit; stopping early (run %d).", run_id)
+                            # Mark aborted but leave finished_at NULL: this partial run is
+                            # non-representative, so it must be excluded from every trend/
+                            # attribution/learning query (all gate on finished_at IS NOT NULL).
+                            conn.execute("UPDATE audit_runs SET status='aborted' WHERE id=%s", (run_id,))
+                            conn.commit()
+                            return run_id
+                        ans = eng.answer(prompt)
+                        failed = bool(ans.get("failed"))
+                        skipped = bool(ans.get("skipped"))
+                        has_text = bool(ans.get("text"))
+
+                        # A FAILED call (retries exhausted / bad shape) must never be
+                        # recorded as a real empty answer -- that would silently drag
+                        # metrics down. Skip scoring; store with NULL metrics + flag.
+                        if has_text and not failed:
+                            _u = ans.get("usage")  # real provider tokens when available
+                            cost.record(business_id, run_id, eng.name, "answer",
+                                        getattr(eng, "model", eng.name),
+                                        _u["input"] if _u else cost.approx_tokens(prompt),
+                                        _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
+                            score = score_answer(b, prompt, ans)
+                            # the scoring pass itself costs money (cheap tier) -- track it
+                            _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
+                                else (None, None)
+                            if _score_model is None:
+                                _, _score_model = _model_for("cheap")
+                            cost.record(business_id, run_id, ORCHESTRATOR, "score",
+                                        _score_model,
+                                        cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")),
+                                        200)  # scoring output is small, bounded JSON
+                        else:
+                            score = {}
+
+                        if skipped:
+                            # key not configured -> don't store a row at all
+                            continue
+
+                        # A successful engine call whose answer could not be SCORED (LLM
+                        # returned nothing parseable, or the JSON failed ScoreResult
+                        # validation -> score == {}) must be treated like a failed row:
+                        # store NULL metrics + failed=True so it is excluded from every KPI
+                        # (contested_rate/owned_rate/avg all gate on NOT failed).
+                        scoring_failed = (has_text and not failed and not score)
+                        row_failed = failed or scoring_failed
+
+                        _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans,
+                                              score, row_failed, scoring_failed, failed, s,
+                                              persona, location)
+                        time.sleep(POLITE_DELAY_S)
+
+                        # adaptive sampling: once stable + clear of the decision boundary,
+                        # stop sampling this (prompt, engine) -- more samples won't change it.
+                        if not row_failed and score.get("goal_alignment") is not None:
+                            try:
+                                _sample_scores.append(float(score["goal_alignment"]))
+                            except (TypeError, ValueError):
+                                pass
+                        if ADAPTIVE_SAMPLING and _should_stop_sampling(_sample_scores):
+                            log.debug("adaptive stop after %d samples (stable) for %r/%s",
+                                      len(_sample_scores), prompt[:40], eng.name)
+                            break
+            conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
+            conn.commit()
+        except SystemExit:
+            raise   # budget/lock exits are clean control flow, not crashes
+        except BaseException:
+            # A crash mid-battery must leave a durable, non-representative 'failed' row
+            # (finished_at NULL -> excluded from every trend/attribution/learning query and
+            # from build_gap_model), never an orphaned in_progress run. Mark it on a FRESH
+            # connection since this audit's transaction may be poisoned by a DB error.
+            log.exception("Audit run %d crashed; marking it failed.", run_id)
+            try:
+                with db() as _c2:
+                    _c2.execute(
+                        "UPDATE audit_runs SET status='failed' WHERE id=%s AND finished_at IS NULL",
+                        (run_id,),
+                    )
+                    _c2.commit()
+            except Exception:  # noqa: BLE001 -- best-effort marking must not mask the original error
+                log.exception("Could not mark audit run %d failed.", run_id)
+            raise
     log.info("Audit run %d complete. Month spend: $%.2f / $%.2f",
              run_id, cost.month_spend(business_id), cost.budget_for(business_id))
     return run_id
@@ -895,12 +961,17 @@ GAP_SYSTEM = (
 def build_gap_model(business_id: int) -> dict:
     with db() as conn:
         b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        # Only synthesize off a COMPLETED run. A budget-aborted/in-progress run keeps
+        # finished_at NULL (and status != 'complete'); building a strategy from a partial,
+        # biased sample of the prompt battery would violate the same invariant diff(),
+        # tracking, reports and learning all enforce (line ~959). Mirror that filter here.
         run = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "AND status='complete' ORDER BY id DESC LIMIT 1",
             (business_id,),
         ).fetchone()
         if not run:
-            raise SystemExit("Run an audit first.")
+            raise SystemExit("Run a completed audit first.")
         answers = conn.execute(
             "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
             "mentions_contested, surfaces_owned, key_sources, missing "
@@ -940,6 +1011,20 @@ def build_gap_model(business_id: int) -> dict:
             "external_signals": external_signals,
         }, default=str)
         model = orchestrator_json(GAP_SYSTEM, payload)
+        # A failed/empty synthesis must NOT overwrite the last good gap model.
+        # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
+        # completion, unparseable JSON, missing key). Persisting that empty model would
+        # poison every downstream consumer (strategy_generator, work orders, the client
+        # report) -- the exact "a failed call must not pollute outputs" invariant the
+        # answer-scoring path is hardened for. Treat an empty dict / missing summary as a
+        # synthesis FAILURE: don't INSERT (the prior gap_models row stays the latest good
+        # one) and raise so the runstate step is marked failed and is resumable.
+        if not isinstance(model, dict) or not model.get("summary"):
+            log.warning("Gap model synthesis returned empty/invalid output for business %d; "
+                        "keeping the previous gap model (nothing persisted).", business_id)
+            raise RuntimeError(
+                "Gap model synthesis failed (empty/invalid LLM output); previous model preserved."
+            )
         conn.execute(
             "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
             (business_id, run["id"], json.dumps(model)),

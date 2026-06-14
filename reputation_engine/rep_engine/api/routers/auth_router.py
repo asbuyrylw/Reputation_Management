@@ -23,20 +23,25 @@ def login(body: LoginRequest, request: Request, response: Response, conn=Depends
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
     token = auth.create_token(user)
-    max_age = api_settings().jwt_ttl_min * 60
+    s = api_settings()
+    max_age = s.jwt_ttl_min * 60
     # httpOnly session cookie (XSS can't read it) + a readable double-submit CSRF token
     # the SPA echoes in the X-CSRF-Token header on writes. The bearer is still returned
-    # for API/script clients.
-    response.set_cookie("rc_token", token, httponly=True, samesite="lax", path="/", max_age=max_age)
+    # for API/script clients. Secure + SameSite are env-driven (see settings): production
+    # over HTTPS sets COOKIE_SECURE=1 so the session cookie is never sent in cleartext.
+    response.set_cookie("rc_token", token, httponly=True, secure=s.cookie_secure,
+                        samesite=s.cookie_samesite, path="/", max_age=max_age)
     response.set_cookie("csrf_token", secrets.token_urlsafe(32), httponly=False,
-                        samesite="lax", path="/", max_age=max_age)
+                        secure=s.cookie_secure, samesite=s.cookie_samesite, path="/", max_age=max_age)
     return {"access_token": token, "token_type": "bearer", "user": auth.public_user(conn, user)}
 
 
 @router.post("/logout")
 def logout(response: Response):
-    response.delete_cookie("rc_token", path="/")
-    response.delete_cookie("csrf_token", path="/")
+    s = api_settings()
+    # Match the Set-Cookie attributes so the browser reliably clears the cookies.
+    response.delete_cookie("rc_token", path="/", secure=s.cookie_secure, samesite=s.cookie_samesite)
+    response.delete_cookie("csrf_token", path="/", secure=s.cookie_secure, samesite=s.cookie_samesite)
     return {"ok": True}
 
 
