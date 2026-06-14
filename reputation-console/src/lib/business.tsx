@@ -22,13 +22,13 @@ interface BusinessState {
 const BusinessCtx = createContext<BusinessState | null>(null);
 
 export function BusinessProvider({ children }: { children: React.ReactNode }) {
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
   const { data: businesses = [], isLoading } = useQuery({
     queryKey: ["businesses"],
-    queryFn: () => apiFetch<Business[]>("/businesses", { token }),
-    enabled: !!token,
+    queryFn: () => apiFetch<Business[]>("/businesses"),
+    enabled: !!user,
   });
 
   const [businessId, setBusinessId] = useState<number | null>(null);

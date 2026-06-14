@@ -46,6 +46,20 @@ def test_login_sets_cookie_and_cookie_authenticates(fresh_schema):
 
 
 @requires_db
+def test_csrf_required_for_cookie_writes(fresh_schema):
+    conn = fresh_schema
+    _admin(conn)
+    with _client() as c:
+        c.post("/auth/login", json={"email": "admin@example.com", "password": "pw12345678"})
+        csrf = c.cookies.get("csrf_token")
+        assert csrf  # readable double-submit token issued on login
+        # cookie-auth write (no bearer) WITHOUT the CSRF header -> 403
+        assert c.post("/admin/businesses", json={"name": "NoCsrf"}).status_code == 403
+        # WITH the matching CSRF header -> allowed
+        assert c.post("/admin/businesses", headers={"X-CSRF-Token": csrf}, json={"name": "WithCsrf"}).status_code == 201
+
+
+@requires_db
 def test_writes_are_audit_logged(fresh_schema):
     conn = fresh_schema
     _admin(conn)
