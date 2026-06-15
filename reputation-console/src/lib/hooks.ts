@@ -21,6 +21,7 @@ import type {
   JobsResponse,
   LearnedLevers,
   Mention,
+  PerEngineMetrics,
   ProductionBrief,
   ShareOfVoice,
   SiteAudit,
@@ -50,6 +51,13 @@ export function useRunAnswers(businessId: number | null, runId: number | null) {
   return useApiQuery<Answer[]>(
     ["run-answers", businessId, runId],
     businessId && runId ? `/businesses/${businessId}/audit-runs/${runId}/answers` : null,
+  );
+}
+
+export function usePerEngine(businessId: number | null, runId: number | null) {
+  return useApiQuery<PerEngineMetrics>(
+    ["per-engine", businessId, runId],
+    businessId && runId ? `/businesses/${businessId}/audit-runs/${runId}/per-engine` : null,
   );
 }
 

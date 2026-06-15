@@ -108,6 +108,29 @@ export interface Answer {
   failed: boolean | null;
 }
 
+// Confidence interval: `mean` for goal_alignment (normal approx), `p` for rates (Wilson).
+export interface CI {
+  p?: number;
+  mean?: number;
+  low: number | null;
+  high: number | null;
+  n: number;
+}
+
+export interface EngineMetrics {
+  n: number;
+  goal_alignment: CI | null;
+  contested_rate: CI | null;
+  owned_rate: CI | null;
+  grounded_rate: CI | null;
+}
+
+export interface PerEngineMetrics {
+  run_id: number | null;
+  engines: Record<string, EngineMetrics>;
+  coverage: { configured: string[]; missing: string[]; partial: boolean; expected: string[] };
+}
+
 export interface BeforeAfterPair {
   prompt: string;
   engine: string;
