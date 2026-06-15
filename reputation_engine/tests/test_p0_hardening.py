@@ -54,6 +54,30 @@ def test_gap_model_empty_synthesis_preserves_previous(fresh_schema, monkeypatch)
 
 
 @requires_db
+def test_gap_model_uses_large_token_cap_and_configured_tier(fresh_schema, monkeypatch):
+    """Regression: the gap synthesis truncated mid-JSON at a 4000-token cap on a real
+    battery. It must request ample output tokens, route to the configured (cheaper, reliable)
+    tier rather than full Opus, and allow a longer timeout for the large input+output."""
+    conn = fresh_schema
+    from rep_engine import ai_state_audit as m
+    bid = _seed_business(conn)
+    conn.execute("INSERT INTO audit_runs (business_id, finished_at, status) "
+                 "VALUES (%s, now(), 'complete')", (bid,))
+    conn.commit()
+    captured = {}
+
+    def fake(system, user, tier="full", max_tokens=2000, timeout=90):
+        captured.update(tier=tier, max_tokens=max_tokens, timeout=timeout)
+        return {"summary": "ok"}
+
+    monkeypatch.setattr(m, "orchestrator_json", fake)
+    m.build_gap_model(bid)
+    assert captured["max_tokens"] >= 8000          # enough headroom -> no mid-JSON truncation
+    assert captured["tier"] == m.GAP_MODEL_TIER     # configured tier (default mid/Sonnet), not full
+    assert captured["timeout"] >= 120               # large synthesis can exceed the 90s default
+
+
+@requires_db
 def test_gap_model_synthesizes_off_completed_not_aborted_run(fresh_schema, monkeypatch):
     conn = fresh_schema
     from rep_engine import ai_state_audit as m

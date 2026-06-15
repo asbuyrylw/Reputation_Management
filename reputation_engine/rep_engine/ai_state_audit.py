@@ -95,6 +95,11 @@ ORCH_MODEL_OPENAI_MID = os.getenv("ORCH_MODEL_OPENAI_MID", "gpt-4o")            
 PERPLEXITY_MODEL = os.getenv("PERPLEXITY_MODEL", "sonar")                                           # PH 9
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")                                        # PH 12
 
+# Gap-model synthesis tier. Default MID (Sonnet): ~5x cheaper than full Opus AND avoids
+# Opus-4.8 prepending reasoning prose ahead of the JSON (which truncated the large gap object
+# at the token cap -> "unparseable JSON"). Override with GAP_MODEL_TIER=full|mid|cheap.
+GAP_MODEL_TIER = os.getenv("GAP_MODEL_TIER", "mid")
+
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
 # Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
@@ -668,14 +673,17 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
     return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
 
 
-def orchestrator_json(system: str, user: str, tier: str = "full") -> dict:
+def orchestrator_json(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
+                      timeout: int = 90) -> dict:
     """Call the configured orchestrator LLM and parse a JSON object response.
     Uses provider structured-output modes where available so parsing is reliable.
-    tier='cheap' routes to the smaller model (used for the high-volume scoring pass)."""
+    tier='cheap' routes to the smaller model (high-volume scoring); max_tokens lets large
+    structured outputs (e.g. the gap model) avoid truncation; timeout accommodates large
+    syntheses whose generation can exceed the default read timeout."""
     if ORCHESTRATOR == "openai":
-        text = _openai_complete(system, user, tier=tier)
+        text = _openai_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout)
     else:
-        text = _anthropic_complete(system, user, tier=tier)
+        text = _anthropic_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout)
     if not text:
         return {}
     return _parse_json_lenient(text)
@@ -699,7 +707,8 @@ def _parse_json_lenient(text: str) -> dict:
             return {}
 
 
-def _anthropic_complete(system: str, user: str, tier: str = "full") -> str:
+def _anthropic_complete(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
+                        timeout: int = 90) -> str:
     if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
         return ""
     model, _ = _model_for(tier)
@@ -707,7 +716,7 @@ def _anthropic_complete(system: str, user: str, tier: str = "full") -> str:
     # We deliberately do NOT prefill an assistant "{" turn: a last-assistant-turn prefill
     # returns HTTP 400 on Opus/Sonnet 4.x, which silently made every full-tier JSON call
     # (e.g. build_gap_model) return {}.
-    body = {"model": model, "max_tokens": 2000,
+    body = {"model": model, "max_tokens": max_tokens,
             "system": system + " Respond with a single minified JSON object and nothing"
                                " else -- no prose, no markdown, no code fences.",
             "messages": [{"role": "user", "content": user}]}
@@ -721,7 +730,7 @@ def _anthropic_complete(system: str, user: str, tier: str = "full") -> str:
         headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                  "content-type": "application/json"},
         json=body,
-        timeout=90,
+        timeout=timeout,
     )
     if res.failed:
         log.warning("orchestrator(anthropic) failed: %s", res.error)
@@ -730,12 +739,14 @@ def _anthropic_complete(system: str, user: str, tier: str = "full") -> str:
     return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
 
 
-def _openai_complete(system: str, user: str, tier: str = "full") -> str:
+def _openai_complete(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
+                     timeout: int = 90) -> str:
     if "YOUR_OPENAI" in OPENAI_API_KEY:
         return ""
     _, model = _model_for(tier)
     # Structured output: response_format json_object forces valid JSON.
     body = {"model": model,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}]}
@@ -745,7 +756,7 @@ def _openai_complete(system: str, user: str, tier: str = "full") -> str:
         "POST", f"{OPENAI_BASE}/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         json=body,
-        timeout=90,
+        timeout=timeout,
     )
     if res.failed:
         log.warning("orchestrator(openai) failed: %s", res.error)
@@ -1094,7 +1105,12 @@ def build_gap_model(business_id: int) -> dict:
             "answers": fenced_answers,
             "external_signals": external_signals,
         }, default=str)
-        model = orchestrator_json(GAP_SYSTEM, payload)
+        # Gap synthesis is a LARGE structured object over the whole answer set: use the mid
+        # tier (Sonnet -- cheaper + no Opus-4.8 prose-before-JSON), a HIGH token cap so the
+        # full model isn't truncated mid-JSON (it ran past 4000 tokens for a real battery),
+        # and a longer timeout (the big input + output can exceed 90s).
+        model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
+                                  max_tokens=8000, timeout=180)
         # A failed/empty synthesis must NOT overwrite the last good gap model.
         # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
         # completion, unparseable JSON, missing key). Persisting that empty model would
