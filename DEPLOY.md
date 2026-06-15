@@ -70,7 +70,15 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   chokepoint enforces **per-org quotas** (monthly audits) and **active-subscription**, returning
   429 (over quota) / 402 (inactive). Backward-compatible: a business with no org, or an org with
   no subscription, is **unmetered**. Assign a plan via `POST /admin/organizations/{id}/subscription`.
-  Stripe (Checkout/Portal/webhooks driving these statuses) is Phase 2c.
+- **Stripe (Phase 2c)**: set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and a price id per
+  plan (`STRIPE_PRICE_STARTER/GROWTH/PRO/AGENCY`, mapped into `plan_catalog.stripe_price_id` at
+  startup), plus `APP_BASE_URL` for Checkout success/cancel + Portal return URLs. Org owners hit
+  `POST /billing/checkout` (Stripe Checkout) and `POST /billing/portal` (Customer Portal); point
+  the Stripe webhook at `POST /billing/webhook` (signature-verified + idempotent — drives
+  subscription status: checkout→active, subscription.updated→mirrored, deleted→canceled,
+  payment_failed→past_due). The `stripe` SDK is imported lazily, so the app runs without it until
+  `STRIPE_SECRET_KEY` is set (the billing endpoints return 503 until then). Headline prices are
+  value-based ($99/$299/$899/$2499); the COGS model is the margin floor/guardrail.
 - **Hardening done**: **cookie-only SPA auth** (httpOnly `rc_token`, no browser token
   storage) with **double-submit CSRF** on writes; env-driven **Secure + SameSite** cookies;
   baseline **security headers** (HSTS when secure, `nosniff`, `frame-ancestors 'none'`,

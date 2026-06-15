@@ -34,16 +34,22 @@ GAP_MODEL = "opus"        # the full-tier synthesis
 # answer-engine model ids, in the canonical order perplexity/openai/anthropic/gemini.
 DEFAULT_ENGINE_MODELS = ("sonar", "gpt-4o", "opus", "gemini")
 
-# Tier limits (capabilities). Prices are derived from these by propose_tiers().
+# Tier limits (capabilities) + value-based LIST price. The COGS model derives a margin
+# FLOOR (propose_tiers); `list_price` is the headline price we actually charge (value-based,
+# always >= floor). Adjust list_price freely -- the floor guards margin if you go too low.
 TIERS = [
-    {"code": "starter", "name": "Starter", "max_businesses": 1, "max_audits_per_month": 4,
-     "max_engines": 2, "max_samples_per_prompt": 2, "battery": 12, "seats": 2, "trial_days": 14},
-    {"code": "growth", "name": "Growth", "max_businesses": 3, "max_audits_per_month": 12,
-     "max_engines": 4, "max_samples_per_prompt": 2, "battery": 14, "seats": 5, "trial_days": 14},
-    {"code": "pro", "name": "Pro", "max_businesses": 10, "max_audits_per_month": 30,
-     "max_engines": 4, "max_samples_per_prompt": 3, "battery": 16, "seats": 15, "trial_days": 14},
-    {"code": "agency", "name": "Agency", "max_businesses": 50, "max_audits_per_month": 100,
-     "max_engines": 4, "max_samples_per_prompt": 3, "battery": 16, "seats": 50, "trial_days": 14},
+    {"code": "starter", "name": "Starter", "list_price": 99, "max_businesses": 1,
+     "max_audits_per_month": 4, "max_engines": 2, "max_samples_per_prompt": 2, "battery": 12,
+     "seats": 2, "trial_days": 14},
+    {"code": "growth", "name": "Growth", "list_price": 299, "max_businesses": 3,
+     "max_audits_per_month": 12, "max_engines": 4, "max_samples_per_prompt": 2, "battery": 14,
+     "seats": 5, "trial_days": 14},
+    {"code": "pro", "name": "Pro", "list_price": 899, "max_businesses": 10,
+     "max_audits_per_month": 30, "max_engines": 4, "max_samples_per_prompt": 3, "battery": 16,
+     "seats": 15, "trial_days": 14},
+    {"code": "agency", "name": "Agency", "list_price": 2499, "max_businesses": 50,
+     "max_audits_per_month": 100, "max_engines": 4, "max_samples_per_prompt": 3, "battery": 16,
+     "seats": 50, "trial_days": 14},
 ]
 
 
@@ -71,15 +77,21 @@ def _round_price(x: float) -> int:
 
 
 def propose_tiers(target_margin: float = 0.80) -> list[dict]:
-    """For each tier, compute monthly COGS at full utilization and the price floor that
-    clears `target_margin`, rounded up to a marketable number. Returns enriched tier dicts."""
+    """For each tier, compute monthly COGS at full utilization, the margin FLOOR that clears
+    `target_margin`, and the headline price (value-based `list_price`, or the rounded floor if
+    none). `price_usd_month` is the headline price; `price_floor` is the margin guardrail."""
     out = []
     for t in TIERS:
         per = audit_cogs(battery=t["battery"], engines=t["max_engines"],
                          samples=t["max_samples_per_prompt"])
         monthly_cogs = round(per * t["max_audits_per_month"], 2)
         floor = monthly_cogs / (1.0 - target_margin) if target_margin < 1 else float("inf")
+        floor_price = _round_price(floor)
+        price = t.get("list_price") or floor_price
+        if price < floor_price:
+            # value price dipped below the margin floor -- guardrail: never price under COGS+margin
+            price = floor_price
         out.append({**t, "audit_cogs": per, "monthly_cogs": monthly_cogs,
-                    "price_floor": round(floor, 2), "price_usd_month": _round_price(floor),
+                    "price_floor": round(floor, 2), "price_usd_month": price,
                     "target_margin": target_margin})
     return out
