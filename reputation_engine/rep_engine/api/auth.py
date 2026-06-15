@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -145,6 +146,44 @@ def public_user(conn, user: dict) -> dict:
         "org_id": user.get("org_id"), "org_role": user.get("org_role"),
         "business_ids": ids,   # None => all (admin)
     }
+
+
+# ---------------------------------------------------------------------------
+# Single-use action tokens (invite / password reset / email verification)
+# ---------------------------------------------------------------------------
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def issue_action_token(conn, user_id: int, kind: str, ttl_hours: int) -> str:
+    """Create a single-use token of `kind` for a user and return the RAW token (emailed in
+    the link). Only its hash is stored, so a DB read cannot reconstruct a working link."""
+    raw = secrets.token_urlsafe(32)
+    conn.execute(
+        "INSERT INTO auth_tokens (user_id, kind, token_hash, expires_at) "
+        "VALUES (%s,%s,%s, now() + make_interval(hours => %s))",
+        (user_id, kind, _hash_token(raw), ttl_hours),
+    )
+    return raw
+
+
+def consume_action_token(conn, kind: str, raw: str) -> Optional[int]:
+    """Validate + single-use-consume a token. Returns the user_id on success, else None."""
+    row = conn.execute(
+        "SELECT id, user_id FROM auth_tokens WHERE kind=%s AND token_hash=%s "
+        "AND used_at IS NULL AND expires_at > now() FOR UPDATE",
+        (kind, _hash_token(raw)),
+    ).fetchone()
+    if not row:
+        return None
+    conn.execute("UPDATE auth_tokens SET used_at=now() WHERE id=%s", (row["id"],))
+    return row["user_id"]
+
+
+def set_password(conn, user_id: int, new_password: str) -> None:
+    """Set a user's password and activate them (used by invite-accept + reset)."""
+    conn.execute("UPDATE users SET password_hash=%s, is_active=TRUE WHERE id=%s",
+                 (hash_password(new_password), user_id))
 
 
 # ---------------------------------------------------------------------------

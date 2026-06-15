@@ -57,7 +57,8 @@ def conn(db_dsn):
 
 # Every table the Alembic baseline creates -- truncated between tests for isolation.
 _ALL_TABLES = [
-    "answers", "api_jobs", "assets", "attribution", "audit_log", "audit_runs", "business_access",
+    "answers", "api_jobs", "assets", "attribution", "audit_log", "audit_runs", "auth_tokens",
+    "business_access",
     "business_config", "businesses", "citation_momentum", "competitor_answers",
     "competitors", "content_drafts", "cost_ledger", "discovery_targets",
     "external_signals", "gap_models",

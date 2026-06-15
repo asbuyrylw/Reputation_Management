@@ -46,6 +46,27 @@ class AssignSubscriptionRequest(BaseModel):
     status: str = "trialing"      # trialing | active | past_due | canceled
 
 
+class InviteRequest(BaseModel):
+    email: str
+    full_name: Optional[str] = None
+    org_role: str = "member"              # owner | admin | member
+    org_id: Optional[int] = None          # admin only; org managers invite into their own org
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
 class CheckoutRequest(BaseModel):
     plan_code: str
     success_url: Optional[str] = None

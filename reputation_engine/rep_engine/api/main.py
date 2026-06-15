@@ -27,6 +27,7 @@ from .routers import (
     insights,
     integrations,
     jobs_router,
+    onboarding_router,
     rankings,
     sustain,
 )
@@ -101,7 +102,10 @@ def create_app() -> FastAPI:
                 "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
 
-    _CSRF_EXEMPT = {"/auth/login", "/auth/logout"}
+    # Public, token-based flows carry their own credential in the body (a single-use token)
+    # and never rely on an ambient session cookie, so CSRF protection is moot for them.
+    _CSRF_EXEMPT = {"/auth/login", "/auth/logout", "/auth/accept-invite",
+                    "/auth/reset-password", "/auth/forgot-password", "/billing/webhook"}
 
     @app.middleware("http")
     async def _csrf_protect(request, call_next):
@@ -150,6 +154,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(auth_router.router)
+    app.include_router(onboarding_router.router)
     app.include_router(billing_router.router)
     app.include_router(businesses.router)
     app.include_router(audits.router)
