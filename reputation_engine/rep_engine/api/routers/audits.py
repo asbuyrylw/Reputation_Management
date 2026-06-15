@@ -14,11 +14,26 @@ from fastapi import APIRouter, Depends, Query
 from ..deps import authorize_business, get_conn
 
 try:
+    from ... import ai_state_audit as _ai
     from ... import report_generator as _rg
 except ImportError:  # pragma: no cover
+    import ai_state_audit as _ai  # type: ignore
     import report_generator as _rg  # type: ignore
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["audits"])
+
+
+@router.get("/per-engine")
+def per_engine_latest(business_id: int = Depends(authorize_business)):
+    """Per-engine KPI breakdown for the latest completed run: what EACH AI engine says,
+    with sample sizes, confidence intervals, grounding coverage, and a partial-coverage
+    flag (which of the 4 engines actually ran)."""
+    return _ai.per_engine_metrics(business_id)
+
+
+@router.get("/audit-runs/{run_id}/per-engine")
+def per_engine_for_run(run_id: int, business_id: int = Depends(authorize_business)):
+    return _ai.per_engine_metrics(business_id, run_id)
 
 
 @router.get("/audit-runs")

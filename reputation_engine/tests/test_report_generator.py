@@ -87,6 +87,28 @@ def test_generate_produces_nonempty_docx(fresh_schema, tmp_path, monkeypatch):
 
 
 @requires_db
+def test_per_engine_section_reports_grounding_and_partial_coverage(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    rid = _complete_run(conn, bid, days_ago=0)
+    for engine, ga, grounded in [("perplexity", 0.6, True), ("perplexity", 0.7, True),
+                                 ("anthropic", 0.2, False)]:
+        conn.execute("INSERT INTO answers (run_id,business_id,engine,goal_alignment,grounded,failed) "
+                     "VALUES (%s,%s,%s,%s,%s,false)", (rid, bid, engine, ga, grounded))
+    conn.commit()
+    out = []
+    rg._section_per_engine(lambda t, *a, **k: out.append(t),
+                           lambda t, *a, **k: out.append(t),
+                           lambda t, *a, **k: out.append(t), bid)
+    text = " ".join(out)
+    assert "What Each AI Engine Says" in text
+    assert "perplexity" in text and "anthropic" in text
+    assert "grounded in live web" in text       # grounding surfaced per engine
+    assert "Partial coverage" in text           # only 2 of the 4 canonical engines ran
+
+
+@requires_db
 def test_before_after_compares_same_engine(fresh_schema):
     """Before/Now must compare the SAME engine -- not the max-goal_alignment answer
     per run (which could put Perplexity 'Before' against ChatGPT 'Now')."""

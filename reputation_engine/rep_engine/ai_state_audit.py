@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS answers (
     goal_alignment NUMERIC(4,2),   -- -1.00 .. 1.00 toward business goal
     mentions_contested BOOLEAN DEFAULT FALSE,
     surfaces_owned BOOLEAN DEFAULT FALSE,  -- did it cite/echo the business's own content?
+    grounded     BOOLEAN,          -- did the engine ground in live web retrieval? NULL=unknown
     raw          JSONB DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ DEFAULT now()
 );
@@ -256,6 +257,8 @@ def init_db() -> None:
         # and the gaps it noticed. jsonb to match cited_sources/compliance_flags.
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS key_sources JSONB DEFAULT '[]'::jsonb")
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS missing JSONB DEFAULT '[]'::jsonb")
+        # grounded: did the engine ground its answer in live web retrieval? (see alembic 0011)
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS grounded BOOLEAN")
         # status distinguishes a budget-aborted partial run from a complete one
         # (see schema_v9.sql). Aborted runs keep finished_at NULL so they are excluded
         # from every downstream metric (all gate on finished_at IS NOT NULL).
@@ -343,10 +346,13 @@ class AnswerEngine(Protocol):
     def answer(self, prompt: str) -> dict: ...
 
 
-def _ok(text: str, sources: list, usage: Optional[dict] = None) -> dict:
+def _ok(text: str, sources: list, usage: Optional[dict] = None,
+        grounded: Optional[bool] = None) -> dict:
     d = {"text": text or "", "sources": sources or [], "failed": False}
     if usage is not None:
         d["usage"] = usage  # {"input": int, "output": int} -- real provider token counts
+    if grounded is not None:
+        d["grounded"] = grounded  # True/False if the engine grounded in live web retrieval
     return d
 
 
@@ -390,6 +396,63 @@ def _skip() -> dict:
     return {"text": "", "sources": [], "failed": False, "skipped": True}
 
 
+# --- grounding detection: did the engine answer from LIVE web retrieval vs model memory?
+# Each returns (grounded: bool, source_urls: list). Shapes verified against current provider
+# docs (2026): Anthropic web_search_20250305, Gemini google_search, OpenAI Responses web_search.
+def _anthropic_grounded(d: dict) -> tuple[bool, list]:
+    usage = d.get("usage") or {}
+    n_search = (usage.get("server_tool_use") or {}).get("web_search_requests") or 0
+    blocks = d.get("content") or []
+    used = bool(n_search) or any(b.get("type") == "web_search_tool_result" for b in blocks)
+    sources: list = []
+    for b in blocks:
+        if b.get("type") == "web_search_tool_result":
+            for r in (b.get("content") or []):
+                if isinstance(r, dict) and r.get("url"):
+                    sources.append(r["url"])
+        elif b.get("type") == "text":
+            for c in (b.get("citations") or []):
+                if isinstance(c, dict) and c.get("url"):
+                    sources.append(c["url"])
+    return used, sources
+
+
+def _gemini_grounded(cand: dict) -> tuple[bool, list]:
+    gm = cand.get("groundingMetadata") or {}
+    sources = [(ch.get("web") or {}).get("uri") for ch in (gm.get("groundingChunks") or [])
+               if (ch.get("web") or {}).get("uri")]
+    return bool(gm), sources
+
+
+def _grounding_enabled() -> bool:
+    """Whether to attach live web-search/grounding tools to engine requests. Default ON
+    (the product's premise is measuring the LIVE web, not model memory). Kill switch
+    (ENGINE_GROUNDING=0) for a provider/org where web search isn't provisioned yet, so a
+    misconfigured grounding tool doesn't fail every answer for that engine."""
+    return os.getenv("ENGINE_GROUNDING", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _openai_grounded(d: dict) -> tuple[bool, list]:
+    out = d.get("output")
+    if not isinstance(out, list):
+        return False, []
+    used = False
+    sources: list = []
+    for item in out:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "web_search_call":
+            used = True
+        elif item.get("type") == "message":
+            for c in (item.get("content") or []):
+                for a in (c.get("annotations") or []):
+                    if isinstance(a, dict) and a.get("type") == "url_citation":
+                        used = True
+                        if a.get("url"):
+                            sources.append(a["url"])
+    return used, sources
+
+
 class PerplexityEngine:
     name = "perplexity"
     model = PERPLEXITY_MODEL
@@ -409,7 +472,8 @@ class PerplexityEngine:
             d = res.data
             text = d["choices"][0]["message"]["content"]
             sources = d.get("citations", []) or d.get("search_results", [])
-            return _ok(text, sources, _usage(d))
+            # sonar is an online model: a real answer carries citations -> grounded.
+            return _ok(text, sources, _usage(d), grounded=bool(sources))
         except (KeyError, IndexError, TypeError) as e:
             return _fail(f"perplexity unexpected response shape: {e}")
 
@@ -421,19 +485,21 @@ class OpenAISearchEngine:
     def answer(self, prompt: str) -> dict:
         if "YOUR_OPENAI" in OPENAI_API_KEY:
             return _skip()
-        # PH 10: verify against current OpenAI Responses API + web_search tool shape
+        body = {"model": self.model, "input": prompt}
+        if _grounding_enabled():
+            body["tools"] = [{"type": "web_search"}]
         res = _llm_http(
             "POST", f"{OPENAI_BASE}/v1/responses",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": self.model, "input": prompt,
-                  "tools": [{"type": "web_search"}]},
+            json=body,
             timeout=60,
         )
         if res.failed:
             return _fail(res.error or "openai request failed")
         d = res.data or {}
         text = d.get("output_text", "") or json.dumps(d.get("output", ""))
-        return _ok(text, _extract_urls(text), _usage(d))
+        grounded, src = _openai_grounded(d)
+        return _ok(text, src or _extract_urls(text), _usage(d), grounded=grounded)
 
 
 class AnthropicEngine:
@@ -443,22 +509,30 @@ class AnthropicEngine:
     def answer(self, prompt: str) -> dict:
         if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
             return _skip()
-        # PH 11: add web_search tool block if you want grounded answers here
+        # web_search server tool (GA, no beta header) so answers are grounded in LIVE web
+        # results -- the whole product measures what AI assistants say about a business on
+        # the live web, not from stale model memory. max_uses caps cost ($10/1k searches).
+        # NOTE: the org admin must enable web search in the Claude Console, else the API
+        # errors -> _fail (surfaced, not silently ungrounded). Verified shape: 2026 docs.
+        body = {"model": self.model, "max_tokens": 1024,
+                "messages": [{"role": "user", "content": prompt}]}
+        if _grounding_enabled():
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
         res = _llm_http(
             "POST", f"{ANTHROPIC_BASE}/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY,
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": self.model, "max_tokens": 1024,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=60,
+            json=body,
+            timeout=90,
         )
         if res.failed:
             return _fail(res.error or "anthropic request failed")
         d = res.data or {}
         text = "".join(blk.get("text", "") for blk in d.get("content", [])
                        if blk.get("type") == "text")
-        return _ok(text, _extract_urls(text), _usage(d))
+        grounded, src = _anthropic_grounded(d)
+        return _ok(text, src or _extract_urls(text), _usage(d), grounded=grounded)
 
 
 class GeminiEngine:
@@ -468,21 +542,28 @@ class GeminiEngine:
     def answer(self, prompt: str) -> dict:
         if "YOUR_GEMINI" in GEMINI_API_KEY:
             return _skip()
-        # PH 12: enable the google search grounding tool for live results.
+        # google_search grounding tool (Gemini 2.0+ shape -- the retired 1.5 line used
+        # google_search_retrieval) so answers reflect LIVE results, not model memory.
         # Auth via the x-goog-api-key header (NOT ?key=) so the secret never lands
         # in a URL that could be logged in an exception / proxy / error trace.
+        body = {"contents": [{"parts": [{"text": prompt}]}]}
+        if _grounding_enabled():
+            body["tools"] = [{"google_search": {}}]
         res = _llm_http(
             "POST",
             f"{GEMINI_BASE}/v1beta/models/{self.model}:generateContent",
             headers={"x-goog-api-key": GEMINI_API_KEY},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=60,
+            json=body,
+            timeout=90,
         )
         if res.failed:
             return _fail(res.error or "gemini request failed")
         try:
-            text = res.data["candidates"][0]["content"]["parts"][0]["text"]
-            return _ok(text, _extract_urls(text), _usage(res.data))
+            cand = res.data["candidates"][0]
+            # grounding can add parts -> join all text parts rather than assume parts[0]
+            text = "".join(p.get("text", "") for p in cand["content"]["parts"])
+            grounded, src = _gemini_grounded(cand)
+            return _ok(text, src or _extract_urls(text), _usage(res.data), grounded=grounded)
         except (KeyError, IndexError, TypeError) as e:
             return _fail(f"gemini unexpected response shape: {e}")
 
@@ -791,8 +872,8 @@ def _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans, score,
         """INSERT INTO answers (run_id, business_id, engine, prompt, answer_text,
             cited_sources, sentiment, goal_alignment, mentions_contested,
             surfaces_owned, key_sources, missing, sample_idx, failed,
-            persona, location, raw)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            persona, location, grounded, raw)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (run_id, business_id, eng.name, prompt, ans.get("text", ""),
          json.dumps(ans.get("sources", [])),
          score.get("sentiment") if not row_failed else None,
@@ -802,6 +883,9 @@ def _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans, score,
          json.dumps(score.get("key_sources", [])) if not row_failed else None,
          json.dumps(score.get("missing", [])) if not row_failed else None,
          s, row_failed, persona, location,
+         # grounded reflects whether the ENGINE grounded in live retrieval (independent of
+         # scoring); None on a failed call where there's no answer to ground.
+         ans.get("grounded") if not failed else None,
          json.dumps({"score": score, "error": ans.get("error")} if failed
                     else ({"score": score, "scoring_failed": True} if scoring_failed
                           else {"score": score}))),
@@ -1075,6 +1159,101 @@ def _delta(a, b):
 
 def _f(row):
     return {k: (round(float(v), 3) if v is not None else None) for k, v in dict(row).items()}
+
+
+# ----------------------------------------------------------------------------
+# PER-ENGINE METRICS + COVERAGE: report what EACH engine says, with honest
+# uncertainty (sample sizes + confidence intervals) and grounding coverage.
+# ----------------------------------------------------------------------------
+# Canonical engine set we aim to cover; a run missing any of these is "partial coverage".
+ALL_ENGINES = ("perplexity", "openai_search", "anthropic", "gemini")
+
+
+def _wilson(successes: int, n: int, z: float = 1.96) -> Optional[dict]:
+    """95% Wilson score interval for a proportion -- robust at small n (unlike the normal
+    approximation). Returns {'p','low','high','n'} or None when n == 0."""
+    if n <= 0:
+        return None
+    p = successes / n
+    z2 = z * z
+    denom = 1 + z2 / n
+    centre = (p + z2 / (2 * n)) / denom
+    half = (z * ((p * (1 - p) / n + z2 / (4 * n * n)) ** 0.5)) / denom
+    return {"p": round(p, 3), "low": round(max(0.0, centre - half), 3),
+            "high": round(min(1.0, centre + half), 3), "n": n}
+
+
+def _mean_ci(values: list, z: float = 1.96) -> Optional[dict]:
+    """95% normal-approx CI for a mean (goal_alignment). low/high are None below 2 samples
+    (no spread to estimate) so the UI can show 'n too small for an interval'."""
+    n = len(values)
+    if n == 0:
+        return None
+    mean = sum(values) / n
+    if n < 2:
+        return {"mean": round(mean, 3), "low": None, "high": None, "n": n}
+    var = sum((v - mean) ** 2 for v in values) / (n - 1)
+    se = (var ** 0.5) / (n ** 0.5)
+    return {"mean": round(mean, 3), "low": round(mean - z * se, 3),
+            "high": round(mean + z * se, 3), "n": n}
+
+
+def _coverage(present: list) -> dict:
+    """Which canonical engines a run actually covered vs which are missing -> the
+    partial-coverage flag. Falls back to the configured (key-present) engines when the
+    run produced nothing, so the caller can still report what WOULD run."""
+    present_set = set(present) or {e.name for e in active_engines()}
+    missing = [e for e in ALL_ENGINES if e not in present_set]
+    return {"configured": sorted(present_set), "missing": missing,
+            "partial": bool(missing), "expected": list(ALL_ENGINES)}
+
+
+def per_engine_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
+    """Per-engine KPI breakdown for a COMPLETED run (latest if run_id is None), with
+    sample sizes, confidence intervals, and grounding coverage -- so the product reports
+    'what EACH engine says' (the cross-engine promise made real) with honest uncertainty,
+    and surfaces how much of each engine's answers were grounded in LIVE web retrieval
+    vs. model memory.
+
+    Returns {run_id, engines: {name: {n, goal_alignment, contested_rate, owned_rate,
+    grounded_rate}}, coverage: {configured, missing, partial, expected}}. KPIs are over
+    NON-FAILED answers (mirroring diff()'s failed-row exclusion); grounded_rate is over the
+    answers whose grounding is known (True/False)."""
+    with db() as conn:
+        if run_id is None:
+            run = conn.execute(
+                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)
+            ).fetchone()
+            if not run:
+                return {"run_id": None, "engines": {}, "coverage": _coverage([])}
+            run_id = run["id"]
+        # scope by business_id too: tenant-safe even if a caller passes a run_id that
+        # belongs to another business (returns no rows rather than leaking metrics).
+        rows = conn.execute(
+            "SELECT engine, goal_alignment, mentions_contested, surfaces_owned, grounded "
+            "FROM answers WHERE run_id=%s AND business_id=%s AND NOT COALESCE(failed,false)",
+            (run_id, business_id),
+        ).fetchall()
+    by: dict = {}
+    for r in rows:
+        by.setdefault(r["engine"], []).append(r)
+    engines = {}
+    for name, rs in by.items():
+        n = len(rs)
+        gas = [float(r["goal_alignment"]) for r in rs if r["goal_alignment"] is not None]
+        contested = sum(1 for r in rs if r["mentions_contested"])
+        owned = sum(1 for r in rs if r["surfaces_owned"])
+        known = [r for r in rs if r["grounded"] is not None]   # grounding is tri-state
+        grounded_true = sum(1 for r in known if r["grounded"])
+        engines[name] = {
+            "n": n,
+            "goal_alignment": _mean_ci(gas),
+            "contested_rate": _wilson(contested, n),
+            "owned_rate": _wilson(owned, n),
+            "grounded_rate": _wilson(grounded_true, len(known)) if known else None,
+        }
+    return {"run_id": run_id, "engines": engines, "coverage": _coverage(list(by.keys()))}
 
 
 # ----------------------------------------------------------------------------

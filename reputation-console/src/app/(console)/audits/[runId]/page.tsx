@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useBeforeAfter, useRunAnswers } from "@/lib/hooks";
+import { useBeforeAfter, usePerEngine, useRunAnswers } from "@/lib/hooks";
 import { AnswerCard } from "@/components/AnswerCard";
 import { BeforeAfterDiffCard } from "@/components/BeforeAfterDiffCard";
+import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 
 export default function RunDetailPage() {
@@ -19,6 +20,7 @@ export default function RunDetailPage() {
 
   const { data: answers, isLoading } = useRunAnswers(businessId, runId);
   const { data: ba } = useBeforeAfter(businessId);
+  const { data: perEngine } = usePerEngine(businessId, runId);
 
   if (isLoading || !answers) return <Spinner />;
 
@@ -37,6 +39,12 @@ export default function RunDetailPage() {
         title={`Audit run #${runId}`}
         subtitle="What the AI engines answered about this business, with the scoring judge's read of each."
       />
+
+      {perEngine && (
+        <div className="mb-6">
+          <PerEnginePanel data={perEngine} />
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <select

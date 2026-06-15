@@ -283,6 +283,39 @@ def _section_share_of_voice(heading, body, business_id):
         log.warning("report: share-of-voice section unavailable (%s)", e)
 
 
+def _section_per_engine(heading, body, bullet, business_id):
+    # ---- Per-engine coverage & grounding: the cross-engine promise, reported honestly ----
+    try:
+        from . import ai_state_audit as _ai
+        pe = _ai.per_engine_metrics(business_id)
+        engines = pe.get("engines") or {}
+        if not engines:
+            return
+        heading("What Each AI Engine Says (and How Grounded)")
+        cov = pe.get("coverage") or {}
+        if cov.get("partial"):
+            body("Partial coverage: this audit covered "
+                 f"{', '.join(cov.get('configured') or []) or 'no engines'} of the four major AI "
+                 f"engines. Configure the missing engines ({', '.join(cov.get('missing') or [])}) "
+                 "for a complete cross-engine read.", italic=True)
+        for name, m in engines.items():
+            ga = m.get("goal_alignment") or {}
+            gr = m.get("grounded_rate")
+            n = m.get("n", 0)
+            ga_txt = "n/a" if ga.get("mean") is None else f"{ga['mean']:+.2f}"
+            if ga.get("low") is not None:
+                ga_txt += f" (95% CI {ga['low']:+.2f}..{ga['high']:+.2f})"
+            grounded_txt = ("grounding not reported" if not gr
+                            else f"{round(gr['p'] * 100)}% grounded in live web (n={gr['n']})")
+            bullet(f"{name}: goal alignment {ga_txt} over {n} answers; {grounded_txt}.")
+        body("Goal alignment runs -1 (works against the goal) to +1 (strongly supports it); "
+             "ranges are 95% confidence intervals. “Grounded” means the engine answered "
+             "from a live web search rather than model memory — ungrounded answers reflect what "
+             "the model already believed, not the current web.", italic=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: per-engine section unavailable (%s)", e)
+
+
 def _section_competitor(heading, body, bullet, business_id):
     # ---- Competitor benchmarking (only if a benchmark has been run) ----
     try:
@@ -592,6 +625,7 @@ def generate(business_id: int) -> str:
     _section_timeline(heading, body, business_id)
     _section_acceleration(heading, body, business_id)
     _section_share_of_voice(heading, body, business_id)
+    _section_per_engine(heading, body, bullet, business_id)
     _section_competitor(heading, body, bullet, business_id)
 
     wos = plan.get("work_orders", []) or []
