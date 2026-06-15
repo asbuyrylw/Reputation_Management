@@ -21,6 +21,7 @@ from .routers import (
     admin,
     audits,
     auth_router,
+    billing_router,
     businesses,
     content,
     insights,
@@ -62,6 +63,12 @@ async def lifespan(app: FastAPI):
             log.info("Seed admin ready (user id=%s)", admin_id)
     except Exception as e:  # noqa: BLE001 -- never let seeding crash startup
         log.warning("seed_admin skipped: %s", e)
+    try:
+        from .. import billing
+        billing.seed_plans()
+        log.info("Plan catalog seeded")
+    except Exception as e:  # noqa: BLE001 -- never let seeding crash startup
+        log.warning("seed_plans skipped: %s", e)
     yield
     close_pool()
 
@@ -143,6 +150,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(auth_router.router)
+    app.include_router(billing_router.router)
     app.include_router(businesses.router)
     app.include_router(audits.router)
     app.include_router(insights.router)

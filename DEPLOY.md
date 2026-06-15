@@ -64,6 +64,13 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   enabled by the org admin in the Claude Console**, and Gemini/OpenAI need real keys; set
   `ENGINE_GROUNDING=0` as a fallback to disable grounding for a provider that isn't
   provisioned yet (answers then come from model memory and are flagged ungrounded).
+- **Billing/plans (Phase 2b)**: the plan catalog (Starter/Growth/Pro/Agency) is seeded
+  idempotently from the COGS model at startup (`billing.seed_plans`); prices are COGS-derived
+  proposals — review/adjust them. An **organization** carries one subscription; the job-trigger
+  chokepoint enforces **per-org quotas** (monthly audits) and **active-subscription**, returning
+  429 (over quota) / 402 (inactive). Backward-compatible: a business with no org, or an org with
+  no subscription, is **unmetered**. Assign a plan via `POST /admin/organizations/{id}/subscription`.
+  Stripe (Checkout/Portal/webhooks driving these statuses) is Phase 2c.
 - **Hardening done**: **cookie-only SPA auth** (httpOnly `rc_token`, no browser token
   storage) with **double-submit CSRF** on writes; env-driven **Secure + SameSite** cookies;
   baseline **security headers** (HSTS when secure, `nosniff`, `frame-ancestors 'none'`,

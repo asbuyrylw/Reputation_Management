@@ -41,6 +41,11 @@ class CreateOrganizationRequest(BaseModel):
     name: str
 
 
+class AssignSubscriptionRequest(BaseModel):
+    plan_code: str
+    status: str = "trialing"      # trialing | active | past_due | canceled
+
+
 class GrantAccessRequest(BaseModel):
     business_id: int
     access_role: str = "viewer"
