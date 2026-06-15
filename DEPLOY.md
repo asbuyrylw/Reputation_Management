@@ -55,6 +55,15 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   retired); `PERPLEXITY_MODEL` defaults to `sonar`. Verify each id against your account's
   live model list — `preflight_engines()` logs the active ids and fails loudly before a
   paid audit if nothing is configured.
+- **Verified-retrieval grounding (Phase 1, ON by default)**: answer engines query the LIVE
+  web so the audit measures what AI assistants actually surface, not stale model memory —
+  Anthropic `web_search`, Gemini `google_search`, OpenAI Responses `web_search` (Perplexity
+  `sonar` is grounded by design). Each answer records a `grounded` flag, and
+  `GET /businesses/{id}/per-engine` reports per-engine KPIs with sample sizes, confidence
+  intervals, grounding coverage, and a partial-coverage flag. **Anthropic web search must be
+  enabled by the org admin in the Claude Console**, and Gemini/OpenAI need real keys; set
+  `ENGINE_GROUNDING=0` as a fallback to disable grounding for a provider that isn't
+  provisioned yet (answers then come from model memory and are flagged ungrounded).
 - **Hardening done**: **cookie-only SPA auth** (httpOnly `rc_token`, no browser token
   storage) with **double-submit CSRF** on writes; env-driven **Secure + SameSite** cookies;
   baseline **security headers** (HSTS when secure, `nosniff`, `frame-ancestors 'none'`,

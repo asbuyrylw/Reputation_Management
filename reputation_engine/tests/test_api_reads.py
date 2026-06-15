@@ -87,6 +87,24 @@ def test_site_audit_and_gap_model(fresh_schema):
 
 
 @requires_db
+def test_per_engine_endpoint(fresh_schema):
+    conn = fresh_schema
+    _admin(conn)
+    bid, rid = _seed_data(conn)
+    with _client() as c:
+        h = {"Authorization": f"Bearer {_token(c)}"}
+        r = c.get(f"/businesses/{bid}/per-engine", headers=h)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["run_id"] == rid
+        assert set(body["engines"]) == {"chatgpt", "gemini"}
+        assert body["coverage"]["partial"] is True       # canonical engines missing
+        # the run-specific route resolves the same run
+        r2 = c.get(f"/businesses/{bid}/audit-runs/{rid}/per-engine", headers=h)
+        assert r2.status_code == 200 and r2.json()["run_id"] == rid
+
+
+@requires_db
 def test_reads_are_tenancy_guarded(fresh_schema):
     conn = fresh_schema
     from rep_engine.api import auth
@@ -100,3 +118,4 @@ def test_reads_are_tenancy_guarded(fresh_schema):
         assert c.get(f"/businesses/{bid}/audit-runs", headers=h).status_code == 403
         assert c.get(f"/businesses/{bid}/site-audit", headers=h).status_code == 403
         assert c.get(f"/businesses/{bid}/gap-model", headers=h).status_code == 403
+        assert c.get(f"/businesses/{bid}/per-engine", headers=h).status_code == 403
