@@ -79,6 +79,18 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   payment_failed→past_due). The `stripe` SDK is imported lazily, so the app runs without it until
   `STRIPE_SECRET_KEY` is set (the billing endpoints return 503 until then). Headline prices are
   value-based ($99/$299/$899/$2499); the COGS model is the margin floor/guardrail.
+- **Onboarding + email (Phase 2d)**: transactional email is sent via SMTP (defaults to Zoho —
+  `SMTP_HOST=smtp.zoho.com`, `SMTP_PORT=465`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`; use
+  ZeptoMail for higher-volume transactional). When SMTP is unset, the API **logs the action link
+  instead of sending** (and `/auth/invite` returns the link), so a pilot can be set up before
+  email creds are added. Flows: `POST /auth/invite` (org owner/admin invites a teammate) →
+  `/accept-invite?token=` → set password; `POST /auth/forgot-password` → `/reset-password?token=`.
+  Set `APP_BASE_URL` so links point at the console.
+- **Pilot provisioning**: `python -m rep_engine.provision_pilot --owner-email owner@teamunstoppable.com
+  --owner-name "..."` creates the **Team Unstoppable** org + business (profiled: financial
+  services / term life, contested terms MLM/pyramid/scam) + an invited owner login. It's **free /
+  unmetered** (no subscription → the quota gate doesn't apply). Idempotent. Prints the invite link
+  (or emails it). Add the real AI engine keys when ready and audits will run for that business.
 - **Hardening done**: **cookie-only SPA auth** (httpOnly `rc_token`, no browser token
   storage) with **double-submit CSRF** on writes; env-driven **Secure + SameSite** cookies;
   baseline **security headers** (HSTS when secure, `nosniff`, `frame-ancestors 'none'`,

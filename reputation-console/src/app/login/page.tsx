@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
@@ -59,6 +60,10 @@ export default function LoginPage() {
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
+
+        <Link href="/forgot-password" className="mt-4 block text-center text-sm text-blue-600 hover:underline">
+          Forgot your password?
+        </Link>
       </form>
     </div>
   );
