@@ -16,8 +16,10 @@ from ..deps import authorize_business, get_conn, get_current_user, require_busin
 from ..settings import api_settings
 
 try:
+    from ... import billing as _billing
     from ... import runstate as _runstate
 except ImportError:  # pragma: no cover
+    import billing as _billing  # type: ignore
     import runstate as _runstate  # type: ignore
 
 router = APIRouter(tags=["jobs"])
@@ -29,12 +31,18 @@ def trigger_job(
     background: BackgroundTasks,
     business_id: int = Depends(require_business_editor),
     user: dict = Depends(get_current_user),
+    conn=Depends(get_conn),
 ):
     if job_type not in _jobs.JOB_DISPATCH:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"unknown job_type; one of {sorted(_jobs.JOB_DISPATCH)}",
         )
+    # Billing/quota gate: blocks LLM-spending work when the org's subscription is inactive
+    # or over its monthly audit quota. No org / no subscription => unmetered (legacy).
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, job_type)
+    if not ok:
+        raise HTTPException(code, reason)
     job_id, active = _jobs.enqueue(business_id, job_type, requested_by=user["id"])
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a {job_type} job is already running (#{active})")

@@ -8,12 +8,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .. import auth
 from ..deps import get_conn, require_admin
 from ..schemas import (
+    AssignSubscriptionRequest,
     CreateBusinessRequest,
     CreateOrganizationRequest,
     CreateUserRequest,
     GrantAccessRequest,
     UpdateBusinessRequest,
 )
+
+try:
+    from ... import billing as _billing
+except ImportError:  # pragma: no cover
+    import billing as _billing  # type: ignore
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -42,6 +48,21 @@ def create_organization(body: CreateOrganizationRequest, _: dict = Depends(requi
     ).fetchone()
     conn.commit()
     return dict(row)
+
+
+@router.post("/organizations/{org_id}/subscription", status_code=status.HTTP_201_CREATED)
+def assign_subscription(org_id: int, body: AssignSubscriptionRequest,
+                        _: dict = Depends(require_admin), conn=Depends(get_conn)):
+    if body.status not in ("trialing", "active", "past_due", "canceled"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid subscription status")
+    if not conn.execute("SELECT 1 FROM organizations WHERE id=%s", (org_id,)).fetchone():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    try:
+        sub = _billing.subscribe(conn, org_id, body.plan_code, status=body.status)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    conn.commit()
+    return dict(sub)
 
 
 @router.get("/users")
