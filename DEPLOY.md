@@ -44,10 +44,22 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   use a managed Postgres, and run the **worker** process (`JOB_WORKER=worker`) so
   long jobs survive web restarts and human-gated agent reviews can resume
   (`AGENT_CHECKPOINT_PG=1`).
-- **Hardening done**: the API sets an **httpOnly `rc_token` cookie** on login and
-  accepts it for auth (defense-in-depth vs. XSS token theft); **every write/trigger is
-  audit-logged** (`audit_log` table, via middleware, attributed to the acting user); and
-  **login is rate-limited** (per-IP sliding window).
-- **Hardening remaining**: switch the SPA to cookie-only auth (drop the localStorage
-  bearer) + add CSRF protection; ship the rate-limit via a shared store for multi-process
-  deployments. (The backend already supports cookie auth, so this is a frontend slice.)
+- **REQUIRED over HTTPS — set `COOKIE_SECURE=1`.** This adds the `Secure` flag to the
+  session + CSRF cookies so they are never sent in cleartext. Also set `COOKIE_SAMESITE`:
+  `strict` when the console and API share a registrable domain (e.g. `app.acme.com` +
+  `api.acme.com`), or `none` when they are different sites (cross-site cookies require
+  `Secure`, which is forced on automatically for `none`). Defaults (unset `COOKIE_SECURE`,
+  `COOKIE_SAMESITE=lax`) are for local http dev only. The dev runner binds `127.0.0.1` by
+  default; set `API_HOST=0.0.0.0` (and optionally `API_PORT`) for container/host exposure.
+- **Engine model ids**: `GEMINI_MODEL` defaults to a current model (the 1.5 line is
+  retired); `PERPLEXITY_MODEL` defaults to `sonar`. Verify each id against your account's
+  live model list — `preflight_engines()` logs the active ids and fails loudly before a
+  paid audit if nothing is configured.
+- **Hardening done**: **cookie-only SPA auth** (httpOnly `rc_token`, no browser token
+  storage) with **double-submit CSRF** on writes; env-driven **Secure + SameSite** cookies;
+  baseline **security headers** (HSTS when secure, `nosniff`, `frame-ancestors 'none'`,
+  `no-store`); **every write/trigger is audit-logged** (`audit_log`, attributed to the
+  acting user); **login is rate-limited** (per-IP sliding window).
+- **Hardening remaining** (Phase 3 in `PRODUCTION_READINESS.md`): ship the rate-limit via
+  a shared store for multi-process deployments; add the `__Host-` cookie prefix; stuck-job
+  reaper + worker resilience; error tracking + metrics/alerting; backups/PITR.

@@ -167,11 +167,14 @@ def _pg_saver():
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
     try:
-        from .db import DB_DSN
+        from .db import dsn
     except ImportError:  # pragma: no cover
-        from db import DB_DSN  # type: ignore
-    # PostgresSaver requires autocommit + dict_row on its connections.
-    pool = ConnectionPool(conninfo=DB_DSN, min_size=1, max_size=4, open=True,
+        from db import dsn  # type: ignore
+    # Use the VALIDATED DSN (config.load_settings), not the raw DB_DSN env constant: a
+    # placeholder/non-postgres DSN fails fast with a clear message here instead of the pool
+    # silently opening against the wrong/unset target. PostgresSaver requires autocommit +
+    # dict_row on its connections.
+    pool = ConnectionPool(conninfo=dsn(), min_size=1, max_size=4, open=True,
                           kwargs={"autocommit": True, "row_factory": dict_row})
     saver = PostgresSaver(pool)
     saver.setup()   # idempotent: creates the langgraph checkpoint tables if absent

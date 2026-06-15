@@ -63,10 +63,12 @@ def run_answers(
     if sentiment:
         where.append("sentiment = %s")
         params.append(sentiment)
+    # `where` is composed ONLY of hardcoded predicate fragments ("engine = %s", ...); every
+    # value is bound through `params`. No user input reaches the SQL string. # nosec B608
     rows = conn.execute(
         "SELECT id, engine, prompt, answer_text, sentiment, goal_alignment, cited_sources, "
         "mentions_contested, surfaces_owned, persona, location, failed "
-        "FROM answers WHERE " + " AND ".join(where) + " ORDER BY engine, id",
+        "FROM answers WHERE " + " AND ".join(where) + " ORDER BY engine, id",  # nosec B608
         params,
     ).fetchall()
     out = []

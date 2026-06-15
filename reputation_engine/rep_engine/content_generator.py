@@ -409,11 +409,22 @@ def list_drafts(business_id: int) -> None:
 
 def approve(draft_id: int, reviewer: str) -> None:
     """Approve a draft and promote it into the assets table (the only path to
-    'published' state). Human action only."""
+    'published' state). Human action only.
+
+    Idempotent: a double-submit (impatient reviewer, retried request, two editors at
+    once) must not mint duplicate assets. The draft row is locked FOR UPDATE so the
+    second caller serializes behind the first, then sees status='approved' and returns
+    the existing asset instead of inserting again."""
     with db() as conn:
-        d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (draft_id,)).fetchone()
+        d = conn.execute("SELECT * FROM content_drafts WHERE id=%s FOR UPDATE",
+                         (draft_id,)).fetchone()
         if not d:
             raise SystemExit(f"No draft {draft_id}")
+        if d["status"] == "approved":
+            conn.commit()   # release the row lock held by FOR UPDATE
+            log.info("Draft %d already approved (asset %s); no-op.",
+                     draft_id, d.get("published_asset_id"))
+            return
         asset = conn.execute(
             """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta)
                VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",

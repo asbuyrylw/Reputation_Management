@@ -71,3 +71,28 @@ def test_writes_are_audit_logged(fresh_schema):
     assert "/auth/login" in paths and "/admin/businesses" in paths
     biz = next(r for r in rows if r["path"] == "/admin/businesses")
     assert biz["status_code"] == 201 and biz["user_id"] == 1   # the admin's action, attributed
+
+
+@requires_db
+def test_security_headers_present(fresh_schema):
+    with _client() as c:
+        r = c.get("/health")
+        assert r.status_code == 200
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["x-frame-options"] == "DENY"
+        assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+        assert r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["cache-control"] == "no-store"     # tenant data is never cached
+
+
+@requires_db
+def test_cookie_samesite_is_env_driven(fresh_schema, monkeypatch):
+    conn = fresh_schema
+    _admin(conn)
+    monkeypatch.setenv("COOKIE_SAMESITE", "strict")          # read fresh per request
+    with _client() as c:
+        r = c.post("/auth/login", json={"email": "admin@example.com", "password": "pw12345678"})
+        assert r.status_code == 200
+        cookies = " ".join(r.headers.get_list("set-cookie")).lower()
+        assert "samesite=strict" in cookies                  # hardened attribute applied
+        assert "httponly" in cookies                         # session cookie stays httpOnly

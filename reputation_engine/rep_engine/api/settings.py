@@ -20,6 +20,8 @@ class ApiSettings:
     admin_email: str
     admin_password: str
     job_worker: str       # 'inline' (dev: run jobs in-process) | 'worker' (separate process)
+    cookie_secure: bool   # set the Secure flag on auth cookies (REQUIRED in prod / over HTTPS)
+    cookie_samesite: str  # 'lax' (default) | 'strict' (same-site console) | 'none' (cross-site, forces Secure)
 
 
 def api_settings() -> ApiSettings:
@@ -31,6 +33,16 @@ def api_settings() -> ApiSettings:
         )
     origins = [o.strip() for o in os.getenv("API_CORS_ORIGINS", "http://localhost:3000").split(",")
                if o.strip()]
+    # Cookie security is env-driven so local dev over http://localhost and the test client
+    # keep working (defaults: not Secure, SameSite=Lax) while production hardens via env:
+    #   same-site console+API -> COOKIE_SECURE=1, COOKIE_SAMESITE=strict
+    #   cross-site (different registrable domains) -> COOKIE_SECURE=1, COOKIE_SAMESITE=none
+    samesite = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
+    if samesite not in ("lax", "strict", "none"):
+        samesite = "lax"
+    cookie_secure = os.getenv("COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes")
+    if samesite == "none":
+        cookie_secure = True   # browsers reject SameSite=None cookies without the Secure flag
     return ApiSettings(
         jwt_secret=secret,
         jwt_ttl_min=int(os.getenv("JWT_TTL_MIN", "720")),
@@ -38,4 +50,6 @@ def api_settings() -> ApiSettings:
         admin_email=os.getenv("ADMIN_SEED_EMAIL", "").strip(),
         admin_password=os.getenv("ADMIN_SEED_PASSWORD", ""),
         job_worker=os.getenv("JOB_WORKER", "inline").strip().lower(),
+        cookie_secure=cookie_secure,
+        cookie_samesite=samesite,
     )

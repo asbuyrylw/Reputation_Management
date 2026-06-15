@@ -258,6 +258,9 @@ def export_labeling_sheet(out_path: str, *, business_id: Optional[int] = None,
         params.append(business_id)
     params.append(limit)
     with db() as conn:
+        # `where` is a hardcoded literal plus an optional " AND a.business_id = %s"
+        # fragment; the value is bound through `params`. No user input is interpolated
+        # into the SQL string. # nosec B608
         rows = conn.execute(
             f"""SELECT b.name AS business_name, b.goal, b.contested_terms,
                        a.engine, a.prompt, a.answer_text, a.cited_sources,
@@ -266,7 +269,7 @@ def export_labeling_sheet(out_path: str, *, business_id: Optional[int] = None,
                 WHERE {where}
                 ORDER BY a.mentions_contested DESC NULLS LAST,
                          a.goal_alignment ASC NULLS LAST, a.id DESC
-                LIMIT %s""", params).fetchall()
+                LIMIT %s""", params).fetchall()  # nosec B608
     with open(out_path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=_SHEET_FIELDS)
         w.writeheader()

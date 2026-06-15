@@ -8,6 +8,7 @@ Env:  REP_DB_DSN (db), JWT_SECRET (auth), optional ADMIN_SEED_EMAIL/ADMIN_SEED_P
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -71,9 +72,27 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=api_settings().cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        # Only the headers the SPA actually sends -- not a wildcard. (A wildcard is also
+        # invalid alongside allow_credentials=True per the CORS spec.)
+        allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
     )
+
+    @app.middleware("http")
+    async def _security_headers(request, call_next):
+        # Baseline hardening headers on every response. HSTS only matters over HTTPS and is
+        # gated on the same flag as Secure cookies so it isn't sent in local http dev.
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # API responses carry tenant data -- never let a shared cache hold them.
+        response.headers.setdefault("Cache-Control", "no-store")
+        if api_settings().cookie_secure:
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
 
     _CSRF_EXEMPT = {"/auth/login", "/auth/logout"}
 
@@ -141,7 +160,11 @@ app = create_app()
 
 def main() -> None:  # pragma: no cover -- convenience entrypoint
     import uvicorn
-    uvicorn.run("rep_engine.api.main:app", host="0.0.0.0", port=8000, reload=True)
+    # Bind localhost by default (don't expose the dev server on all interfaces); a
+    # container/host that needs 0.0.0.0 sets API_HOST explicitly.
+    host = os.getenv("API_HOST", "127.0.0.1")
+    port = int(os.getenv("API_PORT", "8000"))
+    uvicorn.run("rep_engine.api.main:app", host=host, port=port, reload=True)
 
 
 if __name__ == "__main__":  # pragma: no cover

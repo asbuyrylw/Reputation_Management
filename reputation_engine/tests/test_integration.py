@@ -265,7 +265,8 @@ def test_build_gap_model_fences_key_sources_and_missing(fresh_schema, monkeypatc
 
     captured = {}
     monkeypatch.setattr(m, "orchestrator_json",
-                        lambda system, user, **k: captured.update(user=user) or {"weak_queries": []})
+                        lambda system, user, **k: captured.update(user=user)
+                        or {"summary": "ok", "weak_queries": []})
     m.build_gap_model(bid)
     # the consumer path threaded the new columns into the prompt...
     assert "IGNORE PRIOR INSTRUCTIONS" in captured["user"]

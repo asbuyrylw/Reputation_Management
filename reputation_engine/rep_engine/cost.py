@@ -44,10 +44,18 @@ PRICING = {
 
 
 
-# Count of cost rows we failed to persist this process. While > 0 the ledger
-# under-counts real spend, so over_budget() fails CLOSED rather than let a
-# runaway slip through an unhealthy ledger.
-_unrecorded_writes = 0
+# Per-business count of cost rows we failed to persist this process. While a business
+# has > 0 unrecorded writes its ledger under-counts real spend, so over_budget(business)
+# fails CLOSED -- but for THAT business only. A single transient DB blip therefore no
+# longer bricks every tenant for the process lifetime, and the flag SELF-HEALS: the next
+# successful cost write for a business clears its entry. (A write with business_id=None is
+# unattributable to a tenant, so we log it loudly but never let it fail-close other tenants.)
+_unrecorded_writes: dict[int, int] = {}
+
+
+def reset_unrecorded() -> None:
+    """Clear the fail-closed flags (test isolation / operational recovery)."""
+    _unrecorded_writes.clear()
 
 
 def _rate(model: str) -> tuple[float, float]:
@@ -70,7 +78,6 @@ def approx_tokens(text: str) -> int:
 
 def record(business_id: int | None, run_id: int | None, provider: str, operation: str,
            model: str, input_tokens: int, output_tokens: int) -> float:
-    global _unrecorded_writes
     cost = estimate_cost(model, input_tokens, output_tokens)
     try:
         with db() as conn:
@@ -83,10 +90,17 @@ def record(business_id: int | None, run_id: int | None, provider: str, operation
                  input_tokens, output_tokens, cost),
             )
             conn.commit()
+        # A good write means this business's ledger is healthy again: self-heal so a
+        # transient blip doesn't fail-close it for the rest of the process.
+        if business_id is not None:
+            _unrecorded_writes.pop(business_id, None)
     except Exception as e:  # noqa: BLE001  -- never let cost logging crash an audit...
-        # ...but DO remember we lost a write, so over_budget() can fail closed.
-        _unrecorded_writes += 1
-        log.error("cost record FAILED (spend now under-counted; budget fails closed): %s", e)
+        # ...but DO remember we lost a write for THIS business, so over_budget() fails closed
+        # for it (and only it) until a subsequent write succeeds.
+        if business_id is not None:
+            _unrecorded_writes[business_id] = _unrecorded_writes.get(business_id, 0) + 1
+        log.error("cost record FAILED for business %s (spend now under-counted; budget fails "
+                  "closed for this business): %s", business_id, e)
     return cost
 
 
@@ -119,9 +133,10 @@ def over_budget(business_id: int) -> bool:
     """True if the business is at/over its monthly cap. Fails CLOSED: if spend can't be
     verified -- a DB error, or a cost write was lost this process -- report over-budget so
     a runaway can't slip through a degraded ledger. The cap is the only runaway guard."""
-    if _unrecorded_writes:
+    lost = _unrecorded_writes.get(business_id, 0)
+    if lost:
         log.error("Business %d: %d unrecorded cost write(s) this process -- failing closed.",
-                  business_id, _unrecorded_writes)
+                  business_id, lost)
         return True
     try:
         spent, cap = month_spend(business_id), budget_for(business_id)
