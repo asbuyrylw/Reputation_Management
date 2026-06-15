@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from .. import auth
 from ..deps import authorize_business, get_conn, get_current_user
 
 try:
@@ -21,22 +22,30 @@ router = APIRouter(prefix="/businesses", tags=["businesses"])
 
 @router.get("")
 def list_businesses(user: dict = Depends(get_current_user), conn=Depends(get_conn)):
-    # `can_edit` lets the UI gate action buttons: admins edit everything; a client
-    # edits a business only with an 'editor' access row.
+    # `can_edit` lets the UI gate action buttons: platform admins edit everything; org
+    # owners/admins edit every business in their org; otherwise an 'editor' access row.
     if user["role"] == "admin":
         rows = conn.execute(
             "SELECT id, name, domain, geo, goal, contested_terms, created_at, true AS can_edit "
             "FROM businesses ORDER BY name"
         ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT b.id, b.name, b.domain, b.geo, b.goal, b.contested_terms, b.created_at, "
-            "(ba.access_role = 'editor') AS can_edit "
-            "FROM businesses b JOIN business_access ba ON ba.business_id = b.id "
-            "WHERE ba.user_id = %s ORDER BY b.name",
-            (user["id"],),
-        ).fetchall()
-    return [dict(r) for r in rows]
+        return [dict(r) for r in rows]
+    ids = auth.accessible_business_ids(conn, user) or []   # incl. org businesses for managers
+    if not ids:
+        return []
+    editable: set[int] = {
+        r["business_id"] for r in conn.execute(
+            "SELECT business_id FROM business_access WHERE user_id=%s AND access_role='editor'",
+            (user["id"],)).fetchall()
+    }
+    if auth.is_org_manager(user):
+        editable.update(r["id"] for r in conn.execute(
+            "SELECT id FROM businesses WHERE org_id=%s", (user["org_id"],)).fetchall())
+    rows = conn.execute(
+        "SELECT id, name, domain, geo, goal, contested_terms, created_at "
+        "FROM businesses WHERE id = ANY(%s) ORDER BY name", (ids,),
+    ).fetchall()
+    return [{**dict(r), "can_edit": r["id"] in editable} for r in rows]
 
 
 @router.get("/{business_id}")
