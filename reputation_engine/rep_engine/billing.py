@@ -14,6 +14,7 @@ here, status is set directly (admin assign / trial).
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -39,11 +40,15 @@ def seed_plans() -> None:
     editable by the operator). Safe to call on every startup."""
     with db() as conn:
         for i, t in enumerate(_cogs.propose_tiers()):
+            # map plan -> Stripe price via env (STRIPE_PRICE_STARTER, ...); COALESCE on update
+            # so re-seeding without the env set never clobbers an already-mapped price id.
+            price_id = os.getenv(f"STRIPE_PRICE_{t['code'].upper()}")
             conn.execute(
                 """INSERT INTO plan_catalog
                    (code, name, price_usd_month, max_businesses, max_audits_per_month,
-                    max_engines, max_samples_per_prompt, seats, trial_days, sort_order)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    max_engines, max_samples_per_prompt, seats, trial_days, sort_order,
+                    stripe_price_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (code) DO UPDATE SET
                      name=EXCLUDED.name, price_usd_month=EXCLUDED.price_usd_month,
                      max_businesses=EXCLUDED.max_businesses,
@@ -51,10 +56,11 @@ def seed_plans() -> None:
                      max_engines=EXCLUDED.max_engines,
                      max_samples_per_prompt=EXCLUDED.max_samples_per_prompt,
                      seats=EXCLUDED.seats, trial_days=EXCLUDED.trial_days,
-                     sort_order=EXCLUDED.sort_order""",
+                     sort_order=EXCLUDED.sort_order,
+                     stripe_price_id=COALESCE(EXCLUDED.stripe_price_id, plan_catalog.stripe_price_id)""",
                 (t["code"], t["name"], t["price_usd_month"], t["max_businesses"],
                  t["max_audits_per_month"], t["max_engines"], t["max_samples_per_prompt"],
-                 t["seats"], t["trial_days"], i),
+                 t["seats"], t["trial_days"], i, price_id),
             )
         conn.commit()
 

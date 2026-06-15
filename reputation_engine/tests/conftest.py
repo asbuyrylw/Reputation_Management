@@ -63,7 +63,7 @@ _ALL_TABLES = [
     "external_signals", "gap_models",
     "incidents", "learned_baseline", "learned_effectiveness", "mention_replies",
     "mentions", "monitor_keywords", "organizations", "pipeline_runs", "pipeline_steps",
-    "plan_catalog", "production_briefs", "root_cause", "subscriptions",
+    "plan_catalog", "production_briefs", "root_cause", "stripe_events", "subscriptions",
     "site_audits", "strategy_plans", "users", "work_orders",
 ]
 

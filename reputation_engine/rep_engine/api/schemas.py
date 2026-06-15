@@ -46,6 +46,16 @@ class AssignSubscriptionRequest(BaseModel):
     status: str = "trialing"      # trialing | active | past_due | canceled
 
 
+class CheckoutRequest(BaseModel):
+    plan_code: str
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
+class PortalRequest(BaseModel):
+    return_url: Optional[str] = None
+
+
 class GrantAccessRequest(BaseModel):
     business_id: int
     access_role: str = "viewer"
