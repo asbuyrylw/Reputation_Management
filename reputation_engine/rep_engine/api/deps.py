@@ -50,14 +50,31 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+def require_org_manager(user: dict = Depends(get_current_user)) -> dict:
+    """Org-management authorization (billing, members, org settings): platform admin, or
+    an owner/admin of an organization."""
+    if user["role"] == "admin" or auth.is_org_manager(user):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization owner/admin access required")
+
+
 def authorize_business(
     business_id: int,
     user: dict = Depends(get_current_user),
     conn=Depends(get_conn),
 ) -> int:
-    """Read authorization for a scoped route. Returns business_id on success."""
+    """Read authorization for a scoped route. Returns business_id on success.
+
+    Order: platform admin -> any business; org owner/admin -> any business in their org;
+    otherwise an explicit business_access grant. (Org columns default NULL, so a user with
+    no org falls straight through to the business_access check -- unchanged behavior.)"""
     if user["role"] == "admin":
         return business_id
+    if auth.is_org_manager(user):
+        row = conn.execute("SELECT 1 FROM businesses WHERE id=%s AND org_id=%s",
+                           (business_id, user["org_id"])).fetchone()
+        if row:
+            return business_id
     row = conn.execute(
         "SELECT 1 FROM business_access WHERE user_id=%s AND business_id=%s",
         (user["id"], business_id),

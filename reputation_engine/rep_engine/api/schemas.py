@@ -33,6 +33,12 @@ class CreateUserRequest(BaseModel):
     password: str
     full_name: Optional[str] = None
     role: str = "client"
+    org_id: Optional[int] = None          # org the user belongs to
+    org_role: str = "member"              # owner | admin | member
+
+
+class CreateOrganizationRequest(BaseModel):
+    name: str
 
 
 class GrantAccessRequest(BaseModel):
@@ -47,6 +53,7 @@ class CreateBusinessRequest(BaseModel):
     goal: Optional[str] = None
     contested_terms: Optional[str] = None
     geo: Optional[str] = None
+    org_id: Optional[int] = None          # organization that owns this business
 
 
 class UpdateBusinessRequest(BaseModel):

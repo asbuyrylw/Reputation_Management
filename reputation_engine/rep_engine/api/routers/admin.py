@@ -7,11 +7,41 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from .. import auth
 from ..deps import get_conn, require_admin
-from ..schemas import CreateBusinessRequest, CreateUserRequest, GrantAccessRequest, UpdateBusinessRequest
+from ..schemas import (
+    CreateBusinessRequest,
+    CreateOrganizationRequest,
+    CreateUserRequest,
+    GrantAccessRequest,
+    UpdateBusinessRequest,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _BUSINESS_FIELDS = ("name", "domain", "services", "goal", "contested_terms", "geo")
+
+
+@router.get("/organizations")
+def list_organizations(_: dict = Depends(require_admin), conn=Depends(get_conn)):
+    rows = conn.execute(
+        "SELECT o.id, o.name, o.status, o.created_at, "
+        "COUNT(DISTINCT b.id) AS business_count, COUNT(DISTINCT u.id) AS user_count "
+        "FROM organizations o "
+        "LEFT JOIN businesses b ON b.org_id = o.id "
+        "LEFT JOIN users u ON u.org_id = o.id "
+        "GROUP BY o.id ORDER BY o.id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.post("/organizations", status_code=status.HTTP_201_CREATED)
+def create_organization(body: CreateOrganizationRequest, _: dict = Depends(require_admin),
+                        conn=Depends(get_conn)):
+    row = conn.execute(
+        "INSERT INTO organizations (name) VALUES (%s) RETURNING id, name, status, created_at",
+        (body.name,),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
 
 
 @router.get("/users")
@@ -30,12 +60,19 @@ def list_users(_: dict = Depends(require_admin), conn=Depends(get_conn)):
 def create_user(body: CreateUserRequest, _: dict = Depends(require_admin), conn=Depends(get_conn)):
     if body.role not in ("admin", "client"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "role must be admin|client")
+    if body.org_role not in ("owner", "admin", "member"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_role must be owner|admin|member")
+    if body.org_id is not None and not conn.execute(
+            "SELECT 1 FROM organizations WHERE id=%s", (body.org_id,)).fetchone():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if auth.get_user_by_email(conn, body.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "email already exists")
     row = conn.execute(
-        "INSERT INTO users (email, password_hash, full_name, role) VALUES (%s,%s,%s,%s) "
-        "RETURNING id, email, full_name, role, is_active",
-        (body.email, auth.hash_password(body.password), body.full_name, body.role),
+        "INSERT INTO users (email, password_hash, full_name, role, org_id, org_role) "
+        "VALUES (%s,%s,%s,%s,%s,%s) "
+        "RETURNING id, email, full_name, role, is_active, org_id, org_role",
+        (body.email, auth.hash_password(body.password), body.full_name, body.role,
+         body.org_id, body.org_role),
     ).fetchone()
     conn.commit()
     return dict(row)
@@ -67,10 +104,13 @@ def revoke_access(user_id: int, business_id: int, _: dict = Depends(require_admi
 
 @router.post("/businesses", status_code=status.HTTP_201_CREATED)
 def create_business(body: CreateBusinessRequest, _: dict = Depends(require_admin), conn=Depends(get_conn)):
+    if body.org_id is not None and not conn.execute(
+            "SELECT 1 FROM organizations WHERE id=%s", (body.org_id,)).fetchone():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     row = conn.execute(
-        "INSERT INTO businesses (name, domain, services, goal, contested_terms, geo) "
-        "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
-        (body.name, body.domain, body.services, body.goal, body.contested_terms, body.geo),
+        "INSERT INTO businesses (name, domain, services, goal, contested_terms, geo, org_id) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (body.name, body.domain, body.services, body.goal, body.contested_terms, body.geo, body.org_id),
     ).fetchone()
     conn.commit()
     return dict(row)

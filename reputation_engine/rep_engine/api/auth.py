@@ -96,21 +96,39 @@ def authenticate(conn, email: str, password: str) -> Optional[dict]:
     return user
 
 
+def is_org_manager(user: dict) -> bool:
+    """True if the user is an owner/admin of their organization -- they manage org
+    settings/billing and implicitly access every business in their org. (Platform staff,
+    role='admin', are handled separately and sit above all orgs.)"""
+    return bool(user.get("org_id")) and user.get("org_role") in ("owner", "admin")
+
+
 def accessible_business_ids(conn, user: dict) -> Optional[list[int]]:
-    """Business ids this user may access. None means ALL (admin)."""
+    """Business ids this user may access. None means ALL (platform admin)."""
     if user["role"] == "admin":
         return None
+    ids: set[int] = set()
     rows = conn.execute(
-        "SELECT business_id FROM business_access WHERE user_id=%s ORDER BY business_id",
-        (user["id"],),
+        "SELECT business_id FROM business_access WHERE user_id=%s", (user["id"],),
     ).fetchall()
-    return [r["business_id"] for r in rows]
+    ids.update(r["business_id"] for r in rows)
+    # org owners/admins implicitly see every business in their org
+    if is_org_manager(user):
+        rows = conn.execute("SELECT id FROM businesses WHERE org_id=%s", (user["org_id"],)).fetchall()
+        ids.update(r["id"] for r in rows)
+    return sorted(ids)
 
 
 def can_edit_business(conn, user: dict, business_id: int) -> bool:
     """True if the user may perform write/trigger actions on this business."""
     if user["role"] == "admin":
         return True
+    # an org owner/admin can edit any business in their own org
+    if is_org_manager(user):
+        row = conn.execute("SELECT 1 FROM businesses WHERE id=%s AND org_id=%s",
+                           (business_id, user["org_id"])).fetchone()
+        if row:
+            return True
     row = conn.execute(
         "SELECT 1 FROM business_access WHERE user_id=%s AND business_id=%s AND access_role='editor'",
         (user["id"], business_id),
@@ -124,6 +142,7 @@ def public_user(conn, user: dict) -> dict:
     return {
         "id": user["id"], "email": user["email"], "full_name": user.get("full_name"),
         "role": user["role"], "is_active": user["is_active"],
+        "org_id": user.get("org_id"), "org_role": user.get("org_role"),
         "business_ids": ids,   # None => all (admin)
     }
 
