@@ -5,12 +5,26 @@ import { Card } from "./ui";
 import { useApproveDraft, useRejectDraft } from "@/lib/hooks";
 import type { ContentDraft } from "@/lib/types";
 
+const STATUS_WORDS: Record<string, string> = {
+  pending_review: "Waiting for you",
+  needs_fix: "Needs a fix",
+  approved: "Approved",
+  rejected: "Rejected",
+};
 const STATUS_COLORS: Record<string, string> = {
   pending_review: "bg-amber-100 text-amber-800",
   needs_fix: "bg-orange-100 text-orange-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-gray-200 text-gray-600",
 };
+
+function quality(s: number | null): { label: string; cls: string } | null {
+  if (s == null) return null;
+  const v = Math.round(s * 100);
+  if (s >= 0.8) return { label: `Strong ${v}/100`, cls: "text-green-700" };
+  if (s >= 0.6) return { label: `OK ${v}/100`, cls: "text-amber-700" };
+  return { label: `Weak ${v}/100`, cls: "text-rose-600" };
+}
 
 export function DraftReviewCard({
   draft,
@@ -22,34 +36,38 @@ export function DraftReviewCard({
   canEdit: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [notes, setNotes] = useState("");
   const approve = useApproveDraft(businessId);
   const reject = useRejectDraft(businessId);
   const body = draft.body || "";
   const long = body.length > 400;
   const pending = draft.status === "pending_review" || draft.status === "needs_fix";
   const flags = Array.isArray(draft.compliance_flags) ? draft.compliance_flags : [];
+  const q = quality(draft.quality_score);
 
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded bg-gray-900 px-1.5 py-0.5 text-xs font-medium text-white">{draft.asset_type}</span>
         <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${STATUS_COLORS[draft.status] || "bg-gray-100 text-gray-700"}`}>
-          {draft.status.replace(/_/g, " ")}
+          {STATUS_WORDS[draft.status] ?? draft.status.replace(/_/g, " ")}
         </span>
-        {draft.quality_score != null && (
-          <span className="text-xs text-gray-500">quality {draft.quality_score.toFixed(2)}</span>
-        )}
+        {q && <span className={`text-xs font-medium ${q.cls}`}>Quality: {q.label}</span>}
         {draft.compliance_pass === true && (
-          <span className="rounded bg-green-50 px-1.5 py-0.5 text-xs text-green-700">compliance ✓</span>
+          <span className="rounded bg-green-50 px-1.5 py-0.5 text-xs text-green-700">checks passed ✓</span>
         )}
         {draft.compliance_pass === false && (
-          <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">compliance ✗</span>
+          <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">flagged — review ✗</span>
         )}
         {draft.compliance_pass == null && (
-          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">not screened</span>
+          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">not checked yet</span>
         )}
       </div>
       <div className="mt-2 text-sm font-medium text-gray-900">{draft.title}</div>
+      {draft.target_query && (
+        <div className="text-xs text-gray-500">Answers the question: “{draft.target_query}”</div>
+      )}
       <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">
         {open || !long ? body : body.slice(0, 400) + "…"}
       </p>
@@ -65,8 +83,8 @@ export function DraftReviewCard({
           ))}
         </ul>
       )}
-      {canEdit && pending && (
-        <div className="mt-3 flex gap-2">
+      {canEdit && pending && !rejecting && (
+        <div className="mt-3 flex items-center gap-2">
           <button
             disabled={approve.isPending}
             onClick={() => approve.mutate({ draftId: draft.id })}
@@ -76,14 +94,35 @@ export function DraftReviewCard({
           </button>
           <button
             disabled={reject.isPending}
-            onClick={() => {
-              const notes = window.prompt("Reason for rejecting (optional):") || undefined;
-              reject.mutate({ draftId: draft.id, notes });
-            }}
+            onClick={() => setRejecting(true)}
             className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
           >
-            Reject
+            Send back
           </button>
+          <span className="text-xs text-gray-400">Approving adds it to your published content.</span>
+        </div>
+      )}
+      {canEdit && pending && rejecting && (
+        <div className="mt-3">
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="What should change? (optional)"
+            rows={2}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              disabled={reject.isPending}
+              onClick={() => reject.mutate({ draftId: draft.id, notes: notes || undefined }, { onSuccess: () => setRejecting(false) })}
+              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+            >
+              Send back for changes
+            </button>
+            <button onClick={() => { setRejecting(false); setNotes(""); }} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
       {(approve.isError || reject.isError) && (

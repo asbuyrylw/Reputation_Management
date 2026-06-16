@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Term } from "./Term";
 
 // ---- shape of the crawl summary we render (subset we use) ----
 type PageAudit = {
@@ -77,7 +78,7 @@ function X() {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
+function Stat({ label, value, sub }: { label: React.ReactNode; value: React.ReactNode; sub?: string }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
       <div className="text-xs font-medium uppercase tracking-wide text-gray-400">{label}</div>
@@ -100,12 +101,26 @@ export function SiteAuditView({ summary }: { summary: Record<string, unknown> })
   const schemaGaps = s.schema_gaps ?? [];
   const [open, setOpen] = useState<string | null>(null);
 
+  const verdict =
+    overall == null
+      ? "We couldn't score your site's readiness this run."
+      : overall >= 60
+        ? `Your website is easy for AI to read and quote (${overall}/100). Keep it fresh.`
+        : overall >= 40
+          ? `Your website is only moderately easy for AI to quote (${overall}/100). Healthy sites score 60+ — the fixes below close the gap.`
+          : `Your website is hard for AI to read and quote (${overall}/100). When AI can't pull a clean answer from your site, it uses forums and reviews you don't control. Healthy sites score 60+.`;
+
   return (
     <div className="space-y-6">
+      {/* ---- plain-English verdict ---- */}
+      <div className={`rounded-xl border p-4 ${overall == null ? "border-gray-200 bg-gray-50" : band(overall).b}`}>
+        <p className={`text-sm font-medium ${overall == null ? "text-gray-600" : band(overall).t}`}>{verdict}</p>
+      </div>
+
       {/* ---- scorecard band ---- */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat
-          label="Overall readiness"
+          label={<Term name="semantic readiness">Overall readiness</Term>}
           value={
             <span className={overall === null ? "text-gray-400" : band(overall).t}>
               {overall === null ? "—" : `${overall}`}
@@ -114,14 +129,18 @@ export function SiteAuditView({ summary }: { summary: Record<string, unknown> })
           }
           sub={overall === null ? undefined : band(overall).word}
         />
-        <Stat label="Pages analyzed" value={pages.length} sub={`${s.pages_crawled ?? allPages.length} crawled`} />
+        <Stat label="Content pages reviewed" value={pages.length} sub={`of ${s.pages_crawled ?? allPages.length} found`} />
         <Stat label="Pages needing work" value={<span className={needWork ? "text-amber-700" : "text-green-700"}>{needWork}</span>} sub="have ≥1 issue" />
         <Stat
-          label="Schema coverage"
+          label={<Term name="schema">Schema coverage</Term>}
           value={<span className={schemaPresent.length ? "text-green-700" : "text-red-600"}>{schemaPresent.length}/{schemaPresent.length + schemaGaps.length}</span>}
           sub={schemaPresent.length ? "types present" : "none present"}
         />
       </div>
+      <p className="-mt-3 text-xs text-gray-400">
+        We found {s.pages_crawled ?? allPages.length} URLs and reviewed the {pages.length} that are real content
+        pages — system files (feeds, code, images) and any that failed to load are skipped.
+      </p>
 
       {/* ---- site-wide priority fixes ---- */}
       {issues.length > 0 && (
@@ -164,13 +183,18 @@ export function SiteAuditView({ summary }: { summary: Record<string, unknown> })
           {schemaGaps.length > 0 && <p className="mt-2 text-xs text-gray-500">Add these JSON-LD types so AI + search engines can read the business clearly.</p>}
         </div>
         <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-2 text-sm font-semibold text-gray-900">Topics the site barely covers</h3>
+          <h3 className="mb-2 text-sm font-semibold text-gray-900">
+            <Term name="missing topics">Topics the site barely covers</Term>
+          </h3>
           <div className="flex flex-wrap gap-1.5">
             {(s.top_missing_entities ?? []).map((e) => (
               <span key={e} className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-700">{e}</span>
             ))}
           </div>
-          <p className="mt-2 text-xs text-gray-500">Owned content covering these would strengthen what AI surfaces about the business.</p>
+          <p className="mt-2 text-xs text-gray-500">
+            AI expects a business like yours to cover these. Where your site doesn&apos;t, AI fills the gap from
+            outside sources you don&apos;t control — so a page on each is a content opportunity.
+          </p>
         </div>
       </div>
 

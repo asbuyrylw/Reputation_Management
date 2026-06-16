@@ -10,7 +10,13 @@ type NavItem = { href: string; label: string; soon?: boolean };
 type NavGroup = { group: string; items: NavItem[] };
 
 const NAV: NavGroup[] = [
-  { group: "Overview", items: [{ href: "/dashboard", label: "Dashboard" }] },
+  {
+    group: "Overview",
+    items: [
+      { href: "/dashboard", label: "Dashboard" },
+      { href: "/next-steps", label: "Do this next" },
+    ],
+  },
   {
     group: "What AI Says",
     items: [
@@ -44,6 +50,7 @@ const NAV: NavGroup[] = [
     ],
   },
   { group: "External Data", items: [{ href: "/integrations", label: "Integrations" }] },
+  { group: "Help", items: [{ href: "/glossary", label: "Glossary" }] },
 ];
 
 const ADMIN_GROUP: NavGroup = {

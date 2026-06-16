@@ -2,11 +2,13 @@
 
 import { useBusiness } from "@/lib/business";
 import { useAcceleration, useTimeline } from "@/lib/hooks";
-import { Card, PageHeader, Spinner } from "@/components/ui";
-import { DataBlocks } from "@/components/DataBlocks";
-import { DisclaimerBanner } from "@/components/DisclaimerBanner";
+import { PageHeader, Spinner } from "@/components/ui";
+import { EmptyState } from "@/components/primitives";
 import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
+import { TimelineView } from "@/components/TimelineView";
 import type { Challenge } from "@/lib/types";
+
+type Json = Record<string, unknown>;
 
 export default function TimelinePage() {
   const { businessId } = useBusiness();
@@ -16,40 +18,28 @@ export default function TimelinePage() {
   if (tl.isLoading) return <Spinner />;
 
   const challenge = (tl.data?.challenge as Challenge | undefined) ?? null;
+  const hasData = !!tl.data && tl.data.current_alignment != null;
 
   return (
     <div>
       <PageHeader
         title="Time to goal"
-        subtitle="A projection of how long until the accurate narrative dominates — and what would compress it."
+        subtitle="When your AI reputation will reach your goal — and what would get you there sooner."
       />
-      <DisclaimerBanner>
-        This is a projection, not a promise. It reflects how much accurate content is shipping and this
-        business&apos;s own measured rate of change, which sharpens as more audits accumulate.
-      </DisclaimerBanner>
-      <div className="space-y-6">
-        {challenge && (
-          <div>
-            <PrimaryChallengeCard challenge={challenge} />
-            <p className="mt-2 px-1 text-xs text-gray-400">
-              An awareness gap fills faster than an entrenched negative narrative is crowded out, so it
-              shortens the projection below; an entrenched negative narrative lengthens it.
-            </p>
-          </div>
-        )}
-        {tl.data && (
-          <Card>
-            <div className="mb-2 text-sm font-medium text-gray-700">Projection</div>
-            <DataBlocks data={tl.data} />
-          </Card>
-        )}
-        {acc.data && (
-          <Card>
-            <div className="mb-2 text-sm font-medium text-gray-700">Acceleration options</div>
-            <DataBlocks data={acc.data} />
-          </Card>
-        )}
-      </div>
+      {!hasData ? (
+        <EmptyState
+          title="No projection yet"
+          why="We project your finish date from your audit history and how much accurate content is shipping."
+          produces="After your first audit you'll see a projected date; it sharpens with each additional audit."
+          timing="Run an audit to begin."
+          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+        />
+      ) : (
+        <div className="space-y-6">
+          <TimelineView timeline={tl.data as Json} acceleration={acc.data as Json | undefined} />
+          {challenge && <PrimaryChallengeCard challenge={challenge} />}
+        </div>
+      )}
     </div>
   );
 }
