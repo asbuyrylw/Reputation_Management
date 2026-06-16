@@ -4,9 +4,42 @@ import { useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useExternalSignals, useIngestSignal, useTriggerJob } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { DataBlocks } from "@/components/DataBlocks";
+import { EmptyState } from "@/components/primitives";
 
 const TYPES = ["technical_seo", "keywords", "serp_rank", "backlinks", "brand", "visitors", "other"];
+const TYPE_LABELS: Record<string, string> = {
+  technical_seo: "Technical SEO health",
+  keywords: "Keywords",
+  serp_rank: "Google ranking",
+  backlinks: "Links to your site",
+  brand: "Brand mentions",
+  visitors: "Website visitors",
+  other: "Other",
+};
+const STATUS_WORDS: Record<string, string> = {
+  raw: "Ready to process",
+  normalized: "Processed",
+  failed: "Couldn't read this",
+};
+
+// Clean key/value render of a normalized report (replaces the raw JSON dump).
+function KeyValues({ data }: { data: Record<string, unknown> }) {
+  const entries = Object.entries(data).filter(([, v]) => v != null && v !== "");
+  if (entries.length === 0) return <p className="text-sm text-gray-400">No details.</p>;
+  return (
+    <dl className="space-y-1">
+      {entries.map(([k, v]) => (
+        <div key={k} className="grid grid-cols-1 gap-0.5 sm:grid-cols-[160px_1fr]">
+          <dt className="text-xs font-medium uppercase tracking-wide text-gray-400">{k.replace(/_/g, " ")}</dt>
+          <dd className="text-sm text-gray-700">
+            {Array.isArray(v) ? v.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(", ")
+              : typeof v === "object" ? JSON.stringify(v) : String(v)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 export default function IntegrationsPage() {
   const { businessId, canEdit } = useBusiness();
@@ -23,9 +56,17 @@ export default function IntegrationsPage() {
   return (
     <div>
       <PageHeader
-        title="External data"
-        subtitle="Paste or upload a report from a 3rd-party SEO / SERP / analytics tool (SiteGuru, Screpy, ClickRank, WriterZen, Branalyzer, Salespanel, …). The AI normalizes it so the engine can use it."
+        title="Connect your other data"
+        subtitle="Already pay for an SEO or analytics tool? Paste its report here and we'll fold those real numbers into your reputation plan."
       />
+
+      <Card className="mb-4 bg-blue-50/50">
+        <div className="text-sm text-gray-700">
+          <span className="font-medium">Why bother?</span> Reports from tools like SiteGuru, Screpy, ClickRank,
+          or your analytics give us hard data — your Google rankings, links, and traffic — so the plan targets
+          what actually needs work instead of guessing. Paste a report (CSV, JSON, or plain text) and we read it for you.
+        </div>
+      </Card>
 
       {canEdit && (
         <Card className="mb-4">
@@ -40,7 +81,7 @@ export default function IntegrationsPage() {
             <select value={type} onChange={(e) => setType(e.target.value)} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm">
               {TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t.replace(/_/g, " ")}
+                  {TYPE_LABELS[t] ?? t.replace(/_/g, " ")}
                 </option>
               ))}
             </select>
@@ -74,28 +115,31 @@ export default function IntegrationsPage() {
       )}
 
       {data.length === 0 ? (
-        <Card>
-          <p className="text-sm text-gray-600">No external reports yet.</p>
-        </Card>
+        <EmptyState
+          title="No reports added yet"
+          why="You don't need this to get started — but if you have data from another tool, it sharpens your plan."
+          produces="Uploaded reports appear here once we've read them, with a plain summary of what we learned."
+        />
       ) : (
         <div className="space-y-3">
           {data.map((s) => (
             <Card key={s.id}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded bg-gray-900 px-1.5 py-0.5 text-xs font-medium text-white">{s.source}</span>
-                <span className="text-xs text-gray-500">{(s.signal_type || "").replace(/_/g, " ")}</span>
+                <span className="text-xs text-gray-500">{TYPE_LABELS[s.signal_type ?? ""] ?? (s.signal_type || "").replace(/_/g, " ")}</span>
                 <span className={`text-xs ${s.status === "normalized" ? "text-green-700" : s.status === "failed" ? "text-red-700" : "text-amber-700"}`}>
-                  {s.status}
+                  {STATUS_WORDS[s.status] ?? s.status}
                 </span>
                 <span className="text-xs text-gray-400">{s.created_at ? new Date(s.created_at).toLocaleDateString() : ""}</span>
               </div>
               {s.normalized ? (
-                <div className="mt-2">
-                  <DataBlocks data={s.normalized} />
+                <div className="mt-2 border-t border-gray-100 pt-2">
+                  <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-400">What we learned</div>
+                  <KeyValues data={s.normalized} />
                 </div>
               ) : (
                 <p className="mt-2 text-xs text-gray-400">
-                  {s.status === "raw" ? "Awaiting AI normalization — click ‘Normalize’ above." : "Could not normalize this report."}
+                  {s.status === "raw" ? "Ready to process — click ‘Normalize’ above." : "We couldn't read this report. Try pasting it as plain text."}
                 </p>
               )}
             </Card>

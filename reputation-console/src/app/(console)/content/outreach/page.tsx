@@ -3,6 +3,14 @@
 import { useBusiness } from "@/lib/business";
 import { useDiscoveryTargets } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
+import { EmptyState } from "@/components/primitives";
+
+function matchLabel(s: number | null): { label: string; cls: string } {
+  if (s == null) return { label: "—", cls: "text-gray-400" };
+  if (s >= 0.7) return { label: "High", cls: "text-green-700" };
+  if (s >= 0.4) return { label: "Medium", cls: "text-amber-700" };
+  return { label: "Low", cls: "text-gray-500" };
+}
 
 export default function OutreachPage() {
   const { businessId } = useBusiness();
@@ -14,12 +22,15 @@ export default function OutreachPage() {
     <div>
       <PageHeader
         title="Outreach targets"
-        subtitle="Journalists, outlets, podcasts and communities to pitch — ranked by relevance to this business."
+        subtitle="Journalists, outlets, and communities worth pitching — earning a mention from them builds the outside proof AI trusts."
       />
       {data.length === 0 ? (
-        <Card>
-          <p className="text-sm text-gray-600">No outreach targets discovered yet.</p>
-        </Card>
+        <EmptyState
+          title="No outreach targets yet"
+          why="These are people and outlets to pitch so they write about you — the third-party proof AI trusts."
+          produces="Once discovery runs, you'll see ranked contacts with how good a match each is for your story."
+          timing="Generated as part of the plan."
+        />
       ) : (
         <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
@@ -28,8 +39,8 @@ export default function OutreachPage() {
                 <th className="px-4 py-2">Name</th>
                 <th className="px-4 py-2">Channel</th>
                 <th className="px-4 py-2">Outlet</th>
-                <th className="px-4 py-2">Beat</th>
-                <th className="px-4 py-2">Score</th>
+                <th className="px-4 py-2">Covers</th>
+                <th className="px-4 py-2">Match</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -47,7 +58,7 @@ export default function OutreachPage() {
                   <td className="px-4 py-2">{t.channel}</td>
                   <td className="px-4 py-2">{t.outlet}</td>
                   <td className="px-4 py-2">{t.beat}</td>
-                  <td className="px-4 py-2">{t.score == null ? "—" : t.score.toFixed(2)}</td>
+                  <td className={`px-4 py-2 font-medium ${matchLabel(t.score).cls}`}>{matchLabel(t.score).label}</td>
                 </tr>
               ))}
             </tbody>

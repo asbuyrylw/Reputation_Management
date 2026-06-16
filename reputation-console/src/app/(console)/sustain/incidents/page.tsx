@@ -3,7 +3,8 @@
 import { useBusiness } from "@/lib/business";
 import { useIncidents } from "@/lib/hooks";
 import { IncidentCard } from "@/components/IncidentCard";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { PageHeader, Spinner } from "@/components/ui";
+import { EmptyState } from "@/components/primitives";
 
 export default function IncidentsPage() {
   const { businessId, canEdit } = useBusiness();
@@ -16,12 +17,14 @@ export default function IncidentsPage() {
     <div>
       <PageHeader
         title="Incidents"
-        subtitle="New contested mentions, triaged by severity with a drafted response — approve before anything is sent."
+        subtitle="New negative mentions worth a response, sorted by how urgent — with a draft reply you approve before anything is sent."
       />
       {data.length === 0 ? (
-        <Card>
-          <p className="text-sm text-gray-600">No incidents flagged.</p>
-        </Card>
+        <EmptyState
+          title="No incidents to handle — good"
+          why="When a serious negative mention appears, we flag it here with a suggested reply for your approval."
+          produces="Nothing is ever sent without you. You'll see the mention, why it matters, and a draft response."
+        />
       ) : (
         <div className="space-y-3">
           {pending.length > 0 && (

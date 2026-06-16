@@ -44,6 +44,7 @@ const NAV: NavGroup[] = [
     ],
   },
   { group: "External Data", items: [{ href: "/integrations", label: "Integrations" }] },
+  { group: "Help", items: [{ href: "/glossary", label: "Glossary" }] },
 ];
 
 const ADMIN_GROUP: NavGroup = {
