@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useBeforeAfter, usePerEngine, useRunAnswers } from "@/lib/hooks";
-import { AnswerCard } from "@/components/AnswerCard";
+import { AnswersByPrompt } from "@/components/AnswersByPrompt";
 import { BeforeAfterDiffCard } from "@/components/BeforeAfterDiffCard";
 import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { Card, PageHeader, Spinner } from "@/components/ui";
@@ -76,16 +76,13 @@ export default function RunDetailPage() {
         </span>
       </div>
 
-      <div className="space-y-3">
-        {filtered.map((a) => (
-          <AnswerCard key={a.id} a={a} />
-        ))}
-        {filtered.length === 0 && (
-          <Card>
-            <p className="text-sm text-gray-500">No answers match these filters.</p>
-          </Card>
-        )}
-      </div>
+      {filtered.length === 0 ? (
+        <Card>
+          <p className="text-sm text-gray-500">No answers match these filters.</p>
+        </Card>
+      ) : (
+        <AnswersByPrompt answers={filtered} />
+      )}
 
       {ba && ba.length > 0 && (
         <div className="mt-8">

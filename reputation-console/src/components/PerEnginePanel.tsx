@@ -2,8 +2,8 @@
 
 import type { PerEngineMetrics } from "@/lib/types";
 import { Card } from "@/components/ui";
-
-const fmt = (n: number) => (n >= 0 ? "+" : "") + n.toFixed(2);
+import { RepScoreBadge } from "@/components/RepScoreBadge";
+import { repScore } from "@/lib/repScore";
 
 // Per-engine read for one run: what EACH AI engine said, with sample sizes, 95% CIs, and
 // how much of it was grounded in live web retrieval vs. model memory. Surfaces the
@@ -31,7 +31,7 @@ export function PerEnginePanel({ data }: { data: PerEngineMetrics }) {
             <tr className="border-b text-left text-xs uppercase tracking-wide text-gray-400">
               <th className="py-2 pr-4">Engine</th>
               <th className="py-2 pr-4">Answers</th>
-              <th className="py-2 pr-4">Goal alignment (95% CI)</th>
+              <th className="py-2 pr-4">Reputation score (0–100)</th>
               <th className="py-2 pr-4">Grounded</th>
             </tr>
           </thead>
@@ -47,15 +47,12 @@ export function PerEnginePanel({ data }: { data: PerEngineMetrics }) {
                     {ga?.mean == null ? (
                       "n/a"
                     ) : (
-                      <>
-                        {fmt(ga.mean)}
+                      <span className="inline-flex items-center gap-1.5">
+                        <RepScoreBadge goalAlignment={ga.mean} />
                         {ga.low != null && ga.high != null && (
-                          <span className="text-gray-400">
-                            {" "}
-                            ({fmt(ga.low)}…{fmt(ga.high)})
-                          </span>
+                          <span className="text-xs text-gray-400">CI {repScore(ga.low)}–{repScore(ga.high)}</span>
                         )}
-                      </>
+                      </span>
                     )}
                   </td>
                   <td className="py-2 pr-4 text-gray-600">

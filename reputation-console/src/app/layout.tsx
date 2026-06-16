@@ -27,8 +27,11 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="flex min-h-full flex-col bg-gray-50 text-gray-900">
+      {/* suppressHydrationWarning: browser extensions (AI agents, etc.) inject attributes on
+          <html>/<body> before React hydrates, causing a harmless dev-only mismatch warning. */}
+      <body className="flex min-h-full flex-col bg-gray-50 text-gray-900" suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>
