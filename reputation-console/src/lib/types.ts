@@ -103,9 +103,61 @@ export interface Answer {
   cited_sources: unknown;
   mentions_contested: boolean | null;
   surfaces_owned: boolean | null;
+  awareness: boolean | null; // does the engine RECOGNIZE the business (vs no-info)?
+  entity_confusion: boolean | null; // is the answer about a DIFFERENT same-named entity?
   persona: string | null;
   location: string | null;
   failed: boolean | null;
+}
+
+// Primary-challenge profile: is the business's problem an awareness gap (a void to
+// fill, faster) or an entrenched negative narrative (slower to crowd out)?
+export type ChallengeProfile =
+  | "awareness_gap"
+  | "negative_narrative"
+  | "mixed"
+  | "established_positive"
+  | "unknown";
+
+export type ChallengeTrack = "fill_void" | "crowd_out" | "both" | "defend" | "none";
+
+export interface ChallengeEngine {
+  profile: ChallengeProfile;
+  label: string;
+  track: ChallengeTrack;
+  n: number;
+  unaware_rate: number | null;
+  entity_confusion_rate: number | null;
+  recognition_gap: number | null;
+  negative_score: number | null;
+  contested_rebutted_rate: number | null;
+  avg_alignment: number | null;
+}
+
+export interface Challenge {
+  business: string;
+  run_id: number | null;
+  profile: ChallengeProfile;
+  label: string;
+  track: ChallengeTrack;
+  void_fill_factor: number;
+  sample_size: number;
+  headline: string;
+  recommendation: string;
+  signals: {
+    unaware_rate: number | null;
+    awareness_rate: number | null;
+    entity_confusion_rate: number | null;
+    recognition_gap: number | null;
+    contested_rate: number | null;
+    contested_rebutted_rate: number | null;
+    negative_rate: number | null;
+    negative_score: number | null;
+    avg_alignment: number | null;
+    awareness_known_n?: number;
+  };
+  by_engine?: Record<string, ChallengeEngine>;
+  basis?: string;
 }
 
 // Confidence interval: `mean` for goal_alignment (normal approx), `p` for rates (Wilson).
@@ -256,4 +308,5 @@ export interface Dashboard {
   assets_n: number;
   month_cost?: number; // present for admins only
   attribution: { metric: string; delta: number; assets_in_window: unknown }[];
+  challenge?: Challenge | null; // primary-challenge profile (awareness gap vs negatives)
 }

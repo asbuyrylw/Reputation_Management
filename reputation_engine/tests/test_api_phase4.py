@@ -66,7 +66,7 @@ def test_rankings_and_sustain_reads(fresh_schema, monkeypatch):
         assert c.get(f"/businesses/{bid}/attribution", headers=h).status_code == 200
 
         # pure projections compute without LLM and return dicts even on thin data
-        for path in ("timeline", "acceleration", "learned-levers", "alert"):
+        for path in ("timeline", "acceleration", "learned-levers", "alert", "challenge"):
             assert c.get(f"/businesses/{bid}/{path}", headers=h).status_code == 200
 
         inc = c.get(f"/businesses/{bid}/incidents", headers=h)
@@ -77,3 +77,38 @@ def test_rankings_and_sustain_reads(fresh_schema, monkeypatch):
         iid = inc.json()[0]["id"]
         r = c.post(f"/businesses/{bid}/incidents/{iid}/resume", headers=h, json={"approved": True})
         assert r.status_code == 409
+
+
+@requires_db
+def test_challenge_profile_endpoint_and_dashboard(fresh_schema):
+    conn = fresh_schema
+    _admin(conn)
+    bid = conn.execute("INSERT INTO businesses (name, domain, contested_terms) "
+                       "VALUES ('VoidCo','void.com','MLM') RETURNING id").fetchone()["id"]
+    rid = conn.execute("INSERT INTO audit_runs (business_id, finished_at, status) "
+                       "VALUES (%s, now(), 'complete') RETURNING id", (bid,)).fetchone()["id"]
+    # mostly NOT recognized -> an awareness gap (a void to fill)
+    for _ in range(6):
+        conn.execute("INSERT INTO answers (run_id,business_id,engine,prompt,answer_text,"
+                     "goal_alignment,mentions_contested,sentiment,awareness,failed) "
+                     "VALUES (%s,%s,'e','p','t',0.0,false,'neutral',false,false)", (rid, bid))
+    for _ in range(2):
+        conn.execute("INSERT INTO answers (run_id,business_id,engine,prompt,answer_text,"
+                     "goal_alignment,mentions_contested,sentiment,awareness,failed) "
+                     "VALUES (%s,%s,'e','p','t',0.3,false,'positive',true,false)", (rid, bid))
+    conn.commit()
+
+    with _client() as c:
+        h = {"Authorization": f"Bearer {_token(c)}"}
+
+        ch = c.get(f"/businesses/{bid}/challenge", headers=h)
+        assert ch.status_code == 200
+        body = ch.json()
+        assert body["profile"] == "awareness_gap"
+        assert body["track"] == "fill_void"
+        assert body["signals"]["unaware_rate"] > 0.5
+
+        # the dashboard bundle carries the same challenge diagnosis
+        dash = c.get(f"/businesses/{bid}/dashboard", headers=h)
+        assert dash.status_code == 200
+        assert dash.json()["challenge"]["profile"] == "awareness_gap"
