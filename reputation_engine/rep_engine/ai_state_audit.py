@@ -856,6 +856,15 @@ _ADAPT_STABLE_SPREAD = 0.20    # max-min of goal_alignment considered "stable"
 _ADAPT_BOUNDARY = 0.15         # |mean| below this = near decision boundary -> sample more
 
 
+def _batch_scoring() -> bool:
+    """When set (AUDIT_BATCH_SCORING=1), defer the per-answer scoring to the Anthropic Batch
+    API (a flat 50% discount on the dominant audit cost) instead of scoring inline: the audit
+    stores valid-but-unscored answers and the orchestrator's batch_score step (batch.
+    score_run_batched) fills the metrics afterward. Trades synchronous immediacy + adaptive
+    sampling for ~50% lower scoring COGS -- a good trade for periodic audits at scale."""
+    return os.getenv("AUDIT_BATCH_SCORING", "0").strip().lower() not in ("0", "false", "no")
+
+
 def _should_stop_sampling(scores: list[float]) -> bool:
     """Given goal_alignment values so far, decide whether more samples are unlikely
     to change the conclusion."""
@@ -967,16 +976,19 @@ def audit(business_id: int) -> int:
                                         getattr(eng, "model", eng.name),
                                         _u["input"] if _u else cost.approx_tokens(prompt),
                                         _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
-                            score = score_answer(b, prompt, ans)
-                            # the scoring pass itself costs money (cheap tier) -- track it
-                            _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
-                                else (None, None)
-                            if _score_model is None:
-                                _, _score_model = _model_for("cheap")
-                            cost.record(business_id, run_id, ORCHESTRATOR, "score",
-                                        _score_model,
-                                        cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")),
-                                        200)  # scoring output is small, bounded JSON
+                            if _batch_scoring():
+                                score = {}   # defer to the 50%-off batch pass (orchestrator)
+                            else:
+                                score = score_answer(b, prompt, ans)
+                                # the scoring pass itself costs money (cheap tier) -- track it
+                                _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
+                                    else (None, None)
+                                if _score_model is None:
+                                    _, _score_model = _model_for("cheap")
+                                cost.record(business_id, run_id, ORCHESTRATOR, "score",
+                                            _score_model,
+                                            cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")),
+                                            200)  # scoring output is small, bounded JSON
                         else:
                             score = {}
 
@@ -988,8 +1000,11 @@ def audit(business_id: int) -> int:
                         # returned nothing parseable, or the JSON failed ScoreResult
                         # validation -> score == {}) must be treated like a failed row:
                         # store NULL metrics + failed=True so it is excluded from every KPI
-                        # (contested_rate/owned_rate/avg all gate on NOT failed).
-                        scoring_failed = (has_text and not failed and not score)
+                        # (contested_rate/owned_rate/avg all gate on NOT failed). EXCEPTION:
+                        # in batch mode an unscored answer is deferred (scored later by the
+                        # batch pass), so it is NOT a failure -- keep it (failed=False, NULL
+                        # metrics) for batch.score_run_batched to fill in.
+                        scoring_failed = (has_text and not failed and not score) and not _batch_scoring()
                         row_failed = failed or scoring_failed
 
                         _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans,
