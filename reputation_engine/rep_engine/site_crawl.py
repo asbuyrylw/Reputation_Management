@@ -72,6 +72,26 @@ try:
 except ImportError:  # pragma: no cover
     _SeoPage = None
     _HAS_SEO = False
+
+# Non-content system/asset URLs (WordPress feeds, xmlrpc, wp-json/admin/includes/content,
+# oembed, comment-reply links, CSS/JS/feed files). These are crawl artifacts -- never real
+# "thin content pages" and never content opportunities -- so they must not pollute the gap
+# model's missing_owned_content or the SEO view's thin-page list.
+_CRAWL_ARTIFACT_RE = re.compile(
+    r"(?:"
+    r"/feed/?$|/comments/feed|/trackback/?$|"
+    r"xmlrpc\.php|wp-(?:json|admin|includes|content)|oembed|"
+    r"\?replytocom=|"
+    r"\.(?:css|js|json|xml|rss|atom|map|ico|png|jpe?g|gif|svg|webp|woff2?|ttf)(?:\?|$)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_crawl_artifact(url: str) -> bool:
+    """True for non-content system/asset URLs that should never be treated as a thin
+    content page or turned into a content opportunity."""
+    return bool(_CRAWL_ARTIFACT_RE.search(url or ""))
 USE_SEO_ANALYZER = os.getenv("CRAWL_USE_PYSEO", "1") != "0"   # PH 4: 0 to disable
 
 # Firecrawl: optional JS-rendering fetch layer. When configured, the crawler fetches
@@ -437,8 +457,12 @@ def summarize(results: list[PageAudit], lh: dict) -> dict:
     schema_present = {t for pa in results for t in pa.schema_types}
     desired_schema = {"Organization", "FAQPage", "Person", "Review", "LocalBusiness"}
     schema_gaps = sorted(desired_schema - schema_present)
-    thin = [pa.url for pa in results if "thin_content" in pa.issues]
-    no_meta = [pa.url for pa in results if "missing_meta_description" in pa.issues]
+    # exclude WordPress/system crawl artifacts (feeds, xmlrpc, wp-json, CSS/JS) -- they are
+    # not real content pages, so flagging them as "thin" is noise in the SEO view and the gap
+    # model (the validation found ~5 such junk items polluting missing_owned_content).
+    thin = [pa.url for pa in results if "thin_content" in pa.issues and not _is_crawl_artifact(pa.url)]
+    no_meta = [pa.url for pa in results if "missing_meta_description" in pa.issues
+               and not _is_crawl_artifact(pa.url)]
     # markers that are informational, not defects -- kept on the page record but
     # not counted as issues (so reports don't show them as problems).
     _INFO_MARKERS = {"rendered_via_firecrawl"}
@@ -483,6 +507,9 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
             "SELECT id FROM audit_runs WHERE business_id=%s ORDER BY id DESC LIMIT 1",
             (business_id,),
         ).fetchone()
+        biz = conn.execute("SELECT contested_terms FROM businesses WHERE id=%s",
+                           (business_id,)).fetchone()
+        contested = [t.lower() for t in split_terms(biz["contested_terms"]) if t] if biz else []
         conn.execute(
             "CREATE TABLE IF NOT EXISTS site_audits ("
             "id BIGSERIAL PRIMARY KEY, business_id BIGINT, run_id BIGINT, "
@@ -506,8 +533,15 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
                 moc.append({"topic": f"Expand thin page {url}", "asset_type": "article",
                             "why": "Page below content threshold; weak for retrieval/extraction."})
             model["missing_owned_content"] = moc
-            # semantic-depth findings: missing entities become content opportunities
+            # semantic-depth findings: missing entities become content opportunities -- but
+            # NEVER auto-propose a page targeting a CONTESTED term (e.g. "pyramid scheme",
+            # "scam"). A naive keyword page reinforces the very negative association we are
+            # crowding out; the right response to a contested topic is a legitimacy /
+            # transparency / corroboration asset, which the gap-model LLM proposes separately.
             for term in (summary.get("top_missing_entities") or [])[:8]:
+                tl = (term or "").lower()
+                if any(ct in tl or tl in ct for ct in contested):
+                    continue
                 moc.append({"topic": f"Add/strengthen coverage of '{term}'", "asset_type": "article",
                             "why": "Topic AI answers expect but the site under-covers "
                                    "(semantic-depth gap; entity coverage drives AI citation)."})

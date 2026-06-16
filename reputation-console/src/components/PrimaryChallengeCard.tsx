@@ -1,7 +1,47 @@
 "use client";
 
-import type { Challenge, ChallengeProfile } from "@/lib/types";
+import type { Challenge, ChallengeProfile, ChallengeEngine } from "@/lib/types";
 import { Card } from "./ui";
+
+const BADGE: Record<ChallengeProfile, string> = {
+  awareness_gap: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  negative_narrative: "bg-rose-50 text-rose-700 border-rose-200",
+  mixed: "bg-amber-50 text-amber-700 border-amber-200",
+  established_positive: "bg-green-50 text-green-700 border-green-200",
+  unknown: "bg-gray-100 text-gray-500 border-gray-200",
+};
+
+// Per-engine row: the challenge is often bimodal (one engine doesn't know the business,
+// another knows it and is unfavorable). Showing each engine prevents a single portfolio
+// label from hiding that.
+function EngineRow({ name, e }: { name: string; e: ChallengeEngine }) {
+  const pct = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-gray-700">{ENGINE_LABELS[name] ?? name}</span>
+        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${BADGE[e.profile]}`}>
+          {e.label}
+        </span>
+      </div>
+      <div className="flex items-center gap-4 tabular-nums text-xs text-gray-500">
+        <span title="Recognition gap (doesn't know the business / wrong entity)">
+          gap <span className="text-indigo-600">{pct(e.recognition_gap)}</span>
+        </span>
+        <span title="Genuinely unfavorable framing">
+          neg <span className="text-rose-600">{pct(e.negative_score)}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const ENGINE_LABELS: Record<string, string> = {
+  openai_search: "ChatGPT",
+  anthropic: "Claude",
+  perplexity: "Perplexity",
+  gemini: "Gemini",
+};
 
 // Per-profile presentation: accent color + a plain "how fast" read. The strategic point
 // is that an awareness void fills FASTER than an entrenched negative narrative crowds out,
@@ -105,18 +145,41 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
 
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Track
-          label="Awareness void"
-          pct={s.unaware_rate}
+          label="Recognition gap"
+          pct={s.recognition_gap ?? s.unaware_rate}
           color="bg-indigo-500"
-          note="Answers where AI doesn't know the business — fill this (faster)."
+          note={
+            s.entity_confusion_rate
+              ? `AI doesn't know the business or confuses it with a same-named entity (${Math.round((s.entity_confusion_rate ?? 0) * 100)}% wrong-entity) — fill this (faster).`
+              : "Answers where AI doesn't know the business — fill this (faster)."
+          }
         />
         <Track
           label="Negative narrative"
           pct={s.negative_score}
           color="bg-rose-500"
-          note="Answers that know it and are unfavorable — crowd out (slower)."
+          note={
+            s.contested_rebutted_rate
+              ? `Answers that know it and are genuinely unfavorable — crowd out (slower). ${Math.round((s.contested_rebutted_rate ?? 0) * 100)}% raise the topic but the AI rebuts it.`
+              : "Answers that know it and are unfavorable — crowd out (slower)."
+          }
         />
       </div>
+
+      {challenge.by_engine && Object.keys(challenge.by_engine).length > 0 && (
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <div className="text-xs font-medium uppercase tracking-wide text-gray-400">
+            By engine — the challenge is often different per assistant
+          </div>
+          <div className="mt-1 divide-y divide-gray-50">
+            {Object.entries(challenge.by_engine)
+              .sort((a, b) => (b[1].recognition_gap ?? 0) + (b[1].negative_score ?? 0) - (a[1].recognition_gap ?? 0) - (a[1].negative_score ?? 0))
+              .map(([name, e]) => (
+                <EngineRow key={name} name={name} e={e} />
+              ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-4 border-t border-gray-100 pt-3">
         <div className="text-xs font-medium uppercase tracking-wide text-gray-400">What this means</div>

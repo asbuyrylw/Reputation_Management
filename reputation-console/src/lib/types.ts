@@ -104,6 +104,7 @@ export interface Answer {
   mentions_contested: boolean | null;
   surfaces_owned: boolean | null;
   awareness: boolean | null; // does the engine RECOGNIZE the business (vs no-info)?
+  entity_confusion: boolean | null; // is the answer about a DIFFERENT same-named entity?
   persona: string | null;
   location: string | null;
   failed: boolean | null;
@@ -118,12 +119,27 @@ export type ChallengeProfile =
   | "established_positive"
   | "unknown";
 
+export type ChallengeTrack = "fill_void" | "crowd_out" | "both" | "defend" | "none";
+
+export interface ChallengeEngine {
+  profile: ChallengeProfile;
+  label: string;
+  track: ChallengeTrack;
+  n: number;
+  unaware_rate: number | null;
+  entity_confusion_rate: number | null;
+  recognition_gap: number | null;
+  negative_score: number | null;
+  contested_rebutted_rate: number | null;
+  avg_alignment: number | null;
+}
+
 export interface Challenge {
   business: string;
   run_id: number | null;
   profile: ChallengeProfile;
   label: string;
-  track: "fill_void" | "crowd_out" | "both" | "defend" | "none";
+  track: ChallengeTrack;
   void_fill_factor: number;
   sample_size: number;
   headline: string;
@@ -131,12 +147,16 @@ export interface Challenge {
   signals: {
     unaware_rate: number | null;
     awareness_rate: number | null;
+    entity_confusion_rate: number | null;
+    recognition_gap: number | null;
     contested_rate: number | null;
+    contested_rebutted_rate: number | null;
     negative_rate: number | null;
     negative_score: number | null;
     avg_alignment: number | null;
     awareness_known_n?: number;
   };
+  by_engine?: Record<string, ChallengeEngine>;
   basis?: string;
 }
 

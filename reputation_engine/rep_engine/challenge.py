@@ -152,12 +152,82 @@ def _recommendation(profile: str) -> str:
     }[profile]
 
 
+def _r3(v):
+    """Round to 3 dp, passing None through (for JSON-friendly nullable rates)."""
+    return round(v, 3) if v is not None else None
+
+
+def _ec(r) -> bool:
+    """entity_confusion as a hard bool (legacy rows store NULL -> treated as False)."""
+    return bool(r["entity_confusion"]) if "entity_confusion" in r.keys() else False
+
+
+def _compute(rows: list) -> dict:
+    """Compute challenge signals for a set of non-failed answer rows. The recognition gap
+    (engine doesn't correctly know THIS business) is split into a genuine awareness VOID and
+    ENTITY CONFUSION (wrong same-named entity); both fill via identity grounding but are
+    reported apart. A negative narrative is counted only where the engine knows the RIGHT
+    business and the framing is genuinely unfavourable."""
+    n = len(rows)
+    contested_rate = sum(1 for r in rows if r["mentions_contested"]) / n if n else 0.0
+    negative_rate = sum(1 for r in rows if (r["sentiment"] or "").lower() == "negative") / n if n else 0.0
+    ga_vals = [float(r["goal_alignment"]) for r in rows if r["goal_alignment"] is not None]
+    avg_alignment = sum(ga_vals) / len(ga_vals) if ga_vals else 0.0
+
+    aware_known = [r for r in rows if r["awareness"] is not None]
+    if aware_known:
+        nk = len(aware_known)
+        entity_confusion_rate = sum(1 for r in aware_known if _ec(r)) / nk
+        # genuine void = doesn't recognize the business AND not a wrong-entity mixup
+        unaware_rate = sum(1 for r in aware_known if (not r["awareness"]) and not _ec(r)) / nk
+        # aware = recognizes the RIGHT business (and is not a wrong-entity answer)
+        aware_rows = [r for r in aware_known if r["awareness"] and not _ec(r)]
+        awareness_rate = len(aware_rows) / nk
+        recognition_gap = unaware_rate + entity_confusion_rate
+
+        def _is_negative(r):
+            if _ec(r):
+                return False  # wrong entity -> not THIS business's negativity
+            if (r["sentiment"] or "").lower() == "negative":
+                return True
+            ga = r["goal_alignment"]
+            return bool(r["mentions_contested"]) and ga is not None and ga < 0
+
+        negative_score = sum(1 for r in aware_rows if _is_negative(r)) / nk
+        contested_rebutted_rate = (
+            sum(1 for r in aware_rows if r["mentions_contested"] and not _is_negative(r))
+            / len(aware_rows) if aware_rows else 0.0)
+    else:
+        # Legacy run with no awareness signal: fall back to global negativity.
+        entity_confusion_rate = None
+        unaware_rate = None
+        awareness_rate = None
+        recognition_gap = None
+        negative_score = max(contested_rate, negative_rate)
+        contested_rebutted_rate = None
+
+    return {
+        "n": n,
+        "contested_rate": contested_rate,
+        "contested_rebutted_rate": contested_rebutted_rate,
+        "negative_rate": negative_rate,
+        "negative_score": negative_score,
+        "avg_alignment": avg_alignment,
+        "unaware_rate": unaware_rate,
+        "entity_confusion_rate": entity_confusion_rate,
+        "awareness_rate": awareness_rate,
+        "recognition_gap": recognition_gap,
+        "awareness_known_n": len(aware_known),
+    }
+
+
 def challenge_profile(business_id: int, run_id: Optional[int] = None,
                       quiet: bool = True) -> dict:
     """Diagnose the business's PRIMARY reputation challenge from its latest completed
     audit (or a specific run_id). Pure read. Returns a dict with the profile, the
-    diagnostic rates, a timeline ``void_fill_factor``, a plain-English headline and a
-    recommendation. ``profile='unknown'`` when there is no scored audit yet."""
+    diagnostic rates, a per-engine breakdown, a timeline ``void_fill_factor``, a
+    plain-English headline and a recommendation. ``profile='unknown'`` when there is no
+    scored audit yet."""
     with db() as conn:
         biz = conn.execute("SELECT name FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
@@ -171,8 +241,9 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
         rows = []
         if run_id is not None:
             rows = conn.execute(
-                "SELECT awareness, mentions_contested, sentiment, goal_alignment FROM answers "
-                "WHERE run_id=%s AND NOT COALESCE(failed,false)", (run_id,)).fetchall()
+                "SELECT engine, awareness, entity_confusion, mentions_contested, sentiment, "
+                "goal_alignment FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)",
+                (run_id,)).fetchall()
 
     n = len(rows)
     if n == 0:
@@ -185,57 +256,44 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
             "headline": _headline(profile, None, 0, name),
             "recommendation": _recommendation(profile),
             "signals": {"unaware_rate": None, "awareness_rate": None,
-                        "contested_rate": None, "negative_rate": None,
-                        "negative_score": None, "avg_alignment": None},
+                        "entity_confusion_rate": None, "recognition_gap": None,
+                        "contested_rate": None, "contested_rebutted_rate": None,
+                        "negative_rate": None, "negative_score": None, "avg_alignment": None},
+            "by_engine": {},
         }
         if not quiet:
             print(json.dumps(out, indent=2, default=str))
         return out
 
-    # Global rates (kept for transparency + cross-reference with entrenchment).
-    contested_rate = sum(1 for r in rows if r["mentions_contested"]) / n
-    negative_rate = sum(1 for r in rows if (r["sentiment"] or "").lower() == "negative") / n
-    ga_vals = [float(r["goal_alignment"]) for r in rows if r["goal_alignment"] is not None]
-    avg_alignment = sum(ga_vals) / len(ga_vals) if ga_vals else 0.0
+    c = _compute(rows)
+    # Classification keys off the RECOGNITION GAP (genuine void + wrong-entity), since both
+    # mean the engine doesn't correctly know THIS business and both fill via identity
+    # grounding. Legacy runs (no awareness signal) pass recognition_gap=None -> the
+    # negativity-only fallback in _classify.
+    profile = _classify(c["recognition_gap"], c["negative_score"], c["avg_alignment"])
+    gap_pct = round(c["recognition_gap"] * 100) if c["recognition_gap"] is not None else None
+    negative_pct = round(c["negative_score"] * 100)
 
-    aware_known = [r for r in rows if r["awareness"] is not None]
-    if aware_known:
-        # The void: share of answers where the AI did NOT recognize the business.
-        unaware_rate = sum(1 for r in aware_known if not r["awareness"]) / len(aware_known)
-        awareness_rate = 1.0 - unaware_rate
-        # An entrenched NEGATIVE narrative only exists where the AI actually KNOWS the
-        # business AND the framing is genuinely UNFAVOURABLE. Two guards:
-        #   1. Counting a contested mention on an answer that doesn't recognize the business
-        #      would mislabel an awareness void as a negative narrative -> require awareness.
-        #   2. mentions_contested is a keyword flag that cannot tell "engine ALLEGES" from
-        #      "engine DEBUNKS": grounded answers to "is it a pyramid scheme?" frequently
-        #      REBUT the frame (positive goal_alignment) yet still trip the flag. Counting
-        #      those rebuttals as attacks inflates the score (~40-50% over-count observed on
-        #      a Primerica-affiliated org). So a contested mention only counts as negative
-        #      when goal_alignment is actually unfavourable (< 0); a contested mention with
-        #      non-negative goal_alignment is a DEFENDED/rebutted position, tracked apart.
-        def _is_negative(r):
-            if (r["sentiment"] or "").lower() == "negative":
-                return True
-            ga = r["goal_alignment"]
-            return bool(r["mentions_contested"]) and ga is not None and ga < 0
-
-        aware_rows = [r for r in aware_known if r["awareness"]]
-        negative_score = (sum(1 for r in aware_rows if _is_negative(r))
-                          / len(aware_known))
-        contested_rebutted_rate = (
-            sum(1 for r in aware_rows if r["mentions_contested"] and not _is_negative(r))
-            / len(aware_rows) if aware_rows else 0.0)
-    else:
-        # Legacy run with no awareness signal: fall back to global negativity.
-        unaware_rate = None
-        awareness_rate = None
-        negative_score = max(contested_rate, negative_rate)
-        contested_rebutted_rate = None
-
-    profile = _classify(unaware_rate, negative_score, avg_alignment)
-    unaware_pct = round(unaware_rate * 100) if unaware_rate is not None else None
-    negative_pct = round(negative_score * 100)
+    # Per-engine breakdown: the challenge is often bimodal (one engine doesn't know the
+    # business, another knows it and is unfavourable). A single portfolio label hides that.
+    by_engine: dict = {}
+    engines = sorted({r["engine"] for r in rows})
+    for e in engines:
+        erows = [r for r in rows if r["engine"] == e]
+        ec = _compute(erows)
+        eprofile = _classify(ec["recognition_gap"], ec["negative_score"], ec["avg_alignment"])
+        by_engine[e] = {
+            "profile": eprofile,
+            "label": _LABELS[eprofile],
+            "track": _TRACKS[eprofile],
+            "n": ec["n"],
+            "unaware_rate": _r3(ec["unaware_rate"]),
+            "entity_confusion_rate": _r3(ec["entity_confusion_rate"]),
+            "recognition_gap": _r3(ec["recognition_gap"]),
+            "negative_score": _r3(ec["negative_score"]),
+            "contested_rebutted_rate": _r3(ec["contested_rebutted_rate"]),
+            "avg_alignment": _r3(ec["avg_alignment"]),
+        }
 
     out = {
         "business": name,
@@ -245,25 +303,28 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
         "track": _TRACKS[profile],
         "void_fill_factor": VOID_FILL_FACTORS[profile],
         "sample_size": n,
-        "headline": _headline(profile, unaware_pct, negative_pct, name),
+        "headline": _headline(profile, gap_pct, negative_pct, name),
         "recommendation": _recommendation(profile),
         "signals": {
-            "unaware_rate": round(unaware_rate, 3) if unaware_rate is not None else None,
-            "awareness_rate": round(awareness_rate, 3) if awareness_rate is not None else None,
-            "contested_rate": round(contested_rate, 3),
-            "contested_rebutted_rate": (round(contested_rebutted_rate, 3)
-                                        if contested_rebutted_rate is not None else None),
-            "negative_rate": round(negative_rate, 3),
-            "negative_score": round(negative_score, 3),
-            "avg_alignment": round(avg_alignment, 3),
-            "awareness_known_n": len(aware_known),
+            "unaware_rate": _r3(c["unaware_rate"]),
+            "awareness_rate": _r3(c["awareness_rate"]),
+            "entity_confusion_rate": _r3(c["entity_confusion_rate"]),
+            "recognition_gap": _r3(c["recognition_gap"]),
+            "contested_rate": _r3(c["contested_rate"]),
+            "contested_rebutted_rate": _r3(c["contested_rebutted_rate"]),
+            "negative_rate": _r3(c["negative_rate"]),
+            "negative_score": _r3(c["negative_score"]),
+            "avg_alignment": _r3(c["avg_alignment"]),
+            "awareness_known_n": c["awareness_known_n"],
         },
-        "basis": ("unaware_rate (share where awareness=False -> the void) vs negative_score "
-                  "(prevalence of aware AND genuinely UNFAVOURABLE: negative sentiment, or a "
-                  "contested mention with goal_alignment < 0). Contested mentions that the "
-                  "engine REBUTS (non-negative goal_alignment) are counted as "
-                  "contested_rebutted_rate, not as negatives. Falls back to global "
-                  "contested/negative rates on legacy runs with no awareness signal."),
+        "by_engine": by_engine,
+        "basis": ("recognition_gap (share where the engine doesn't correctly know THIS business "
+                  "= genuine awareness void + wrong-entity confusion) vs negative_score "
+                  "(aware-of-the-RIGHT-business AND genuinely UNFAVOURABLE: negative sentiment, "
+                  "or a contested mention with goal_alignment < 0). Contested mentions the engine "
+                  "REBUTS (non-negative goal_alignment) count as contested_rebutted_rate, not "
+                  "negatives; wrong-entity answers count as entity_confusion, not negatives. "
+                  "Falls back to global contested/negative rates on legacy runs."),
     }
     if not quiet:
         print(json.dumps(out, indent=2, default=str))

@@ -20,20 +20,27 @@ def _biz(conn, name="Acme Co"):
     return r["id"]
 
 
-def _run(conn, bid, rows):
-    """Create a finished run with answer rows: list of
-    (goal_alignment, mentions_contested, sentiment, awareness)."""
+def _insert(conn, rid, bid, rows, engine="e"):
+    """Insert answer rows into run `rid`. Each row is a tuple
+    (goal_alignment, mentions_contested, sentiment, awareness[, entity_confusion])."""
+    for row in rows:
+        ga, con, sent, aware = row[:4]
+        ec = row[4] if len(row) > 4 else None
+        conn.execute(
+            "INSERT INTO answers (run_id,business_id,engine,prompt,answer_text,"
+            "goal_alignment,mentions_contested,sentiment,awareness,entity_confusion,failed) "
+            "VALUES (%s,%s,%s,'p','t',%s,%s,%s,%s,%s,false)",
+            (rid, bid, engine, ga, con, sent, aware, ec),
+        )
+
+
+def _run(conn, bid, rows, engine="e"):
+    """Create a finished run with answer rows (see _insert for the row shape)."""
     rid = conn.execute(
         "INSERT INTO audit_runs (business_id, finished_at) VALUES (%s, now()) RETURNING id",
         (bid,),
     ).fetchone()["id"]
-    for ga, con, sent, aware in rows:
-        conn.execute(
-            "INSERT INTO answers (run_id,business_id,engine,prompt,answer_text,"
-            "goal_alignment,mentions_contested,sentiment,awareness,failed) "
-            "VALUES (%s,%s,'e','p','t',%s,%s,%s,%s,false)",
-            (rid, bid, ga, con, sent, aware),
-        )
+    _insert(conn, rid, bid, rows, engine)
     conn.commit()
     return rid
 
@@ -142,6 +149,49 @@ def test_mixed_when_void_and_negatives_both_material(fresh_schema):
     assert out["signals"]["negative_score"] == pytest.approx(0.40, abs=1e-6)
     assert out["profile"] == "mixed"
     assert out["track"] == "both"
+
+
+@requires_db
+def test_entity_confusion_not_counted_as_negative(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import challenge as ch
+    bid = _biz(conn, "ConfusedCo")
+    # 3 wrong-entity answers ("negative" but about a DIFFERENT same-named company) must NOT
+    # pollute the negative score; they count as entity_confusion, separate from the genuine void
+    _run(conn, bid,
+         [(0.4, False, "positive", True)] * 4            # knows the right business
+         + [(-0.8, True, "negative", False, True)] * 3   # wrong-entity hallucinations
+         + [(0.0, False, "neutral", False)] * 3)         # genuine void
+    out = ch.challenge_profile(bid)
+    s = out["signals"]
+    assert s["entity_confusion_rate"] == pytest.approx(0.30, abs=1e-6)
+    assert s["unaware_rate"] == pytest.approx(0.30, abs=1e-6)
+    assert s["recognition_gap"] == pytest.approx(0.60, abs=1e-6)
+    # despite 3 "negative" wrong-entity answers, the negative score is 0 -- they are not
+    # this business's reputation
+    assert s["negative_score"] == pytest.approx(0.0, abs=1e-6)
+    assert out["profile"] == "awareness_gap"
+
+
+@requires_db
+def test_per_engine_breakdown_is_bimodal(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import challenge as ch
+    bid = _biz(conn, "BimodalCo")
+    rid = conn.execute(
+        "INSERT INTO audit_runs (business_id, finished_at) VALUES (%s, now()) RETURNING id",
+        (bid,)).fetchone()["id"]
+    # one engine knows the business and is unfavourable; another simply doesn't know it
+    _insert(conn, rid, bid, [(-0.4, True, "negative", True)] * 8, engine="gemini")
+    _insert(conn, rid, bid, [(0.0, False, "neutral", False)] * 8, engine="openai_search")
+    conn.commit()
+    out = ch.challenge_profile(bid)
+    be = out["by_engine"]
+    assert set(be) == {"gemini", "openai_search"}
+    assert be["gemini"]["profile"] == "negative_narrative"
+    assert be["openai_search"]["profile"] == "awareness_gap"
+    # overall is the blend
+    assert out["profile"] in ("mixed", "negative_narrative", "awareness_gap")
 
 
 @requires_db
