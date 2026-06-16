@@ -5,6 +5,7 @@ import { useDashboard, usePerEngine, useRunAnswers } from "@/lib/hooks";
 import { KpiStatCard } from "@/components/KpiStatCard";
 import { TrendChart } from "@/components/TrendChart";
 import { ReputationHero } from "@/components/ReputationHero";
+import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { ScoreDonut } from "@/components/ScoreDonut";
 import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { Card, PageHeader, Spinner } from "@/components/ui";
@@ -86,6 +87,8 @@ export default function DashboardPage() {
             woCounts={data.wo_counts}
             assetsN={data.assets_n}
           />
+
+          <PrimaryChallengeCard challenge={data.challenge} />
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <KpiStatCard

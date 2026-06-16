@@ -13,8 +13,10 @@ from .. import auth
 from ..deps import authorize_business, get_conn, get_current_user
 
 try:
+    from ... import challenge as _challenge
     from ... import report_generator as _rg
 except ImportError:  # pragma: no cover
+    import challenge as _challenge  # type: ignore
     import report_generator as _rg  # type: ignore
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
@@ -71,4 +73,10 @@ def get_dashboard(
     # Clients don't see internal cost-of-goods; admins do.
     if user["role"] != "admin":
         data.pop("month_cost", None)
+    # Primary-challenge profile (awareness gap vs negative narrative) -- pure read,
+    # added here so the dashboard gets it without coupling report_generator._load.
+    try:
+        data["challenge"] = _challenge.challenge_profile(business_id, quiet=True)
+    except Exception:  # never let the diagnostic break the dashboard
+        data["challenge"] = None
     return data

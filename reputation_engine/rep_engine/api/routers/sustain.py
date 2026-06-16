@@ -15,11 +15,13 @@ from ..schemas import ResumeRequest
 
 try:
     from ... import acceleration_advisor as _acc
+    from ... import challenge as _challenge
     from ... import feedback_loop as _fb
     from ... import timeline_estimator as _te
     from ... import tracking as _tracking
 except ImportError:  # pragma: no cover
     import acceleration_advisor as _acc  # type: ignore
+    import challenge as _challenge  # type: ignore
     import feedback_loop as _fb  # type: ignore
     import timeline_estimator as _te  # type: ignore
     import tracking as _tracking  # type: ignore
@@ -30,6 +32,13 @@ router = APIRouter(prefix="/businesses/{business_id}", tags=["sustain"])
 @router.get("/timeline")
 def timeline(business_id: int = Depends(authorize_business)):
     return _te.estimate(business_id, quiet=True)
+
+
+@router.get("/challenge")
+def challenge(business_id: int = Depends(authorize_business)):
+    """Primary-challenge profile: is this an awareness gap (a void to fill, faster) or
+    an entrenched negative narrative (slower to crowd out)? Pure read."""
+    return _challenge.challenge_profile(business_id, quiet=True)
 
 
 @router.get("/acceleration")

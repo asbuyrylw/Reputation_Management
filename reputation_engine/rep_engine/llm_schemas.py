@@ -44,6 +44,10 @@ class ScoreResult(BaseModel):
     goal_alignment: float = Field(ge=-1.0, le=1.0)
     mentions_contested: bool = False
     surfaces_owned: bool = False
+    # awareness: does the AI actually RECOGNIZE this specific business (True) vs give a
+    # generic/no-information answer (False)? Separates an awareness gap (a void to fill --
+    # faster) from a negative narrative (entrenched negatives to crowd out -- slower).
+    awareness: bool = True
     key_sources: list[str] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
 

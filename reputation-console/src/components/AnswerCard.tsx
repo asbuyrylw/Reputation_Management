@@ -18,6 +18,14 @@ export function AnswerCard({ a }: { a: Answer }) {
         <span className="rounded bg-gray-900 px-1.5 py-0.5 text-xs font-medium text-white">{a.engine}</span>
         <SentimentBadge sentiment={a.sentiment} />
         {a.goal_alignment != null && <RepScoreBadge goalAlignment={a.goal_alignment} />}
+        {a.awareness === false && (
+          <span
+            className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700"
+            title="The engine did not recognize this business — an awareness gap (a void to fill)."
+          >
+            no awareness
+          </span>
+        )}
         {a.mentions_contested && (
           <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">contested</span>
         )}

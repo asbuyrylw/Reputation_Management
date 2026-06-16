@@ -93,7 +93,7 @@ ORCH_MODEL_OPENAI_MID = os.getenv("ORCH_MODEL_OPENAI_MID", "gpt-4o")            
 # model; always verify the exact id against the provider's live model list for your account
 # (preflight_engines() logs the active ids before a paid audit so a stale one is visible).
 PERPLEXITY_MODEL = os.getenv("PERPLEXITY_MODEL", "sonar")                                           # PH 9
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")                                        # PH 12
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")                                        # PH 12
 
 # Gap-model synthesis tier. Default MID (Sonnet): ~5x cheaper than full Opus AND avoids
 # Opus-4.8 prepending reasoning prose ahead of the JSON (which truncated the large gap object
@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS answers (
     goal_alignment NUMERIC(4,2),   -- -1.00 .. 1.00 toward business goal
     mentions_contested BOOLEAN DEFAULT FALSE,
     surfaces_owned BOOLEAN DEFAULT FALSE,  -- did it cite/echo the business's own content?
+    awareness    BOOLEAN,          -- does the AI recognize this business? NULL=unknown/failed
     grounded     BOOLEAN,          -- did the engine ground in live web retrieval? NULL=unknown
     raw          JSONB DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ DEFAULT now()
@@ -264,6 +265,8 @@ def init_db() -> None:
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS missing JSONB DEFAULT '[]'::jsonb")
         # grounded: did the engine ground its answer in live web retrieval? (see alembic 0011)
         conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS grounded BOOLEAN")
+        # awareness: does the AI recognize this business vs no-info? (see alembic 0016)
+        conn.execute("ALTER TABLE answers ADD COLUMN IF NOT EXISTS awareness BOOLEAN")
         # status distinguishes a budget-aborted partial run from a complete one
         # (see schema_v9.sql). Aborted runs keep finished_at NULL so they are excluded
         # from every downstream metric (all gate on finished_at IS NOT NULL).
@@ -796,6 +799,12 @@ SCORING_SYSTEM = (
     "with caution or 'look elsewhere' -- but never strongly negative merely because criticisms are mentioned), "
     "mentions_contested (boolean: does it raise any of the contested terms), "
     "surfaces_owned (boolean: does it appear to draw on the business's own/official content), "
+    "awareness (boolean: TRUE if the answer shows the AI actually RECOGNIZES and has SPECIFIC "
+    "knowledge of THIS business -- names its real services, people, location, or facts; FALSE if "
+    "it gives a generic non-answer, conflates it with a different entity, or says it has no "
+    "information about it. This separates an AWARENESS gap -- the AI simply does not know the "
+    "business, a void to fill -- from a NEGATIVE narrative where the AI knows it and is "
+    "unfavorable), "
     "key_sources (array of the most influential source domains it relied on), "
     "missing (array of accurate, positive facts a well-informed answer SHOULD have included but didn't). "
     "Do not include any prose outside the JSON."
@@ -894,15 +903,16 @@ def _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans, score,
     conn.execute(
         """INSERT INTO answers (run_id, business_id, engine, prompt, answer_text,
             cited_sources, sentiment, goal_alignment, mentions_contested,
-            surfaces_owned, key_sources, missing, sample_idx, failed,
+            surfaces_owned, awareness, key_sources, missing, sample_idx, failed,
             persona, location, grounded, raw)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (run_id, business_id, eng.name, prompt, ans.get("text", ""),
          json.dumps(ans.get("sources", [])),
          score.get("sentiment") if not row_failed else None,
          score.get("goal_alignment") if not row_failed else None,
          bool(score.get("mentions_contested")) if not row_failed else None,
          bool(score.get("surfaces_owned")) if not row_failed else None,
+         score.get("awareness") if not row_failed else None,
          json.dumps(score.get("key_sources", [])) if not row_failed else None,
          json.dumps(score.get("missing", [])) if not row_failed else None,
          s, row_failed, persona, location,

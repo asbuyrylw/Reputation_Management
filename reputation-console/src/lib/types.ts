@@ -103,9 +103,41 @@ export interface Answer {
   cited_sources: unknown;
   mentions_contested: boolean | null;
   surfaces_owned: boolean | null;
+  awareness: boolean | null; // does the engine RECOGNIZE the business (vs no-info)?
   persona: string | null;
   location: string | null;
   failed: boolean | null;
+}
+
+// Primary-challenge profile: is the business's problem an awareness gap (a void to
+// fill, faster) or an entrenched negative narrative (slower to crowd out)?
+export type ChallengeProfile =
+  | "awareness_gap"
+  | "negative_narrative"
+  | "mixed"
+  | "established_positive"
+  | "unknown";
+
+export interface Challenge {
+  business: string;
+  run_id: number | null;
+  profile: ChallengeProfile;
+  label: string;
+  track: "fill_void" | "crowd_out" | "both" | "defend" | "none";
+  void_fill_factor: number;
+  sample_size: number;
+  headline: string;
+  recommendation: string;
+  signals: {
+    unaware_rate: number | null;
+    awareness_rate: number | null;
+    contested_rate: number | null;
+    negative_rate: number | null;
+    negative_score: number | null;
+    avg_alignment: number | null;
+    awareness_known_n?: number;
+  };
+  basis?: string;
 }
 
 // Confidence interval: `mean` for goal_alignment (normal approx), `p` for rates (Wilson).
@@ -256,4 +288,5 @@ export interface Dashboard {
   assets_n: number;
   month_cost?: number; // present for admins only
   attribution: { metric: string; delta: number; assets_in_window: unknown }[];
+  challenge?: Challenge | null; // primary-challenge profile (awareness gap vs negatives)
 }

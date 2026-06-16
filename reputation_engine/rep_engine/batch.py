@@ -191,10 +191,10 @@ def score_run_batched(business_id: int, run_id: Optional[int] = None) -> int:
                 continue
             conn.execute(
                 "UPDATE answers SET sentiment=%s, goal_alignment=%s, mentions_contested=%s, "
-                "surfaces_owned=%s WHERE id=%s",
+                "surfaces_owned=%s, awareness=%s WHERE id=%s",
                 (score.get("sentiment"), score.get("goal_alignment"),
                  bool(score.get("mentions_contested")), bool(score.get("surfaces_owned")),
-                 ans["id"]))
+                 score.get("awareness"), ans["id"]))
             updated += 1
         conn.commit()
     log.info("batch-scored %d/%d answers for run %s", updated, len(answers), run_id)
