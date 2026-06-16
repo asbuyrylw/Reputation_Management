@@ -51,6 +51,11 @@ VOID_LOW = 0.30           # unaware_rate below this = the AI generally knows the
 NEG_LOW = 0.25            # negative_score below this = negativity is not the problem
 NEG_HIGH = 0.40           # negative_score at/above this = entrenched negativity dominates
 HEALTHY_ALIGNMENT = 0.40  # avg goal_alignment at/above this = already a good position
+# A single portfolio label is misleading when BOTH problems are materially present (e.g. a
+# Primerica-affiliated org the engines half-recognize AND partly frame as MLM). If the void
+# and the negatives each clear their "material" bar, the challenge is genuinely two-track.
+VOID_MATERIAL = 0.25      # >=1 in 4 answers don't recognize the business -> a real void
+NEG_MATERIAL = 0.30       # >=~1 in 3 aware answers genuinely unfavourable -> real negatives
 
 # Timeline speed multipliers per profile (>1 = the accurate narrative dominates faster).
 # Filling a void is actively faster than competing with entrenched citations; an
@@ -90,10 +95,18 @@ def _classify(unaware_rate: Optional[float], negative_score: float,
         if negative_score < NEG_LOW and avg_alignment >= HEALTHY_ALIGNMENT:
             return "established_positive"
         return "mixed"
+    # Both a real void AND real negatives -> genuinely two-track, regardless of which is
+    # marginally larger. A sizable recognition gap means you cannot call the challenge a pure
+    # "negative narrative" (and vice-versa); the strategy must run both tracks.
+    if unaware_rate >= VOID_MATERIAL and negative_score >= NEG_MATERIAL:
+        return "mixed"
+    # Dominant void, little negativity -> an awareness gap (a void to fill, faster).
     if unaware_rate >= VOID_HIGH and negative_score < NEG_LOW + 0.05:
         return "awareness_gap"
-    if negative_score >= NEG_HIGH and unaware_rate < VOID_LOW + 0.10:
+    # Dominant negativity with only a SMALL void -> an entrenched negative narrative.
+    if negative_score >= NEG_HIGH and unaware_rate < VOID_MATERIAL:
         return "negative_narrative"
+    # Well-known, low negativity, healthy alignment -> defend the position.
     if unaware_rate < VOID_LOW and negative_score < NEG_LOW and avg_alignment >= HEALTHY_ALIGNMENT:
         return "established_positive"
     return "mixed"
@@ -191,19 +204,34 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
         unaware_rate = sum(1 for r in aware_known if not r["awareness"]) / len(aware_known)
         awareness_rate = 1.0 - unaware_rate
         # An entrenched NEGATIVE narrative only exists where the AI actually KNOWS the
-        # business. Counting a contested mention on an answer that doesn't even recognize
-        # the business would mislabel an awareness void as a negative narrative -- so the
-        # negativity signal is the prevalence of (aware AND (contested OR negative)).
-        negative_score = sum(
-            1 for r in aware_known
-            if r["awareness"] and (r["mentions_contested"]
-                                   or (r["sentiment"] or "").lower() == "negative")
-        ) / len(aware_known)
+        # business AND the framing is genuinely UNFAVOURABLE. Two guards:
+        #   1. Counting a contested mention on an answer that doesn't recognize the business
+        #      would mislabel an awareness void as a negative narrative -> require awareness.
+        #   2. mentions_contested is a keyword flag that cannot tell "engine ALLEGES" from
+        #      "engine DEBUNKS": grounded answers to "is it a pyramid scheme?" frequently
+        #      REBUT the frame (positive goal_alignment) yet still trip the flag. Counting
+        #      those rebuttals as attacks inflates the score (~40-50% over-count observed on
+        #      a Primerica-affiliated org). So a contested mention only counts as negative
+        #      when goal_alignment is actually unfavourable (< 0); a contested mention with
+        #      non-negative goal_alignment is a DEFENDED/rebutted position, tracked apart.
+        def _is_negative(r):
+            if (r["sentiment"] or "").lower() == "negative":
+                return True
+            ga = r["goal_alignment"]
+            return bool(r["mentions_contested"]) and ga is not None and ga < 0
+
+        aware_rows = [r for r in aware_known if r["awareness"]]
+        negative_score = (sum(1 for r in aware_rows if _is_negative(r))
+                          / len(aware_known))
+        contested_rebutted_rate = (
+            sum(1 for r in aware_rows if r["mentions_contested"] and not _is_negative(r))
+            / len(aware_rows) if aware_rows else 0.0)
     else:
         # Legacy run with no awareness signal: fall back to global negativity.
         unaware_rate = None
         awareness_rate = None
         negative_score = max(contested_rate, negative_rate)
+        contested_rebutted_rate = None
 
     profile = _classify(unaware_rate, negative_score, avg_alignment)
     unaware_pct = round(unaware_rate * 100) if unaware_rate is not None else None
@@ -223,15 +251,19 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
             "unaware_rate": round(unaware_rate, 3) if unaware_rate is not None else None,
             "awareness_rate": round(awareness_rate, 3) if awareness_rate is not None else None,
             "contested_rate": round(contested_rate, 3),
+            "contested_rebutted_rate": (round(contested_rebutted_rate, 3)
+                                        if contested_rebutted_rate is not None else None),
             "negative_rate": round(negative_rate, 3),
             "negative_score": round(negative_score, 3),
             "avg_alignment": round(avg_alignment, 3),
             "awareness_known_n": len(aware_known),
         },
         "basis": ("unaware_rate (share where awareness=False -> the void) vs negative_score "
-                  "(prevalence of aware AND (contested OR negative) -> entrenched negatives). "
-                  "Falls back to global contested/negative rates on legacy runs with no "
-                  "awareness signal."),
+                  "(prevalence of aware AND genuinely UNFAVOURABLE: negative sentiment, or a "
+                  "contested mention with goal_alignment < 0). Contested mentions that the "
+                  "engine REBUTS (non-negative goal_alignment) are counted as "
+                  "contested_rebutted_rate, not as negatives. Falls back to global "
+                  "contested/negative rates on legacy runs with no awareness signal."),
     }
     if not quiet:
         print(json.dumps(out, indent=2, default=str))

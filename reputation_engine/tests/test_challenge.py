@@ -97,6 +97,54 @@ def test_established_positive_profile(fresh_schema):
 
 
 @requires_db
+def test_contested_rebuttal_not_counted_as_negative(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import challenge as ch
+    bid = _biz(conn, "RebuttalCo")
+    # the AI KNOWS the business and mentions a contested term, but REBUTS it with a
+    # POSITIVE goal_alignment ("some call it an MLM, but it's a licensed insurer") -- this
+    # must NOT count toward negative_score; it is a defended/contested-rebutted position
+    _run(conn, bid,
+         [(0.6, True, "neutral", True)] * 5 + [(0.3, False, "positive", True)] * 3)
+    out = ch.challenge_profile(bid)
+    assert out["signals"]["negative_score"] == pytest.approx(0.0, abs=1e-6)
+    assert out["signals"]["contested_rebutted_rate"] == pytest.approx(0.625, abs=1e-3)
+    assert out["profile"] != "negative_narrative"
+
+
+@requires_db
+def test_contested_with_negative_alignment_still_counts(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import challenge as ch
+    bid = _biz(conn, "RealNegCo")
+    # contested mention with UNFAVOURABLE goal_alignment (< 0) but sentiment not tagged
+    # 'negative' must still count as a genuine negative
+    _run(conn, bid, [(-0.4, True, "mixed", True)] * 6 + [(0.2, False, "positive", True)] * 2)
+    out = ch.challenge_profile(bid)
+    assert out["signals"]["negative_score"] >= 0.6
+    assert out["profile"] == "negative_narrative"
+
+
+@requires_db
+def test_mixed_when_void_and_negatives_both_material(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import challenge as ch
+    bid = _biz(conn, "BothCo")
+    # a material void (~30% unaware) AND material negatives (~40% aware+negative): the
+    # primary-challenge label must be 'mixed', not 'negative_narrative' -- you cannot call a
+    # business the engines half-recognize a pure negative narrative (mirrors run-4)
+    _run(conn, bid,
+         [(0.0, False, "neutral", False)] * 3
+         + [(-0.3, True, "negative", True)] * 4
+         + [(0.4, False, "positive", True)] * 3)
+    out = ch.challenge_profile(bid)
+    assert out["signals"]["unaware_rate"] == pytest.approx(0.30, abs=1e-6)
+    assert out["signals"]["negative_score"] == pytest.approx(0.40, abs=1e-6)
+    assert out["profile"] == "mixed"
+    assert out["track"] == "both"
+
+
+@requires_db
 def test_unknown_when_no_run(fresh_schema):
     conn = fresh_schema
     from rep_engine import challenge as ch
