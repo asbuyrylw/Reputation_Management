@@ -125,10 +125,19 @@ def _add_business(args) -> int:
     return row["id"]
 
 
+def _maybe_batch_score(rs, bid: int) -> None:
+    """When AUDIT_BATCH_SCORING is on, the audit deferred scoring; fill the metrics now via
+    the Anthropic Batch API (50% off). Must run BEFORE gap_model (which reads the scores)."""
+    if m1._batch_scoring():
+        from . import batch as m_batch
+        rs.step("batch_score", lambda: m_batch.score_run_batched(bid), "batch-score answers (50% off)")
+
+
 def run_full(args) -> None:
     bid = _add_business(args)
     rs = m_rs.RunState.start(bid, kind="run", resume=getattr(args, "resume", False))
     rs.step("audit", lambda: m1.audit(bid), "STEP audit — AI-state audit")
+    _maybe_batch_score(rs, bid)
     rs.step("site_crawl", lambda: m3.crawl_cmd(bid, args.max_pages), "STEP site crawl")
     rs.step("gap_model", lambda: m1.build_gap_model(bid), "STEP gap model")
     rs.step("remerge", lambda: _remerge(bid), "STEP re-merge site findings")
@@ -161,6 +170,7 @@ def run_cycle(args) -> None:
     bid = args.business_id
     rs = m_rs.RunState.start(bid, kind="cycle", resume=getattr(args, "resume", False))
     rs.step("audit", lambda: m1.audit(bid), "CYCLE audit")
+    _maybe_batch_score(rs, bid)
     rs.step("gap_model", lambda: m1.build_gap_model(bid), "CYCLE gap model")
     rs.step("attribution", lambda: m5.attribute(bid), "CYCLE attribution")
     rs.step("alert", lambda: m5.check_alert(bid), "CYCLE alert check")

@@ -55,6 +55,13 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
   retired); `PERPLEXITY_MODEL` defaults to `sonar`. Verify each id against your account's
   live model list — `preflight_engines()` logs the active ids and fails loudly before a
   paid audit if nothing is configured.
+- **Cost levers**: `GAP_MODEL_TIER` (default `mid`/Sonnet) routes the gap synthesis off the
+  pricey full tier. `AUDIT_BATCH_SCORING=1` defers the dominant cost — the per-answer scoring
+  pass — to the Anthropic **Batch API (flat 50% off)**: the audit stores answers unscored and
+  the orchestrator's `batch_score` step fills the metrics afterward (trades synchronous
+  immediacy + adaptive sampling for ~50% lower scoring COGS; ideal for periodic audits at
+  scale). Default is the synchronous inline path. (Prompt caching is not used — our scoring
+  prompt is ~680 tokens, below the provider cache minimums.)
 - **Verified-retrieval grounding (Phase 1, ON by default)**: answer engines query the LIVE
   web so the audit measures what AI assistants actually surface, not stale model memory —
   Anthropic `web_search`, Gemini `google_search`, OpenAI Responses `web_search` (Perplexity
