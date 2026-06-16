@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card } from "./ui";
 import { SentimentBadge } from "./SentimentBadge";
+import { RepScoreBadge } from "./RepScoreBadge";
 import type { Answer } from "@/lib/types";
 
 export function AnswerCard({ a }: { a: Answer }) {
@@ -16,9 +17,7 @@ export function AnswerCard({ a }: { a: Answer }) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded bg-gray-900 px-1.5 py-0.5 text-xs font-medium text-white">{a.engine}</span>
         <SentimentBadge sentiment={a.sentiment} />
-        {a.goal_alignment != null && (
-          <span className="text-xs text-gray-500">goal {a.goal_alignment.toFixed(2)}</span>
-        )}
+        {a.goal_alignment != null && <RepScoreBadge goalAlignment={a.goal_alignment} />}
         {a.mentions_contested && (
           <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">contested</span>
         )}
