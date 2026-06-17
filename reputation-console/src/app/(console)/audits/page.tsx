@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/SentimentBadge";
 import { RepScoreBadge } from "@/components/RepScoreBadge";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
 import { WorstAnswers } from "@/components/WorstAnswers";
+import { Sparkline } from "@/components/Sparkline";
 import { EmptyState, Freshness } from "@/components/primitives";
 import { repScore, repBand, repClasses } from "@/lib/repScore";
 import { Term } from "@/components/Term";
@@ -30,6 +31,11 @@ export default function AuditsPage() {
   const score = repScore(latest?.goal_alignment ?? null);
   const prevScore = repScore(prev?.goal_alignment ?? null);
   const delta = score != null && prevScore != null ? score - prevScore : null;
+  // scores oldest -> newest for the sparkline
+  const scoreSeries = [...data]
+    .reverse()
+    .map((r) => repScore(r.goal_alignment))
+    .filter((v): v is number => v != null);
 
   return (
     <div>
@@ -63,6 +69,11 @@ export default function AuditsPage() {
                 {delta != null && Math.abs(delta) >= 1 && (
                   <span className={`pb-1 text-sm font-medium ${delta > 0 ? "text-green-600" : "text-rose-600"}`}>
                     {delta > 0 ? "▲ +" : "▼ −"}{Math.abs(delta)} pts since last audit
+                  </span>
+                )}
+                {scoreSeries.length >= 2 && (
+                  <span className="ml-auto pb-1" title="Your score across audits">
+                    <Sparkline values={scoreSeries} />
                   </span>
                 )}
               </div>

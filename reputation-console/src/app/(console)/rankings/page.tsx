@@ -65,7 +65,8 @@ export default function RankingsPage() {
               is <Term name="contested">critical / contested</Term>.{" "}
               {contestedShare <= 0.05
                 ? "Critical sources are a small slice — good. Keep growing your own share."
-                : "Critical sources are a meaningful slice — the priority is out-publishing them."}
+                : "Critical sources are a meaningful slice — the priority is out-publishing them."}{" "}
+              <span className="text-gray-400">(aim: keep critical under 5%.)</span>
             </p>
             <div className="mt-3">
               <ShareOfVoiceBar byClass={data!.by_classification} />

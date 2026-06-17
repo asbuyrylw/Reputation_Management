@@ -7,7 +7,7 @@
 import type { SeriesPoint } from "@/lib/types";
 import { repScore } from "@/lib/repScore";
 
-export function ScoreTrend({ series }: { series: SeriesPoint[] }) {
+export function ScoreTrend({ series, goal }: { series: SeriesPoint[]; goal?: number | null }) {
   const pts = series
     .map((s) => ({ date: s.date, score: repScore(s.goal_alignment) }))
     .filter((p): p is { date: string; score: number } => p.score != null);
@@ -36,6 +36,12 @@ export function ScoreTrend({ series }: { series: SeriesPoint[] }) {
         <rect x={P} y={y(40)} width={W - 2 * P} height={y(0) - y(40)} fill="#dc2626" opacity={0.06} />
         <line x1={P} x2={W - P} y1={y(50)} y2={y(50)} stroke="#d1d5db" strokeWidth={1} strokeDasharray="4 4" />
         <text x={W - P} y={y(50) - 4} textAnchor="end" className="fill-gray-400 text-[10px]">50 = neutral</text>
+        {goal != null && (
+          <>
+            <line x1={P} x2={W - P} y1={y(goal)} y2={y(goal)} stroke="#16a34a" strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+            <text x={P} y={y(goal) - 4} className="fill-green-700 text-[10px]">Goal {goal}</text>
+          </>
+        )}
         <path d={d} fill="none" stroke={rising ? "#16a34a" : "#dc2626"} strokeWidth={2.5} />
         {pts.map((p, i) => (
           <circle key={i} cx={xs[i]} cy={y(p.score)} r={3} fill={rising ? "#16a34a" : "#dc2626"} />
