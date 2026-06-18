@@ -6,6 +6,9 @@ export const ENGINE_LABELS: Record<string, string> = {
   anthropic: "Claude",
   perplexity: "Perplexity",
   gemini: "Gemini",
+  grok: "Grok",
+  google_aio: "Google AI Overview",
+  bing_copilot: "Bing Copilot",
 };
 
 export function engineLabel(key: string): string {

@@ -32,11 +32,22 @@ SEARCH_COST = 0.01
 CHEAP_MODEL = "haiku"     # the high-volume scoring tier
 GAP_MODEL = "opus"        # the full-tier synthesis
 # answer-engine model ids, in the canonical order perplexity/openai/anthropic/gemini.
+# NOTE: this COGS/tier model is priced for the FOUR CORE engines only. The expansion
+# engines (Grok, Google AI Overview, Bing Copilot) are opt-in and OFF by default. They are
+# enabled by GLOBAL env keys, so turning one on adds cost to EVERY tenant's audit (roughly:
+# Grok/Bing ~= one extra core engine in tokens; Google AI Overview via Serper ~= $0.001 per
+# query, negligible tokens). Before enabling any of them in production, raise the relevant
+# tiers' max_engines and re-run propose_tiers() so prices aren't set against stale COGS.
 DEFAULT_ENGINE_MODELS = ("sonar", "gpt-4o", "opus", "gemini")
+# Per-engine model ids if/when the expansion engines are enabled and priced in (Serper has
+# no token model -> treated as a flat surcharge, not a chat model, so it's omitted here).
+EXPANSION_ENGINE_MODELS = ("grok", "gpt-4o")  # grok billed ~gpt-4o-class; bing via its endpoint
 
 # Tier limits (capabilities) + value-based LIST price. The COGS model derives a margin
 # FLOOR (propose_tiers); `list_price` is the headline price we actually charge (value-based,
 # always >= floor). Adjust list_price freely -- the floor guards margin if you go too low.
+# `max_engines` counts CORE engines (see DEFAULT_ENGINE_MODELS): raise it + recompute before
+# enabling expansion engines for a tier.
 TIERS = [
     {"code": "starter", "name": "Starter", "list_price": 99, "max_businesses": 1,
      "max_audits_per_month": 4, "max_engines": 2, "max_samples_per_prompt": 2, "battery": 12,
@@ -64,7 +75,9 @@ def per_answer_cost(engine_models) -> float:
 
 def audit_cogs(*, battery: int = 14, engines: int = 4, samples: int = 2,
                engine_models=None) -> float:
-    """Estimated LLM cost (USD) of a single audit at the given shape."""
+    """Estimated LLM cost (USD) of a single audit at the given shape. For an accurate
+    projection, `engines`/`engine_models` should reflect the ACTUAL engines a run uses --
+    core only by default, or core + any enabled expansion engines (see EXPANSION_ENGINE_MODELS)."""
     engine_models = list(engine_models or DEFAULT_ENGINE_MODELS)[:max(1, engines)]
     answers = battery * len(engine_models) * samples
     gap = _cost.estimate_cost(GAP_MODEL, GAP_IN, GAP_OUT)
