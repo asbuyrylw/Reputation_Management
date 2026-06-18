@@ -8,6 +8,7 @@ import {
 } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import PromptResultsPanel from "@/components/PromptResultsPanel";
 import type { CustomPrompt } from "@/lib/types";
 
 export default function PromptsPage() {
@@ -26,6 +27,7 @@ export default function PromptsPage() {
   const enabled = rows.filter((r) => r.enabled);
   const suggestions = rows.filter((r) => r.source === "ai_suggested" && !r.enabled);
   const paused = rows.filter((r) => !r.enabled && r.source !== "ai_suggested");
+  const customTexts = new Set(enabled.map((r) => r.prompt));
 
   const runSuggest = () =>
     suggest.mutate(
@@ -161,6 +163,11 @@ export default function PromptsPage() {
           )}
         </div>
       )}
+
+      {/* Per-prompt results from the latest audit (all battery prompts; yours are badged). */}
+      <div className="mt-4">
+        <PromptResultsPanel businessId={businessId} customTexts={customTexts} />
+      </div>
     </div>
   );
 }

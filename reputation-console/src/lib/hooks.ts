@@ -16,6 +16,7 @@ import type {
   CompareResult,
   CustomPrompt,
   LocalRankings,
+  PromptResults,
   Competitor,
   ContentDraft,
   Dashboard,
@@ -212,6 +213,9 @@ export function useDeletePrompt(businessId: number | null) {
     mutationFn: (id: number) => apiFetch(`/businesses/${businessId}/prompts/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts", businessId] }),
   });
+}
+export function usePromptResults(businessId: number | null) {
+  return useApiQuery<PromptResults>(["prompt-results", businessId], base(businessId, "/prompt-results"));
 }
 export function useAddCompetitor(businessId: number | null) {
   return useApiMutation<{ name: string; domain?: string }>(

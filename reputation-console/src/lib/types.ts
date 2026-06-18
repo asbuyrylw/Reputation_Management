@@ -327,6 +327,30 @@ export interface CustomPrompt {
   created_at?: string;
 }
 
+// ---- per-prompt visibility (how each tracked question performs in the latest audit) ----
+export interface PromptEngineResult {
+  n: number;
+  visibility: number | null;
+  goal_alignment: number | null;
+  sentiment: string;
+}
+export interface PromptResult {
+  prompt: string;
+  persona: string;
+  location: string;
+  n: number;
+  visibility: number | null;
+  goal_alignment: { mean: number; low: number | null; high: number | null; n: number } | null;
+  sentiment: { positive: number; neutral: number; negative: number; mixed: number };
+  owned_rate: { p: number; low: number; high: number; n: number } | null;
+  contested_rate: { p: number; low: number; high: number; n: number } | null;
+  engines: Record<string, PromptEngineResult>;
+}
+export interface PromptResults {
+  run_id: number | null;
+  prompts: PromptResult[];
+}
+
 // ---- local SEO rank tracking (Google organic + map/local pack) ----
 export interface LocalRankEntry {
   name: string;

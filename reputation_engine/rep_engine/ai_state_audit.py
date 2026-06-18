@@ -1500,6 +1500,96 @@ def per_engine_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
     return {"run_id": run_id, "engines": engines, "coverage": _coverage(list(by.keys()))}
 
 
+def _modal_sentiment(rs: list) -> str:
+    """Most common sentiment label among a set of answers (ties -> first seen)."""
+    counts: dict = {}
+    for r in rs:
+        s = (r["sentiment"] or "neutral").lower()
+        counts[s] = counts.get(s, 0) + 1
+    return max(counts, key=counts.get) if counts else "neutral"
+
+
+def per_prompt_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
+    """Per-PROMPT KPI breakdown for a completed run (latest if run_id is None): for each
+    question in the battery, how VISIBLE/known the business is (awareness rate), the
+    sentiment mix, and goal-alignment, with a per-engine split. This makes the prompt set
+    actionable -- the owner sees which questions the AIs answer well vs. badly, including
+    their own user-managed prompts. KPIs are over NON-FAILED answers; prompts are sorted
+    lowest-visibility first (the ones that need work)."""
+    with db() as conn:
+        if run_id is None:
+            run = conn.execute(
+                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)
+            ).fetchone()
+            if not run:
+                return {"run_id": None, "prompts": []}
+            run_id = run["id"]
+        rows = conn.execute(
+            "SELECT prompt, engine, persona, location, goal_alignment, sentiment, "
+            "awareness, surfaces_owned, mentions_contested "
+            "FROM answers WHERE run_id=%s AND business_id=%s AND NOT COALESCE(failed,false) "
+            "ORDER BY prompt, persona, location, engine, id",   # deterministic grouping/lens pick
+            (run_id, business_id),
+        ).fetchall()
+
+    # Group by the FULL lens identity (prompt, persona, location): different audiences can
+    # share the exact same prompt text (the generic and prospective_client lenses do), and
+    # merging them would blend audiences and report a non-deterministic persona.
+    by: dict = {}
+    for r in rows:
+        by.setdefault((r["prompt"], r["persona"] or "", r["location"] or ""), []).append(r)
+
+    def _visibility(items: list):
+        # awareness is tri-state (NULL = unknown); compute the rate over KNOWN rows only,
+        # matching challenge._compute. None when no row carries an awareness signal.
+        known = [r for r in items if r["awareness"] is not None]
+        return round(sum(1 for r in known if r["awareness"]) / len(known), 3) if known else None
+
+    prompts = []
+    for (prompt, persona, location), rs in by.items():
+        n = len(rs)
+        gas = [float(r["goal_alignment"]) for r in rs if r["goal_alignment"] is not None]
+        owned = sum(1 for r in rs if r["surfaces_owned"])
+        contested = sum(1 for r in rs if r["mentions_contested"])
+        # keep the standard keys always present; count any other label (e.g. 'mixed') too,
+        # so the breakdown always sums to n.
+        sent = {"positive": 0, "neutral": 0, "negative": 0, "mixed": 0}
+        for r in rs:
+            s = (r["sentiment"] or "neutral").lower()
+            sent[s] = sent.get(s, 0) + 1
+        ebucket: dict = {}
+        for r in rs:
+            ebucket.setdefault(r["engine"], []).append(r)
+        eng = {}
+        for ename, ers in ebucket.items():
+            egas = [float(r["goal_alignment"]) for r in ers if r["goal_alignment"] is not None]
+            eng[ename] = {
+                "n": len(ers),
+                "visibility": _visibility(ers),
+                "goal_alignment": round(sum(egas) / len(egas), 3) if egas else None,
+                "sentiment": _modal_sentiment(ers),
+            }
+        prompts.append({
+            "prompt": prompt,
+            "persona": persona,
+            "location": location,
+            "n": n,
+            "visibility": _visibility(rs),
+            "goal_alignment": _mean_ci(gas),
+            "sentiment": sent,
+            "owned_rate": _wilson(owned, n),
+            "contested_rate": _wilson(contested, n),
+            "engines": eng,
+        })
+    # worst-known-visibility first; prompts with no awareness signal (None) sort LAST so an
+    # all-unknown prompt doesn't masquerade as the most-invisible one.
+    prompts.sort(key=lambda p: (p["visibility"] is None,
+                                p["visibility"] if p["visibility"] is not None else 1.0,
+                                p["prompt"]))
+    return {"run_id": run_id, "prompts": prompts}
+
+
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
