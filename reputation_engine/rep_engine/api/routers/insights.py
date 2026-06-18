@@ -53,6 +53,15 @@ def competitors_compare(business_id: int = Depends(authorize_business)):
     return _c.compare(business_id, quiet=True)
 
 
+@router.get("/prompt-results")
+def prompt_results(business_id: int = Depends(authorize_business)):
+    """Per-prompt visibility/sentiment/goal-alignment for the latest completed audit run --
+    how each tracked question performs, with a per-engine split. Null prompts list when no
+    completed run exists yet."""
+    from ...ai_state_audit import per_prompt_metrics
+    return per_prompt_metrics(business_id)
+
+
 @router.get("/local-rankings")
 def local_rankings(business_id: int = Depends(authorize_business)):
     """Latest local Google rank snapshot (organic + map pack) for the category-local
