@@ -5,10 +5,22 @@ import { useJobs, useTriggerJob } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 
 const JOBS = [
+  // core pipeline
   { type: "audit", label: "Run audit" },
-  { type: "cycle", label: "Run monthly cycle" },
-  { type: "production_briefs", label: "Generate production briefs" },
+  { type: "site_crawl", label: "Crawl website" },
+  { type: "gap_model", label: "Rebuild gap model" },
+  { type: "plan", label: "Regenerate plan" },
+  { type: "sync_plan", label: "Sync tasks" },
+  { type: "generate_drafts", label: "Generate content drafts" },
+  { type: "report", label: "Build report" },
+  { type: "cycle", label: "Run full monthly cycle" },
+  // monitoring + outreach + learning
+  { type: "mentions_scan", label: "Scan mentions" },
+  { type: "incident_scan", label: "Scan for incidents" },
+  { type: "discovery", label: "Find outreach targets" },
   { type: "citation_analyze", label: "Refresh citation analytics" },
+  { type: "learn", label: "Recompute what's working" },
+  { type: "production_briefs", label: "Generate production briefs" },
 ];
 
 function StepDot({ status }: { status: string }) {

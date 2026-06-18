@@ -9,9 +9,15 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 from ..deps import authorize_business, get_conn, require_business_editor
 from ..schemas import ResumeRequest
+
+
+class KeywordCreate(BaseModel):
+    keyword: str
+    negative: bool = False
 
 try:
     from ... import acceleration_advisor as _acc
@@ -74,6 +80,30 @@ def incidents(business_id: int = Depends(authorize_business), conn=Depends(get_c
         d["severity_score"] = float(d["severity_score"]) if d["severity_score"] is not None else None
         out.append(d)
     return out
+
+
+@router.get("/keywords")
+def list_keywords(business_id: int = Depends(authorize_business)):
+    from ... import mention_monitor as _mm
+    return _mm.list_keywords(business_id)
+
+
+@router.post("/keywords", status_code=201)
+def add_keyword(payload: KeywordCreate, business_id: int = Depends(require_business_editor)):
+    from ... import mention_monitor as _mm
+    kw = payload.keyword.strip()
+    if not kw:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "keyword required")
+    kid = _mm.add_keyword(business_id, kw, payload.negative)
+    return {"id": kid, "keyword": kw, "negative": payload.negative}
+
+
+@router.delete("/keywords/{keyword_id}")
+def delete_keyword(keyword_id: int, business_id: int = Depends(require_business_editor)):
+    from ... import mention_monitor as _mm
+    if not _mm.remove_keyword(business_id, keyword_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Keyword not found")
+    return {"deleted": keyword_id}
 
 
 @router.get("/mentions")

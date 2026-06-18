@@ -8,6 +8,7 @@ import { apiFetch } from "./api";
 import { useAuth } from "./auth";
 import type {
   AdminUser,
+  Asset,
   AuditRun,
   Answer,
   AttributionRow,
@@ -16,6 +17,7 @@ import type {
   Dashboard,
   DiscoveryTarget,
   ExternalSignal,
+  Keyword,
   GapModel,
   Incident,
   JobsResponse,
@@ -163,6 +165,46 @@ export function useIncidents(businessId: number | null) {
 }
 export function useMentions(businessId: number | null) {
   return useApiQuery<Mention[]>(["mentions", businessId], base(businessId, "/mentions"));
+}
+
+// ---- monitoring keywords ----
+export function useKeywords(businessId: number | null) {
+  return useApiQuery<Keyword[]>(["keywords", businessId], base(businessId, "/keywords"));
+}
+export function useAddKeyword(businessId: number | null) {
+  return useApiMutation<{ keyword: string; negative?: boolean }>(
+    () => `/businesses/${businessId}/keywords`,
+    (v) => ({ keyword: v.keyword, negative: v.negative ?? false }),
+    [["keywords", businessId]],
+  );
+}
+export function useDeleteKeyword(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiFetch(`/businesses/${businessId}/keywords/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["keywords", businessId] }),
+  });
+}
+
+// ---- finalized / published content (assets) ----
+export function useAssets(businessId: number | null) {
+  return useApiQuery<Asset[]>(["assets", businessId], base(businessId, "/assets"));
+}
+
+// ---- outreach targets (manual add + status) ----
+export function useAddDiscoveryTarget(businessId: number | null) {
+  return useApiMutation<{ name: string; channel?: string; outlet?: string; url?: string; beat?: string; rationale?: string }>(
+    () => `/businesses/${businessId}/discovery-targets`,
+    (v) => v,
+    [["discovery-targets", businessId]],
+  );
+}
+export function useSetTargetStatus(businessId: number | null) {
+  return useApiMutation<{ targetId: number; status: string }>(
+    ({ targetId }) => `/businesses/${businessId}/discovery-targets/${targetId}/status`,
+    ({ status }) => ({ status }),
+    [["discovery-targets", businessId]],
+  );
 }
 export function useResumeIncident(businessId: number | null) {
   return useApiMutation<{ incidentId: number; approved: boolean; edited_response?: string }>(

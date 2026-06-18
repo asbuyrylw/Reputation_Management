@@ -30,6 +30,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/content/work-orders", label: "Improvement tasks" },
       { href: "/content/drafts", label: "Content drafts" },
+      { href: "/content/finalized", label: "Published content" },
       { href: "/content/briefs", label: "Content to produce" },
       { href: "/content/outreach", label: "Outreach" },
     ],

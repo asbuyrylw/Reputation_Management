@@ -8,10 +8,26 @@ business_id matches the path (the engine functions don't check tenancy).
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
 from ..schemas import RejectRequest, StatusRequest
+
+
+class DiscoveryTargetCreate(BaseModel):
+    name: str
+    channel: str = "manual"
+    outlet: Optional[str] = None
+    url: Optional[str] = None
+    beat: Optional[str] = None
+    rationale: Optional[str] = None
+
+
+class TargetStatusRequest(BaseModel):
+    status: str
 
 try:
     from ... import content_generator as _cg
@@ -78,6 +94,54 @@ def discovery_targets(business_id: int = Depends(authorize_business), conn=Depen
         (business_id,),
     ).fetchall()
     return [_to_float(dict(r), "score") for r in rows]
+
+
+@router.get("/assets")
+def assets(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Finalized / published content — assets created when a draft is approved or a
+    produced piece is logged. The approved draft's body is attached when available."""
+    rows = conn.execute(
+        "SELECT a.id, a.asset_type, a.title, a.url, a.surface, a.published_at, a.work_order_id, "
+        "d.body, d.target_query "
+        "FROM assets a "
+        "LEFT JOIN content_drafts d ON d.work_order_id = a.work_order_id AND d.status='approved' "
+        "WHERE a.business_id=%s ORDER BY a.published_at DESC NULLS LAST, a.id DESC",
+        (business_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.post("/discovery-targets", status_code=201)
+def add_discovery_target(
+    payload: DiscoveryTargetCreate,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Manually add an outreach target (in addition to the ones the Discovery agent finds)."""
+    row = conn.execute(
+        "INSERT INTO discovery_targets (business_id, channel, name, outlet, url, beat, rationale, status) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,'suggested') RETURNING id",
+        (business_id, payload.channel, payload.name, payload.outlet, payload.url, payload.beat, payload.rationale),
+    ).fetchone()
+    conn.commit()
+    return {"id": row["id"]}
+
+
+@router.post("/discovery-targets/{target_id}/status")
+def set_discovery_status(
+    target_id: int,
+    body: TargetStatusRequest,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    r = conn.execute(
+        "UPDATE discovery_targets SET status=%s WHERE id=%s AND business_id=%s RETURNING id",
+        (body.status, target_id, business_id),
+    ).fetchone()
+    if not r:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Target not found")
+    conn.commit()
+    return {"id": target_id, "status": body.status}
 
 
 # ---------------------------------------------------------------------------
