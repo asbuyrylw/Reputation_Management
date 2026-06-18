@@ -316,6 +316,37 @@ export interface CompareResult {
   method?: string;
 }
 
+// ---- local SEO rank tracking (Google organic + map/local pack) ----
+export interface LocalRankEntry {
+  name: string;
+  organic_rank: number | null;
+  local_pack_rank: number | null;
+  on_page_one: boolean;
+  url: string;
+  title: string;
+  found: boolean;
+}
+export interface LocalRankQuery {
+  query: string;
+  location: string;
+  subject: LocalRankEntry | null;
+  competitors: LocalRankEntry[];
+}
+export interface LocalRankSummary {
+  queries: number;
+  page_one_rate: number;
+  local_pack_rate: number;
+  avg_organic_rank: number | null;
+  ranked_queries: number;
+  note: string;
+}
+export interface LocalRankings {
+  business?: string;
+  run_id: number | null;
+  queries: LocalRankQuery[];
+  summary: LocalRankSummary | null;
+}
+
 export interface Notification {
   id: number;
   kind: string;
