@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -54,6 +55,26 @@ def _auto_migrate() -> None:
         log.warning("auto-migrate skipped (%s); ensure migrations are applied manually", e)
 
 
+_scheduler_stop = threading.Event()
+
+
+def _scheduler_loop() -> None:
+    """In-process scheduler + job runner for single-process (inline) deployments like the
+    demo, where there is no separate worker. Each minute: enqueue due recurring jobs, then
+    drain the queue. Worker-mode deployments leave this off and let the worker do it."""
+    from .. import scheduler
+    from . import jobs as _jobs
+    while not _scheduler_stop.is_set():
+        try:
+            scheduler.tick()
+            drained = 0
+            while drained < 20 and _jobs.pump():
+                drained += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("in-process scheduler loop error: %s", e)
+        _scheduler_stop.wait(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _auto_migrate()
@@ -70,7 +91,17 @@ async def lifespan(app: FastAPI):
         log.info("Plan catalog seeded")
     except Exception as e:  # noqa: BLE001 -- never let seeding crash startup
         log.warning("seed_plans skipped: %s", e)
+    # Run the scheduler in-process when there's no separate worker (inline mode) and it
+    # hasn't been explicitly disabled. Worker-mode deployments run scheduler.tick() in the
+    # worker instead.
+    run_inproc = (api_settings().job_worker == "inline"
+                  and os.getenv("SCHEDULER_IN_API", "1").lower() not in ("0", "false", "no"))
+    if run_inproc:
+        _scheduler_stop.clear()
+        threading.Thread(target=_scheduler_loop, daemon=True, name="rc-scheduler").start()
+        log.info("In-process scheduler started")
     yield
+    _scheduler_stop.set()
     close_pool()
 
 

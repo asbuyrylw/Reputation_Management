@@ -288,6 +288,29 @@ export interface JobsResponse {
   pipeline_runs: PipelineRun[];
 }
 
+export interface Notification {
+  id: number;
+  kind: string;
+  title: string;
+  body: string | null;
+  severity: string;
+  read: boolean;
+  created_at: string | null;
+}
+export interface NotificationsResponse {
+  items: Notification[];
+  unread: number;
+}
+
+export interface Schedule {
+  id: number;
+  job_type: string;
+  interval_hours: number;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+}
+
 export interface Keyword {
   id: number;
   keyword: string;

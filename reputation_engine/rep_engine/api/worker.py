@@ -74,6 +74,11 @@ def run_forever(poll_seconds: float = 3.0) -> None:  # pragma: no cover -- long-
             now = time.monotonic()
             if now - last_reap > 60:
                 jobs.reap_stale()
+                try:
+                    from .. import scheduler
+                    scheduler.tick()   # enqueue any due recurring jobs
+                except Exception as e:  # noqa: BLE001
+                    log.warning("scheduler tick failed: %s", e)
                 last_reap = now
             job_id = _next_queued()
             if job_id is None:
