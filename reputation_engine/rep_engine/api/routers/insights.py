@@ -53,6 +53,15 @@ def competitors_compare(business_id: int = Depends(authorize_business)):
     return _c.compare(business_id, quiet=True)
 
 
+@router.get("/local-rankings")
+def local_rankings(business_id: int = Depends(authorize_business)):
+    """Latest local Google rank snapshot (organic + map pack) for the category-local
+    queries -- our rank vs competitors, plus page-1 / local-pack roll-ups. Null when no
+    run has been captured yet (needs SERPER_API_KEY)."""
+    from ... import local_seo as _ls
+    return _ls.latest(business_id)
+
+
 @router.post("/competitors", status_code=201)
 def add_competitor(payload: CompetitorCreate, business_id: int = Depends(require_business_editor)):
     from ... import competitor as _c

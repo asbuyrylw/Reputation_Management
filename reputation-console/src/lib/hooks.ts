@@ -14,6 +14,7 @@ import type {
   AttributionRow,
   BeforeAfterPair,
   CompareResult,
+  LocalRankings,
   Competitor,
   ContentDraft,
   Dashboard,
@@ -177,6 +178,9 @@ export function useCompetitors(businessId: number | null) {
 }
 export function useCompare(businessId: number | null) {
   return useApiQuery<CompareResult>(["compare", businessId], base(businessId, "/competitors/compare"));
+}
+export function useLocalRankings(businessId: number | null) {
+  return useApiQuery<LocalRankings>(["local-rankings", businessId], base(businessId, "/local-rankings"));
 }
 export function useAddCompetitor(businessId: number | null) {
   return useApiMutation<{ name: string; domain?: string }>(

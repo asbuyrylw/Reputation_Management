@@ -20,6 +20,7 @@ const JOBS = [
   { type: "alert_check", label: "Check for alerts" },
   { type: "discovery", label: "Find outreach targets" },
   { type: "benchmark", label: "Benchmark vs competitors" },
+  { type: "local_rank", label: "Track local Google rankings" },
   { type: "citation_analyze", label: "Refresh citation analytics" },
   { type: "learn", label: "Recompute what's working" },
   { type: "production_briefs", label: "Generate production briefs" },

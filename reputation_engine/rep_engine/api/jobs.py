@@ -130,6 +130,12 @@ def _run_benchmark(business_id: int, args: dict) -> None:
     _imp("competitor").benchmark(business_id, quiet=True)
 
 
+def _run_local_rank(business_id: int, args: dict) -> None:
+    """Local SEO: capture Google front-page + local-pack rankings for the category-local
+    queries (subject + competitors). No-op without SERPER_API_KEY."""
+    _imp("local_seo").track(business_id, quiet=True)
+
+
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -148,6 +154,7 @@ JOB_DISPATCH = {
     "learn": _run_learn,
     "alert_check": _run_alert_check,
     "benchmark": _run_benchmark,
+    "local_rank": _run_local_rank,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }

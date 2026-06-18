@@ -93,3 +93,43 @@ BEGIN
       (ce,1,rid,'gemini','Top-rated financial advisors in Cincinnati, OH','',true,true,false);
   END IF;
 END $$;
+
+-- Synthetic LOCAL Google rank snapshot so the Local SEO page shows the same story out of
+-- the box (the real tracker runs when SERPER_API_KEY is set). Team Unstoppable is mostly
+-- absent / off page one for local-category searches while rivals with local offices rank
+-- and hold map-pack spots -- the local-SEO gap the engine is built to close. Idempotent.
+DO $$
+DECLARE rid BIGINT := -2;   -- NEGATIVE sentinel run id: latest() reads MAX(run_id), so any
+                            -- real tracker run (positive id) always supersedes this synthetic
+                            -- snapshot, while the demo (no real runs) still shows it.
+DECLARE loc TEXT := 'Cincinnati, OH';
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM local_rankings WHERE business_id=1) THEN
+    INSERT INTO local_rankings (business_id, run_id, query, location, party, is_subject,
+        organic_rank, local_pack_rank, on_page_one, url, title, found) VALUES
+      -- Query 1: "Best financial services in Cincinnati, OH" -- TU absent
+      (1,rid,'Best financial services in Cincinnati, OH',loc,'subject',true, NULL,NULL,false,'','',false),
+      (1,rid,'Best financial services in Cincinnati, OH',loc,'Northwestern Mutual',false, 3,2,true,'https://www.northwesternmutual.com/','Northwestern Mutual - Cincinnati',true),
+      (1,rid,'Best financial services in Cincinnati, OH',loc,'Edward Jones',false, 5,1,true,'https://www.edwardjones.com/','Edward Jones - Financial Advisors',true),
+      (1,rid,'Best financial services in Cincinnati, OH',loc,'New York Life',false, 8,NULL,true,'https://www.newyorklife.com/','New York Life',true),
+      (1,rid,'Best financial services in Cincinnati, OH',loc,'World Financial Group',false, NULL,NULL,false,'','',false),
+      -- Query 2: "financial services near me in Cincinnati, OH" -- TU absent
+      (1,rid,'financial services near me in Cincinnati, OH',loc,'subject',true, NULL,NULL,false,'','',false),
+      (1,rid,'financial services near me in Cincinnati, OH',loc,'Northwestern Mutual',false, 2,1,true,'https://www.northwesternmutual.com/','Northwestern Mutual - Cincinnati',true),
+      (1,rid,'financial services near me in Cincinnati, OH',loc,'Edward Jones',false, 4,3,true,'https://www.edwardjones.com/','Edward Jones - Financial Advisors',true),
+      (1,rid,'financial services near me in Cincinnati, OH',loc,'New York Life',false, NULL,NULL,false,'','',false),
+      (1,rid,'financial services near me in Cincinnati, OH',loc,'World Financial Group',false, 9,NULL,true,'https://www.worldfinancialgroup.com/','World Financial Group',true),
+      -- Query 3: "Top-rated financial services companies in Cincinnati, OH" -- TU ranks, but page 2 (the near-miss)
+      (1,rid,'Top-rated financial services companies in Cincinnati, OH',loc,'subject',true, 14,NULL,false,'https://teamunstoppable.com/','Team Unstoppable',true),
+      (1,rid,'Top-rated financial services companies in Cincinnati, OH',loc,'Northwestern Mutual',false, 1,1,true,'https://www.northwesternmutual.com/','Northwestern Mutual - Cincinnati',true),
+      (1,rid,'Top-rated financial services companies in Cincinnati, OH',loc,'Edward Jones',false, 6,2,true,'https://www.edwardjones.com/','Edward Jones - Financial Advisors',true),
+      (1,rid,'Top-rated financial services companies in Cincinnati, OH',loc,'New York Life',false, 11,NULL,false,'https://www.newyorklife.com/','New York Life',true),
+      (1,rid,'Top-rated financial services companies in Cincinnati, OH',loc,'World Financial Group',false, NULL,NULL,false,'','',false),
+      -- Query 4: "Who do you recommend for financial services in Cincinnati, OH?" -- TU absent
+      (1,rid,'Who do you recommend for financial services in Cincinnati, OH?',loc,'subject',true, NULL,NULL,false,'','',false),
+      (1,rid,'Who do you recommend for financial services in Cincinnati, OH?',loc,'Northwestern Mutual',false, 4,NULL,true,'https://www.northwesternmutual.com/','Northwestern Mutual - Cincinnati',true),
+      (1,rid,'Who do you recommend for financial services in Cincinnati, OH?',loc,'Edward Jones',false, 7,2,true,'https://www.edwardjones.com/','Edward Jones - Financial Advisors',true),
+      (1,rid,'Who do you recommend for financial services in Cincinnati, OH?',loc,'New York Life',false, NULL,NULL,false,'','',false),
+      (1,rid,'Who do you recommend for financial services in Cincinnati, OH?',loc,'World Financial Group',false, NULL,NULL,false,'','',false);
+  END IF;
+END $$;

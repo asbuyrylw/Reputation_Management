@@ -42,6 +42,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/rankings", label: "Rankings" },
       { href: "/competitors", label: "Competitors" },
+      { href: "/local-seo", label: "Local rankings" },
       { href: "/timeline", label: "Time to goal" },
     ],
   },
