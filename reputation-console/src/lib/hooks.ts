@@ -13,6 +13,8 @@ import type {
   Answer,
   AttributionRow,
   BeforeAfterPair,
+  CompareResult,
+  Competitor,
   ContentDraft,
   Dashboard,
   DiscoveryTarget,
@@ -167,6 +169,28 @@ export function useIncidents(businessId: number | null) {
 }
 export function useMentions(businessId: number | null) {
   return useApiQuery<Mention[]>(["mentions", businessId], base(businessId, "/mentions"));
+}
+
+// ---- competitor benchmarking ----
+export function useCompetitors(businessId: number | null) {
+  return useApiQuery<Competitor[]>(["competitors", businessId], base(businessId, "/competitors"));
+}
+export function useCompare(businessId: number | null) {
+  return useApiQuery<CompareResult>(["compare", businessId], base(businessId, "/competitors/compare"));
+}
+export function useAddCompetitor(businessId: number | null) {
+  return useApiMutation<{ name: string; domain?: string }>(
+    () => `/businesses/${businessId}/competitors`,
+    (v) => ({ name: v.name, domain: v.domain ?? "" }),
+    [["competitors", businessId]],
+  );
+}
+export function useDeleteCompetitor(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiFetch(`/businesses/${businessId}/competitors/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["competitors", businessId] }),
+  });
 }
 
 // ---- notifications / alerts ----
