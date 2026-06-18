@@ -316,6 +316,17 @@ export interface CompareResult {
   method?: string;
 }
 
+// ---- user-managed prompts / topics ----
+export interface CustomPrompt {
+  id: number;
+  prompt: string;
+  topic: string;
+  tags: string;
+  enabled: boolean;
+  source: "user" | "ai_suggested";
+  created_at?: string;
+}
+
 // ---- local SEO rank tracking (Google organic + map/local pack) ----
 export interface LocalRankEntry {
   name: string;

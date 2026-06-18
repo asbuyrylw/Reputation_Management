@@ -227,7 +227,9 @@ def track(business_id: int, quiet: bool = False) -> dict:
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
-            raise SystemExit(f"No business id {business_id}")
+            # ValueError (not SystemExit) so the background-job runner records a failed job
+            # instead of the SystemExit (a BaseException) escaping and tearing down the loop.
+            raise ValueError(f"No business id {business_id}")
         location = (biz.get("geo") or "").strip()
         queries = _audit.category_local_prompts(dict(biz))
         if not queries:

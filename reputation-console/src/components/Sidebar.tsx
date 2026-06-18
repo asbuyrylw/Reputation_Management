@@ -23,6 +23,7 @@ const NAV: NavGroup[] = [
     group: "What AI Says",
     items: [
       { href: "/audits", label: "Audits & AI answers" },
+      { href: "/prompts", label: "Prompts & topics" },
       { href: "/seo", label: "SEO / site" },
       { href: "/gaps", label: "Gaps" },
     ],

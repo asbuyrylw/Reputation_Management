@@ -319,7 +319,23 @@ def build_prompt_battery(b: dict) -> list[str]:
     # Contested-term probes: we MEASURE these to know what to out-produce.
     for term in _split(b.get("contested_terms")):
         base.append(f"Is {name} a {term}?")
-    return [p for p in base if p.strip()]
+    # USER-MANAGED prompts: the owner's own questions/topics, merged in so the whole
+    # pipeline (audit -> gap -> content -> benchmark) measures what THEY care about too.
+    # Defensive: never let this additive feature break the core battery.
+    if b.get("id"):
+        try:
+            from . import prompts as _p
+            base += _p.custom_prompt_texts(b["id"])
+        except Exception:  # pragma: no cover -- additive; core battery must survive
+            pass
+    # dedupe (preserve order) -- a custom prompt may restate an auto-generated one.
+    out, seen = [], set()
+    for p in base:
+        s = p.strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 def category_local_prompts(b: dict) -> list[str]:

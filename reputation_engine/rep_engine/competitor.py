@@ -115,7 +115,9 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
-            raise SystemExit(f"No business id {business_id}")
+            # ValueError (not SystemExit): benchmark() runs as a background job and compare()
+            # in a request -- a BaseException would escape the runner / request handler.
+            raise ValueError(f"No business id {business_id}")
         comps = conn.execute("SELECT * FROM competitors WHERE business_id=%s", (business_id,)).fetchall()
         if not comps:
             if not quiet:
@@ -165,7 +167,9 @@ def compare(business_id: int, quiet: bool = False) -> dict:
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
-            raise SystemExit(f"No business id {business_id}")
+            # ValueError (not SystemExit): benchmark() runs as a background job and compare()
+            # in a request -- a BaseException would escape the runner / request handler.
+            raise ValueError(f"No business id {business_id}")
         run = conn.execute(
             "SELECT MAX(run_id) r FROM competitor_answers WHERE business_id=%s", (business_id,)
         ).fetchone()
