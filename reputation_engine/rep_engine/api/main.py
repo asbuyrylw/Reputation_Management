@@ -153,6 +153,32 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok"}
 
+    @app.get("/livez", tags=["meta"])
+    def livez():
+        # Liveness: the process is up and serving. (No dependency checks.)
+        return {"status": "ok"}
+
+    @app.get("/readyz", tags=["meta"])
+    def readyz():
+        # Readiness: DB reachable, and (in worker mode) the worker heartbeat is fresh.
+        from fastapi.responses import JSONResponse
+        checks: dict = {}
+        try:
+            from ..db import db
+            with db() as c:
+                c.execute("SELECT 1")
+            checks["db"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            checks["db"] = f"error: {str(e)[:120]}"
+        if api_settings().job_worker == "worker":
+            from .worker import seconds_since_heartbeat
+            age = seconds_since_heartbeat()
+            checks["worker"] = "ok" if (age is not None and age < 120) else (
+                f"stale ({int(age)}s)" if age is not None else "no heartbeat")
+        healthy = all(v == "ok" for v in checks.values())
+        return JSONResponse(status_code=200 if healthy else 503,
+                            content={"status": "ok" if healthy else "degraded", "checks": checks})
+
     app.include_router(auth_router.router)
     app.include_router(onboarding_router.router)
     app.include_router(billing_router.router)

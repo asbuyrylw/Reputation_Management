@@ -67,3 +67,29 @@ def test_me_requires_valid_token(fresh_schema):
     with _client() as c:
         assert c.get("/auth/me").status_code == 401
         assert c.get("/auth/me", headers={"Authorization": "Bearer garbage"}).status_code == 401
+
+
+def test_health_endpoints():
+    with _client() as c:
+        assert c.get("/livez").status_code == 200
+        r = c.get("/readyz")
+        assert r.status_code in (200, 503)
+        assert "checks" in r.json()
+
+
+@requires_db
+def test_change_password(fresh_schema):
+    conn = fresh_schema
+    _mk_user(conn, "u@example.com", "OldPass123!", "client")
+    with _client() as c:
+        tok = c.post("/auth/login", json={"email": "u@example.com", "password": "OldPass123!"}).json()["access_token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        # wrong current password -> 403
+        assert c.post("/auth/change-password", json={"current_password": "wrong", "new_password": "Brand-New99"}, headers=h).status_code == 403
+        # weak new password -> 400
+        assert c.post("/auth/change-password", json={"current_password": "OldPass123!", "new_password": "short"}, headers=h).status_code == 400
+        # valid change -> 200, and the new password logs in
+        ok = c.post("/auth/change-password", json={"current_password": "OldPass123!", "new_password": "Brand-New99"}, headers=h)
+        assert ok.status_code == 200, ok.text
+        assert c.post("/auth/login", json={"email": "u@example.com", "password": "Brand-New99"}).status_code == 200
+        assert c.post("/auth/login", json={"email": "u@example.com", "password": "OldPass123!"}).status_code == 401
