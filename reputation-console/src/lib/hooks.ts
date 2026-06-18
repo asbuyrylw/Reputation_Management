@@ -18,6 +18,8 @@ import type {
   DiscoveryTarget,
   ExternalSignal,
   Keyword,
+  NotificationsResponse,
+  Schedule,
   GapModel,
   Incident,
   JobsResponse,
@@ -165,6 +167,50 @@ export function useIncidents(businessId: number | null) {
 }
 export function useMentions(businessId: number | null) {
   return useApiQuery<Mention[]>(["mentions", businessId], base(businessId, "/mentions"));
+}
+
+// ---- notifications / alerts ----
+export function useNotifications(businessId: number | null, poll = true) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["notifications", businessId],
+    queryFn: () => apiFetch<NotificationsResponse>(`/businesses/${businessId}/notifications`),
+    enabled: !!user && !!businessId,
+    refetchInterval: poll ? 20000 : false,
+  });
+}
+export function useMarkNotificationRead(businessId: number | null) {
+  return useApiMutation<{ id: number }>(
+    ({ id }) => `/businesses/${businessId}/notifications/${id}/read`,
+    () => undefined,
+    [["notifications", businessId]],
+  );
+}
+export function useMarkAllNotificationsRead(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/businesses/${businessId}/notifications/read-all`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", businessId] }),
+  });
+}
+
+// ---- automation schedules ----
+export function useSchedules(businessId: number | null) {
+  return useApiQuery<Schedule[]>(["schedules", businessId], base(businessId, "/schedules"));
+}
+export function useUpsertSchedule(businessId: number | null) {
+  return useApiMutation<{ job_type: string; interval_hours: number; enabled?: boolean }>(
+    () => `/businesses/${businessId}/schedules`,
+    (v) => ({ job_type: v.job_type, interval_hours: v.interval_hours, enabled: v.enabled ?? true }),
+    [["schedules", businessId]],
+  );
+}
+export function useDeleteSchedule(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiFetch(`/businesses/${businessId}/schedules/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["schedules", businessId] }),
+  });
 }
 
 // ---- monitoring keywords ----

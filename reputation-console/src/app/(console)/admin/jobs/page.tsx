@@ -17,6 +17,7 @@ const JOBS = [
   // monitoring + outreach + learning
   { type: "mentions_scan", label: "Scan mentions" },
   { type: "incident_scan", label: "Scan for incidents" },
+  { type: "alert_check", label: "Check for alerts" },
   { type: "discovery", label: "Find outreach targets" },
   { type: "citation_analyze", label: "Refresh citation analytics" },
   { type: "learn", label: "Recompute what's working" },

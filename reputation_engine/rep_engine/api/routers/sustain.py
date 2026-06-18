@@ -82,6 +82,27 @@ def incidents(business_id: int = Depends(authorize_business), conn=Depends(get_c
     return out
 
 
+@router.get("/notifications")
+def list_notifications(business_id: int = Depends(authorize_business), unread_only: bool = False):
+    from ... import notifications as _n
+    return {"items": _n.list_notifications(business_id, unread_only=unread_only),
+            "unread": _n.unread_count(business_id)}
+
+
+@router.post("/notifications/{notification_id}/read")
+def read_notification(notification_id: int, business_id: int = Depends(require_business_editor)):
+    from ... import notifications as _n
+    if not _n.mark_read(business_id, notification_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification not found")
+    return {"read": notification_id}
+
+
+@router.post("/notifications/read-all")
+def read_all_notifications(business_id: int = Depends(require_business_editor)):
+    from ... import notifications as _n
+    return {"read": _n.mark_all_read(business_id)}
+
+
 @router.get("/keywords")
 def list_keywords(business_id: int = Depends(authorize_business)):
     from ... import mention_monitor as _mm

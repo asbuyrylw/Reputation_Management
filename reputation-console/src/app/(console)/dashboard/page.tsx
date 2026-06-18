@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
 import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { ScoreDonut } from "@/components/ScoreDonut";
@@ -126,6 +126,7 @@ export default function DashboardPage() {
   const { data: answers } = useRunAnswers(businessId, latestRunId);
   const { data: workOrders } = useWorkOrders(businessId);
   const { data: timeline } = useTimeline(businessId);
+  const { data: notifs } = useNotifications(businessId);
 
   if (bizLoading) return <Spinner />;
   if (businesses.length === 0) {
@@ -165,6 +166,18 @@ export default function DashboardPage() {
         title={`Dashboard — ${data.business.name}`}
         subtitle="Where you stand with AI assistants, what to do next, and when it'll improve."
       />
+
+      {notifs && notifs.unread > 0 && (
+        <Link
+          href="/notifications"
+          className="mb-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm hover:bg-amber-100"
+        >
+          <span className="font-medium text-amber-800">
+            ⚠ {notifs.unread} thing{notifs.unread === 1 ? "" : "s"} need your attention
+          </span>
+          <span className="text-amber-700">View →</span>
+        </Link>
+      )}
 
       {!latest ? (
         <EmptyState

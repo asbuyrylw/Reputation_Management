@@ -120,6 +120,11 @@ def _run_learn(business_id: int, args: dict) -> None:
     _imp("feedback_loop").learn(business_id, quiet=True)
 
 
+def _run_alert_check(business_id: int, args: dict) -> None:
+    """Raise proactive alerts (score drop, new incidents/negative mentions, drafts waiting)."""
+    _imp("notifications").check_and_notify(business_id, quiet=True)
+
+
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -136,6 +141,7 @@ JOB_DISPATCH = {
     "incident_scan": _run_incident_scan,
     "citation_analyze": _run_citation_analyze,
     "learn": _run_learn,
+    "alert_check": _run_alert_check,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }
@@ -211,3 +217,16 @@ def run_job(job_id: int) -> Optional[str]:
         )
         conn.commit()
     return status
+
+
+def pump() -> bool:
+    """Run the next queued job, if any. Returns True if one ran. Used by the in-process
+    scheduler loop (inline mode) and the worker so scheduler-enqueued jobs actually execute."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM api_jobs WHERE status='queued' ORDER BY id LIMIT 1"
+        ).fetchone()
+    if not row:
+        return False
+    run_job(row["id"])
+    return True

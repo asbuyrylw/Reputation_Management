@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from .. import auth as _auth
 from .. import jobs as _jobs
@@ -19,11 +20,19 @@ from ..settings import api_settings
 try:
     from ... import billing as _billing
     from ... import runstate as _runstate
+    from ... import scheduler as _scheduler
 except ImportError:  # pragma: no cover
     import billing as _billing  # type: ignore
     import runstate as _runstate  # type: ignore
+    import scheduler as _scheduler  # type: ignore
 
 router = APIRouter(tags=["jobs"])
+
+
+class ScheduleUpsert(BaseModel):
+    job_type: str
+    interval_hours: int
+    enabled: bool = True
 
 
 @router.post("/businesses/{business_id}/jobs/{job_type}")
@@ -60,6 +69,27 @@ def list_jobs(business_id: int = Depends(authorize_business), conn=Depends(get_c
         (business_id,),
     ).fetchall()
     return {"jobs": [dict(r) for r in rows], "pipeline_runs": _runstate.runs_status(business_id)}
+
+
+@router.get("/businesses/{business_id}/schedules")
+def list_schedules(business_id: int = Depends(authorize_business)):
+    """Recurring automation for this business (what runs, how often, when next)."""
+    return _scheduler.list_schedules(business_id)
+
+
+@router.post("/businesses/{business_id}/schedules")
+def upsert_schedule(payload: ScheduleUpsert, business_id: int = Depends(require_business_editor)):
+    try:
+        return _scheduler.upsert_schedule(business_id, payload.job_type, payload.interval_hours, payload.enabled)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+
+
+@router.delete("/businesses/{business_id}/schedules/{schedule_id}")
+def delete_schedule(schedule_id: int, business_id: int = Depends(require_business_editor)):
+    if not _scheduler.delete_schedule(business_id, schedule_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule not found")
+    return {"deleted": schedule_id}
 
 
 @router.get("/jobs/{job_id}")
