@@ -31,20 +31,74 @@ const CAPABILITY: Record<string, string> = {
 const capLabel = (c?: string | null) =>
   c ? CAPABILITY[c] ?? c.replace(/_/g, " ").replace(/\b\w/g, (x) => x.toUpperCase()) : "Task";
 
+// high-level tool TYPE + concrete examples, by capability
+const TOOL_GUIDE: Record<string, { type: string; examples: string[] }> = {
+  content_writing: { type: "Article / web-copy creation", examples: ["ChatGPT", "Jasper", "Google Docs", "Surfer SEO"] },
+  schema_markup: { type: "Website code (schema)", examples: ["Schema.org generator", "Google Rich Results Test", "your web developer"] },
+  review_generation: { type: "Review collection", examples: ["Google Business Profile", "Birdeye", "a follow-up email/SMS"] },
+  press_outreach: { type: "PR / media outreach", examples: ["Connectively (HARO)", "Muck Rack", "a pitch email"] },
+  media_list_building: { type: "PR / media research", examples: ["Muck Rack", "Prowly", "manual research"] },
+  link_building: { type: "Links & citations", examples: ["directory listings", "guest posts", "BBB / industry registries"] },
+  social_posting: { type: "Social media", examples: ["Buffer", "Hootsuite", "native schedulers"] },
+  social_automation: { type: "Social-media automation", examples: ["Buffer", "Hootsuite", "Later"] },
+  gbp_optimization: { type: "Google Business Profile", examples: ["Google Business Profile Manager"] },
+  ai_visibility_tracking: { type: "AI-visibility tracking", examples: ["this console's audits"] },
+  video_creation: { type: "Video creation", examples: ["Descript", "CapCut", "Synthesia"] },
+};
+
+// YYYY-MM-DD -> MM-DD-YYYY
+function fmtDate(d?: string | null): string {
+  if (!d) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  return m ? `${m[2]}-${m[3]}-${m[1]}` : d;
+}
+
+// Break a long instruction into bullets on sentence / semicolon boundaries.
+function bulletize(text: string): string[] | null {
+  const t = (text || "").trim();
+  if (t.length <= 140) return null;
+  const parts = t.split(/(?:;\s+|\.\s+(?=[A-Z]))/).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean);
+  return parts.length > 1 ? parts : null;
+}
+
 function WorkOrderCard({ wo, canEdit, onStatus }: { wo: WorkOrder; canEdit: boolean; onStatus: (s: string) => void }) {
+  const tool = TOOL_GUIDE[wo.capability ?? ""];
+  const bullets = bulletize(wo.instruction || "");
   return (
     <Card className="p-3">
-      <div className="flex items-center justify-between">
+      {/* category (left) · phase above date (right) */}
+      <div className="flex items-start justify-between gap-2">
         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">{capLabel(wo.capability)}</span>
-        {wo.target_date && <span className="text-[11px] text-gray-400">by {wo.target_date}</span>}
+        <div className="text-right">
+          {wo.phase && <div className="text-[11px] font-medium text-gray-500">{wo.phase}</div>}
+          {wo.target_date && <div className="text-[11px] text-gray-400">Due {fmtDate(wo.target_date)}</div>}
+        </div>
       </div>
-      <div className="mt-1 text-sm font-medium text-gray-900">{wo.title}</div>
-      {wo.instruction && <div className="mt-1 text-xs text-gray-600">{wo.instruction}</div>}
-      <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-gray-400">
-        {wo.recommended_tool && <span>Tool: {wo.recommended_tool}</span>}
-        {wo.assignee && <span>Owner: {wo.assignee}</span>}
-        {wo.phase && <span>{wo.phase}</span>}
+
+      {/* bold to-do heading */}
+      <div className="mt-1.5 text-sm font-bold text-gray-900">{wo.title}</div>
+
+      {/* instruction — bulleted when long */}
+      {wo.instruction && (
+        bullets ? (
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-600">
+            {bullets.map((b, i) => <li key={i}>{b}</li>)}
+          </ul>
+        ) : (
+          <div className="mt-1 text-xs text-gray-600">{wo.instruction}</div>
+        )
+      )}
+
+      {/* tool type + examples */}
+      <div className="mt-1.5 text-[11px] text-gray-500">
+        {tool ? (
+          <span><span className="font-medium text-gray-600">{tool.type}</span> — e.g. {tool.examples.join(", ")}</span>
+        ) : wo.recommended_tool ? (
+          <span><span className="font-medium text-gray-600">Tool:</span> {wo.recommended_tool}</span>
+        ) : null}
+        {wo.assignee && <span> · Owner: {wo.assignee}</span>}
       </div>
+
       {wo.result_notes && <div className="mt-1 text-xs text-green-700">Result: {wo.result_notes}</div>}
       {canEdit && (
         <select
@@ -78,13 +132,13 @@ export default function WorkOrdersPage() {
   return (
     <div>
       <PageHeader
-        title="Your action plan"
+        title="Reputation Improvement Task List"
         subtitle="Every task that improves your AI reputation, and where each one stands. Change a status to move it."
       />
       {total === 0 ? (
         <EmptyState
           title="No tasks yet"
-          why="Your action plan is built from the gaps an audit finds."
+          why="Your task list is built from the gaps an audit finds."
           produces="Once an audit + plan run, your prioritized tasks appear here — what to do, what it fixes, and when."
           timing="An audit takes a few minutes."
           cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}

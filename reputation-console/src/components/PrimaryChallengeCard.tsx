@@ -103,7 +103,7 @@ function Track({
       <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
         <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${w}%` }} />
       </div>
-      <div className="mt-1 text-xs text-gray-400">{note}</div>
+      <div className="mt-1 text-sm text-gray-600">{note}</div>
     </div>
   );
 }
@@ -141,7 +141,7 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
         </div>
       </div>
 
-      <p className={`mt-3 text-sm leading-relaxed ${st.accent}`}>{challenge.headline}</p>
+      <p className={`mt-3 text-base leading-relaxed ${st.accent}`}>{challenge.headline}</p>
 
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Track
@@ -183,7 +183,7 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
 
       <div className="mt-4 border-t border-gray-100 pt-3">
         <div className="text-xs font-medium uppercase tracking-wide text-gray-400">What this means</div>
-        <p className="mt-1 text-sm text-gray-600">{challenge.recommendation}</p>
+        <p className="mt-1 text-[15px] leading-relaxed text-gray-700">{challenge.recommendation}</p>
       </div>
     </Card>
   );

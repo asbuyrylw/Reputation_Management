@@ -61,11 +61,25 @@ export default function IntegrationsPage() {
       />
 
       <Card className="mb-4 bg-blue-50/50">
-        <div className="text-sm text-gray-700">
-          <span className="font-medium">Why bother?</span> Reports from tools like SiteGuru, Screpy, ClickRank,
-          or your analytics give us hard data — your Google rankings, links, and traffic — so the plan targets
-          what actually needs work instead of guessing. Paste a report (CSV, JSON, or plain text) and we read it for you.
-        </div>
+        <div className="text-sm font-semibold text-gray-900">What this is for</div>
+        <p className="mt-1 text-sm text-gray-700">
+          If you already use an SEO or analytics tool (SiteGuru, Screpy, ClickRank, Google Analytics, Search
+          Console…), paste its report here. We read the real numbers and fold them into your reputation plan.
+        </p>
+        <ul className="mt-2 list-disc space-y-1 pl-6 text-sm text-gray-700">
+          <li>
+            <span className="font-medium">How it&apos;s used:</span> your real Google rankings, backlinks,
+            technical-SEO issues, and traffic feed the gap model and site audit — so the plan targets what actually
+            needs work instead of guessing.
+          </li>
+          <li>
+            <span className="font-medium">The value:</span> sharper, evidence-based priorities (fix the pages and
+            keywords that genuinely move your AI visibility) and hard numbers to prove progress over time.
+          </li>
+        </ul>
+        <p className="mt-2 text-xs text-gray-500">
+          Paste a report as CSV, JSON, or plain text — we normalize it for you. Optional; you don&apos;t need it to get started.
+        </p>
       </Card>
 
       {canEdit && (
