@@ -294,9 +294,11 @@ def _section_per_engine(heading, body, bullet, business_id):
         heading("What Each AI Engine Says (and How Grounded)")
         cov = pe.get("coverage") or {}
         if cov.get("partial"):
+            cfg = cov.get("configured") or []
+            exp = cov.get("expected") or []
             body("Partial coverage: this audit covered "
-                 f"{', '.join(cov.get('configured') or []) or 'no engines'} of the four major AI "
-                 f"engines. Configure the missing engines ({', '.join(cov.get('missing') or [])}) "
+                 f"{', '.join(cfg) or 'no engines'} ({len(cfg)} of {len(exp)} AI "
+                 f"engines). Configure the missing engines ({', '.join(cov.get('missing') or [])}) "
                  "for a complete cross-engine read.", italic=True)
         for name, m in engines.items():
             ga = m.get("goal_alignment") or {}

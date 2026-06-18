@@ -73,6 +73,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_KEY")                 
 # Answer-engine adapters (the surfaces we audit)
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "YOUR_PERPLEXITY_KEY")        # PH 5
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_KEY")                    # PH 6
+# Additional answer engines (wired now; activate by setting the key). Grok (xAI) is
+# OpenAI-compatible; Google AI Overview is read via Serper's Google results; Bing Copilot
+# is an OpenAI-compatible endpoint (point BING_COPILOT_BASE_URL at Azure OpenAI / Copilot).
+XAI_API_KEY = os.getenv("XAI_API_KEY", "YOUR_XAI_KEY")                             # PH 6b (Grok)
+BING_COPILOT_API_KEY = os.getenv("BING_COPILOT_API_KEY", "YOUR_BING_KEY")          # PH 6c
+# Google AI Overview reuses the Serper key (same one the mention monitor uses).
+SERPER_API_KEY_AIO = os.getenv("SERPER_API_KEY", "")
 # (OpenAI-with-search reuses OPENAI_API_KEY)
 
 ORCH_MODEL_ANTHROPIC = "claude-opus-4-8"          # PH 7  (set to your chosen model id)
@@ -110,6 +117,11 @@ ANTHROPIC_BASE = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 OPENAI_BASE = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
 PERPLEXITY_BASE = os.getenv("PERPLEXITY_BASE_URL", "https://api.perplexity.ai")
 GEMINI_BASE = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")
+XAI_BASE = os.getenv("XAI_BASE_URL", "https://api.x.ai")
+XAI_MODEL = os.getenv("XAI_MODEL", "grok-2-latest")
+BING_COPILOT_BASE = os.getenv("BING_COPILOT_BASE_URL", "")   # e.g. an Azure OpenAI endpoint
+BING_COPILOT_MODEL = os.getenv("BING_COPILOT_MODEL", "gpt-4o")
+SERPER_BASE = os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
 
 
 def _obs_headers() -> dict:
@@ -298,10 +310,34 @@ def build_prompt_battery(b: dict) -> list[str]:
         f"Is {name} a good choice for a middle-class family?",
         f"Alternatives to {name} in {geo}".strip(),
     ]
+    # CATEGORY-LOCAL queries: questions where the business should APPEAR (be recommended),
+    # not just be asked about by name. These drive LOCAL AI + search visibility / lead-gen --
+    # the same crowding-out machinery (audit -> gap -> content -> citations) that fixes the
+    # reputation also wins these local category searches. Only added when a service area (geo)
+    # is set. See category_local_prompts() so the SEO/local tracker can reuse the exact set.
+    base += category_local_prompts(b)
     # Contested-term probes: we MEASURE these to know what to out-produce.
     for term in _split(b.get("contested_terms")):
         base.append(f"Is {name} a {term}?")
     return [p for p in base if p.strip()]
+
+
+def category_local_prompts(b: dict) -> list[str]:
+    """Category-local search queries ('best <service> in <city>', '<service> near me ...')
+    for the business's service area. Shared by the audit battery, the competitor benchmark,
+    and the local Google-rank tracker so 'local visibility' is measured consistently."""
+    geo = (b.get("geo") or "").strip()
+    if not geo:
+        return []
+    svc = (b.get("services") or "").strip() or "services"
+    # keep the service phrase short for natural queries
+    svc_short = svc.split(",")[0].split(" and ")[0].strip() or svc
+    return [
+        f"Best {svc_short} in {geo}",
+        f"{svc_short} near me in {geo}",
+        f"Top-rated {svc_short} companies in {geo}",
+        f"Who do you recommend for {svc_short} in {geo}?",
+    ]
 
 
 # Personas/locations to probe so we can see how the answer differs by audience.
@@ -579,6 +615,116 @@ class GeminiEngine:
             return _fail(f"gemini unexpected response shape: {e}")
 
 
+class GrokEngine:
+    name = "grok"
+    model = XAI_MODEL
+
+    def answer(self, prompt: str) -> dict:
+        if "YOUR_XAI" in XAI_API_KEY:
+            return _skip()
+        body = {"model": self.model, "messages": [{"role": "user", "content": prompt}]}
+        # xAI does NOT search the web by default -> turn on Live Search so answers reflect
+        # LIVE results, like the other grounded engines. grounded is then derived from the
+        # citations the API returns, never hardcoded (else the grounding KPI is corrupted).
+        if _grounding_enabled():
+            body["search_parameters"] = {"mode": "auto", "return_citations": True}
+        res = _llm_http(
+            "POST", f"{XAI_BASE}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {XAI_API_KEY}"},
+            json=body,
+            timeout=60,
+        )
+        if res.failed:
+            return _fail(res.error or "grok request failed")
+        try:
+            d = res.data
+            text = d["choices"][0]["message"]["content"]
+            # Live-Search citations live at the top level (or on the choice). grounded is
+            # bool(citations) when we asked to search, else None (unknown -- we didn't try).
+            cites = d.get("citations") or d["choices"][0].get("citations") or []
+            sources = [c for c in cites if isinstance(c, str)] or _extract_urls(text)
+            grounded = bool(cites) if _grounding_enabled() else None
+            return _ok(text, sources, _usage(d), grounded=grounded)
+        except (KeyError, IndexError, TypeError) as e:
+            return _fail(f"grok unexpected response shape: {e}")
+
+
+class GoogleAIOverviewEngine:
+    name = "google_aio"
+    model = "google-ai-overview"
+
+    def answer(self, prompt: str) -> dict:
+        # Google AI Overview is read via Serper's Google results (AI overview / answer box,
+        # else the top organic snippets). Activates when SERPER_API_KEY is set.
+        if not SERPER_API_KEY_AIO:
+            return _skip()
+        res = _llm_http(
+            "POST", f"{SERPER_BASE}/search",
+            headers={"X-API-KEY": SERPER_API_KEY_AIO, "Content-Type": "application/json"},
+            json={"q": prompt}, timeout=30,
+        )
+        if res.failed:
+            return _fail(res.error or "serper request failed")
+        d = res.data or {}
+        ai = d.get("aiOverview") or d.get("answerBox") or {}
+        text = ""
+        if isinstance(ai, dict):
+            text = ai.get("overview") or ai.get("answer") or ai.get("snippet") or ""
+            if not text:
+                # Serper returns the AI Overview as structured textBlocks
+                # ([{snippet, list:[{snippet}...]}]); flatten them to recover the real text
+                # rather than fall straight through to plain organic snippets.
+                parts: list[str] = []
+                for blk in (ai.get("textBlocks") or []):
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("snippet"):
+                        parts.append(blk["snippet"])
+                    for item in (blk.get("list") or []):
+                        if isinstance(item, dict) and item.get("snippet"):
+                            parts.append(item["snippet"])
+                text = " ".join(parts)
+        organic = d.get("organic", []) or []
+        if not text:
+            text = " ".join((o.get("snippet") or "") for o in organic[:5])
+        sources = [o.get("link") for o in organic[:8] if o.get("link")]
+        return _ok(text, sources, grounded=True)
+
+
+class BingCopilotEngine:
+    name = "bing_copilot"
+    model = BING_COPILOT_MODEL
+
+    def answer(self, prompt: str) -> dict:
+        # Bing Copilot has no public answer API; point BING_COPILOT_BASE_URL at an
+        # OpenAI-compatible endpoint (Azure OpenAI with Bing grounding) and set the key.
+        if "YOUR_BING" in BING_COPILOT_API_KEY or not BING_COPILOT_BASE:
+            return _skip()
+        res = _llm_http(
+            "POST", f"{BING_COPILOT_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {BING_COPILOT_API_KEY}", "api-key": BING_COPILOT_API_KEY},
+            json={"model": self.model, "messages": [{"role": "user", "content": prompt}]},
+            timeout=60,
+        )
+        if res.failed:
+            return _fail(res.error or "bing copilot request failed")
+        try:
+            d = res.data
+            msg = d["choices"][0]["message"]
+            text = msg.get("content") or ""
+            # We can't know whether an arbitrary OpenAI-compatible endpoint actually did Bing
+            # grounding, so grounded is UNKNOWN (None) unless the response surfaces citations
+            # (Azure "On Your Data" returns them under message.context.citations). Never True.
+            ctx = msg.get("context") if isinstance(msg.get("context"), dict) else {}
+            cites = d.get("citations") or ctx.get("citations") or []
+            sources = [c.get("url") for c in cites if isinstance(c, dict) and c.get("url")] \
+                or _extract_urls(text)
+            grounded = True if cites else None
+            return _ok(text, sources, _usage(d), grounded=grounded)
+        except (KeyError, IndexError, TypeError) as e:
+            return _fail(f"bing copilot unexpected response shape: {e}")
+
+
 def _extract_urls(text: str) -> list[str]:
     return re.findall(r"https?://[^\s)\]]+", text or "")
 
@@ -594,6 +740,13 @@ def active_engines() -> list[AnswerEngine]:
         engines.append(AnthropicEngine())
     if "YOUR_GEMINI" not in GEMINI_API_KEY:
         engines.append(GeminiEngine())
+    # Additional engines (wired now; each activates only once its key is configured).
+    if "YOUR_XAI" not in XAI_API_KEY:
+        engines.append(GrokEngine())
+    if SERPER_API_KEY_AIO:
+        engines.append(GoogleAIOverviewEngine())
+    if "YOUR_BING" not in BING_COPILOT_API_KEY and BING_COPILOT_BASE:
+        engines.append(BingCopilotEngine())
     if not engines:
         log.warning("No engine keys configured; running in dry mode.")
     return engines
@@ -630,7 +783,9 @@ def preflight_engines() -> list:
 
 def _engine_base(name: str) -> str:
     return {"perplexity": PERPLEXITY_BASE, "openai_search": OPENAI_BASE,
-            "anthropic": ANTHROPIC_BASE, "gemini": GEMINI_BASE}.get(name, "?")
+            "anthropic": ANTHROPIC_BASE, "gemini": GEMINI_BASE,
+            "grok": XAI_BASE, "google_aio": SERPER_BASE,
+            "bing_copilot": BING_COPILOT_BASE}.get(name, "?")
 
 
 # ----------------------------------------------------------------------------
@@ -1228,8 +1383,13 @@ def _f(row):
 # PER-ENGINE METRICS + COVERAGE: report what EACH engine says, with honest
 # uncertainty (sample sizes + confidence intervals) and grounding coverage.
 # ----------------------------------------------------------------------------
-# Canonical engine set we aim to cover; a run missing any of these is "partial coverage".
-ALL_ENGINES = ("perplexity", "openai_search", "anthropic", "gemini")
+# Core engines we always aim to cover; a run missing any of these is "partial coverage".
+CORE_ENGINES = ("perplexity", "openai_search", "anthropic", "gemini")
+# Expansion engines (Grok, Google AI Overview, Bing Copilot): only "expected" once their
+# key is configured -- so adding the adapters doesn't make every run report partial coverage.
+EXPANSION_ENGINES = ("grok", "google_aio", "bing_copilot")
+# Full known set, for labeling/iteration.
+ALL_ENGINES = CORE_ENGINES + EXPANSION_ENGINES
 
 
 def _wilson(successes: int, n: int, z: float = 1.96) -> Optional[dict]:
@@ -1262,13 +1422,18 @@ def _mean_ci(values: list, z: float = 1.96) -> Optional[dict]:
 
 
 def _coverage(present: list) -> dict:
-    """Which canonical engines a run actually covered vs which are missing -> the
-    partial-coverage flag. Falls back to the configured (key-present) engines when the
-    run produced nothing, so the caller can still report what WOULD run."""
-    present_set = set(present) or {e.name for e in active_engines()}
-    missing = [e for e in ALL_ENGINES if e not in present_set]
-    return {"configured": sorted(present_set), "missing": missing,
-            "partial": bool(missing), "expected": list(ALL_ENGINES)}
+    """Which expected engines a run covered vs which are missing -> the partial-coverage
+    flag. Expected = the core four PLUS any expansion engine that's configured (has a key)
+    or actually ran; an expansion engine without a key is NOT counted as missing, so adding
+    the adapters doesn't flag every run partial. A CONFIGURED engine a run skipped IS missing.
+    Falls back to the configured engines when the run produced nothing, to report intent."""
+    present_set = set(present)
+    configured = {e.name for e in active_engines()}
+    expected = set(CORE_ENGINES) | (configured & set(ALL_ENGINES)) | (present_set & set(ALL_ENGINES))
+    report_present = present_set or configured
+    missing = [e for e in ALL_ENGINES if e in expected and e not in report_present]
+    return {"configured": sorted(report_present), "missing": missing,
+            "partial": bool(missing), "expected": sorted(expected)}
 
 
 def per_engine_metrics(business_id: int, run_id: Optional[int] = None) -> dict:

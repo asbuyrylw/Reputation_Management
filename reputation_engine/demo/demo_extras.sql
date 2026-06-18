@@ -2,6 +2,12 @@
 -- repeatedly. Loaded by replit/start.sh after the main seed so the monitoring + published-
 -- content features show data out of the box.
 
+-- Local service area: Team Unstoppable is a Cincinnati, OH practice. The geo drives the
+-- category-local prompt battery ("best financial services in Cincinnati, OH") and the local
+-- Google-rank tracker, so it must be the LOCAL market, not "United States".
+UPDATE businesses SET geo = 'Cincinnati, OH'
+WHERE id = 1 AND (geo IS NULL OR geo = '' OR geo = 'United States');
+
 -- Monitoring keywords (positives to watch; negatives to EXCLUDE the wrong-entity noise).
 INSERT INTO monitor_keywords (business_id, keyword, negative) VALUES
   (1, 'Team Unstoppable', false),
@@ -69,6 +75,21 @@ BEGIN
       (cw,1,rid,'gemini','Highest-rated insurance companies 2026','',false,false,false),
       (cn,1,rid,'gemini','Highest-rated insurance companies 2026','',false,false,false),
       (cy,1,rid,'gemini','Highest-rated insurance companies 2026','',false,false,false),
-      (ce,1,rid,'gemini','Highest-rated insurance companies 2026','',false,true,false);
+      (ce,1,rid,'gemini','Highest-rated insurance companies 2026','',false,true,false),
+      -- LOCAL category queries: the heart of the local-SEO story. Team Unstoppable is
+      -- largely invisible in "near me" / "in Cincinnati" searches while national rivals
+      -- with local offices surface -- the gap the local prompts + content close.
+      (cw,1,rid,'gemini','Best financial services in Cincinnati, OH','',false,false,false),
+      (cn,1,rid,'gemini','Best financial services in Cincinnati, OH','',false,true,false),
+      (cy,1,rid,'gemini','Best financial services in Cincinnati, OH','',false,false,false),
+      (ce,1,rid,'gemini','Best financial services in Cincinnati, OH','',false,true,false),
+      (cw,1,rid,'gemini','Financial advisors near me in Cincinnati, OH','',false,false,false),
+      (cn,1,rid,'gemini','Financial advisors near me in Cincinnati, OH','',false,true,false),
+      (cy,1,rid,'gemini','Financial advisors near me in Cincinnati, OH','',false,false,false),
+      (ce,1,rid,'gemini','Financial advisors near me in Cincinnati, OH','',false,false,false),
+      (cw,1,rid,'gemini','Top-rated financial advisors in Cincinnati, OH','',true,false,false),
+      (cn,1,rid,'gemini','Top-rated financial advisors in Cincinnati, OH','',true,true,false),
+      (cy,1,rid,'gemini','Top-rated financial advisors in Cincinnati, OH','',true,false,false),
+      (ce,1,rid,'gemini','Top-rated financial advisors in Cincinnati, OH','',true,true,false);
   END IF;
 END $$;
