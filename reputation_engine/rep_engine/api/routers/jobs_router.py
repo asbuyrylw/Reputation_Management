@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from .. import auth as _auth
 from .. import jobs as _jobs
 from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
 from ..settings import api_settings
@@ -67,10 +68,8 @@ def get_job(job_id: int, user: dict = Depends(get_current_user), conn=Depends(ge
     if not job:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
     if user["role"] != "admin":
-        ok = conn.execute(
-            "SELECT 1 FROM business_access WHERE user_id=%s AND business_id=%s",
-            (user["id"], job["business_id"]),
-        ).fetchone()
-        if not ok:
+        # Org-aware tenancy: org owners/managers + business_access members can see the job.
+        # (The old check only honored a direct business_access row, denying org owners.)
+        if job["business_id"] not in (_auth.accessible_business_ids(conn, user) or []):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "No access to this job")
     return dict(job)

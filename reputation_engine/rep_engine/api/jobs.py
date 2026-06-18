@@ -141,6 +141,26 @@ JOB_DISPATCH = {
 }
 
 
+STALE_RUNNING_MINUTES = 30
+
+
+def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
+    """Mark jobs stuck in 'running' beyond max_minutes as failed. The enqueue dedup treats
+    'running' as active, so a process crash mid-job would otherwise PERMANENTLY block that
+    (business, job_type) from running again. Self-heals both inline and worker modes."""
+    with db() as conn:
+        rows = conn.execute(
+            "UPDATE api_jobs SET status='failed', "
+            "error='timed out (worker restart or stuck job) -- please re-run', finished_at=now() "
+            "WHERE status='running' AND started_at < now() - make_interval(mins => %s) RETURNING id",
+            (max_minutes,),
+        ).fetchall()
+        conn.commit()
+    if rows:
+        log.warning("reaped %d stale running job(s)", len(rows))
+    return len(rows)
+
+
 def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
             args: Optional[dict] = None) -> tuple[Optional[int], Optional[int]]:
     """Insert a queued job unless one of the same type is already active for this
@@ -148,6 +168,7 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
     active_job_id of the in-flight job (so the caller can 409)."""
     if job_type not in JOB_DISPATCH:
         raise ValueError(f"unknown job_type: {job_type}")
+    reap_stale()  # clear any deadlocked 'running' job first, so a crash can't block forever
     with db() as conn:
         active = conn.execute(
             "SELECT id FROM api_jobs WHERE business_id=%s AND job_type=%s "
