@@ -28,7 +28,7 @@ const NAV: NavGroup[] = [
   {
     group: "What We're Doing",
     items: [
-      { href: "/content/work-orders", label: "Work orders" },
+      { href: "/content/work-orders", label: "Improvement tasks" },
       { href: "/content/drafts", label: "Content drafts" },
       { href: "/content/briefs", label: "Content to produce" },
       { href: "/content/outreach", label: "Outreach" },

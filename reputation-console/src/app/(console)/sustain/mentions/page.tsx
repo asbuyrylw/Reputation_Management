@@ -33,10 +33,10 @@ export default function MentionsPage() {
       />
       {data.length === 0 ? (
         <EmptyState
-          title="No mentions captured yet"
-          why="We watch the web for posts, reviews, and articles that mention your business."
-          produces="New mentions show up here with how positive or negative they are and how sure we are they're about you."
-          timing="Runs on a schedule once monitoring keywords are set."
+          title="Mention monitoring isn't set up yet"
+          why="When configured, this watches Reddit and Google News for posts that mention your business and flags the negative ones."
+          produces="New mentions appear here with a positive/negative read and how sure we are they're really about you."
+          timing="Setup: monitoring keywords are configured by your operator today (there's no in-app keyword screen yet), and capture currently covers Reddit + Google News."
         />
       ) : (
         <>
