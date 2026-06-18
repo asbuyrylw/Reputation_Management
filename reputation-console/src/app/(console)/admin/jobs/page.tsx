@@ -21,6 +21,7 @@ const JOBS = [
   { type: "discovery", label: "Find outreach targets" },
   { type: "benchmark", label: "Benchmark vs competitors" },
   { type: "local_rank", label: "Track local Google rankings" },
+  { type: "suggest_prompts", label: "Suggest prompts with AI" },
   { type: "citation_analyze", label: "Refresh citation analytics" },
   { type: "learn", label: "Recompute what's working" },
   { type: "production_briefs", label: "Generate production briefs" },

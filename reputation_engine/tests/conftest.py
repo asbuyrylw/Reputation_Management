@@ -60,7 +60,7 @@ _ALL_TABLES = [
     "answers", "api_jobs", "assets", "attribution", "audit_log", "audit_runs", "auth_tokens",
     "business_access",
     "business_config", "businesses", "citation_momentum", "competitor_answers",
-    "competitors", "content_drafts", "cost_ledger", "discovery_targets",
+    "competitors", "content_drafts", "cost_ledger", "custom_prompts", "discovery_targets",
     "external_signals", "gap_models",
     "incidents", "learned_baseline", "learned_effectiveness", "local_rankings",
     "mention_replies",

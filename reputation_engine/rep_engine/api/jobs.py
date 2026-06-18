@@ -136,6 +136,11 @@ def _run_local_rank(business_id: int, args: dict) -> None:
     _imp("local_seo").track(business_id, quiet=True)
 
 
+def _run_suggest_prompts(business_id: int, args: dict) -> None:
+    """LLM proposes candidate tracking prompts (saved DISABLED for owner review)."""
+    _imp("prompts").suggest(business_id, n=int(args.get("n", 8)), quiet=True)
+
+
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -155,6 +160,7 @@ JOB_DISPATCH = {
     "alert_check": _run_alert_check,
     "benchmark": _run_benchmark,
     "local_rank": _run_local_rank,
+    "suggest_prompts": _run_suggest_prompts,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }

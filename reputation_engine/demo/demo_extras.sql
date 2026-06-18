@@ -8,6 +8,16 @@
 UPDATE businesses SET geo = 'Cincinnati, OH'
 WHERE id = 1 AND (geo IS NULL OR geo = '' OR geo = 'United States');
 
+-- User-managed prompts/topics: the owner's own questions to track, merged into the audit
+-- battery. Shows the curate-your-own-prompts feature out of the box (incl. one AI-suggested
+-- prompt left DISABLED to demonstrate the review-before-tracking flow). Idempotent.
+INSERT INTO custom_prompts (business_id, prompt, topic, tags, enabled, source) VALUES
+  (1, 'Is Team Unstoppable a pyramid scheme or a legitimate career opportunity?', 'Legitimacy', 'objection,recruiting', true, 'user'),
+  (1, 'Best place to get affordable term life insurance for a young family in Cincinnati', 'Local lead-gen', 'local,insurance', true, 'user'),
+  (1, 'How does Primerica compare to Northwestern Mutual for someone starting a financial-services career?', 'Recruiting', 'comparison,recruiting', true, 'user'),
+  (1, 'Is Team Unstoppable a good fit for a part-time side income?', 'Fit', 'persona', false, 'ai_suggested')
+ON CONFLICT (business_id, prompt) DO NOTHING;
+
 -- Monitoring keywords (positives to watch; negatives to EXCLUDE the wrong-entity noise).
 INSERT INTO monitor_keywords (business_id, keyword, negative) VALUES
   (1, 'Team Unstoppable', false),

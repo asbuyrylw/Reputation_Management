@@ -14,6 +14,7 @@ import type {
   AttributionRow,
   BeforeAfterPair,
   CompareResult,
+  CustomPrompt,
   LocalRankings,
   Competitor,
   ContentDraft,
@@ -181,6 +182,36 @@ export function useCompare(businessId: number | null) {
 }
 export function useLocalRankings(businessId: number | null) {
   return useApiQuery<LocalRankings>(["local-rankings", businessId], base(businessId, "/local-rankings"));
+}
+
+// ---- user-managed prompts / topics ----
+export function usePrompts(businessId: number | null) {
+  return useApiQuery<CustomPrompt[]>(["prompts", businessId], base(businessId, "/prompts"));
+}
+export function useAddPrompt(businessId: number | null) {
+  return useApiMutation<{ prompt: string; topic?: string; tags?: string }>(
+    () => `/businesses/${businessId}/prompts`,
+    (v) => ({ prompt: v.prompt, topic: v.topic ?? "", tags: v.tags ?? "" }),
+    [["prompts", businessId]],
+  );
+}
+export function useUpdatePrompt(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: number; enabled?: boolean; topic?: string; tags?: string }) =>
+      apiFetch(`/businesses/${businessId}/prompts/${v.id}`, {
+        method: "PATCH",
+        body: { enabled: v.enabled ?? null, topic: v.topic ?? null, tags: v.tags ?? null },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts", businessId] }),
+  });
+}
+export function useDeletePrompt(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiFetch(`/businesses/${businessId}/prompts/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["prompts", businessId] }),
+  });
 }
 export function useAddCompetitor(businessId: number | null) {
   return useApiMutation<{ name: string; domain?: string }>(
