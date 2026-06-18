@@ -141,6 +141,12 @@ export function SiteAuditView({ summary }: { summary: Record<string, unknown> })
         We found {s.pages_crawled ?? allPages.length} URLs and reviewed the {pages.length} that are real content
         pages — system files (feeds, code, images) and any that failed to load are skipped.
       </p>
+      {pages.length > 0 && pages.length <= 2 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Only {pages.length} content {pages.length === 1 ? "page" : "pages"} could be analyzed this run, so treat
+          this as a partial snapshot. As your site grows (or the crawler reaches more pages), the picture fills in.
+        </div>
+      )}
 
       {/* ---- site-wide priority fixes ---- */}
       {issues.length > 0 && (

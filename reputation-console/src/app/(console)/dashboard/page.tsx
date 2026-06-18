@@ -223,7 +223,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">
               <div className="mb-3 text-sm font-medium text-gray-700">Your score over time (0–100)</div>
-              <ScoreTrend series={s} />
+              <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
             </Card>
             <ScoreDonut
               title="How AI answers lean"

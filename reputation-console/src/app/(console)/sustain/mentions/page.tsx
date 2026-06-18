@@ -21,6 +21,9 @@ export default function MentionsPage() {
 
   const counts = { positive: 0, neutral: 0, negative: 0, mixed: 0 } as Record<string, number>;
   for (const m of data) if (m.sentiment && m.sentiment in counts) counts[m.sentiment]++;
+  const sourceCounts: Record<string, number> = {};
+  for (const m of data) if (m.source) sourceCounts[m.source] = (sourceCounts[m.source] ?? 0) + 1;
+  const topSources = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
   return (
     <div>
@@ -46,6 +49,12 @@ export default function MentionsPage() {
               <span className="text-amber-700">{counts.mixed} mixed</span>
               <span className="text-rose-600">{counts.negative} negative</span>
             </div>
+            {topSources.length > 0 && (
+              <div className="mt-2 border-t border-gray-100 pt-2 text-xs text-gray-500">
+                <span className="font-medium text-gray-600">Top sources talking about you:</span>{" "}
+                {topSources.map(([src, n]) => `${src} (${n})`).join(" · ")}
+              </div>
+            )}
           </Card>
 
           <div className="space-y-2">
