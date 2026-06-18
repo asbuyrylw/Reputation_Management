@@ -1,0 +1,20 @@
+# Replit config — full-stack demo (Postgres + FastAPI API + Next.js console).
+# The console is the single public web port (mapped to 80); it proxies /api/* to the
+# local API. See replit/start.sh and REPLIT_DEMO.md.
+run = "bash replit/start.sh"
+entrypoint = "replit/start.sh"
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+PORT = "3000"
+
+# Expose only the console; the API (8000) and Postgres (5432) stay internal.
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[deployment]
+run = ["bash", "replit/start.sh"]
+deploymentTarget = "cloudrun"
