@@ -64,11 +64,79 @@ def _run_normalize_signals(business_id: int, args: dict) -> None:
     es.normalize_pending(business_id)
 
 
+def _imp(name: str):
+    """Lazy import an engine module by name (package or loose-script fallback)."""
+    try:
+        import importlib
+        return importlib.import_module(f"..{name}", __package__)
+    except Exception:  # pragma: no cover -- loose-script fallback
+        import importlib
+        return importlib.import_module(name)
+
+
+def _run_site_crawl(business_id: int, args: dict) -> None:
+    _imp("site_crawl").crawl_cmd(business_id, int(args.get("max_pages", 15)))
+
+
+def _run_gap_model(business_id: int, args: dict) -> None:
+    _imp("ai_state_audit").build_gap_model(business_id)
+
+
+def _run_plan(business_id: int, args: dict) -> None:
+    _imp("strategy_generator").plan_cmd(business_id, args.get("start"))
+
+
+def _run_sync_plan(business_id: int, args: dict) -> None:
+    _imp("tracking").sync_plan(business_id)
+
+
+def _run_generate_drafts(business_id: int, args: dict) -> None:
+    _imp("content_generator").generate(business_id)
+
+
+def _run_report(business_id: int, args: dict) -> None:
+    _imp("report_generator").generate(business_id)
+
+
+def _run_discovery(business_id: int, args: dict) -> None:
+    """Find outreach targets (journalists/outlets/podcasts/communities) via the Discovery agent."""
+    _imp("agent_discovery").discover(business_id)
+
+
+def _run_mentions_scan(business_id: int, args: dict) -> None:
+    """Scan the configured sources for new mentions, then draft (human-gated) replies."""
+    mm = _imp("mention_monitor")
+    mm.discover(business_id, quiet=True)
+    mm.draft_replies(business_id, quiet=True)
+
+
+def _run_incident_scan(business_id: int, args: dict) -> None:
+    """Triage negative mentions into incidents with drafted, human-gated responses."""
+    _imp("agent_incident").scan(business_id)
+
+
+def _run_learn(business_id: int, args: dict) -> None:
+    """Recompute 'what's working' from this business's own audit-to-audit results."""
+    _imp("feedback_loop").learn(business_id, quiet=True)
+
+
 JOB_DISPATCH = {
+    # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
+    "site_crawl": _run_site_crawl,
+    "gap_model": _run_gap_model,
+    "plan": _run_plan,
+    "sync_plan": _run_sync_plan,
+    "generate_drafts": _run_generate_drafts,
+    "report": _run_report,
     "cycle": _run_cycle,
-    "production_briefs": _run_production_briefs,
+    # monitoring + outreach + learning
+    "discovery": _run_discovery,
+    "mentions_scan": _run_mentions_scan,
+    "incident_scan": _run_incident_scan,
     "citation_analyze": _run_citation_analyze,
+    "learn": _run_learn,
+    "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }
 

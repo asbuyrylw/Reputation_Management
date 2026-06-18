@@ -39,6 +39,8 @@ if [ "${ROWS:-0}" = "0" ]; then
 else
   echo "  demo data already present (businesses=${ROWS}) — skipping seed."
 fi
+# demo extras (monitoring keywords + a couple published assets) — idempotent, always applied
+$PSQL -d "${DB}" -q -f reputation_engine/demo/demo_extras.sql 2>/dev/null || true
 
 echo "▶ [3/4] Starting API on 127.0.0.1:8000…"
 export JWT_SECRET="${JWT_SECRET:-demo-only-secret-change-me-0123456789abcdef0123}"

@@ -151,8 +151,83 @@ def _src_rss(keyword: str) -> list[dict]:
     return out
 
 
+def _serper_search(query: str, num: int = 15) -> list[dict]:
+    """General Google web search via Serper (google.serper.dev/search). Returns the
+    'organic' results, or [] when SERPER_API_KEY is unset or the call fails. This is what
+    powers the broader web / social / review-site coverage beyond the free Reddit + news
+    feeds; set SERPER_API_KEY to turn it on."""
+    import os
+    key = os.getenv("SERPER_API_KEY", "")
+    if not key:
+        return []
+    res = _http.request_json(
+        "POST", "https://google.serper.dev/search",
+        headers={"X-API-KEY": key, "Content-Type": "application/json"},
+        json={"q": query, "num": num}, timeout=20, max_retries=2,
+    )
+    if res.failed or not isinstance(res.data, dict):
+        return []
+    return res.data.get("organic", []) or []
+
+
+def _serper_items(results: list[dict], source: str) -> list[dict]:
+    out = []
+    for r in results:
+        link = r.get("link") or ""
+        out.append({
+            "source": source, "source_url": link, "external_id": link,
+            "author": r.get("source") or "", "title": r.get("title") or "",
+            "body": r.get("snippet") or r.get("title") or "",
+        })
+    return out
+
+
+def _src_web(keyword: str) -> list[dict]:
+    """Broad Google web results for the keyword (Serper)."""
+    return _serper_items(_serper_search(f'"{keyword}"'), "web")
+
+
+def _src_social(keyword: str) -> list[dict]:
+    """X/Twitter, Facebook, YouTube, LinkedIn posts mentioning the keyword (Serper, site-scoped)."""
+    q = f'"{keyword}" (site:twitter.com OR site:x.com OR site:facebook.com OR site:youtube.com OR site:linkedin.com)'
+    return _serper_items(_serper_search(q), "social")
+
+
+def _src_reviews(keyword: str) -> list[dict]:
+    """Complaint + review sites mentioning the keyword (Serper, site-scoped): RipoffReport,
+    PissedConsumer, BBB, Trustpilot, Yelp, ComplaintsBoard, Glassdoor."""
+    q = (f'"{keyword}" (site:ripoffreport.com OR site:pissedconsumer.com OR site:bbb.org OR '
+         f'site:trustpilot.com OR site:yelp.com OR site:complaintsboard.com OR site:glassdoor.com)')
+    return _serper_items(_serper_search(q), "reviews")
+
+
 register_source("reddit", _src_reddit)
 register_source("news_rss", _src_rss)
+register_source("web", _src_web)
+register_source("social", _src_social)
+register_source("reviews", _src_reviews)
+
+
+# ----------------------------------------------------------------------------
+# Keyword management helpers (used by the API CRUD)
+# ----------------------------------------------------------------------------
+def list_keywords(business_id: int) -> list[dict]:
+    _ensure()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, keyword, negative, active, created_at FROM monitor_keywords "
+            "WHERE business_id=%s ORDER BY id", (business_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def remove_keyword(business_id: int, keyword_id: int) -> bool:
+    _ensure()
+    with db() as conn:
+        r = conn.execute(
+            "DELETE FROM monitor_keywords WHERE id=%s AND business_id=%s RETURNING id",
+            (keyword_id, business_id)).fetchone()
+        conn.commit()
+    return bool(r)
 
 
 # ----------------------------------------------------------------------------

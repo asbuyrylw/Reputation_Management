@@ -288,6 +288,26 @@ export interface JobsResponse {
   pipeline_runs: PipelineRun[];
 }
 
+export interface Keyword {
+  id: number;
+  keyword: string;
+  negative: boolean;
+  active: boolean;
+  created_at?: string;
+}
+
+export interface Asset {
+  id: number;
+  asset_type: string | null;
+  title: string | null;
+  url: string | null;
+  surface: string | null;
+  published_at: string | null;
+  work_order_id: number | null;
+  body: string | null;
+  target_query: string | null;
+}
+
 export interface ExternalSignal {
   id: number;
   source: string | null;
