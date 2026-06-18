@@ -3,11 +3,19 @@ JSONB document (or null when none exists yet)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Optional
 
-from ..deps import authorize_business, get_conn
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+
+from ..deps import authorize_business, get_conn, require_business_editor
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["insights"])
+
+
+class CompetitorCreate(BaseModel):
+    name: str
+    domain: Optional[str] = ""
 
 
 @router.get("/site-audit")
@@ -26,3 +34,41 @@ def gap_model(business_id: int = Depends(authorize_business), conn=Depends(get_c
         (business_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+# ---- competitor benchmarking (share-of-voice vs rivals) ----
+@router.get("/competitors")
+def competitors(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    rows = conn.execute(
+        "SELECT id, name, domain, created_at FROM competitors WHERE business_id=%s ORDER BY id",
+        (business_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.get("/competitors/compare")
+def competitors_compare(business_id: int = Depends(authorize_business)):
+    """Latest benchmark: how often AI surfaces YOU vs each competitor for category questions."""
+    from ... import competitor as _c
+    return _c.compare(business_id, quiet=True)
+
+
+@router.post("/competitors", status_code=201)
+def add_competitor(payload: CompetitorCreate, business_id: int = Depends(require_business_editor)):
+    from ... import competitor as _c
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "name required")
+    cid = _c.register_competitor(business_id, name, (payload.domain or "").strip())
+    return {"id": cid, "name": name}
+
+
+@router.delete("/competitors/{competitor_id}")
+def delete_competitor(competitor_id: int, business_id: int = Depends(require_business_editor),
+                      conn=Depends(get_conn)):
+    r = conn.execute("DELETE FROM competitors WHERE id=%s AND business_id=%s RETURNING id",
+                     (competitor_id, business_id)).fetchone()
+    if not r:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Competitor not found")
+    conn.commit()
+    return {"deleted": competitor_id}

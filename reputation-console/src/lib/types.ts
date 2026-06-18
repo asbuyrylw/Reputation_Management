@@ -288,6 +288,34 @@ export interface JobsResponse {
   pipeline_runs: PipelineRun[];
 }
 
+export interface Competitor {
+  id: number;
+  name: string;
+  domain: string | null;
+  created_at?: string;
+}
+export interface Standing {
+  name: string;
+  is_subject: boolean;
+  appears_in: number;
+  appearance_rate: number;
+}
+export interface HeadToHead {
+  competitor: string;
+  subject_only_prompts: number;
+  competitor_only_prompts: number;
+}
+export interface CompareResult {
+  business?: string;
+  run_id?: number | null;
+  prompts_compared?: number;
+  subject_rank?: number | null;
+  field_size?: number;
+  standings?: Standing[];
+  head_to_head?: HeadToHead[];
+  method?: string;
+}
+
 export interface Notification {
   id: number;
   kind: string;

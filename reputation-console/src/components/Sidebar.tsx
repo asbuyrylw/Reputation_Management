@@ -41,6 +41,7 @@ const NAV: NavGroup[] = [
     group: "Are We Winning",
     items: [
       { href: "/rankings", label: "Rankings" },
+      { href: "/competitors", label: "Competitors" },
       { href: "/timeline", label: "Time to goal" },
     ],
   },

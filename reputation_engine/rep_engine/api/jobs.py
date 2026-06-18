@@ -125,6 +125,11 @@ def _run_alert_check(business_id: int, args: dict) -> None:
     _imp("notifications").check_and_notify(business_id, quiet=True)
 
 
+def _run_benchmark(business_id: int, args: dict) -> None:
+    """Competitor benchmark: how often AI surfaces YOU vs each registered competitor."""
+    _imp("competitor").benchmark(business_id, quiet=True)
+
+
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -142,6 +147,7 @@ JOB_DISPATCH = {
     "citation_analyze": _run_citation_analyze,
     "learn": _run_learn,
     "alert_check": _run_alert_check,
+    "benchmark": _run_benchmark,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }

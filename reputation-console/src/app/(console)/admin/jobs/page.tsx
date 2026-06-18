@@ -19,6 +19,7 @@ const JOBS = [
   { type: "incident_scan", label: "Scan for incidents" },
   { type: "alert_check", label: "Check for alerts" },
   { type: "discovery", label: "Find outreach targets" },
+  { type: "benchmark", label: "Benchmark vs competitors" },
   { type: "citation_analyze", label: "Refresh citation analytics" },
   { type: "learn", label: "Recompute what's working" },
   { type: "production_briefs", label: "Generate production briefs" },
