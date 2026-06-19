@@ -223,6 +223,16 @@ export function usePromptResults(businessId: number | null) {
 export function useOnboarding(businessId: number | null) {
   return useApiQuery<OnboardingStatus>(["onboarding", businessId], base(businessId, "/onboarding"));
 }
+export function useRevokeSessions() {
+  return useMutation({ mutationFn: () => apiFetch("/auth/revoke-sessions", { method: "POST" }) });
+}
+export function useDeleteBusiness(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/businesses/${businessId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["businesses"] }),
+  });
+}
 export function useReports(businessId: number | null, poll = false) {
   const { user } = useAuth();
   return useQuery({

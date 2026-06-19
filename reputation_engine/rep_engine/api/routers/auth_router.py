@@ -51,6 +51,17 @@ def logout(response: Response):
     return {"ok": True}
 
 
+@router.post("/revoke-sessions")
+def revoke_sessions(response: Response, user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Sign out EVERYWHERE: invalidate every outstanding token for the current user (this
+    device included) by stamping the revocation time; also clear this response's cookies."""
+    auth.revoke_sessions(conn, user["id"])
+    s = api_settings()
+    response.delete_cookie("rc_token", path="/", secure=s.cookie_secure, samesite=s.cookie_samesite)
+    response.delete_cookie("csrf_token", path="/", secure=s.cookie_secure, samesite=s.cookie_samesite)
+    return {"ok": True, "revoked_all_sessions": True}
+
+
 @router.get("/me")
 def me(user: dict = Depends(get_current_user), conn=Depends(get_conn)):
     return auth.public_user(conn, user)

@@ -75,6 +75,24 @@ def decode_token(token: str) -> dict:
     return jwt.decode(token, api_settings().jwt_secret, algorithms=["HS256"])
 
 
+def token_is_revoked(payload: dict, revoked_at) -> bool:
+    """True if this token (by its `iat`) predates the user's revocation time -- i.e. it was
+    issued before a 'sign out everywhere' and must be rejected. JWT `iat` is whole-second, so
+    we compare at WHOLE-SECOND granularity: a token minted later in the SAME second as the
+    revoke (e.g. an immediate re-login) is NOT falsely killed, while every token from an
+    earlier second is. Worst case a same-second pre-revoke token survives <1s -- acceptable."""
+    iat = payload.get("iat")
+    if iat is None or revoked_at is None:
+        return False
+    return int(iat) < int(revoked_at.timestamp())
+
+
+def revoke_sessions(conn, user_id: int) -> None:
+    """Invalidate ALL outstanding tokens for a user (stamp the revocation time = now)."""
+    conn.execute("UPDATE users SET sessions_revoked_at=now() WHERE id=%s", (user_id,))
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # User + tenancy queries
 # ---------------------------------------------------------------------------
