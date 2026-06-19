@@ -9,28 +9,27 @@ import { useAuth } from "@/lib/auth";
 type NavItem = { href: string; label: string; soon?: boolean };
 type NavGroup = { group: string; items: NavItem[] };
 
+// Four top-level buckets (Analytics / Actions / Monitor / Settings); plain-language item
+// labels kept so non-technical owners still read them at a glance.
 const NAV: NavGroup[] = [
   {
-    group: "Overview",
+    group: "Analytics",
     items: [
       { href: "/dashboard", label: "Dashboard" },
-      { href: "/next-steps", label: "Do this next" },
-      { href: "/notifications", label: "Notifications" },
-      { href: "/automation", label: "Automation" },
-    ],
-  },
-  {
-    group: "What AI Says",
-    items: [
       { href: "/audits", label: "Audits & AI answers" },
       { href: "/prompts", label: "Prompts & topics" },
       { href: "/seo", label: "SEO / site" },
       { href: "/gaps", label: "Gaps" },
+      { href: "/rankings", label: "Rankings" },
+      { href: "/competitors", label: "Competitors" },
+      { href: "/local-seo", label: "Local rankings" },
+      { href: "/timeline", label: "Time to goal" },
     ],
   },
   {
-    group: "What We're Doing",
+    group: "Actions",
     items: [
+      { href: "/next-steps", label: "Do this next" },
       { href: "/content/work-orders", label: "Improvement tasks" },
       { href: "/content/drafts", label: "Content drafts" },
       { href: "/content/finalized", label: "Published content" },
@@ -39,24 +38,22 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    group: "Are We Winning",
+    group: "Monitor",
     items: [
-      { href: "/rankings", label: "Rankings" },
-      { href: "/competitors", label: "Competitors" },
-      { href: "/local-seo", label: "Local rankings" },
-      { href: "/timeline", label: "Time to goal" },
-    ],
-  },
-  {
-    group: "Keeping It",
-    items: [
+      { href: "/notifications", label: "Notifications" },
+      { href: "/automation", label: "Automation" },
       { href: "/sustain/incidents", label: "Incidents" },
       { href: "/sustain/mentions", label: "Mentions" },
       { href: "/sustain/levers", label: "What's working" },
+      { href: "/integrations", label: "Integrations" },
     ],
   },
-  { group: "External Data", items: [{ href: "/integrations", label: "Integrations" }] },
-  { group: "Help", items: [{ href: "/glossary", label: "Glossary" }] },
+  {
+    group: "Settings",
+    items: [
+      { href: "/glossary", label: "Glossary" },
+    ],
+  },
 ];
 
 const ADMIN_GROUP: NavGroup = {
