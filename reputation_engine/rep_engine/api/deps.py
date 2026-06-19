@@ -41,6 +41,11 @@ def get_current_user(
     user = auth.get_user_by_id(conn, int(payload["sub"]))
     if not user or not user["is_active"]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
+    # Session revocation: a token issued BEFORE the user's revocation stamp is dead, so
+    # "sign out everywhere" / an admin force-logout invalidates all outstanding tokens.
+    revoked = user.get("sessions_revoked_at")
+    if revoked is not None and auth.token_is_revoked(payload, revoked):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session revoked -- please sign in again")
     return user
 
 

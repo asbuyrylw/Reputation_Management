@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from .. import auth
-from ..deps import authorize_business, get_conn, get_current_user
+from ..deps import authorize_business, get_conn, get_current_user, require_admin, require_business_editor
 
 try:
     from ... import challenge as _challenge
@@ -56,6 +56,34 @@ def get_business(business_id: int = Depends(authorize_business), conn=Depends(ge
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found")
     return dict(row)
+
+
+@router.get("/{business_id}/export")
+def export_business_data(business_id: int = Depends(require_business_editor)):
+    """GDPR data export (portability): everything we hold for this business as JSON. Editor/
+    admin only, since it contains the full dataset."""
+    try:
+        from ... import gdpr as _gdpr
+    except ImportError:  # pragma: no cover
+        import gdpr as _gdpr  # type: ignore
+    data = _gdpr.export_business(business_id)
+    if not data:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found")
+    return data
+
+
+@router.delete("/{business_id}")
+def delete_business_data(business_id: int, user: dict = Depends(require_admin)):
+    """GDPR erasure: PERMANENTLY delete the business and ALL its data. Platform-admin only
+    (irreversible)."""
+    try:
+        from ... import gdpr as _gdpr
+    except ImportError:  # pragma: no cover
+        import gdpr as _gdpr  # type: ignore
+    result = _gdpr.delete_business(business_id)
+    if result["deleted_business"] is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found")
+    return result
 
 
 @router.get("/{business_id}/dashboard")

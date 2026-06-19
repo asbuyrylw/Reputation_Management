@@ -52,6 +52,7 @@ const NAV: NavGroup[] = [
   {
     group: "Settings",
     items: [
+      { href: "/account", label: "Account & data" },
       { href: "/glossary", label: "Glossary" },
     ],
   },
