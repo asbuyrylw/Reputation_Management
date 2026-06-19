@@ -328,6 +328,14 @@ export interface CustomPrompt {
   created_at?: string;
 }
 
+// ---- deliverable reports ----
+export interface Report {
+  id: number;
+  filename: string;
+  kind: string;
+  created_at: string;
+}
+
 // ---- getting-started onboarding ----
 export interface OnboardingStep {
   key: string;

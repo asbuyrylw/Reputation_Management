@@ -48,3 +48,19 @@ export async function apiFetch<T>(path: string, opts: FetchOpts = {}): Promise<T
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
+
+// Credentialed binary download (e.g. a .docx report): fetch as a blob with the session
+// cookie, then trigger a browser download. GET-only, so no CSRF token is needed.
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { credentials: "include" });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

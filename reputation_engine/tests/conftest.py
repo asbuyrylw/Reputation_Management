@@ -65,7 +65,7 @@ _ALL_TABLES = [
     "incidents", "learned_baseline", "learned_effectiveness", "local_rankings",
     "mention_replies",
     "mentions", "monitor_keywords", "organizations", "pipeline_runs", "pipeline_steps",
-    "plan_catalog", "production_briefs", "root_cause", "stripe_events", "subscriptions",
+    "plan_catalog", "production_briefs", "reports", "root_cause", "stripe_events", "subscriptions",
     "site_audits", "strategy_plans", "users", "work_orders",
 ]
 
