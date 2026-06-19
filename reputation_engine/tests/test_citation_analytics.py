@@ -111,3 +111,22 @@ def test_domain_extraction_handles_dict_and_str(fresh_schema):
     assert "acme.com" in domains
     assert "example.org" in domains
     assert "news.com" in domains
+
+
+def test_source_type_buckets():
+    from rep_engine.citation_analytics import _source_type
+    biz = {"domain": "acme.com"}
+    cases = {
+        "acme.com": "own", "blog.acme.com": "own",
+        "yelp.com": "review", "bbb.org": "review",
+        "facebook.com": "social", "linkedin.com": "social",
+        "reddit.com": "forum", "quora.com": "forum",
+        "forbes.com": "news",
+        "ripoffreport.com": "complaint",         # complaint wins over any 'review' overlap
+        "en.wikipedia.org": "reference",
+        "yellowpages.com": "directory",
+        "some-random-blog.net": "other",
+    }
+    for domain, expected in cases.items():
+        assert _source_type(domain, biz) == expected, f"{domain} -> {_source_type(domain, biz)}"
+    assert _source_type("", biz) == "other"

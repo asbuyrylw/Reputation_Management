@@ -98,6 +98,40 @@ def _classify(domain: str, biz: dict) -> str:
     return "neutral"
 
 
+# Typed source buckets so the strategy can target the RIGHT KIND of source -- e.g. "AI leans
+# on review sites for you" implies get-listed-on-more-review-sites, vs "it leans on news"
+# implies earn-press. Transparent substring heuristic, ordered so the more specific bucket
+# wins (a complaint site is not merely a 'review'; reddit/quora are 'forum', not 'social').
+_SOURCE_TYPE_TABLE = [
+    ("complaint", ("ripoffreport", "complaintsboard", "pissedconsumer", "ripoff", "scamadviser")),
+    ("reference", ("wikipedia", "wikidata", "britannica", "investopedia", ".gov", ".edu")),
+    ("forum", ("reddit", "quora", "stackexchange", "stackoverflow", "forum")),
+    ("review", ("yelp", "trustpilot", "g2.com", "bbb.org", "glassdoor", "consumeraffairs",
+                "sitejabber", "clutch.co", "capterra", "angi.", "birdeye", "trustradius", "reviews")),
+    ("social", ("facebook", "instagram", "twitter.", "x.com", "linkedin", "tiktok",
+                "youtube", "pinterest", "threads.net")),
+    ("news", ("nytimes", "wsj.com", "forbes", "bloomberg", "reuters", "cnbc", "businessinsider",
+              "apnews", "usatoday", "prnewswire", "businesswire", "techcrunch", "news")),
+    ("directory", ("yellowpages", "manta.com", "crunchbase", "mapquest", "foursquare",
+                   "chamberofcommerce", "dnb.com", "zoominfo", "yellowbook")),
+]
+
+
+def _source_type(domain: str, biz: dict) -> str:
+    """own | review | social | forum | news | directory | complaint | reference | other.
+    A cited domain's KIND, for source-mix analysis. Independent of owned/contested/neutral."""
+    if not domain:
+        return "other"
+    own = _strip_www((biz.get("domain") or "").lower())
+    if own and own in domain:
+        return "own"
+    d = domain.lower()
+    for label, markers in _SOURCE_TYPE_TABLE:
+        if any(m in d for m in markers):
+            return label
+    return "other"
+
+
 def _citations_for_run(conn, run_id: int, biz: dict, persona: str = "", location: str = "") -> dict:
     """Aggregate cited domains for a run (optionally filtered to a persona/location)."""
     q = ("SELECT cited_sources FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)")
@@ -119,7 +153,7 @@ def _citations_for_run(conn, run_id: int, biz: dict, persona: str = "", location
     out = []
     for d, c in counts.items():
         out.append({"domain": d, "count": c, "share": round(c / total, 4) if total else 0.0,
-                    "classification": _classify(d, biz)})
+                    "classification": _classify(d, biz), "source_type": _source_type(d, biz)})
     out.sort(key=lambda x: x["count"], reverse=True)
     return {"total_citations": total, "domains": out}
 

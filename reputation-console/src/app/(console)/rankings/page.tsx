@@ -5,6 +5,7 @@ import { useBusiness } from "@/lib/business";
 import { useAttribution, useMomentum, useShareOfVoice, useGapModel } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { ShareOfVoiceBar } from "@/components/ShareOfVoiceBar";
+import { SourceMix } from "@/components/SourceMix";
 import { DataSection, EmptyState } from "@/components/primitives";
 import { Term } from "@/components/Term";
 
@@ -104,6 +105,9 @@ export default function RankingsPage() {
               </p>
             )}
           </Card>
+
+          {/* what KINDS of sources AI cites (source-type mix) */}
+          {data!.by_source_type && <SourceMix bySource={data!.by_source_type} />}
 
           {/* how the plan addresses it */}
           {(planPages.length > 0 || planProof.length > 0) && (

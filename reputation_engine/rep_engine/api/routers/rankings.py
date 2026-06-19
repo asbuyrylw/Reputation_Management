@@ -36,15 +36,32 @@ def share_of_voice(business_id: int = Depends(authorize_business), conn=Depends(
         "WHERE business_id=%s AND run_id=%s ORDER BY cite_count DESC LIMIT 20",
         (business_id, run_id),
     ).fetchall()
+    # source TYPE (review/social/news/...) is a pure function of the domain, so we type it at
+    # read time -- no extra column. Roll it up across ALL of the run's domains (not just the
+    # top 20) so the by-source-type mix is complete.
+    biz = conn.execute("SELECT domain FROM businesses WHERE id=%s", (business_id,)).fetchone()
+    bizd = {"domain": (biz or {}).get("domain") if biz else ""}
+    all_domains = conn.execute(
+        "SELECT domain, cite_count, share FROM citation_momentum "
+        "WHERE business_id=%s AND run_id=%s", (business_id, run_id),
+    ).fetchall()
+    by_source: dict = {}
+    for r in all_domains:
+        st = _ca._source_type(r["domain"], bizd)
+        b = by_source.setdefault(st, {"cites": 0, "share": 0.0})
+        b["cites"] += int(r["cite_count"] or 0)
+        b["share"] = round(b["share"] + float(r["share"] or 0), 4)
     return {
         "run_id": run_id,
         "by_classification": {
             r["classification"]: {"cites": int(r["cites"] or 0), "share": float(r["share"] or 0)}
             for r in by_class
         },
+        "by_source_type": by_source,
         "top_domains": [
             {"domain": r["domain"], "cite_count": r["cite_count"],
-             "share": float(r["share"] or 0), "classification": r["classification"]}
+             "share": float(r["share"] or 0), "classification": r["classification"],
+             "source_type": _ca._source_type(r["domain"], bizd)}
             for r in top
         ],
     }

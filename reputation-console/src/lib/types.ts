@@ -204,7 +204,8 @@ export interface GapModel {
 export interface ShareOfVoice {
   run_id: number | null;
   by_classification: Record<string, { cites: number; share: number }>;
-  top_domains: { domain: string; cite_count: number; share: number; classification: string }[];
+  by_source_type: Record<string, { cites: number; share: number }>;
+  top_domains: { domain: string; cite_count: number; share: number; classification: string; source_type: string }[];
 }
 
 export interface AttributionRow {
