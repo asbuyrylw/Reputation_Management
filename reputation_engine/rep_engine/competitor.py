@@ -240,6 +240,49 @@ def compare(business_id: int, quiet: bool = False) -> dict:
     return result
 
 
+def trend(business_id: int) -> dict:
+    """Subject vs. competitor APPEARANCE RATE over time -- one point per benchmark run,
+    so the console can chart visibility climbing (or not) against rivals. Same appearance-
+    rate definition as compare() (share of a run's non-failed category prompts in which the
+    party is mentioned); points are ordered by run date."""
+    _ensure()
+    with db() as conn:
+        biz = conn.execute("SELECT name FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not biz:
+            return {"business": None, "competitors": [], "points": []}
+        comps = [r["name"] for r in conn.execute(
+            "SELECT name FROM competitors WHERE business_id=%s ORDER BY id", (business_id,)
+        ).fetchall()]
+        runs = conn.execute(
+            "SELECT run_id, MIN(created_at) dt, "
+            "COUNT(DISTINCT prompt) FILTER (WHERE NOT failed) nprompts, "
+            "COUNT(DISTINCT prompt) FILTER (WHERE mentions_subject AND NOT failed) subj "
+            "FROM competitor_answers WHERE business_id=%s GROUP BY run_id "
+            # drop all-failed runs: a run with no usable prompts is 'no data', not a real 0%
+            "HAVING COUNT(*) FILTER (WHERE NOT failed) > 0 "
+            "ORDER BY MIN(created_at), run_id", (business_id,),
+        ).fetchall()
+        points = []
+        for r in runs:
+            np = r["nprompts"] or 0
+            point = {
+                "run_id": r["run_id"], "date": r["dt"],
+                "subject_rate": round(r["subj"] / np, 4) if np else 0.0,
+                "competitors": {},
+            }
+            for cname in comps:
+                cp = conn.execute(
+                    "SELECT COUNT(DISTINCT a.prompt) c FROM competitor_answers a "
+                    "JOIN competitors c ON c.id=a.competitor_id "
+                    "WHERE a.run_id=%s AND a.business_id=%s AND c.name=%s "
+                    "AND a.mentions_competitor AND NOT a.failed",
+                    (r["run_id"], business_id, cname),
+                ).fetchone()["c"]
+                point["competitors"][cname] = round(cp / np, 4) if np else 0.0
+            points.append(point)
+    return {"business": biz["name"], "competitors": comps, "points": points}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Competitor share-of-voice benchmarking")
     sub = ap.add_subparsers(dest="cmd", required=True)

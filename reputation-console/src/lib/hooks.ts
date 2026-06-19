@@ -16,7 +16,9 @@ import type {
   CompareResult,
   CustomPrompt,
   LocalRankings,
+  OnboardingStatus,
   PromptResults,
+  VisibilityTrend,
   Competitor,
   ContentDraft,
   Dashboard,
@@ -216,6 +218,12 @@ export function useDeletePrompt(businessId: number | null) {
 }
 export function usePromptResults(businessId: number | null) {
   return useApiQuery<PromptResults>(["prompt-results", businessId], base(businessId, "/prompt-results"));
+}
+export function useOnboarding(businessId: number | null) {
+  return useApiQuery<OnboardingStatus>(["onboarding", businessId], base(businessId, "/onboarding"));
+}
+export function useVisibilityTrend(businessId: number | null) {
+  return useApiQuery<VisibilityTrend>(["visibility-trend", businessId], base(businessId, "/visibility-trend"));
 }
 export function useAddCompetitor(businessId: number | null) {
   return useApiMutation<{ name: string; domain?: string }>(
