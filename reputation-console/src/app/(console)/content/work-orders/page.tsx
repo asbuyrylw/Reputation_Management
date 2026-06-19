@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useSetWorkOrderStatus, useWorkOrders } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
 import type { WorkOrder } from "@/lib/types";
@@ -115,6 +116,47 @@ function WorkOrderCard({ wo, canEdit, onStatus }: { wo: WorkOrder; canEdit: bool
   );
 }
 
+function AddTask({ businessId }: { businessId: number | null }) {
+  const add = useAddWorkOrder(businessId);
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [instruction, setInstruction] = useState("");
+  const [due, setDue] = useState("");
+  const submit = () =>
+    title.trim() &&
+    add.mutate(
+      { title, instruction: instruction || undefined, target_date: due || undefined },
+      { onSuccess: () => { setTitle(""); setInstruction(""); setDue(""); setOpen(false); } },
+    );
+  return (
+    <Card className="mb-4">
+      {!open ? (
+        <button onClick={() => setOpen(true)} className="text-sm font-medium text-blue-600 hover:underline">
+          + Add a task
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title (e.g. Get 5 new Google reviews)"
+            className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+          <textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="What to do (optional)"
+            rows={2} className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs text-gray-500">Due
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)}
+                className="ml-1 rounded-md border border-gray-300 px-2 py-1 text-sm" />
+            </label>
+            <button onClick={submit} disabled={add.isPending || !title.trim()}
+              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50">
+              {add.isPending ? "Adding…" : "Add task"}
+            </button>
+            <button onClick={() => setOpen(false)} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useWorkOrders(businessId);
@@ -135,6 +177,7 @@ export default function WorkOrdersPage() {
         title="Reputation Improvement Task List"
         subtitle="Every task that improves your AI reputation, and where each one stands. Change a status to move it."
       />
+      {canEdit && <AddTask businessId={businessId} />}
       {total === 0 ? (
         <EmptyState
           title="No tasks yet"

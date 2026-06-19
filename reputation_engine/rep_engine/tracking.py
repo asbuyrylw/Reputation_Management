@@ -93,6 +93,37 @@ def sync_plan(business_id: int) -> int:
 
 
 # ----------------------------------------------------------------------------
+# create: a manual (ad-hoc) work order outside the generated plan
+# ----------------------------------------------------------------------------
+def create_work_order(business_id: int, title: str, *, instruction: str | None = None,
+                      capability: str | None = None, recommended_tool: str | None = None,
+                      target_date: str | None = None, assignee: str | None = None) -> int:
+    """Add a manual work order (an ad-hoc task the owner/admin wants tracked alongside the
+    plan-generated ones). plan_id is NULL; wo_code is a per-business MANUAL-<n>. Returns id."""
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("title required")
+    td: date | None = None
+    if target_date:
+        td = target_date if isinstance(target_date, date) else date.fromisoformat(str(target_date))
+    with db() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) c FROM work_orders WHERE business_id=%s AND wo_code LIKE 'MANUAL-%%'",
+            (business_id,),
+        ).fetchone()["c"]
+        row = conn.execute(
+            """INSERT INTO work_orders (business_id, wo_code, title, capability, instruction,
+                recommended_tool, target_date, assignee, phase, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'manual','pending') RETURNING id""",
+            (business_id, f"MANUAL-{n + 1}", title, capability, instruction,
+             recommended_tool, td, assignee),
+        ).fetchone()
+        conn.commit()
+    log.info("Created manual work order %d for business %d", row["id"], business_id)
+    return row["id"]
+
+
+# ----------------------------------------------------------------------------
 # set-status: lifecycle transitions with timestamps
 # ----------------------------------------------------------------------------
 def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None) -> None:

@@ -36,6 +36,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
 from typing import Callable, Optional
 
@@ -261,6 +262,37 @@ def _sentiment(text: str) -> str:
     return "neutral"
 
 
+_SENTIMENT_SYS = (
+    "You classify the sentiment a piece of text expresses TOWARD the business/subject it "
+    "mentions (not the author's mood). Account for sarcasm and context. Output STRICT JSON "
+    '{"sentiment":"positive|neutral|negative"} and nothing else.'
+)
+
+
+def score_sentiment(text: str) -> str:
+    """Sentiment of a mention. Uses the orchestrator LLM when one is configured (far better
+    on sarcasm/context than keyword counting) and falls back to the keyword heuristic offline
+    or on any failure. Opt out with MENTION_LLM_SENTIMENT=0. Called only from the (job-run)
+    discovery path, so no LLM spend ever happens in an HTTP request."""
+    txt = (text or "").strip()
+    if not txt or os.getenv("MENTION_LLM_SENTIMENT", "1") == "0":
+        return _sentiment(txt)
+    try:
+        from . import ai_state_audit as _ai
+        orch_key = _ai.ANTHROPIC_API_KEY if _ai.ORCHESTRATOR == "anthropic" else _ai.OPENAI_API_KEY
+        if "YOUR_" in orch_key:
+            return _sentiment(txt)
+        # fence the untrusted mention text as DATA so it can't act as an instruction
+        out = _ai.orchestrator_json(_SENTIMENT_SYS, _ai._fence_untrusted(txt[:1500]),
+                                    tier="cheap", max_tokens=30)
+        s = (out or {}).get("sentiment", "").strip().lower()
+        if s in ("positive", "neutral", "negative"):
+            return s
+    except Exception as e:  # noqa: BLE001 -- never let scoring break discovery
+        log.debug("LLM sentiment unavailable, using heuristic: %s", e)
+    return _sentiment(txt)
+
+
 def _matches_negative(text: str, neg_terms: list[str]) -> bool:
     t = (text or "").lower()
     return any(n.lower() in t for n in neg_terms)
@@ -296,6 +328,11 @@ def discover(business_id: int, sources: Optional[list[str]] = None, quiet: bool 
                     if rel < 0.34:
                         continue  # too weak a match
                     h = hashlib.sha256(f"{it.get('source')}|{it.get('external_id')}".encode()).hexdigest()
+                    # Skip already-known mentions BEFORE scoring: source adapters re-return the
+                    # same stable items each daily scan, so without this we'd pay an LLM
+                    # sentiment call for every duplicate the ON CONFLICT would just discard.
+                    if conn.execute("SELECT 1 FROM mentions WHERE dedup_hash=%s", (h,)).fetchone():
+                        continue
                     try:
                         r = conn.execute(
                             """INSERT INTO mentions (business_id, source, source_url, external_id, author,
@@ -304,7 +341,7 @@ def discover(business_id: int, sources: Optional[list[str]] = None, quiet: bool 
                                ON CONFLICT (dedup_hash) DO NOTHING RETURNING id""",
                             (business_id, it.get("source"), it.get("source_url"), it.get("external_id"),
                              it.get("author"), it.get("title"), it.get("body"), kw,
-                             _sentiment(text), rel, h),
+                             score_sentiment(text), rel, h),
                         ).fetchone()
                         if r:
                             found += 1
