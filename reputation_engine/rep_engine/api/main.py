@@ -31,6 +31,7 @@ from .routers import (
     onboarding_router,
     prompts_router,
     rankings,
+    reports_router,
     sustain,
 )
 
@@ -221,6 +222,7 @@ def create_app() -> FastAPI:
     app.include_router(rankings.router)
     app.include_router(sustain.router)
     app.include_router(prompts_router.router)
+    app.include_router(reports_router.router)
     app.include_router(jobs_router.router)
     app.include_router(admin.router)
     app.include_router(integrations.router)

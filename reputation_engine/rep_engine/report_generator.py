@@ -35,7 +35,9 @@ except ImportError:  # pragma: no cover
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("report_generator")
 
-OUTPUT_DIR = os.getenv("REP_OUTPUT_DIR", "output")                                        # PH 2
+# Absolute at import so the generating process and the API agree on the location regardless
+# of each one's working directory (the download endpoint anchors served files to this dir).
+OUTPUT_DIR = os.path.abspath(os.getenv("REP_OUTPUT_DIR", "output"))                       # PH 2
 
 NAVY = "1F3A5F"
 GOLD = "B08D2E"
@@ -351,12 +353,30 @@ def _section_competitor(heading, body, bullet, business_id):
 def _save_report(doc, b) -> str:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     safe = "".join(c for c in b.get("name", "business") if c.isalnum() or c in " -_").strip().replace(" ", "_")
-    path = os.path.join(OUTPUT_DIR, f"{safe}_AI_Visibility_Report_{date.today().isoformat()}.docx")
+    filename = f"{safe}_AI_Visibility_Report_{date.today().isoformat()}.docx"
+    path = os.path.join(OUTPUT_DIR, filename)
     doc.save(path)
     _fix_settings_zoom(path)
     log.info("Report written: %s", path)
     print(path)
+    _record_report(b.get("id"), filename, os.path.abspath(path))
     return path
+
+
+def _record_report(business_id, filename: str, path: str) -> None:
+    """Track the saved report so the console can list + download it. Best-effort: never let
+    a bookkeeping miss (e.g. pre-migration DB) fail an otherwise-good report generation."""
+    if not business_id:
+        return
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO reports (business_id, filename, path, kind) VALUES (%s,%s,%s,'monthly')",
+                (business_id, filename, path),
+            )
+            conn.commit()
+    except Exception as e:  # noqa: BLE001 -- bookkeeping must not break report generation
+        log.warning("report: could not record report row (%s)", e)
 
 
 def _section_root_cause_and_incidents(heading, body, bullet, business_id):

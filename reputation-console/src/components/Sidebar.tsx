@@ -35,6 +35,7 @@ const NAV: NavGroup[] = [
       { href: "/content/finalized", label: "Published content" },
       { href: "/content/briefs", label: "Content to produce" },
       { href: "/content/outreach", label: "Outreach" },
+      { href: "/reports", label: "Reports" },
     ],
   },
   {

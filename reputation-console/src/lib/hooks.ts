@@ -18,6 +18,7 @@ import type {
   LocalRankings,
   OnboardingStatus,
   PromptResults,
+  Report,
   VisibilityTrend,
   Competitor,
   ContentDraft,
@@ -221,6 +222,15 @@ export function usePromptResults(businessId: number | null) {
 }
 export function useOnboarding(businessId: number | null) {
   return useApiQuery<OnboardingStatus>(["onboarding", businessId], base(businessId, "/onboarding"));
+}
+export function useReports(businessId: number | null, poll = false) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["reports", businessId],
+    queryFn: () => apiFetch<Report[]>(`/businesses/${businessId}/reports`),
+    enabled: !!user && !!businessId,
+    refetchInterval: poll ? 8000 : false,
+  });
 }
 export function useVisibilityTrend(businessId: number | null) {
   return useApiQuery<VisibilityTrend>(["visibility-trend", businessId], base(businessId, "/visibility-trend"));
