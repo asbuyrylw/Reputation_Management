@@ -23,8 +23,12 @@ import argparse
 import json
 import logging
 import os
+import pathlib
+import shutil
+import subprocess
 import tempfile
 from datetime import date
+from typing import Optional
 
 
 try:
@@ -360,7 +364,42 @@ def _save_report(doc, b) -> str:
     log.info("Report written: %s", path)
     print(path)
     _record_report(b.get("id"), filename, os.path.abspath(path))
+    # A regenerated .docx (same per-day basename) must not keep a STALE colocated .pdf: drop
+    # any old sibling before (re)converting, so a failed/absent conversion leaves the fresh
+    # .docx as the single source of truth rather than serving last run's mismatched PDF.
+    stale_pdf = os.path.splitext(os.path.abspath(path))[0] + ".pdf"
+    try:
+        if os.path.exists(stale_pdf):
+            os.remove(stale_pdf)
+    except OSError:  # pragma: no cover -- best-effort cleanup
+        pass
+    pdf = _docx_to_pdf(path)   # best-effort: a colocated <basename>.pdf when LibreOffice is present
+    if pdf:
+        log.info("Report PDF written: %s", pdf)
     return path
+
+
+def _docx_to_pdf(docx_path: str) -> Optional[str]:
+    """Best-effort .docx -> PDF via headless LibreOffice (soffice/libreoffice). Returns the PDF
+    path (next to the .docx), or None when LibreOffice isn't installed or conversion fails --
+    callers then fall back to the .docx. Fixed argv (no shell); time-bounded; a PER-CALL user
+    profile (-env:UserInstallation) so concurrent conversions don't clash on the shared default
+    profile lock (and so it doesn't depend on a writable HOME)."""
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+    src = os.path.abspath(docx_path)
+    try:
+        with tempfile.TemporaryDirectory(prefix="lo_") as profile:
+            subprocess.run(
+                [soffice, f"-env:UserInstallation={pathlib.Path(profile).as_uri()}",
+                 "--headless", "--convert-to", "pdf", "--outdir", os.path.dirname(src), src],
+                check=True, timeout=180, capture_output=True)
+    except Exception as e:  # noqa: BLE001 -- PDF is optional; never break report generation
+        log.warning("report: PDF conversion failed (%s)", e)
+        return None
+    pdf = os.path.splitext(src)[0] + ".pdf"
+    return pdf if os.path.isfile(pdf) else None
 
 
 def _record_report(business_id, filename: str, path: str) -> None:

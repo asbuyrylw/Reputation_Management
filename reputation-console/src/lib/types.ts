@@ -334,6 +334,7 @@ export interface Report {
   filename: string;
   kind: string;
   created_at: string;
+  has_pdf?: boolean;
 }
 
 // ---- getting-started onboarding ----
