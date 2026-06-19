@@ -458,6 +458,49 @@ def reject(draft_id: int, reviewer: str, notes: Optional[str]) -> None:
     log.info("Draft %d rejected by %s", draft_id, reviewer)
 
 
+def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[str] = None,
+                 business_id: Optional[int] = None) -> bool:
+    """Edit a draft's title/body BEFORE approval -- the human can fix a fact or adjust tone,
+    then approve the edited version. Only editable while it is NOT yet an asset (status not
+    'approved' and no published_asset_id); an approved/published draft is immutable. Scopes to
+    business_id when given. Returns True if a row was updated.
+
+    A human edit MUST NOT inherit the AI version's quality/compliance verdict (else the UI
+    would show 'checks passed' for un-re-screened content). So on every edit we RE-SCREEN the
+    effective body with the deterministic (no-LLM, non-injectable) compliance check and reset
+    the stale signals: compliance_pass=False if a hard rule trips, else NULL (unscreened --
+    the UI shows 'not checked yet', not a false pass); quality_score is cleared."""
+    if title is None and body is None:
+        return False
+    with db() as conn:
+        # Lock the row so the edit + re-screen are atomic relative to approve(), and so a
+        # title-only edit still re-screens the (unchanged) body.
+        d = conn.execute(
+            "SELECT body, status, published_asset_id, business_id FROM content_drafts "
+            "WHERE id=%s FOR UPDATE", (draft_id,),
+        ).fetchone()
+        if (not d or d["status"] == "approved" or d["published_asset_id"] is not None
+                or (business_id is not None and d["business_id"] != business_id)):
+            conn.commit()   # release the FOR UPDATE lock
+            return False
+        new_body = body if body is not None else d["body"]
+        flags = _deterministic_compliance(new_body or "")
+        comp_pass = False if flags else None
+        comp_flags = flags or ["content edited after screening -- re-screen recommended"]
+        sets, args = [], []
+        if title is not None:
+            sets.append("title=%s"); args.append(title)
+        if body is not None:
+            sets.append("body=%s"); args.append(body)
+        sets += ["quality_score=NULL", "compliance_pass=%s", "compliance_flags=%s", "updated_at=now()"]
+        args += [comp_pass, json.dumps(comp_flags)]
+        conn.execute(f"UPDATE content_drafts SET {', '.join(sets)} WHERE id=%s",
+                     tuple(args) + (draft_id,))
+        conn.commit()
+    log.info("Draft %d edited (re-screened: compliance_pass=%s)", draft_id, comp_pass)
+    return True
+
+
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------

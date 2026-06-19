@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Card } from "./ui";
-import { useApproveDraft, useRejectDraft } from "@/lib/hooks";
+import { useApproveDraft, useEditDraft, useRejectDraft } from "@/lib/hooks";
 import type { ContentDraft } from "@/lib/types";
 
 const STATUS_WORDS: Record<string, string> = {
@@ -38,8 +38,12 @@ export function DraftReviewCard({
   const [open, setOpen] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [notes, setNotes] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(draft.title || "");
+  const [editBody, setEditBody] = useState(draft.body || "");
   const approve = useApproveDraft(businessId);
   const reject = useRejectDraft(businessId);
+  const edit = useEditDraft(businessId);
   const body = draft.body || "";
   const long = body.length > 400;
   const pending = draft.status === "pending_review" || draft.status === "needs_fix";
@@ -64,17 +68,57 @@ export function DraftReviewCard({
           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">not checked yet</span>
         )}
       </div>
-      <div className="mt-2 text-sm font-medium text-gray-900">{draft.title}</div>
-      {draft.target_query && (
-        <div className="text-xs text-gray-500">Answers the question: “{draft.target_query}”</div>
-      )}
-      <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">
-        {open || !long ? body : body.slice(0, 400) + "…"}
-      </p>
-      {long && (
-        <button onClick={() => setOpen((o) => !o)} className="mt-1 text-xs text-blue-600 hover:underline">
-          {open ? "Show less" : "Show full draft"}
-        </button>
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          <input
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            placeholder="Title"
+            className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium"
+          />
+          <textarea
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            rows={12}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              disabled={edit.isPending || !editTitle.trim() || !editBody.trim()}
+              onClick={() =>
+                edit.mutate(
+                  { draftId: draft.id, title: editTitle, body: editBody },
+                  { onSuccess: () => setEditing(false) },
+                )
+              }
+              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+            >
+              {edit.isPending ? "Saving…" : "Save changes"}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setEditTitle(draft.title || ""); setEditBody(draft.body || ""); }}
+              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+            >
+              Cancel
+            </button>
+            <span className="text-xs text-gray-400">Edit the copy, then approve the revised version.</span>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="mt-2 text-sm font-medium text-gray-900">{draft.title}</div>
+          {draft.target_query && (
+            <div className="text-xs text-gray-500">Answers the question: “{draft.target_query}”</div>
+          )}
+          <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">
+            {open || !long ? body : body.slice(0, 400) + "…"}
+          </p>
+          {long && (
+            <button onClick={() => setOpen((o) => !o)} className="mt-1 text-xs text-blue-600 hover:underline">
+              {open ? "Show less" : "Show full draft"}
+            </button>
+          )}
+        </>
       )}
       {flags.length > 0 && (
         <ul className="mt-2 list-disc pl-5 text-xs text-red-700">
@@ -83,14 +127,20 @@ export function DraftReviewCard({
           ))}
         </ul>
       )}
-      {canEdit && pending && !rejecting && (
-        <div className="mt-3 flex items-center gap-2">
+      {canEdit && pending && !rejecting && !editing && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             disabled={approve.isPending}
             onClick={() => approve.mutate({ draftId: draft.id })}
             className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
           >
             Approve &amp; publish
+          </button>
+          <button
+            onClick={() => { setEditTitle(draft.title || ""); setEditBody(draft.body || ""); setEditing(true); }}
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+          >
+            Edit
           </button>
           <button
             disabled={reject.isPending}
@@ -102,7 +152,7 @@ export function DraftReviewCard({
           <span className="text-xs text-gray-400">Approving adds it to your published content.</span>
         </div>
       )}
-      {canEdit && pending && rejecting && (
+      {canEdit && pending && rejecting && !editing && (
         <div className="mt-3">
           <textarea
             value={notes}
@@ -125,7 +175,7 @@ export function DraftReviewCard({
           </div>
         </div>
       )}
-      {(approve.isError || reject.isError) && (
+      {(approve.isError || reject.isError || edit.isError) && (
         <p className="mt-2 text-xs text-red-600">Action failed — please retry.</p>
       )}
     </Card>

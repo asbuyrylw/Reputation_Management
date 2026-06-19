@@ -92,3 +92,36 @@ def test_viewer_cannot_act_editor_can(fresh_schema):
         assert c.post(f"/businesses/{bid}/content-drafts/{d}/approve", headers=vh).status_code == 403  # but not act
         assert c.post(f"/businesses/{bid}/content-drafts/{d}/approve", headers=eh).status_code == 200  # editor can
         assert c.post(f"/businesses/{bid}/content-drafts/999999/approve", headers=eh).status_code == 404  # missing draft
+
+
+@requires_db
+def test_edit_draft_endpoint(fresh_schema):
+    conn = fresh_schema
+    bid = _biz(conn)
+    other = conn.execute("INSERT INTO businesses (name) VALUES ('Other') RETURNING id").fetchone()["id"]
+    viewer = _user(conn, "viewer@example.com", "client")
+    editor = _user(conn, "editor@example.com", "client")
+    conn.execute("INSERT INTO business_access (user_id, business_id, access_role) VALUES (%s,%s,'viewer')", (viewer, bid))
+    conn.execute("INSERT INTO business_access (user_id, business_id, access_role) VALUES (%s,%s,'editor')", (editor, bid))
+    d = _draft(conn, bid)
+    other_draft = _draft(conn, other)
+    conn.commit()
+
+    with _client() as c:
+        vh = {"Authorization": f"Bearer {_token(c, 'viewer@example.com')}"}
+        eh = {"Authorization": f"Bearer {_token(c, 'editor@example.com')}"}
+
+        # editor edits -> 200, DB reflects new title/body
+        assert c.patch(f"/businesses/{bid}/content-drafts/{d}", headers=eh, json={"title": "T2", "body": "B2"}).status_code == 200
+        row = conn.execute("SELECT title, body FROM content_drafts WHERE id=%s", (d,)).fetchone()
+        assert row["title"] == "T2" and row["body"] == "B2"
+        # viewer cannot edit -> 403
+        assert c.patch(f"/businesses/{bid}/content-drafts/{d}", headers=vh, json={"body": "hax"}).status_code == 403
+        # a draft owned by another business -> 404
+        assert c.patch(f"/businesses/{bid}/content-drafts/{other_draft}", headers=eh, json={"body": "x"}).status_code == 404
+        # nothing to change -> 409
+        assert c.patch(f"/businesses/{bid}/content-drafts/{d}", headers=eh, json={}).status_code == 409
+        # once approved, editing is rejected (409) and the body is unchanged
+        assert c.post(f"/businesses/{bid}/content-drafts/{d}/approve", headers=eh).status_code == 200
+        assert c.patch(f"/businesses/{bid}/content-drafts/{d}", headers=eh, json={"body": "late"}).status_code == 409
+        assert conn.execute("SELECT body FROM content_drafts WHERE id=%s", (d,)).fetchone()["body"] == "B2"
