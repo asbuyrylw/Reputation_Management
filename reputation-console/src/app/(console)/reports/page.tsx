@@ -17,7 +17,7 @@ function ReportRow({
   r, businessId, canEdit, onDownload, downloading,
 }: {
   r: Report; businessId: number | null; canEdit: boolean;
-  onDownload: (id: number, filename: string) => void; downloading: boolean;
+  onDownload: (id: number, filename: string, fmt?: "docx" | "pdf") => void; downloading: boolean;
 }) {
   const email = useEmailReport(businessId);
   const [open, setOpen] = useState(false);
@@ -52,9 +52,15 @@ function ReportRow({
               Email
             </button>
           )}
-          <button onClick={() => onDownload(r.id, r.filename)} disabled={downloading}
+          {r.has_pdf && (
+            <button onClick={() => onDownload(r.id, r.filename, "pdf")} disabled={downloading}
+              className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50">
+              PDF
+            </button>
+          )}
+          <button onClick={() => onDownload(r.id, r.filename, "docx")} disabled={downloading}
             className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50">
-            {downloading ? "Downloading…" : "Download"}
+            {downloading ? "Downloading…" : r.has_pdf ? "Word" : "Download"}
           </button>
         </div>
       </div>
@@ -100,11 +106,13 @@ export default function ReportsPage() {
     trigger.mutate({ jobType: "report" });
   };
 
-  const download = async (id: number, filename: string) => {
+  const download = async (id: number, filename: string, fmt: "docx" | "pdf" = "docx") => {
     setBusyId(id);
     setError(null);
+    const name = fmt === "pdf" ? filename.replace(/\.docx$/i, ".pdf") : filename;
+    const url = `/businesses/${businessId}/reports/${id}/download${fmt === "pdf" ? "?fmt=pdf" : ""}`;
     try {
-      await apiDownload(`/businesses/${businessId}/reports/${id}/download`, filename);
+      await apiDownload(url, name);
     } catch (e) {
       setError(
         e instanceof ApiError && e.status === 410

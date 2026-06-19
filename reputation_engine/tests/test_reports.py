@@ -88,6 +88,86 @@ def test_record_list_download(fresh_schema, tmp_path, monkeypatch):
     assert c.get(f"/businesses/{other}/reports/{rid}/download").status_code == 404
 
 
+def test_docx_to_pdf_no_libreoffice_returns_none(monkeypatch):
+    import shutil
+    from rep_engine import report_generator as rg
+    monkeypatch.setattr(shutil, "which", lambda name: None)   # no soffice/libreoffice on PATH
+    assert rg._docx_to_pdf("/whatever.docx") is None
+
+
+@requires_db
+def test_save_report_drops_stale_pdf_when_conversion_unavailable(fresh_schema, tmp_path, monkeypatch):
+    import os as _os
+    import shutil
+    from datetime import date
+    from docx import Document
+    from rep_engine import report_generator as rg
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(shutil, "which", lambda name: None)   # no LibreOffice -> conversion returns None
+    conn = fresh_schema
+    bid = conn.execute("INSERT INTO businesses (name) VALUES ('Acme') RETURNING id").fetchone()["id"]
+    conn.commit()
+    # a stale PDF from a prior run already sits at today's basename
+    fname = f"Acme_AI_Visibility_Report_{date.today().isoformat()}.docx"
+    (tmp_path / fname.replace(".docx", ".pdf")).write_bytes(b"%PDF stale")
+
+    doc = Document(); doc.add_paragraph("fresh content")
+    path = rg._save_report(doc, {"id": bid, "name": "Acme"})
+
+    # the .docx saved fine (conversion-unavailable didn't break generation) and the stale PDF is gone
+    assert _os.path.isfile(path)
+    assert not _os.path.exists(_os.path.splitext(path)[0] + ".pdf")
+
+
+@requires_db
+def test_pdf_present_lists_downloads_and_emails(fresh_schema, tmp_path, monkeypatch):
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    from rep_engine import email_service as es
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    bid = conn.execute("INSERT INTO businesses (name) VALUES ('Acme') RETURNING id").fetchone()["id"]
+    conn.commit()
+    (tmp_path / "R.docx").write_bytes(b"PK-doc")
+    (tmp_path / "R.pdf").write_bytes(b"%PDF-1.4 fake")   # colocated PDF, as if LibreOffice ran
+    rg._record_report(bid, "R.docx", str(tmp_path / "R.docx"))
+    rid = conn.execute("SELECT id FROM reports WHERE business_id=%s", (bid,)).fetchone()["id"]
+    captured = {}
+    monkeypatch.setattr(es, "send_email",
+                        lambda to, subject, body, **kw: (captured.update(atts=kw.get("attachments")), True)[1])
+    _admin(conn)
+    c = _client()
+    h = _bearer(c)
+
+    # list flags the PDF
+    reps = c.get(f"/businesses/{bid}/reports", headers=h).json()
+    assert reps[0]["has_pdf"] is True
+    # PDF download serves the .pdf
+    d = c.get(f"/businesses/{bid}/reports/{rid}/download?fmt=pdf", headers=h)
+    assert d.status_code == 200 and d.content == b"%PDF-1.4 fake"
+    assert "application/pdf" in d.headers.get("content-type", "")
+    # email prefers the PDF attachment
+    c.post(f"/businesses/{bid}/reports/{rid}/email", json={"to": "x@example.com"}, headers=h)
+    assert captured["atts"][0][0].endswith(".pdf")
+
+
+@requires_db
+def test_pdf_download_410_when_absent(fresh_schema, tmp_path, monkeypatch):
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    bid = conn.execute("INSERT INTO businesses (name) VALUES ('Acme') RETURNING id").fetchone()["id"]
+    conn.commit()
+    (tmp_path / "R.docx").write_bytes(b"PK-doc")   # no .pdf sibling
+    rg._record_report(bid, "R.docx", str(tmp_path / "R.docx"))
+    rid = conn.execute("SELECT id FROM reports WHERE business_id=%s", (bid,)).fetchone()["id"]
+    _admin(conn)
+    c = _client()
+    h = _bearer(c)
+    assert c.get(f"/businesses/{bid}/reports", headers=h).json()[0]["has_pdf"] is False
+    assert c.get(f"/businesses/{bid}/reports/{rid}/download?fmt=pdf", headers=h).status_code == 410
+    assert c.get(f"/businesses/{bid}/reports/{rid}/download", headers=h).status_code == 200   # docx still works
+
+
 @requires_db
 def test_email_report(fresh_schema, tmp_path, monkeypatch):
     conn = fresh_schema
