@@ -31,23 +31,32 @@ def _from() -> str:
     return os.getenv("EMAIL_FROM") or os.getenv("SMTP_USER") or "no-reply@localhost"
 
 
-def send_email(to: str, subject: str, body_text: str, body_html: Optional[str] = None) -> bool:
+def send_email(to: str, subject: str, body_text: str, body_html: Optional[str] = None,
+               attachments: Optional[list[tuple[str, bytes, str]]] = None) -> bool:
     """Send an email (or, when SMTP is unconfigured, LOG it). Returns True if actually sent.
     Never raises on a send failure -- logs and returns False so onboarding still proceeds and
-    the caller can surface the action link."""
+    the caller can surface the action link. `attachments` is a list of
+    (filename, content_bytes, mime_type) -- e.g. a .docx report."""
     if not enabled():
-        log.info("[email:dev -- not sent, SMTP unconfigured] To=%s | Subject=%s\n%s",
-                 to, subject, body_text)
+        log.info("[email:dev -- not sent, SMTP unconfigured] To=%s | Subject=%s | attachments=%d\n%s",
+                 to, subject, len(attachments or []), body_text)
         return False
     host = os.getenv("SMTP_HOST", "smtp.zoho.com")
     port = int(os.getenv("SMTP_PORT", "465"))
     user, pw = os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD")
-    msg = EmailMessage()
-    msg["From"], msg["To"], msg["Subject"] = _from(), to, subject
-    msg.set_content(body_text)
-    if body_html:
-        msg.add_alternative(body_html, subtype="html")
     try:
+        # Build inside the try so a bad header value (the stdlib rejects CR/LF in a header,
+        # e.g. a newline in the subject/filename) is caught and returns False -- honoring the
+        # never-raise contract -- rather than escaping to a 500 in the caller.
+        msg = EmailMessage()
+        msg["From"], msg["To"], msg["Subject"] = _from(), to, subject
+        msg.set_content(body_text)
+        if body_html:
+            msg.add_alternative(body_html, subtype="html")
+        for filename, content, mime in (attachments or []):
+            maintype, _, subtype = (mime or "application/octet-stream").partition("/")
+            msg.add_attachment(content, maintype=maintype or "application",
+                               subtype=subtype or "octet-stream", filename=filename)
         ctx = ssl.create_default_context()
         if port == 465:
             with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as s:
