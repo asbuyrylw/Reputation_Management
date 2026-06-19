@@ -245,6 +245,13 @@ export function useDeleteBusiness(businessId: number | null) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["businesses"] }),
   });
 }
+export function useEmailReport(businessId: number | null) {
+  return useApiMutation<{ reportId: number; to: string }>(
+    ({ reportId }) => `/businesses/${businessId}/reports/${reportId}/email`,
+    ({ to }) => ({ to }),
+    [],
+  );
+}
 export function useReports(businessId: number | null, poll = false) {
   const { user } = useAuth();
   return useQuery({
