@@ -327,6 +327,33 @@ export interface CustomPrompt {
   created_at?: string;
 }
 
+// ---- getting-started onboarding ----
+export interface OnboardingStep {
+  key: string;
+  label: string;
+  href: string;
+  done: boolean;
+}
+export interface OnboardingStatus {
+  steps: OnboardingStep[];
+  done: number;
+  total: number;
+  complete: boolean;
+}
+
+// ---- visibility over time (subject vs competitors across benchmark runs) ----
+export interface TrendPoint {
+  run_id: number;
+  date: string;
+  subject_rate: number;
+  competitors: Record<string, number>;
+}
+export interface VisibilityTrend {
+  business: string | null;
+  competitors: string[];
+  points: TrendPoint[];
+}
+
 // ---- per-prompt visibility (how each tracked question performs in the latest audit) ----
 export interface PromptEngineResult {
   n: number;

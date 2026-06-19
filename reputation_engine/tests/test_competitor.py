@@ -95,6 +95,52 @@ def test_compare_without_benchmark_returns_empty(fresh_schema):
 
 
 @requires_db
+def test_trend_orders_by_date_and_computes_rates(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import competitor as cp
+    bid = _subject(conn)
+    cid = cp.register_competitor(bid, "Rival LLC", "rival.com")
+    # two runs at different dates; subject invisible in the older, present in the newer
+    conn.execute(
+        "INSERT INTO competitor_answers (competitor_id, business_id, run_id, engine, prompt, "
+        "mentions_subject, mentions_competitor, failed, created_at) "
+        "VALUES (%s,%s,1,'gemini','Q1',false,true,false, now()-interval '30 days')", (cid, bid))
+    conn.execute(
+        "INSERT INTO competitor_answers (competitor_id, business_id, run_id, engine, prompt, "
+        "mentions_subject, mentions_competitor, failed, created_at) "
+        "VALUES (%s,%s,2,'gemini','Q1',true,true,false, now())", (cid, bid))
+    conn.commit()
+    t = cp.trend(bid)
+    assert [p["run_id"] for p in t["points"]] == [1, 2]      # ordered by date
+    assert t["points"][0]["subject_rate"] == 0.0 and t["points"][1]["subject_rate"] == 1.0
+    assert t["points"][1]["competitors"]["Rival LLC"] == 1.0
+    assert t["competitors"] == ["Rival LLC"]
+
+
+@requires_db
+def test_trend_empty_without_runs(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import competitor as cp
+    bid = _subject(conn)
+    assert cp.trend(bid) == {"business": "Subject Co", "competitors": [], "points": []}
+
+
+@requires_db
+def test_trend_excludes_all_failed_run(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import competitor as cp
+    bid = _subject(conn)
+    cid = cp.register_competitor(bid, "Rival LLC", "rival.com")
+    # an all-failed run is 'no data', not a 0% point -> excluded from the trend
+    conn.execute(
+        "INSERT INTO competitor_answers (competitor_id, business_id, run_id, engine, prompt, "
+        "mentions_subject, mentions_competitor, failed) VALUES (%s,%s,7,'gemini','Q1',false,false,true)",
+        (cid, bid))
+    conn.commit()
+    assert cp.trend(bid)["points"] == []
+
+
+@requires_db
 def test_failed_calls_excluded_from_benchmark(fresh_schema, monkeypatch):
     conn = fresh_schema
     from rep_engine import competitor as cp

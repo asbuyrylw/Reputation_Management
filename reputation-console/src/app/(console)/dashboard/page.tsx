@@ -11,6 +11,8 @@ import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { VerdictBanner } from "@/components/VerdictBanner";
 import { WorstAnswers } from "@/components/WorstAnswers";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
+import OnboardingCard from "@/components/OnboardingCard";
+import VisibilityTrendChart from "@/components/VisibilityTrendChart";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, Freshness, ToneLegend } from "@/components/primitives";
 import { repScore } from "@/lib/repScore";
@@ -179,6 +181,11 @@ export default function DashboardPage() {
         </Link>
       )}
 
+      {/* Getting-started checklist — guides a new owner; collapses to a confirmation when done. */}
+      <div className="mb-4">
+        <OnboardingCard businessId={businessId} />
+      </div>
+
       {!latest ? (
         <EmptyState
           title="No audit has run yet"
@@ -217,6 +224,9 @@ export default function DashboardPage() {
 
           {/* 4. when will I know it improved */}
           <ProjectionStrip timeline={timeline as Json | undefined} />
+
+          {/* 4b. visibility over time vs competitors (self-hides until 2+ benchmark runs) */}
+          <VisibilityTrendChart businessId={businessId} />
 
           {/* 5. what AI is saying now + per-engine */}
           <Card>

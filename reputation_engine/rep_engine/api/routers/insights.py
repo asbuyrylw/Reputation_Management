@@ -53,6 +53,21 @@ def competitors_compare(business_id: int = Depends(authorize_business)):
     return _c.compare(business_id, quiet=True)
 
 
+@router.get("/visibility-trend")
+def visibility_trend(business_id: int = Depends(authorize_business)):
+    """Subject vs competitor appearance rate over time (one point per benchmark run) --
+    backs the visibility-over-time chart with competitor lines."""
+    from ... import competitor as _c
+    return _c.trend(business_id)
+
+
+@router.get("/onboarding")
+def onboarding(business_id: int = Depends(authorize_business)):
+    """Getting-started checklist state for this business (derived from existing data)."""
+    from ... import onboarding as _o
+    return _o.status(business_id)
+
+
 @router.get("/prompt-results")
 def prompt_results(business_id: int = Depends(authorize_business)):
     """Per-prompt visibility/sentiment/goal-alignment for the latest completed audit run --

@@ -104,6 +104,50 @@ BEGIN
   END IF;
 END $$;
 
+-- Historical benchmark runs so the visibility-over-time chart has a trend line: Team
+-- Unstoppable climbs from invisible toward the field while national rivals hold steady --
+-- the crowding-out working over time. Dated 90/60/30 days back; the live (999001) run is
+-- "now". Idempotent (guarded on the historical run ids).
+DO $$
+DECLARE cw BIGINT; cn BIGINT; cy BIGINT; ce BIGINT; run RECORD; pr TEXT; i INT;
+-- Same 9-prompt universe as the live run (6 national + 3 local Cincinnati) so every trend
+-- point shares one denominator -- the subject is absent locally early on (the gap), present
+-- on one prompt by the 30-day run.
+DECLARE prompts TEXT[] := ARRAY[
+  'Best life-insurance and financial-services career opportunities',
+  'Top term life insurance companies',
+  'Most trusted financial advisors for families',
+  'Best whole life insurance providers',
+  'Financial-services companies hiring agents',
+  'Highest-rated insurance companies 2026',
+  'Best financial services in Cincinnati, OH',
+  'Financial advisors near me in Cincinnati, OH',
+  'Top-rated financial advisors in Cincinnati, OH'];
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM competitor_answers WHERE run_id IN (990001, 990002, 990003)) THEN
+    SELECT id INTO cw FROM competitors WHERE business_id=1 AND name='World Financial Group';
+    SELECT id INTO cn FROM competitors WHERE business_id=1 AND name='Northwestern Mutual';
+    SELECT id INTO cy FROM competitors WHERE business_id=1 AND name='New York Life';
+    SELECT id INTO ce FROM competitors WHERE business_id=1 AND name='Edward Jones';
+    FOR run IN SELECT * FROM (VALUES
+        (990001, now() - interval '90 days', 0),   -- (run_id, date, # of prompts mentioning subject)
+        (990002, now() - interval '60 days', 0),
+        (990003, now() - interval '30 days', 1)
+      ) AS t(rid, dt, subjn)
+    LOOP
+      FOR i IN 1..array_length(prompts, 1) LOOP
+        pr := prompts[i];
+        INSERT INTO competitor_answers (competitor_id, business_id, run_id, engine, prompt,
+            answer_text, mentions_subject, mentions_competitor, failed, created_at) VALUES
+          (cw,1,run.rid,'gemini',pr,'', i <= run.subjn, i IN (1,3),       false, run.dt),
+          (cn,1,run.rid,'gemini',pr,'', i <= run.subjn, i IN (1,2,4,5,7,8), false, run.dt),
+          (cy,1,run.rid,'gemini',pr,'', i <= run.subjn, i IN (2,3,4,9),   false, run.dt),
+          (ce,1,run.rid,'gemini',pr,'', i <= run.subjn, i IN (1,5,6,7,9), false, run.dt);
+      END LOOP;
+    END LOOP;
+  END IF;
+END $$;
+
 -- Synthetic LOCAL Google rank snapshot so the Local SEO page shows the same story out of
 -- the box (the real tracker runs when SERPER_API_KEY is set). Team Unstoppable is mostly
 -- absent / off page one for local-category searches while rivals with local offices rank
