@@ -64,6 +64,26 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
     return [dict(r) for r in rows]
 
 
+class WorkOrderCreate(BaseModel):
+    title: str
+    instruction: Optional[str] = None
+    recommended_tool: Optional[str] = None
+    target_date: Optional[str] = None
+
+
+@router.post("/work-orders", status_code=201)
+def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_business_editor)):
+    """Manually add an ad-hoc task to the work queue (outside the generated plan)."""
+    from ... import tracking as _t
+    try:
+        wid = _t.create_work_order(business_id, payload.title, instruction=payload.instruction,
+                                   recommended_tool=payload.recommended_tool,
+                                   target_date=payload.target_date)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    return {"id": wid}
+
+
 @router.get("/content-drafts")
 def content_drafts(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(

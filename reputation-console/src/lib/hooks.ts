@@ -137,6 +137,18 @@ export function useRejectDraft(businessId: number | null) {
   );
 }
 
+export function useAddWorkOrder(businessId: number | null) {
+  return useApiMutation<{ title: string; instruction?: string; recommended_tool?: string; target_date?: string }>(
+    () => `/businesses/${businessId}/work-orders`,
+    (v) => ({
+      title: v.title,
+      instruction: v.instruction ?? null,
+      recommended_tool: v.recommended_tool ?? null,
+      target_date: v.target_date ?? null,
+    }),
+    [["work-orders", businessId], ["dashboard", businessId]],
+  );
+}
 export function useSetWorkOrderStatus(businessId: number | null) {
   return useApiMutation<{ woId: number; status: string; assignee?: string; notes?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/status`,
