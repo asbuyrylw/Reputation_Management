@@ -4,13 +4,17 @@ import type { PerEngineMetrics } from "@/lib/types";
 import { Card } from "@/components/ui";
 import { RepScoreBadge } from "@/components/RepScoreBadge";
 import { repScore } from "@/lib/repScore";
+import { engineLabel } from "@/lib/engines";
+import { useFilters } from "@/lib/filters";
 
 // Per-engine read for one run: what EACH AI engine said, with sample sizes, 95% CIs, and
 // how much of it was grounded in live web retrieval vs. model memory. Surfaces the
 // partial-coverage flag so a run that only hit some engines never reads as the full picture.
 export function PerEnginePanel({ data }: { data: PerEngineMetrics }) {
-  const engines = Object.entries(data.engines);
-  if (engines.length === 0) return null;
+  const { engine: engineFilter } = useFilters();
+  const all = Object.entries(data.engines);
+  if (all.length === 0) return null;
+  const engines = engineFilter ? all.filter(([k]) => k === engineFilter) : all;
   return (
     <Card>
       <h2 className="mb-1 text-lg font-semibold text-gray-900">What each AI engine says</h2>
@@ -36,12 +40,19 @@ export function PerEnginePanel({ data }: { data: PerEngineMetrics }) {
             </tr>
           </thead>
           <tbody>
+            {engines.length === 0 && (
+              <tr>
+                <td colSpan={4} className="py-3 text-sm text-gray-400">
+                  No data for {engineFilter ? engineLabel(engineFilter) : "this model"} in this run.
+                </td>
+              </tr>
+            )}
             {engines.map(([name, m]) => {
               const ga = m.goal_alignment;
               const gr = m.grounded_rate;
               return (
                 <tr key={name} className="border-b last:border-0">
-                  <td className="py-2 pr-4 font-medium text-gray-900">{name}</td>
+                  <td className="py-2 pr-4 font-medium text-gray-900">{engineLabel(name)}</td>
                   <td className="py-2 pr-4 text-gray-600">{m.n}</td>
                   <td className="py-2 pr-4 text-gray-600">
                     {ga?.mean == null ? (
