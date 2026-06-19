@@ -173,6 +173,28 @@ def _assert_draft_in_business(conn, draft_id: int, business_id: int) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Draft not found")
 
 
+class DraftEdit(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
+@router.patch("/content-drafts/{draft_id}")
+def edit_draft(
+    draft_id: int,
+    payload: DraftEdit,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Revise a draft's title/body before approving it (fix a fact, adjust tone). Editable
+    only while it's still a draft -- an already-approved/published one is immutable (409)."""
+    _assert_draft_in_business(conn, draft_id, business_id)
+    ok = _cg.update_draft(draft_id, title=payload.title, body=payload.body, business_id=business_id)
+    if not ok:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Draft can't be edited (already approved/published, or nothing to change)")
+    return {"updated": draft_id}
+
+
 @router.post("/content-drafts/{draft_id}/approve")
 def approve_draft(
     draft_id: int,

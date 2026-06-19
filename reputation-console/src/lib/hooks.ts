@@ -129,6 +129,17 @@ export function useApproveDraft(businessId: number | null) {
   );
 }
 
+export function useEditDraft(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { draftId: number; title?: string; body?: string }) =>
+      apiFetch(`/businesses/${businessId}/content-drafts/${v.draftId}`, {
+        method: "PATCH",
+        body: { title: v.title ?? null, body: v.body ?? null },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["content-drafts", businessId] }),
+  });
+}
 export function useRejectDraft(businessId: number | null) {
   return useApiMutation<{ draftId: number; notes?: string }>(
     ({ draftId }) => `/businesses/${businessId}/content-drafts/${draftId}/reject`,
