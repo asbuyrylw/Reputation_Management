@@ -69,43 +69,43 @@ function WorkOrderCard({ wo, canEdit, onStatus }: { wo: WorkOrder; canEdit: bool
     <Card className="p-3">
       {/* category (left) · phase above date (right) */}
       <div className="flex items-start justify-between gap-2">
-        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">{capLabel(wo.capability)}</span>
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">{capLabel(wo.capability)}</span>
         <div className="text-right">
-          {wo.phase && <div className="text-[11px] font-medium text-gray-500">{wo.phase}</div>}
-          {wo.target_date && <div className="text-[11px] text-gray-400">Due {fmtDate(wo.target_date)}</div>}
+          {wo.phase && <div className="text-[11px] font-medium text-slate-500">{wo.phase}</div>}
+          {wo.target_date && <div className="text-[11px] text-slate-400">Due {fmtDate(wo.target_date)}</div>}
         </div>
       </div>
 
       {/* bold to-do heading */}
-      <div className="mt-1.5 text-sm font-bold text-gray-900">{wo.title}</div>
+      <div className="mt-1.5 text-sm font-bold text-slate-900">{wo.title}</div>
 
       {/* instruction — bulleted when long */}
       {wo.instruction && (
         bullets ? (
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-600">
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-slate-600">
             {bullets.map((b, i) => <li key={i}>{b}</li>)}
           </ul>
         ) : (
-          <div className="mt-1 text-xs text-gray-600">{wo.instruction}</div>
+          <div className="mt-1 text-xs text-slate-600">{wo.instruction}</div>
         )
       )}
 
       {/* tool type + examples */}
-      <div className="mt-1.5 text-[11px] text-gray-500">
+      <div className="mt-1.5 text-[11px] text-slate-500">
         {tool ? (
-          <span><span className="font-medium text-gray-600">{tool.type}</span> — e.g. {tool.examples.join(", ")}</span>
+          <span><span className="font-medium text-slate-600">{tool.type}</span> — e.g. {tool.examples.join(", ")}</span>
         ) : wo.recommended_tool ? (
-          <span><span className="font-medium text-gray-600">Tool:</span> {wo.recommended_tool}</span>
+          <span><span className="font-medium text-slate-600">Tool:</span> {wo.recommended_tool}</span>
         ) : null}
         {wo.assignee && <span> · Owner: {wo.assignee}</span>}
       </div>
 
-      {wo.result_notes && <div className="mt-1 text-xs text-green-700">Result: {wo.result_notes}</div>}
+      {wo.result_notes && <div className="mt-1 text-xs text-emerald-700">Result: {wo.result_notes}</div>}
       {canEdit && (
         <select
           value={wo.status}
           onChange={(e) => onStatus(e.target.value)}
-          className="mt-2 w-full rounded border border-gray-200 px-2 py-1 text-xs"
+          className="mt-2 w-full rounded border border-slate-200 px-2 py-1 text-xs"
         >
           {COLUMNS.map((s) => (
             <option key={s} value={s}>{LABEL[s]}</option>
@@ -131,25 +131,25 @@ function AddTask({ businessId }: { businessId: number | null }) {
   return (
     <Card className="mb-4">
       {!open ? (
-        <button onClick={() => setOpen(true)} className="text-sm font-medium text-blue-600 hover:underline">
+        <button onClick={() => setOpen(true)} className="text-sm font-medium text-indigo-600 hover:underline">
           + Add a task
         </button>
       ) : (
         <div className="space-y-2">
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title (e.g. Get 5 new Google reviews)"
-            className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
           <textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="What to do (optional)"
-            rows={2} className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+            rows={2} className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
           <div className="flex flex-wrap items-center gap-2">
-            <label className="text-xs text-gray-500">Due
+            <label className="text-xs text-slate-500">Due
               <input type="date" value={due} onChange={(e) => setDue(e.target.value)}
-                className="ml-1 rounded-md border border-gray-300 px-2 py-1 text-sm" />
+                className="ml-1 rounded-md border border-slate-300 px-2 py-1 text-sm" />
             </label>
             <button onClick={submit} disabled={add.isPending || !title.trim()}
-              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50">
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
               {add.isPending ? "Adding…" : "Add task"}
             </button>
-            <button onClick={() => setOpen(false)} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+            <button onClick={() => setOpen(false)} className="text-sm text-slate-500 hover:text-slate-700">Cancel</button>
           </div>
         </div>
       )}
@@ -191,8 +191,8 @@ export default function WorkOrdersPage() {
           {/* progress roll-up */}
           <Card className="mb-4">
             <div className="mb-1.5 flex items-center justify-between text-sm">
-              <span className="font-medium text-gray-700">Plan progress</span>
-              <span className="text-gray-500">{done} of {total} done · {inProgress} in progress</span>
+              <span className="font-medium text-slate-700">Plan progress</span>
+              <span className="text-slate-500">{done} of {total} done · {inProgress} in progress</span>
             </div>
             <ToneBar pct={donePct} tone="good" />
           </Card>
@@ -201,8 +201,8 @@ export default function WorkOrdersPage() {
             {visibleColumns.map((s) => (
               <div key={s}>
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-gray-700">{LABEL[s]}</span>
-                  <span className="text-xs text-gray-400">{byStatus(s).length}</span>
+                  <span className="text-sm font-semibold text-slate-700">{LABEL[s]}</span>
+                  <span className="text-xs text-slate-400">{byStatus(s).length}</span>
                 </div>
                 <div className="space-y-2">
                   {byStatus(s).map((w) => (
@@ -213,7 +213,7 @@ export default function WorkOrdersPage() {
                       onStatus={(st) => setStatus.mutate({ woId: w.id, status: st })}
                     />
                   ))}
-                  {byStatus(s).length === 0 && <p className="text-xs text-gray-300">—</p>}
+                  {byStatus(s).length === 0 && <p className="text-xs text-slate-300">—</p>}
                 </div>
               </div>
             ))}

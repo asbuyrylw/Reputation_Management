@@ -47,14 +47,14 @@ export default function AccountPage() {
       <div className="space-y-4">
         {/* sessions */}
         <Card>
-          <h3 className="text-sm font-semibold text-gray-900">Sessions</h3>
-          <p className="mt-1 text-sm text-gray-600">
+          <h3 className="text-sm font-semibold text-slate-900">Sessions</h3>
+          <p className="mt-1 text-sm text-slate-600">
             Sign out of every device and browser. Anyone currently signed in (including you) will need to log in again.
           </p>
           <button
             onClick={signOutEverywhere}
             disabled={revoke.isPending}
-            className="mt-3 rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+            className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
           >
             {revoke.isPending ? "Signing out…" : "Sign out everywhere"}
           </button>
@@ -65,15 +65,15 @@ export default function AccountPage() {
 
         {/* data export */}
         <Card>
-          <h3 className="text-sm font-semibold text-gray-900">Export your data</h3>
-          <p className="mt-1 text-sm text-gray-600">
+          <h3 className="text-sm font-semibold text-slate-900">Export your data</h3>
+          <p className="mt-1 text-sm text-slate-600">
             Download everything we hold for <span className="font-medium">{biz?.name ?? "this business"}</span> as a
             single JSON file (audits, prompts, content, mentions, and more).
           </p>
           <button
             onClick={exportData}
             disabled={exporting || !businessId}
-            className="mt-3 rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+            className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
           >
             {exporting ? "Preparing…" : "Export business data"}
           </button>
@@ -84,7 +84,7 @@ export default function AccountPage() {
         {isAdmin && (
           <Card className="border-rose-200">
             <h3 className="text-sm font-semibold text-rose-700">Delete this business</h3>
-            <p className="mt-1 text-sm text-gray-600">
+            <p className="mt-1 text-sm text-slate-600">
               Permanently erase <span className="font-medium">{biz?.name ?? "this business"}</span> and all of its
               data. This cannot be undone. Type the business name to confirm.
             </p>
@@ -93,7 +93,7 @@ export default function AccountPage() {
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
                 placeholder={biz?.name ?? "business name"}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
               />
               <button
                 onClick={deleteBusiness}

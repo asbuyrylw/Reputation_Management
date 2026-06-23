@@ -28,16 +28,16 @@ export function SourceMix({ bySource }: { bySource: Record<string, { cites: numb
 
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-gray-900">What kinds of sources AI cites</h3>
-      <p className="mt-0.5 text-xs text-gray-500">
+      <h3 className="text-sm font-semibold text-slate-900">What kinds of sources AI cites</h3>
+      <p className="mt-0.5 text-xs text-slate-500">
         The mix of source <em>types</em> behind the answers — it tells you where to earn more accurate presence.
       </p>
       <div className="mt-3 space-y-2">
         {sorted.map(([type, v]) => (
           <div key={type}>
             <div className="mb-0.5 flex items-baseline justify-between text-sm">
-              <span className="text-gray-700">{TYPE_LABELS[type] ?? type}</span>
-              <span className="tabular-nums text-gray-500">
+              <span className="text-slate-700">{TYPE_LABELS[type] ?? type}</span>
+              <span className="tabular-nums text-slate-500">
                 {Math.round((v.cites / totalCites) * 100)}% · {v.cites}
               </span>
             </div>
@@ -49,7 +49,7 @@ export function SourceMix({ bySource }: { bySource: Record<string, { cites: numb
         ))}
       </div>
       {topType && (
-        <p className="mt-3 text-xs text-gray-500">
+        <p className="mt-3 text-xs text-slate-500">
           AI leans most on{" "}
           <span className="font-medium">{(TYPE_LABELS[topType[0]] ?? topType[0]).toLowerCase()}</span> — a strong
           place to earn more accurate presence.

@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from ..deps import authorize_business, get_conn
+from ..deps import authorize_business, get_conn, require_admin
 
 try:
     from ... import ai_state_audit as _ai
@@ -36,6 +36,41 @@ def per_engine_for_run(run_id: int, business_id: int = Depends(authorize_busines
     return _ai.per_engine_metrics(business_id, run_id)
 
 
+@router.get("/cost-breakdown")
+def cost_breakdown(business_id: int = Depends(authorize_business),
+                   _: dict = Depends(require_admin), conn=Depends(get_conn)):
+    """Estimated COGS for the latest audit: per engine + operation, the run total, and this
+    month's total. ADMIN-ONLY -- this is OUR provider cost (cost_ledger.est_cost_usd), not the
+    client's billing. Figures are ESTIMATES (token counts x a list-price table), not invoiced
+    amounts, so the response flags estimated=true."""
+    run = conn.execute(
+        "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+        "AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (business_id,),
+    ).fetchone()
+    run_id = run["id"] if run else None
+    items: list[dict] = []
+    run_total = 0.0
+    if run_id:
+        for r in conn.execute(
+            "SELECT provider, operation, count(*) AS calls, COALESCE(sum(input_tokens),0) AS in_tok, "
+            "COALESCE(sum(output_tokens),0) AS out_tok, COALESCE(sum(est_cost_usd),0) AS cost "
+            "FROM cost_ledger WHERE run_id=%s GROUP BY provider, operation ORDER BY cost DESC",
+            (run_id,),
+        ).fetchall():
+            items.append({
+                "provider": r["provider"], "operation": r["operation"], "calls": r["calls"],
+                "input_tokens": int(r["in_tok"]), "output_tokens": int(r["out_tok"]),
+                "cost": round(float(r["cost"]), 4),
+            })
+            run_total += float(r["cost"])
+    month = conn.execute(
+        "SELECT COALESCE(SUM(est_cost_usd),0) AS s FROM cost_ledger WHERE business_id=%s "
+        "AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC')", (business_id,),
+    ).fetchone()
+    return {"run_id": run_id, "items": items, "run_total": round(run_total, 4),
+            "month_total": round(float(month["s"]), 4), "estimated": True}
+
+
 @router.get("/audit-runs")
 def list_audit_runs(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
@@ -43,10 +78,12 @@ def list_audit_runs(business_id: int = Depends(authorize_business), conn=Depends
                   AVG(a.goal_alignment) FILTER (WHERE NOT COALESCE(a.failed,false)) AS goal_alignment,
                   AVG((a.mentions_contested)::int) FILTER (WHERE NOT COALESCE(a.failed,false)) AS contested_rate,
                   AVG((a.surfaces_owned)::int) FILTER (WHERE NOT COALESCE(a.failed,false)) AS owned_rate,
-                  COUNT(a.id) FILTER (WHERE NOT COALESCE(a.failed,false)) AS n_answers
+                  COUNT(a.id) FILTER (WHERE NOT COALESCE(a.failed,false)) AS n_answers,
+                  COUNT(a.id) FILTER (WHERE COALESCE(a.failed,false)) AS failed_count,
+                  COUNT(DISTINCT a.engine) FILTER (WHERE COALESCE(a.failed,false)) AS failed_engines
              FROM audit_runs r
              LEFT JOIN answers a ON a.run_id = r.id
-            WHERE r.business_id = %s
+            WHERE r.business_id = %s AND r.kind = 'ai_audit'
             GROUP BY r.id
             ORDER BY r.id DESC
             LIMIT 100""",

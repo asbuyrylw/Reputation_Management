@@ -28,7 +28,7 @@ export default function IncidentsPage() {
       ) : (
         <div className="space-y-3">
           {pending.length > 0 && (
-            <div className="text-sm font-medium text-gray-700">Awaiting review ({pending.length})</div>
+            <div className="text-sm font-medium text-slate-700">Awaiting review ({pending.length})</div>
           )}
           {data.map((i) => (
             <IncidentCard key={i.id} incident={i} businessId={businessId} canEdit={canEdit} />

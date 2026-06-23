@@ -20,10 +20,10 @@ export function ScoreDonut({
   const total = data.reduce((a, d) => a + d.value, 0);
   return (
     <Card>
-      <div className="text-sm font-medium text-gray-700">{title}</div>
-      {subtitle && <div className="mt-0.5 text-xs text-gray-400">{subtitle}</div>}
+      <div className="text-sm font-medium text-slate-700">{title}</div>
+      {subtitle && <div className="mt-0.5 text-xs text-slate-400">{subtitle}</div>}
       {total === 0 ? (
-        <p className="mt-3 text-sm text-gray-400">No data yet.</p>
+        <p className="mt-3 text-sm text-slate-400">No data yet.</p>
       ) : (
         <div className="mt-2 flex items-center gap-5">
           <div className="relative h-40 w-40 shrink-0">
@@ -46,17 +46,17 @@ export function ScoreDonut({
               </PieChart>
             </ResponsiveContainer>
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-2xl font-bold text-gray-900">{total}</span>
-              {centerLabel && <span className="text-xs text-gray-400">{centerLabel}</span>}
+              <span className="text-2xl font-bold text-slate-900">{total}</span>
+              {centerLabel && <span className="text-xs text-slate-400">{centerLabel}</span>}
             </div>
           </div>
           <ul className="flex-1 space-y-1.5">
             {data.filter((d) => d.value > 0).map((d) => (
               <li key={d.name} className="flex items-center gap-2 text-sm">
                 <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: d.color }} />
-                <span className="flex-1 capitalize text-gray-700">{d.name}</span>
-                <span className="font-medium text-gray-900">{d.value}</span>
-                <span className="w-9 text-right text-xs text-gray-400">
+                <span className="flex-1 capitalize text-slate-700">{d.name}</span>
+                <span className="font-medium text-slate-900">{d.value}</span>
+                <span className="w-9 text-right text-xs text-slate-400">
                   {Math.round((d.value / total) * 100)}%
                 </span>
               </li>

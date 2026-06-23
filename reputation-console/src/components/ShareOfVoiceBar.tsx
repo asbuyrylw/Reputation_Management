@@ -18,7 +18,7 @@ export function ShareOfVoiceBar({ byClass }: { byClass: Record<string, { cites: 
           return w > 0 ? <div key={o.key} style={{ width: `${w}%`, background: o.color }} title={`${o.label}: ${c}`} /> : null;
         })}
       </div>
-      <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600">
+      <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-600">
         {ORDER.map((o) => {
           const c = byClass[o.key]?.cites || 0;
           return (

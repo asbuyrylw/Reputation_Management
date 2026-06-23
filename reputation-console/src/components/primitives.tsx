@@ -59,17 +59,17 @@ export function MetricCard({
     );
   }
   return (
-    <Card>
-      <div className="text-sm font-medium text-gray-500">
+    <Card accent={tone === "neutral" ? undefined : tone} hover>
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
         {term ? <Term name={term}>{label}</Term> : label}
       </div>
-      <div className="mt-1 flex items-baseline gap-2">
-        <div className={`text-3xl font-semibold ${toneText[tone]}`}>{value}</div>
+      <div className="mt-1.5 flex items-baseline gap-2">
+        <div className={`text-[32px] font-bold leading-none tracking-tight ${toneText[tone]}`}>{value}</div>
       </div>
-      {change && <div className="mt-0.5">{change}</div>}
-      {whyItMatters && <p className="mt-2 text-sm leading-snug text-gray-600">{whyItMatters}</p>}
+      {change && <div className="mt-1.5">{change}</div>}
+      {whyItMatters && <p className="mt-2.5 text-sm leading-snug text-slate-600">{whyItMatters}</p>}
       {action && (
-        <Link href={action.href} className="mt-2 inline-block text-sm font-medium text-blue-600 hover:underline">
+        <Link href={action.href} className="mt-2.5 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">
           {action.label} →
         </Link>
       )}
@@ -111,17 +111,17 @@ export function DataSection({
   return (
     <Card>
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${severityDot[severity]}`} aria-hidden />
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+        <div className="flex items-center gap-2.5">
+          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-slate-100 ${severityDot[severity]}`} aria-hidden />
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">{title}</h3>
         </div>
         {action && (
-          <Link href={action.href} className="shrink-0 text-sm font-medium text-blue-600 hover:underline">
+          <Link href={action.href} className="shrink-0 text-sm font-medium text-indigo-600 hover:underline">
             {action.label} →
           </Link>
         )}
       </div>
-      {headline && <p className="mt-2 text-sm leading-relaxed text-gray-700">{headline}</p>}
+      {headline && <p className="mt-2 text-sm leading-relaxed text-slate-700">{headline}</p>}
       {highlights.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {highlights.map((h, i) => (
@@ -139,11 +139,11 @@ export function DataSection({
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
-            className="text-sm font-medium text-gray-500 hover:text-gray-800"
+            className="text-sm font-medium text-slate-500 hover:text-slate-800"
           >
             {open ? "▾ Hide details" : `▸ ${detailsLabel}`}
           </button>
-          {open && <div className="mt-2 border-t border-gray-100 pt-3">{children}</div>}
+          {open && <div className="mt-2 border-t border-slate-100 pt-3">{children}</div>}
         </div>
       )}
     </Card>
@@ -154,7 +154,7 @@ export function DataSection({
 export function ToneBar({ pct, tone = "neutral" }: { pct: number; tone?: Tone }) {
   const w = Math.max(0, Math.min(100, Math.round(pct)));
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
+    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
       <div className={`h-full rounded-full transition-all ${toneBar[tone]}`} style={{ width: `${w}%` }} />
     </div>
   );
@@ -163,10 +163,10 @@ export function ToneBar({ pct, tone = "neutral" }: { pct: number; tone?: Tone })
 // One-line legend so the color code is never a mystery.
 export function ToneLegend() {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
-      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500" /> Good for your reputation</span>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Good for your reputation</span>
       <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" /> Working against you</span>
-      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-gray-400" /> Neutral</span>
+      <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-slate-400" /> Neutral</span>
     </div>
   );
 }
@@ -183,7 +183,7 @@ export function Freshness({ asOf, cadenceDays = 30 }: { asOf?: string | null; ca
   if (Number.isNaN(d.getTime())) return null;
   const next = new Date(d.getTime() + cadenceDays * 86400000);
   return (
-    <span className="text-xs text-gray-500">
+    <span className="text-xs text-slate-500">
       Last audited {fmt(d)} · next recheck ~{fmt(next)}
     </span>
   );
@@ -205,14 +205,14 @@ export function EmptyState({
 }) {
   return (
     <Card>
-      <div className="text-sm font-semibold text-gray-900">{title}</div>
-      <p className="mt-1 text-sm text-gray-600">{why}</p>
-      {produces && <p className="mt-1 text-sm text-gray-500">{produces}</p>}
-      {timing && <p className="mt-1 text-xs text-gray-400">{timing}</p>}
+      <div className="text-sm font-semibold text-slate-900">{title}</div>
+      <p className="mt-1 text-sm text-slate-600">{why}</p>
+      {produces && <p className="mt-1 text-sm text-slate-500">{produces}</p>}
+      {timing && <p className="mt-1 text-xs text-slate-400">{timing}</p>}
       {cta && (
         <Link
           href={cta.href}
-          className="mt-3 inline-block rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700"
+          className="mt-3 inline-block rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
         >
           {cta.label}
         </Link>

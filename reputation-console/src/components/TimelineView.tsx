@@ -20,18 +20,37 @@ type Lever = {
   note?: string;
 };
 
+// Keys match the engine's acceleration levers (acceleration_advisor): earned_links,
+// third_party_articles, earned_press, reviews, videos, podcasts -- plus older aliases.
 const LEVER_LABELS: Record<string, string> = {
-  earned_links: "Earned links & citations",
+  earned_links: "Earned links (inbound links)",
+  third_party_articles: "Third-party articles (published mentions)",
+  earned_press: "Press / media coverage",
   reviews: "Genuine customer reviews",
+  videos: "Video content",
+  podcasts: "Podcast appearances",
+  // older aliases kept so any legacy lever key still reads well
   press: "Press / media coverage",
   third_party_mentions: "Third-party mentions",
   directory_listings: "Directory & registry listings",
   social_proof: "Social proof",
 };
-// concrete how-to examples shown under each lever
+// Concrete how-to + the plain-English definition. The two most-confused levers are spelled out:
+// an EARNED LINK is a hyperlink FROM someone else's site back to yours; a THIRD-PARTY ARTICLE is
+// a piece ABOUT you published on an outside outlet (which may or may not contain a link).
 const LEVER_SUGGESTIONS: Record<string, string> = {
-  earned_links: "e.g. guest articles on finance/insurance blogs, BBB + industry directory listings, a local press feature.",
-  reviews: "e.g. ask satisfied clients for a Google review by email/SMS — genuine only, never incentivized against policy.",
+  earned_links:
+    "A hyperlink FROM another website back to yours — it sends referral traffic and signals trust to AI and Google. e.g. a BBB / industry-directory listing, or a local press feature that links to your site.",
+  third_party_articles:
+    "An article ABOUT your business published on an outside outlet (a guest post or media mention) — outside corroboration of your story, which often also carries a link. e.g. a bylined post on a finance blog, or a local business feature.",
+  earned_press:
+    "e.g. pitch local Cincinnati business outlets; answer reporter queries on Connectively (HARO); offer an expert quote.",
+  reviews:
+    "e.g. ask satisfied clients for a Google review by email/SMS — genuine only, never incentivized against policy.",
+  videos:
+    "e.g. a short intro / testimonial video on YouTube + your site, cross-shared to social — owned content AI can surface and cite.",
+  podcasts:
+    "e.g. guest on a local-business or finance podcast; the episode page + show notes become citable third-party coverage.",
   press: "e.g. pitch local Cincinnati business outlets; answer reporter queries on Connectively (HARO); offer an expert quote.",
   third_party_mentions: "e.g. get listed/quoted on neutral finance sites, podcasts, and community Q&A where engines index.",
   directory_listings: "e.g. Google Business Profile, BBB, FINRA BrokerCheck, state DOI lookup, local chamber of commerce.",
@@ -69,26 +88,26 @@ export function TimelineView({ timeline, acceleration }: { timeline: Json; accel
     <div className="space-y-4">
       {/* projected finish hero */}
       <Card>
-        <div className="text-xs font-medium uppercase tracking-wide text-gray-400">Projected finish</div>
+        <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Projected finish</div>
         <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="text-3xl font-bold text-gray-900">{fmtDate(expected?.target_date)}</span>
-          <span className="text-sm text-gray-500">
+          <span className="text-3xl font-bold text-slate-900">{fmtDate(expected?.target_date)}</span>
+          <span className="text-sm text-slate-500">
             (~{expected?.months ?? "—"} months) to reach your goal of {goal ?? "—"}/100
           </span>
         </div>
         {(optimistic || conservative) && (
-          <ul className="mt-2 list-disc space-y-0.5 pl-6 text-sm text-gray-600">
-            <li>If things go well: <span className="font-medium text-gray-800">{fmtDate(optimistic?.target_date)}</span></li>
-            <li>If slower: <span className="font-medium text-gray-800">{fmtDate(conservative?.target_date)}</span></li>
+          <ul className="mt-2 list-disc space-y-0.5 pl-6 text-sm text-slate-600">
+            <li>If things go well: <span className="font-medium text-slate-800">{fmtDate(optimistic?.target_date)}</span></li>
+            <li>If slower: <span className="font-medium text-slate-800">{fmtDate(conservative?.target_date)}</span></li>
           </ul>
         )}
         {confidence && (
-          <div className="mt-3 rounded-lg bg-gray-50 p-3 text-sm">
-            <span className="font-medium text-gray-700">Confidence: {confidence}.</span>{" "}
-            <span className="text-gray-600">{confidenceNote(confidence)}</span>
+          <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm">
+            <span className="font-medium text-slate-700">Confidence: {confidence}.</span>{" "}
+            <span className="text-slate-600">{confidenceNote(confidence)}</span>
           </div>
         )}
-        <p className="mt-2 text-xs text-gray-400">
+        <p className="mt-2 text-xs text-slate-400">
           A projection, not a promise — it tracks how fast accurate content is out-publishing the negatives. Recheck after your next audit.
         </p>
       </Card>
@@ -96,11 +115,11 @@ export function TimelineView({ timeline, acceleration }: { timeline: Json; accel
       {/* you are here -> goal */}
       <Card>
         <div className="mb-2 flex items-center justify-between text-sm">
-          <span className="font-medium text-gray-700">You are here → your goal</span>
-          <span className="text-gray-500">{cur ?? "—"}/100 → {goal ?? "—"}/100</span>
+          <span className="font-medium text-slate-700">You are here → your goal</span>
+          <span className="text-slate-500">{cur ?? "—"}/100 → {goal ?? "—"}/100</span>
         </div>
         <ToneBar pct={cur != null && goal ? Math.min(100, (cur / goal) * 100) : 0} tone="good" />
-        <div className="mt-1 flex justify-between text-xs text-gray-400">
+        <div className="mt-1 flex justify-between text-xs text-slate-400">
           <span>Today: {cur ?? "—"}</span>
           <span>Goal: {goal ?? "—"} (AI mostly accurate &amp; positive)</span>
         </div>
@@ -122,21 +141,21 @@ export function TimelineView({ timeline, acceleration }: { timeline: Json; accel
               const pm = l.suggested_per_month;
               const suggestion = LEVER_SUGGESTIONS[l.lever ?? ""];
               return (
-                <li key={i} className="rounded-lg border border-gray-100 p-2.5">
+                <li key={i} className="rounded-lg border border-slate-100 p-2.5">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="text-sm font-semibold text-gray-800">{leverLabel(l.lever)}</div>
+                    <div className="text-sm font-semibold text-slate-800">{leverLabel(l.lever)}</div>
                     {ws && (
-                      <span className="shrink-0 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700">
+                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
                         saves {ws.low}–{ws.high} wks
                       </span>
                     )}
                   </div>
                   {pm && (
-                    <div className="mt-0.5 text-xs text-gray-500">
+                    <div className="mt-0.5 text-xs text-slate-500">
                       Suggested: {pm.low}–{pm.high} per month{l.unit ? ` (${l.unit})` : ""}
                     </div>
                   )}
-                  {suggestion && <div className="mt-1 text-xs text-gray-600">How: {suggestion}</div>}
+                  {suggestion && <div className="mt-1 text-xs text-slate-600">How: {suggestion}</div>}
                 </li>
               );
             })}
@@ -151,7 +170,7 @@ export function TimelineView({ timeline, acceleration }: { timeline: Json; accel
         headline="The date is driven by how entrenched the negatives are, how much accurate content is shipping, and your own measured pace once we have two audits."
         detailsLabel="See the methodology & assumptions"
       >
-        <ul className="list-disc space-y-2 pl-6 text-base leading-relaxed text-gray-700">
+        <ul className="list-disc space-y-2 pl-6 text-base leading-relaxed text-slate-700">
           <li>
             <Term name="confidence">Confidence</Term> starts low and rises as your own measured pace accumulates across audits.
           </li>

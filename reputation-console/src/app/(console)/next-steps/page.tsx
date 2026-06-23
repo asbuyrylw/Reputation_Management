@@ -51,20 +51,20 @@ export default function NextStepsPage() {
           {/* tasks */}
           <Card>
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-900">Your tasks ({open.length})</h3>
-              <Link href="/content/work-orders" className="text-sm font-medium text-blue-600 hover:underline">Manage tasks →</Link>
+              <h3 className="text-sm font-semibold text-slate-900">Your tasks ({open.length})</h3>
+              <Link href="/content/work-orders" className="text-sm font-medium text-indigo-600 hover:underline">Manage tasks →</Link>
             </div>
             {ranked.length === 0 ? (
-              <p className="mt-2 text-sm text-gray-500">No open tasks.</p>
+              <p className="mt-2 text-sm text-slate-500">No open tasks.</p>
             ) : (
               <ol className="mt-3 space-y-2">
                 {ranked.slice(0, 10).map((w, i) => (
                   <li key={w.id} className="flex gap-2 text-sm">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-xs font-semibold text-white">{i + 1}</span>
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">{i + 1}</span>
                     <div className="min-w-0">
-                      <div className="font-medium text-gray-800">{w.title}</div>
-                      {w.instruction && <div className="text-xs text-gray-500">{w.instruction}</div>}
-                      <div className="text-[11px] text-gray-400">
+                      <div className="font-medium text-slate-800">{w.title}</div>
+                      {w.instruction && <div className="text-xs text-slate-500">{w.instruction}</div>}
+                      <div className="text-[11px] text-slate-400">
                         {STATUS_WORDS[w.status] ?? humanize(w.status)}
                         {w.target_date ? ` · by ${w.target_date}` : ""}
                       </div>
@@ -79,14 +79,14 @@ export default function NextStepsPage() {
           {pages.length > 0 && (
             <Card>
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-900">Pages to create ({pages.length})</h3>
-                <Link href="/gaps" className="text-sm font-medium text-blue-600 hover:underline">See details →</Link>
+                <h3 className="text-sm font-semibold text-slate-900">Pages to create ({pages.length})</h3>
+                <Link href="/gaps" className="text-sm font-medium text-indigo-600 hover:underline">See details →</Link>
               </div>
               <ul className="mt-3 space-y-1.5">
                 {pages.slice(0, 6).map((p, i) => (
                   <li key={i} className="text-sm">
-                    <span className="font-medium text-gray-800">{p.topic}</span>
-                    {p.asset_type && <span className="text-xs text-gray-400"> · {p.asset_type}</span>}
+                    <span className="font-medium text-slate-800">{p.topic}</span>
+                    {p.asset_type && <span className="text-xs text-slate-400"> · {p.asset_type}</span>}
                   </li>
                 ))}
               </ul>
@@ -97,15 +97,15 @@ export default function NextStepsPage() {
           {levers.length > 0 && (
             <Card>
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-gray-900">Ways to go faster</h3>
-                <Link href="/timeline" className="text-sm font-medium text-blue-600 hover:underline">See projection →</Link>
+                <h3 className="text-sm font-semibold text-slate-900">Ways to go faster</h3>
+                <Link href="/timeline" className="text-sm font-medium text-indigo-600 hover:underline">See projection →</Link>
               </div>
               <ul className="mt-3 space-y-1.5">
                 {levers.slice(0, 4).map((l, i) => (
                   <li key={i} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-800">{humanize(l.lever)}</span>
+                    <span className="text-slate-800">{humanize(l.lever)}</span>
                     {l.weeks_saved_range && (
-                      <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700">
+                      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
                         saves {l.weeks_saved_range.low}–{l.weeks_saved_range.high} wks
                       </span>
                     )}

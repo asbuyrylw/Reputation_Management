@@ -425,11 +425,29 @@ def approve(draft_id: int, reviewer: str) -> None:
             log.info("Draft %d already approved (asset %s); no-op.",
                      draft_id, d.get("published_asset_id"))
             return
+        # Compliance gate, enforced server-side (not just hidden in the UI): a draft that FAILED
+        # the deterministic compliance screen must never be promoted to a published asset. For
+        # the regulated (e.g. financial-services) context this module exists to protect,
+        # approving past a failed screen is exactly the failure mode the gate prevents. Resolve
+        # the flags by editing the draft (which re-screens it), then approve.
+        if d.get("compliance_pass") is False:
+            conn.commit()   # release the FOR UPDATE lock before raising
+            flags = d.get("compliance_flags") or []
+            raise ValueError(
+                "This draft failed the compliance screen and can't be published"
+                + (f" (flags: {', '.join(str(f) for f in flags)})" if flags else "")
+                + ". Edit it to resolve the issues, which re-screens it, then approve."
+            )
+        # Seed a short summary (for the Published list) + published_status='pending' so the owner
+        # can paste the live URL later. No site/social integration yet -> the link is manual.
+        body = (d.get("body") or "").strip()
+        summary = (body[:280] + "…") if len(body) > 280 else body
         asset = conn.execute(
-            """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta)
-               VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta,
+                                   summary, published_status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending') RETURNING id""",
             (d["business_id"], d["work_order_id"], d["asset_type"], d["title"],
-             "own_site", json.dumps({"from_draft": draft_id})),
+             "own_site", json.dumps({"from_draft": draft_id}), summary),
         ).fetchone()
         conn.execute(
             "UPDATE content_drafts SET status='approved', reviewer=%s, reviewed_at=now(), "

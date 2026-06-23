@@ -11,6 +11,7 @@ import type {
   Asset,
   AuditRun,
   Answer,
+  CostBreakdown,
   AttributionRow,
   BeforeAfterPair,
   CompareResult,
@@ -53,6 +54,12 @@ function useApiQuery<T>(key: unknown[], path: string | null) {
 
 export function useDashboard(businessId: number | null) {
   return useApiQuery<Dashboard>(["dashboard", businessId], businessId ? `/businesses/${businessId}/dashboard` : null);
+}
+
+// Admin-only estimated COGS for the latest audit (per engine/operation) + month total.
+// Only mount the consuming component for admins, so non-admins never hit the 403.
+export function useCostBreakdown(businessId: number | null) {
+  return useApiQuery<CostBreakdown>(["cost-breakdown", businessId], businessId ? `/businesses/${businessId}/cost-breakdown` : null);
 }
 
 export function useAuditRuns(businessId: number | null) {
@@ -118,6 +125,37 @@ function useApiMutation<TVars>(
     onSuccess: () => {
       for (const key of invalidate) qc.invalidateQueries({ queryKey: key });
     },
+  });
+}
+
+// Guided first-run setup: create a business + competitors/keywords and kick off the full
+// pipeline in one POST. Returns the new business id + the queued jobs (so the UI can route
+// to the new business and show progress). Invalidates the business list so the switcher updates.
+export interface SetupBusinessVars {
+  name: string;
+  domain?: string;
+  services?: string;
+  industry?: string;
+  goal?: string;
+  contested_terms?: string;
+  geo?: string;
+  competitors?: { name: string; domain?: string }[];
+  keywords?: string[];
+  run_pipeline?: boolean;
+}
+export interface SetupBusinessResult {
+  business_id: number;
+  name: string;
+  competitors_added: number;
+  keywords_added: number;
+  jobs: { job_type: string; job_id: number | null; already_running?: boolean; error?: string }[];
+}
+export function useSetupBusiness() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: SetupBusinessVars) =>
+      apiFetch<SetupBusinessResult>("/onboarding/setup", { method: "POST", body: vars }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["businesses"] }),
   });
 }
 
@@ -358,6 +396,19 @@ export function useAssets(businessId: number | null) {
   return useApiQuery<Asset[]>(["assets", businessId], base(businessId, "/assets"));
 }
 
+// Record where a published asset went live (manual link) + flip pending -> live.
+export function usePatchAsset(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ assetId, published_url, published_status }: { assetId: number; published_url?: string; published_status?: string }) =>
+      apiFetch(`/businesses/${businessId}/assets/${assetId}`, {
+        method: "PATCH",
+        body: { published_url, published_status },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["assets", businessId] }),
+  });
+}
+
 // ---- outreach targets (manual add + status) ----
 export function useAddDiscoveryTarget(businessId: number | null) {
   return useApiMutation<{ name: string; channel?: string; outlet?: string; url?: string; beat?: string; rationale?: string }>(
@@ -388,7 +439,13 @@ export function useJobs(businessId: number | null, poll = true) {
     queryKey: ["jobs", businessId],
     queryFn: () => apiFetch<JobsResponse>(`/businesses/${businessId}/jobs`),
     enabled: !!user && !!businessId,
-    refetchInterval: poll ? 3000 : false,
+    // Only poll while something is actually in flight — an idle dashboard shouldn't hit
+    // /jobs every 3s forever. Mirrors the data-aware pattern in useExternalSignals.
+    refetchInterval: (q) => {
+      if (!poll) return false;
+      const jobs = (q.state.data as JobsResponse | undefined)?.jobs ?? [];
+      return jobs.some((j) => j.status === "running" || j.status === "queued") ? 3000 : false;
+    },
   });
 }
 
@@ -431,6 +488,17 @@ export function useCreateBusiness() {
     (v) => v,
     [["businesses"]],
   );
+}
+
+// PATCH an existing business (admin only). Pass { id, ...fields-to-update }; the backend
+// whitelists name/domain/services/goal/contested_terms/geo (+industry once migrated).
+export function useUpdateBusiness() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: number } & Record<string, unknown>) =>
+      apiFetch(`/admin/businesses/${id}`, { method: "PATCH", body: patch }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["businesses"] }),
+  });
 }
 
 // ---- external data ingestion ----

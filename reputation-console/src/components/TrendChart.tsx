@@ -13,7 +13,7 @@ const LINES = [
 
 export function TrendChart({ series }: { series: SeriesPoint[] }) {
   if (series.length < 2) {
-    return <p className="text-sm text-gray-400">Need at least two audits to show a trend.</p>;
+    return <p className="text-sm text-slate-400">Need at least two audits to show a trend.</p>;
   }
   const W = 640, H = 220, P = 28;
   const xs = series.map((_, i) => P + (i * (W - 2 * P)) / (series.length - 1));
@@ -38,7 +38,7 @@ export function TrendChart({ series }: { series: SeriesPoint[] }) {
           );
         })}
       </svg>
-      <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600">
+      <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-600">
         {LINES.map((l) => (
           <span key={l.key} className="flex items-center gap-1.5">
             <span className="inline-block h-2 w-3 rounded" style={{ background: l.color }} />

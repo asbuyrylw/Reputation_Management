@@ -35,8 +35,8 @@ export default function VisibilityTrendChart({ businessId }: { businessId: numbe
 
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-gray-900">Visibility over time</h3>
-      <p className="mt-0.5 text-xs text-gray-500">
+      <h3 className="text-sm font-semibold text-slate-900">Visibility over time</h3>
+      <p className="mt-0.5 text-xs text-slate-500">
         Share of category questions where AI surfaces you vs. competitors. Higher is better — the goal is your line
         climbing past theirs.
       </p>

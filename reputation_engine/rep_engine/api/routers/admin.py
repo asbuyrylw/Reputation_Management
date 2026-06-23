@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-_BUSINESS_FIELDS = ("name", "domain", "services", "goal", "contested_terms", "geo")
+_BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo")
 
 
 @router.get("/organizations")
@@ -129,9 +129,10 @@ def create_business(body: CreateBusinessRequest, _: dict = Depends(require_admin
             "SELECT 1 FROM organizations WHERE id=%s", (body.org_id,)).fetchone():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     row = conn.execute(
-        "INSERT INTO businesses (name, domain, services, goal, contested_terms, geo, org_id) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
-        (body.name, body.domain, body.services, body.goal, body.contested_terms, body.geo, body.org_id),
+        "INSERT INTO businesses (name, domain, services, industry, goal, contested_terms, geo, org_id) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (body.name, body.domain, body.services, body.industry, body.goal,
+         body.contested_terms, body.geo, body.org_id),
     ).fetchone()
     conn.commit()
     return dict(row)

@@ -123,8 +123,9 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
             if not quiet:
                 log.info("No competitors registered for business %d; add some first.", business_id)
             return {}
-        # a shared benchmark run id groups this comparison
-        run = conn.execute("INSERT INTO audit_runs (business_id) VALUES (%s) RETURNING id",
+        # a shared benchmark run id groups this comparison. kind='competitor' so it isn't
+        # mistaken for an AI-reputation audit in the Audits list.
+        run = conn.execute("INSERT INTO audit_runs (business_id, kind) VALUES (%s,'competitor') RETURNING id",
                            (business_id,)).fetchone()
         run_id = run["id"]
 
@@ -153,7 +154,9 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
                          json.dumps(sources), mentions_subject, mc, persona, location, failed),
                     )
                     recorded += 1
-        conn.execute("UPDATE audit_runs SET finished_at=now() WHERE id=%s", (run_id,))
+        # Leave finished_at NULL: a competitor benchmark is not an AI reputation audit, and the
+        # "latest AI audit" queries all filter `finished_at IS NOT NULL`. compare()/trend() read
+        # competitor_answers (by run_id), not this flag, so they're unaffected. (kind='competitor'.)
         conn.commit()
     if not quiet:
         log.info("Benchmark run %d complete (%d competitor-answer rows).", run_id, recorded)
@@ -210,21 +213,33 @@ def compare(business_id: int, quiet: bool = False) -> dict:
             })
         standings.sort(key=lambda x: x["appearance_rate"], reverse=True)
 
-        # head-to-head: prompts where subject appears and competitor doesn't (subject win) & vice-versa
+        # head-to-head: the actual prompts where subject appears and competitor doesn't (subject
+        # win), vice-versa, and where BOTH appear (ties). Returning the prompt text (not just a
+        # count) lets the console show WHICH questions drive each bucket -- the context the owner
+        # asked for ("only you / only them doesn't make sense without context").
+        def _distinct_prompts(comp_id: int, where: str) -> list[str]:
+            rows = conn.execute(
+                "SELECT DISTINCT a.prompt FROM competitor_answers a "
+                f"WHERE a.run_id=%s AND a.competitor_id=%s AND NOT a.failed AND {where} "
+                "ORDER BY a.prompt",
+                (rid, comp_id),
+            ).fetchall()
+            return [r["prompt"] for r in rows if r["prompt"]]
+
         head_to_head = []
         for comp in comps:
-            subj_only = conn.execute(
-                "SELECT COUNT(DISTINCT a.prompt) c FROM competitor_answers a "
-                "WHERE a.run_id=%s AND a.competitor_id=%s AND a.mentions_subject "
-                "AND NOT a.mentions_competitor AND NOT a.failed", (rid, comp["id"]),
-            ).fetchone()["c"]
-            comp_only = conn.execute(
-                "SELECT COUNT(DISTINCT a.prompt) c FROM competitor_answers a "
-                "WHERE a.run_id=%s AND a.competitor_id=%s AND a.mentions_competitor "
-                "AND NOT a.mentions_subject AND NOT a.failed", (rid, comp["id"]),
-            ).fetchone()["c"]
-            head_to_head.append({"competitor": comp["name"], "subject_only_prompts": subj_only,
-                                 "competitor_only_prompts": comp_only})
+            subj_only_list = _distinct_prompts(comp["id"], "a.mentions_subject AND NOT a.mentions_competitor")
+            comp_only_list = _distinct_prompts(comp["id"], "a.mentions_competitor AND NOT a.mentions_subject")
+            both_list = _distinct_prompts(comp["id"], "a.mentions_subject AND a.mentions_competitor")
+            head_to_head.append({
+                "competitor": comp["name"],
+                "subject_only_prompts": len(subj_only_list),
+                "competitor_only_prompts": len(comp_only_list),
+                # cap the lists so a huge battery can't bloat the payload; counts stay exact
+                "prompts_subject_only": subj_only_list[:30],
+                "prompts_competitor_only": comp_only_list[:30],
+                "prompts_both": both_list[:30],
+            })
 
     rank = next((i for i, s in enumerate(standings, 1) if s["is_subject"]), None)
     result = {

@@ -6,6 +6,7 @@ import { useReports, useTriggerJob, useEmailReport } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { Report } from "@/lib/types";
 
 function fmtDate(d: string): string {
@@ -42,24 +43,24 @@ function ReportRow({
     <li className="py-2.5">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-gray-900">{r.filename}</p>
-          <p className="text-xs text-gray-500">{fmtDate(r.created_at)}</p>
+          <p className="truncate text-sm font-medium text-slate-900">{r.filename}</p>
+          <p className="text-xs text-slate-500">{fmtDate(r.created_at)}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {canEdit && (
             <button onClick={() => { setOpen((o) => !o); setNote(null); }}
-              className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-100">
+              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100">
               Email
             </button>
           )}
           {r.has_pdf && (
             <button onClick={() => onDownload(r.id, r.filename, "pdf")} disabled={downloading}
-              className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50">
+              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50">
               PDF
             </button>
           )}
           <button onClick={() => onDownload(r.id, r.filename, "docx")} disabled={downloading}
-            className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50">
+            className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50">
             {downloading ? "Downloading…" : r.has_pdf ? "Word" : "Download"}
           </button>
         </div>
@@ -67,14 +68,14 @@ function ReportRow({
       {open && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com"
-            className="min-w-[16rem] flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
           <button onClick={send} disabled={email.isPending || !to.trim()}
-            className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50">
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
             {email.isPending ? "Sending…" : "Send"}
           </button>
         </div>
       )}
-      {note && <p className="mt-1 text-xs text-gray-500">{note}</p>}
+      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
     </li>
   );
 }
@@ -131,19 +132,21 @@ export default function ReportsPage() {
         subtitle="Your polished monthly AI-visibility reports — download and share them, or generate a fresh one."
       />
 
+      <JobProgressBanner businessId={businessId} className="mb-4" />
+
       {canEdit && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-gray-600">Generate a new monthly report from the latest data.</span>
+            <span className="text-sm text-slate-600">Generate a new monthly report from the latest data.</span>
             <button
               onClick={generate}
               disabled={generating || trigger.isPending}
-              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               {generating || trigger.isPending ? "Generating…" : "Generate report"}
             </button>
           </div>
-          <p className="mt-2 text-xs text-gray-400">A report takes a minute or two to build; it appears here automatically when ready.</p>
+          <p className="mt-2 text-xs text-slate-400">A report takes a minute or two to build; it appears here automatically when ready.</p>
         </Card>
       )}
 
@@ -160,7 +163,7 @@ export default function ReportsPage() {
         />
       ) : (
         <Card>
-          <ul className="divide-y divide-gray-100">
+          <ul className="divide-y divide-slate-100">
             {rows.map((r) => (
               <ReportRow
                 key={r.id}

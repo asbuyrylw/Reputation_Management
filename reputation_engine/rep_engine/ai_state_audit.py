@@ -33,6 +33,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as _futures
 import json
 import logging
 import os
@@ -82,8 +83,19 @@ BING_COPILOT_API_KEY = os.getenv("BING_COPILOT_API_KEY", "YOUR_BING_KEY")       
 SERPER_API_KEY_AIO = os.getenv("SERPER_API_KEY", "")
 # (OpenAI-with-search reuses OPENAI_API_KEY)
 
-ORCH_MODEL_ANTHROPIC = "claude-opus-4-8"          # PH 7  (set to your chosen model id)
-ORCH_MODEL_OPENAI = "gpt-4o"                       # PH 8
+ORCH_MODEL_ANTHROPIC = os.getenv("ORCH_MODEL_ANTHROPIC", "claude-opus-4-8")   # PH 7
+ORCH_MODEL_OPENAI = os.getenv("ORCH_MODEL_OPENAI", "gpt-4o")                  # PH 8
+# The ANSWER engines (what each assistant SAYS about the business) default to those flagship
+# models, but can be dialed to a cheaper tier INDEPENDENTLY of the orchestrator's synthesis +
+# scoring -- the single biggest answer-cost lever. e.g. ANSWER_MODEL_ANTHROPIC=claude-sonnet-4-6
+# measures "Claude Sonnet" instead of Opus at materially lower $/token, without touching the
+# gap-model synthesis (which stays on the full orchestrator model).
+ANSWER_MODEL_ANTHROPIC = os.getenv("ANSWER_MODEL_ANTHROPIC", ORCH_MODEL_ANTHROPIC)
+ANSWER_MODEL_OPENAI = os.getenv("ANSWER_MODEL_OPENAI", ORCH_MODEL_OPENAI)
+# Cap on Anthropic web_search tool uses per answer (each search feeds its results back as INPUT
+# tokens -- the dominant audit cost). Lower it (e.g. 2) to cut grounding spend; the model still
+# grounds, just with fewer searches. Default 5 preserves prior behavior.
+_WEB_SEARCH_MAX_USES = int(os.getenv("AUDIT_WEB_SEARCH_MAX_USES", "5"))
 # Cheap tier for the high-volume scoring pass (one call per answer per sample). Using
 # a smaller model here is the single biggest cost lever; synthesis still uses the
 # full models above. Set to the same value to disable tiering.
@@ -139,12 +151,48 @@ def _obs_headers() -> dict:
         return {}
 
 
+# Audit resilience knobs (env-overridable). The defaults bound the worst-case damage a single
+# slow/dead provider can do to a run:
+#  - _ENGINE_MAX_RETRIES: per-call retry cap for engine answers. The global http default is 4;
+#    at a 40-90s timeout that is ~3 min PER failed call. 2 keeps a transient blip survivable
+#    without letting a dead provider add hours.
+#  - _AUDIT_CIRCUIT_TRIP: after this many CONSECUTIVE failures, a provider is "circuit-broken"
+#    for the rest of the run and its remaining answers are recorded as refreshable 'failed'
+#    markers WITHOUT calling it again -- so e.g. a Perplexity outage costs ~3 calls, not ~44.
+_ENGINE_MAX_RETRIES = int(os.getenv("AUDIT_ENGINE_MAX_RETRIES", "2"))
+_AUDIT_CIRCUIT_TRIP = int(os.getenv("AUDIT_CIRCUIT_TRIP", "3"))
+#  - _AUDIT_ENGINE_CONCURRENCY: how many engines to query at once within a single prompt-sample.
+#    The engines are independent network calls, so a prompt that hit 5 engines sequentially
+#    (~5x the slowest call) now takes ~1x the slowest call. Set to 1 to force the old sequential
+#    behavior. DB writes stay on the main thread (one connection); only the network is parallel.
+_AUDIT_ENGINE_CONCURRENCY = int(os.getenv("AUDIT_ENGINE_CONCURRENCY", "5"))
+
+
+def _audit_fetch_one(b, prompt: str, eng):
+    """Network-only half of one (prompt, engine) call: get the engine's answer and (unless
+    batch scoring) score it. Does NO database work, so it is safe to run concurrently across
+    engines in a thread pool. Any exception is folded into a 'failed' result so one engine
+    throwing can never crash the whole concurrent batch."""
+    try:
+        ans = eng.answer(prompt)
+    except Exception as e:  # noqa: BLE001 -- a raised provider error == a failed answer
+        return eng, {"text": "", "sources": [], "failed": True, "error": f"{eng.name} raised: {e}"}, {}
+    score: dict = {}
+    if ans.get("text") and not ans.get("failed") and not _batch_scoring():
+        try:
+            score = score_answer(b, prompt, ans)
+        except Exception:  # noqa: BLE001 -- unscored -> treated as scoring_failed downstream
+            score = {}
+    return eng, ans, score
+
+
 def _llm_http(method: str, url: str, *, headers: Optional[dict] = None, **kw):
     """LLM HTTP call -- like http.request_json but merges the optional proxy /
     observability headers from _obs_headers(), so the whole LLM layer can be routed
     through a gateway via env. Scoped to LLM calls so the gateway auth header is
     never sent to a crawled customer page (crawl uses http.request_json directly)."""
     merged = {**(headers or {}), **_obs_headers()}
+    kw.setdefault("max_retries", _ENGINE_MAX_RETRIES)   # bound retries so one dead provider can't dominate a run
     return http.request_json(method, url, headers=merged or None, **kw)
 
 
@@ -375,8 +423,20 @@ def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
     name = b["name"]
     svc = b.get("services") or "its services"
     out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+
+    def _add(prompt: str, persona: str, location: str) -> None:
+        # Dedup by the FINAL prompt TEXT: a lens only adds signal if it changes the text the
+        # engine actually sees (the persona/location is metadata the engine never reads). The
+        # prospective_client lens has no location framing, so its text is identical to the
+        # generic battery -- adding it would just re-ask the same question (wasted spend +
+        # duplicate rows in the per-prompt view). Skip any lens whose text we already have.
+        if prompt and prompt not in seen:
+            seen.add(prompt)
+            out.append((prompt, persona, location))
+
     for prompt in build_prompt_battery(b):
-        out.append((prompt, "", ""))   # generic lens = full battery
+        _add(prompt, "", "")   # generic lens = full battery
     focused = [
         f"Is {name} legitimate and trustworthy?",
         f"Should I use {name} for {svc}?",
@@ -386,10 +446,8 @@ def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
         if persona == "" and location == "":
             continue  # already covered by the full battery above
         for prompt in focused:
-            framed = prompt
-            if location:
-                framed = f"{prompt} (I'm in {location})"
-            out.append((framed, persona, location))
+            framed = f"{prompt} (I'm in {location})" if location else prompt
+            _add(framed, persona, location)
     return out
 
 
@@ -543,7 +601,7 @@ class PerplexityEngine:
 
 class OpenAISearchEngine:
     name = "openai_search"
-    model = ORCH_MODEL_OPENAI
+    model = ANSWER_MODEL_OPENAI
 
     def answer(self, prompt: str) -> dict:
         if "YOUR_OPENAI" in OPENAI_API_KEY:
@@ -567,7 +625,7 @@ class OpenAISearchEngine:
 
 class AnthropicEngine:
     name = "anthropic"
-    model = ORCH_MODEL_ANTHROPIC
+    model = ANSWER_MODEL_ANTHROPIC
 
     def answer(self, prompt: str) -> dict:
         if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
@@ -580,7 +638,8 @@ class AnthropicEngine:
         body = {"model": self.model, "max_tokens": 1024,
                 "messages": [{"role": "user", "content": prompt}]}
         if _grounding_enabled():
-            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search",
+                              "max_uses": _WEB_SEARCH_MAX_USES}]
         res = _llm_http(
             "POST", f"{ANTHROPIC_BASE}/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY,
@@ -1024,6 +1083,13 @@ def score_answer(b: dict, prompt: str, ans: dict) -> dict:
 # ----------------------------------------------------------------------------
 # AUDIT: run the battery across all engines, score, store
 # ----------------------------------------------------------------------------
+# Global default sample count when a business has no explicit `samples_per_prompt` config.
+# Multi-sampling reduces LLM variance but each extra sample is another full answer+score call
+# for every (prompt, engine) -> a direct cost multiplier. Set AUDIT_SAMPLES_DEFAULT=1 to roughly
+# halve audit COGS fleet-wide; a per-business config row still overrides this.
+_DEFAULT_SAMPLES = max(1, int(os.getenv("AUDIT_SAMPLES_DEFAULT", "2")))
+
+
 def _samples_per_prompt(conn, business_id: int) -> int:
     """Per-business sample count (multi-sampling reduces LLM variance/noise).
     Interpreted as the MAX samples; adaptive sampling may stop earlier when stable."""
@@ -1032,9 +1098,9 @@ def _samples_per_prompt(conn, business_id: int) -> int:
             "SELECT samples_per_prompt FROM business_config WHERE business_id=%s",
             (business_id,),
         ).fetchone()
-        return int(row["samples_per_prompt"]) if row and row["samples_per_prompt"] else 2
+        return int(row["samples_per_prompt"]) if row and row["samples_per_prompt"] else _DEFAULT_SAMPLES
     except Exception:  # noqa: BLE001  -- config table may not exist yet
-        return 2
+        return _DEFAULT_SAMPLES
 
 
 # Adaptive sampling: stop early once we have >= MIN samples whose goal_alignment is
@@ -1142,80 +1208,115 @@ def audit(business_id: int) -> int:
             samples = _samples_per_prompt(conn, business_id)
             log.info("Auditing '%s': %d prompt-lenses x %d engines x %d samples",
                      b["name"], len(battery), len(engines), samples)
+            # Per-engine circuit breaker for THIS run. After _AUDIT_CIRCUIT_TRIP consecutive
+            # failures a provider is skipped for every remaining prompt (recorded as refreshable
+            # 'failed' rows) so a dead/slow engine can't add hours. Top it up later with
+            # refresh_failed_answers() once the provider recovers.
+            _fail_streak: dict[str, int] = {}
+            _tripped: set[str] = set()
             for prompt, persona, location in battery:
+                # Circuit-broken providers: record a refreshable marker without paying for
+                # another doomed call (do this once per prompt, not per sample).
                 for eng in engines:
-                    _sample_scores: list[float] = []   # goal_alignment seen for this (prompt,engine)
-                    for s in range(samples):
-                        # mid-audit budget check so a runaway stops cleanly
-                        if cost.over_budget(business_id):
-                            log.warning("Budget reached mid-audit; stopping early (run %d).", run_id)
-                            # Mark aborted but leave finished_at NULL: this partial run is
-                            # non-representative, so it must be excluded from every trend/
-                            # attribution/learning query (all gate on finished_at IS NOT NULL).
-                            conn.execute("UPDATE audit_runs SET status='aborted' WHERE id=%s", (run_id,))
-                            conn.commit()
-                            return run_id
-                        ans = eng.answer(prompt)
+                    if eng.name in _tripped:
+                        _audit_persist_answer(
+                            conn, run_id, business_id, eng, prompt,
+                            {"text": "", "sources": [], "failed": True,
+                             "error": f"skipped: {eng.name} circuit-broken after repeated failures this run"},
+                            {}, True, False, True, 0, persona, location)
+
+                # Engines still in play for this prompt. Each sample round queries them
+                # CONCURRENTLY (independent network calls); an engine drops out of `sampling`
+                # once it stabilizes (adaptive) or trips the breaker.
+                sampling = [e for e in engines if e.name not in _tripped]
+                sample_scores: dict[str, list[float]] = {e.name: [] for e in sampling}
+                for s in range(samples):
+                    if not sampling:
+                        break
+                    # mid-audit budget check so a runaway stops cleanly (per sample round)
+                    if cost.over_budget(business_id):
+                        log.warning("Budget reached mid-audit; stopping early (run %d).", run_id)
+                        # Mark aborted but leave finished_at NULL: this partial run is
+                        # non-representative, so it must be excluded from every trend/
+                        # attribution/learning query (all gate on finished_at IS NOT NULL).
+                        conn.execute("UPDATE audit_runs SET status='aborted' WHERE id=%s", (run_id,))
+                        conn.commit()
+                        return run_id
+
+                    # --- network: query all still-sampling engines concurrently (answer + score) ---
+                    if _AUDIT_ENGINE_CONCURRENCY > 1 and len(sampling) > 1:
+                        with _futures.ThreadPoolExecutor(
+                                max_workers=min(_AUDIT_ENGINE_CONCURRENCY, len(sampling))) as _ex:
+                            results = list(_ex.map(lambda e: _audit_fetch_one(b, prompt, e), sampling))
+                    else:
+                        results = [_audit_fetch_one(b, prompt, e) for e in sampling]
+
+                    # --- DB: persist + score-accounting sequentially on the one connection ---
+                    drop: set[str] = set()
+                    for eng, ans, score in results:
                         failed = bool(ans.get("failed"))
                         skipped = bool(ans.get("skipped"))
                         has_text = bool(ans.get("text"))
 
-                        # A FAILED call (retries exhausted / bad shape) must never be
-                        # recorded as a real empty answer -- that would silently drag
-                        # metrics down. Skip scoring; store with NULL metrics + flag.
+                        # A FAILED call must never be recorded as a real empty answer -- it would
+                        # silently drag metrics down. NULL metrics + failed flag instead.
                         if has_text and not failed:
                             _u = ans.get("usage")  # real provider tokens when available
                             cost.record(business_id, run_id, eng.name, "answer",
                                         getattr(eng, "model", eng.name),
                                         _u["input"] if _u else cost.approx_tokens(prompt),
                                         _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
-                            if _batch_scoring():
-                                score = {}   # defer to the 50%-off batch pass (orchestrator)
-                            else:
-                                score = score_answer(b, prompt, ans)
-                                # the scoring pass itself costs money (cheap tier) -- track it
+                            if not _batch_scoring():
+                                # scoring (done in the worker thread) costs money on the cheap tier
                                 _score_model, _ = _model_for("cheap") if ORCHESTRATOR == "anthropic" \
                                     else (None, None)
                                 if _score_model is None:
                                     _, _score_model = _model_for("cheap")
-                                cost.record(business_id, run_id, ORCHESTRATOR, "score",
-                                            _score_model,
-                                            cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")),
-                                            200)  # scoring output is small, bounded JSON
-                        else:
-                            score = {}
+                                cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model,
+                                            cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")), 200)
 
                         if skipped:
-                            # key not configured -> don't store a row at all
+                            drop.add(eng.name)   # key not configured -> don't store, stop querying it
                             continue
 
-                        # A successful engine call whose answer could not be SCORED (LLM
-                        # returned nothing parseable, or the JSON failed ScoreResult
-                        # validation -> score == {}) must be treated like a failed row:
-                        # store NULL metrics + failed=True so it is excluded from every KPI
-                        # (contested_rate/owned_rate/avg all gate on NOT failed). EXCEPTION:
-                        # in batch mode an unscored answer is deferred (scored later by the
-                        # batch pass), so it is NOT a failure -- keep it (failed=False, NULL
-                        # metrics) for batch.score_run_batched to fill in.
+                        # An answered-but-unscorable row is treated like a failure (NULL metrics +
+                        # failed=True so it is excluded from every KPI). In batch mode an unscored
+                        # answer is deferred to the batch pass, so it is NOT a failure.
                         scoring_failed = (has_text and not failed and not score) and not _batch_scoring()
                         row_failed = failed or scoring_failed
-
                         _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans,
                                               score, row_failed, scoring_failed, failed, s,
                                               persona, location)
-                        time.sleep(POLITE_DELAY_S)
 
-                        # adaptive sampling: once stable + clear of the decision boundary,
-                        # stop sampling this (prompt, engine) -- more samples won't change it.
+                        # circuit-breaker accounting on REAL calls only
+                        if failed:
+                            _fail_streak[eng.name] = _fail_streak.get(eng.name, 0) + 1
+                            if _fail_streak[eng.name] >= _AUDIT_CIRCUIT_TRIP:
+                                _tripped.add(eng.name)
+                                drop.add(eng.name)
+                                log.warning(
+                                    "Engine %s circuit-broken after %d consecutive failures; skipping "
+                                    "it for the rest of run %d (re-run it later with refresh_failed).",
+                                    eng.name, _fail_streak[eng.name], run_id)
+                        else:
+                            _fail_streak[eng.name] = 0
+
+                        # adaptive sampling: stop sampling this (prompt, engine) once stable
                         if not row_failed and score.get("goal_alignment") is not None:
                             try:
-                                _sample_scores.append(float(score["goal_alignment"]))
+                                sample_scores[eng.name].append(float(score["goal_alignment"]))
                             except (TypeError, ValueError):
                                 pass
-                        if ADAPTIVE_SAMPLING and _should_stop_sampling(_sample_scores):
-                            log.debug("adaptive stop after %d samples (stable) for %r/%s",
-                                      len(_sample_scores), prompt[:40], eng.name)
-                            break
+                        if ADAPTIVE_SAMPLING and _should_stop_sampling(sample_scores.get(eng.name, [])):
+                            drop.add(eng.name)
+
+                    if drop:
+                        sampling = [e for e in sampling if e.name not in drop]
+                    time.sleep(POLITE_DELAY_S)   # pace between sample rounds
+                # Commit after each prompt: completed answers are durable, so a mid-run crash
+                # (or a killed worker) preserves the work done so far instead of rolling back the
+                # whole battery. The per-business advisory lock is session-level, so this is safe.
+                conn.commit()
             conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
             conn.commit()
         except SystemExit:
@@ -1239,6 +1340,89 @@ def audit(business_id: int) -> int:
     log.info("Audit run %d complete. Month spend: $%.2f / $%.2f",
              run_id, cost.month_spend(business_id), cost.budget_for(business_id))
     return run_id
+
+
+def refresh_failed_answers(business_id: int, engines: Optional[list[str]] = None,
+                           quiet: bool = False) -> dict:
+    """Re-run ONLY the failed answers in the latest completed audit run and merge the results
+    in place, then rebuild the gap model. This is the "top up a provider that was down" path:
+    an audit can finish with the engines that worked (a circuit-broken engine leaves refreshable
+    'failed' rows), then later -- once e.g. Perplexity recovers -- this re-pulls just those
+    answers WITHOUT re-paying for the ones that already succeeded. Optionally limit to specific
+    `engines` (e.g. ['perplexity']). Background-job only (LLM spend)."""
+    init_db()
+    _audit_check_budget_or_exit(business_id)
+    with db() as conn:
+        # Same per-business advisory lock as audit(): never run two engine passes for one
+        # business at once (budget race + duplicate spend). Auto-released when conn closes.
+        if not conn.execute("SELECT pg_try_advisory_lock(%s) AS ok", (business_id,)).fetchone()["ok"]:
+            raise SystemExit(f"Another audit/refresh is already running for business {business_id}.")
+        b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not b:
+            raise ValueError(f"No business id {business_id}")
+        run = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "AND status='complete' AND kind='ai_audit' ORDER BY id DESC LIMIT 1",
+            (business_id,),
+        ).fetchone()
+        if not run:
+            return {"skipped": True, "reason": "no completed audit run to refresh"}
+        run_id = run["id"]
+        q = ("SELECT id, engine, prompt, persona, location, sample_idx FROM answers "
+             "WHERE run_id=%s AND failed=true")
+        params: list = [run_id]
+        if engines:
+            q += " AND engine = ANY(%s)"
+            params.append(list(engines))
+        failed_rows = conn.execute(q, params).fetchall()
+        if not failed_rows:
+            return {"run_id": run_id, "refreshed": 0, "still_failed": 0, "reason": "no failed answers"}
+
+        eng_by_name = {e.name: e for e in active_engines()}
+        refreshed = still_failed = 0
+        for r in failed_rows:
+            if cost.over_budget(business_id):
+                log.warning("Budget reached during refresh; stopping early (run %d).", run_id)
+                break
+            eng = eng_by_name.get(r["engine"])
+            if eng is None:                       # engine no longer active/configured
+                still_failed += 1
+                continue
+            ans = eng.answer(r["prompt"])
+            if ans.get("skipped") or ans.get("failed") or not ans.get("text"):
+                still_failed += 1                 # still down / unparseable -> leave the failed row
+                continue
+            # Score inline (refresh is a small set; don't defer to the batch pass).
+            score = score_answer(b, r["prompt"], ans)
+            if not score:
+                still_failed += 1                 # answered but unscorable -> leave it failed
+                continue
+            _u = ans.get("usage")
+            cost.record(business_id, run_id, eng.name, "answer", getattr(eng, "model", eng.name),
+                        _u["input"] if _u else cost.approx_tokens(r["prompt"]),
+                        _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
+            _, _score_model = _model_for("cheap")
+            cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model,
+                        cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")), 200)
+            # Replace the failed row via the canonical persist path (delete + re-insert) so the
+            # metric columns are written exactly as a fresh audit would. Aggregates (score,
+            # contested/owned rates) are computed on read, so they pick this up automatically.
+            conn.execute("DELETE FROM answers WHERE id=%s", (r["id"],))
+            _audit_persist_answer(conn, run_id, business_id, eng, r["prompt"], ans, score,
+                                  False, False, False, r["sample_idx"], r["persona"], r["location"])
+            conn.commit()
+            refreshed += 1
+            time.sleep(POLITE_DELAY_S)
+
+    if refreshed:
+        try:
+            build_gap_model(business_id)          # weak_queries / actions now reflect the fuller data
+        except Exception:  # noqa: BLE001 -- a gap-rebuild hiccup must not undo the refreshed answers
+            log.exception("gap rebuild after refresh failed (business %d)", business_id)
+    if not quiet:
+        log.info("Refresh for business %d run %d: %d refreshed, %d still failed.",
+                 business_id, run_id, refreshed, still_failed)
+    return {"run_id": run_id, "refreshed": refreshed, "still_failed": still_failed}
 
 
 # ----------------------------------------------------------------------------

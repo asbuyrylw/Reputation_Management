@@ -8,6 +8,7 @@ import {
 } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import { JobProgressBanner } from "@/components/JobProgressBanner";
 import PromptResultsPanel from "@/components/PromptResultsPanel";
 import type { CustomPrompt } from "@/lib/types";
 
@@ -36,17 +37,17 @@ export default function PromptsPage() {
     );
 
   const Row = ({ p }: { p: CustomPrompt }) => (
-    <div className="flex items-start justify-between gap-3 border-t border-gray-100 py-2.5 first:border-0">
+    <div className="flex items-start justify-between gap-3 border-t border-slate-100 py-2.5 first:border-0">
       <div className="min-w-0">
-        <p className="text-sm text-gray-900">{p.prompt}</p>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
-          {p.topic && <span className="rounded bg-gray-100 px-1.5 py-0.5">{p.topic}</span>}
+        <p className="text-sm text-slate-900">{p.prompt}</p>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+          {p.topic && <span className="rounded bg-slate-100 px-1.5 py-0.5">{p.topic}</span>}
           {(p.tags || "")
             .split(",")
             .map((t) => t.trim())
             .filter(Boolean)
             .map((t) => (
-              <span key={t} className="text-gray-400">#{t}</span>
+              <span key={t} className="text-slate-400">#{t}</span>
             ))}
           {p.source === "ai_suggested" && <span className="text-violet-600">AI-suggested</span>}
         </div>
@@ -57,15 +58,15 @@ export default function PromptsPage() {
             onClick={() => update.mutate({ id: p.id, enabled: !p.enabled })}
             className={`rounded-md px-2 py-1 text-xs font-medium ${
               p.enabled
-                ? "border border-gray-300 text-gray-600 hover:bg-gray-100"
-                : "bg-gray-900 text-white hover:bg-gray-700"
+                ? "border border-slate-300 text-slate-600 hover:bg-slate-100"
+                : "bg-slate-900 text-white hover:bg-slate-700"
             }`}
           >
             {p.enabled ? "Tracking" : "Track"}
           </button>
           <button
             onClick={() => del.mutate(p.id)}
-            className="text-gray-400 hover:text-rose-600"
+            className="text-slate-400 hover:text-rose-600"
             aria-label="delete"
           >
             ×
@@ -78,14 +79,17 @@ export default function PromptsPage() {
   return (
     <div>
       <PageHeader
+        eyebrow="Prompts"
         title="Prompts & topics"
         subtitle="The exact questions we ask the AI engines about you. Add your own — every tracked prompt flows through the audit, the gap analysis, the content plan, and the competitor benchmark."
       />
 
+      <JobProgressBanner businessId={businessId} className="mb-4" />
+
       {canEdit && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-gray-600">Add a question your customers (or critics) would ask AI about you.</span>
+            <span className="text-sm text-slate-600">Add a question your customers (or critics) would ask AI about you.</span>
             <button
               onClick={runSuggest}
               disabled={suggest.isPending}
@@ -99,13 +103,13 @@ export default function PromptsPage() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="e.g. Is Acme a pyramid scheme or a legitimate business?"
-              className="min-w-[18rem] flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+              className="min-w-[18rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
             />
             <input
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="Topic (optional)"
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
             />
             <button
               onClick={() =>
@@ -113,7 +117,7 @@ export default function PromptsPage() {
                 add.mutate({ prompt: text, topic }, { onSuccess: () => { setText(""); setTopic(""); } })
               }
               disabled={add.isPending || !text.trim()}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 disabled:opacity-50"
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
             >
               Add prompt
             </button>
@@ -142,22 +146,22 @@ export default function PromptsPage() {
             </Card>
           )}
           <Card>
-            <h3 className="text-sm font-semibold text-gray-900">
+            <h3 className="text-sm font-semibold text-slate-900">
               Tracked prompts ({enabled.length})
             </h3>
-            <p className="mt-0.5 text-xs text-gray-500">These run on every audit. Pause one to stop tracking it without deleting it.</p>
+            <p className="mt-0.5 text-xs text-slate-500">These run on every audit. Pause one to stop tracking it without deleting it.</p>
             {update.isError && <p className="mt-1 text-xs text-rose-600">{(update.error as Error)?.message}</p>}
             <div className="mt-2">
               {enabled.length === 0
-                ? <p className="py-2 text-sm text-gray-400">None tracked yet — add one above, or enable a suggestion.</p>
+                ? <p className="py-2 text-sm text-slate-400">None tracked yet — add one above, or enable a suggestion.</p>
                 : enabled.map((p) => <Row key={p.id} p={p} />)}
             </div>
           </Card>
 
           {paused.length > 0 && (
             <Card>
-              <h3 className="text-sm font-semibold text-gray-900">Paused ({paused.length})</h3>
-              <p className="mt-0.5 text-xs text-gray-500">Not tracked right now. Click “Track” to include one in the next audit.</p>
+              <h3 className="text-sm font-semibold text-slate-900">Paused ({paused.length})</h3>
+              <p className="mt-0.5 text-xs text-slate-500">Not tracked right now. Click “Track” to include one in the next audit.</p>
               <div className="mt-2">{paused.map((p) => <Row key={p.id} p={p} />)}</div>
             </Card>
           )}

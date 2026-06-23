@@ -8,7 +8,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   if (user?.role !== "admin") {
     return (
       <Card>
-        <p className="text-sm text-gray-600">Admin access required.</p>
+        <p className="text-sm text-slate-600">Admin access required.</p>
       </Card>
     );
   }

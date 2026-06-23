@@ -75,7 +75,9 @@ def _imp(name: str):
 
 
 def _run_site_crawl(business_id: int, args: dict) -> None:
-    _imp("site_crawl").crawl_cmd(business_id, int(args.get("max_pages", 15)))
+    # Default raised 15 -> 40 to match crawl_site()'s own default, so larger sites aren't
+    # truncated mid-crawl. Small WordPress sites still finish well under the cap.
+    _imp("site_crawl").crawl_cmd(business_id, int(args.get("max_pages", 40)))
 
 
 def _run_gap_model(business_id: int, args: dict) -> None:
@@ -103,11 +105,14 @@ def _run_discovery(business_id: int, args: dict) -> None:
     _imp("agent_discovery").discover(business_id)
 
 
-def _run_mentions_scan(business_id: int, args: dict) -> None:
-    """Scan the configured sources for new mentions, then draft (human-gated) replies."""
+def _run_mentions_scan(business_id: int, args: dict):
+    """Scan the configured sources for new mentions, then draft (human-gated) replies.
+    Returns the discovered/drafted counts so a scan that found nothing reads as such in the
+    job result rather than a bare 'complete'."""
     mm = _imp("mention_monitor")
-    mm.discover(business_id, quiet=True)
-    mm.draft_replies(business_id, quiet=True)
+    found = mm.discover(business_id, quiet=True) or {}
+    drafted = mm.draft_replies(business_id, quiet=True) or {}
+    return {"discovered": found.get("found"), "drafted": drafted.get("drafted")}
 
 
 def _run_incident_scan(business_id: int, args: dict) -> None:
@@ -125,20 +130,35 @@ def _run_alert_check(business_id: int, args: dict) -> None:
     _imp("notifications").check_and_notify(business_id, quiet=True)
 
 
-def _run_benchmark(business_id: int, args: dict) -> None:
+def _run_benchmark(business_id: int, args: dict):
     """Competitor benchmark: how often AI surfaces YOU vs each registered competitor."""
-    _imp("competitor").benchmark(business_id, quiet=True)
+    return _imp("competitor").benchmark(business_id, quiet=True)
 
 
-def _run_local_rank(business_id: int, args: dict) -> None:
+def _run_local_rank(business_id: int, args: dict):
     """Local SEO: capture Google front-page + local-pack rankings for the category-local
-    queries (subject + competitors). No-op without SERPER_API_KEY."""
-    _imp("local_seo").track(business_id, quiet=True)
+    queries (subject + competitors). No-op without SERPER_API_KEY. Returns a summary dict
+    ({skipped, reason} or {run_id, rows, queries}) so the UI can explain what happened."""
+    return _imp("local_seo").track(business_id, quiet=True)
 
 
-def _run_suggest_prompts(business_id: int, args: dict) -> None:
+def _run_suggest_prompts(business_id: int, args: dict):
     """LLM proposes candidate tracking prompts (saved DISABLED for owner review)."""
-    _imp("prompts").suggest(business_id, n=int(args.get("n", 8)), quiet=True)
+    return _imp("prompts").suggest(business_id, n=int(args.get("n", 8)), quiet=True)
+
+
+def _run_refresh_failed(business_id: int, args: dict):
+    """Re-run only the failed answers in the latest audit (optionally limited to args['engines'],
+    e.g. ['perplexity']) and merge them in, then rebuild the gap model. Lets a provider that was
+    down during the audit be topped up later without re-paying for the answers that worked."""
+    engines = args.get("engines") or None
+    return _imp("ai_state_audit").refresh_failed_answers(business_id, engines=engines)
+
+
+def _run_suggest_keywords(business_id: int, args: dict):
+    """LLM proposes brand-monitoring keywords. Returns {keywords:[...]} in the job result for
+    the owner to review and add (nothing is saved here)."""
+    return _imp("mention_monitor").suggest_keywords(business_id, n=int(args.get("n", 10)), quiet=True)
 
 
 JOB_DISPATCH = {
@@ -160,13 +180,19 @@ JOB_DISPATCH = {
     "alert_check": _run_alert_check,
     "benchmark": _run_benchmark,
     "local_rank": _run_local_rank,
+    "refresh_failed": _run_refresh_failed,
     "suggest_prompts": _run_suggest_prompts,
+    "suggest_keywords": _run_suggest_keywords,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }
 
 
-STALE_RUNNING_MINUTES = 30
+# Generous enough to clear a genuinely crashed/wedged job, but comfortably longer than the
+# worst-case real job (a full `cycle` = audit -> gap -> plan -> report can run many minutes).
+# Too small and a legitimately long job gets reaped, the dedup frees up, and a re-trigger or the
+# scheduler starts a second concurrent copy.
+STALE_RUNNING_MINUTES = 90
 
 
 def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
@@ -187,13 +213,19 @@ def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
 
 
 def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
-            args: Optional[dict] = None) -> tuple[Optional[int], Optional[int]]:
+            args: Optional[dict] = None,
+            depends_on: Optional[list] = None) -> tuple[Optional[int], Optional[int]]:
     """Insert a queued job unless one of the same type is already active for this
     business. Returns (job_id, active_job_id): job_id set on success; otherwise
-    active_job_id of the in-flight job (so the caller can 409)."""
+    active_job_id of the in-flight job (so the caller can 409).
+
+    `depends_on` is a list of api_jobs.id this job must wait for: pump() will not claim it
+    until ALL of them are 'complete'. This makes a multi-step pipeline's ordering explicit so
+    it is correct with ANY number of workers (not just a single FIFO consumer)."""
     if job_type not in JOB_DISPATCH:
         raise ValueError(f"unknown job_type: {job_type}")
     reap_stale()  # clear any deadlocked 'running' job first, so a crash can't block forever
+    deps = list(depends_on) if depends_on else None
     with db() as conn:
         active = conn.execute(
             "SELECT id FROM api_jobs WHERE business_id=%s AND job_type=%s "
@@ -202,13 +234,27 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
         ).fetchone()
         if active:
             return None, active["id"]
+        # Atomic dedup: the SELECT above is a fast path, but the partial UNIQUE index
+        # uq_api_jobs_active(business_id, job_type) WHERE status IN ('queued','running') is the
+        # real guard against two concurrent triggers both inserting (which would double the LLM
+        # spend the dedup exists to prevent). ON CONFLICT DO NOTHING -> no row means we lost the
+        # race, so return the winner's id.
         row = conn.execute(
-            "INSERT INTO api_jobs (business_id, job_type, status, args, requested_by) "
-            "VALUES (%s,%s,'queued',%s,%s) RETURNING id",
-            (business_id, job_type, json.dumps(args or {}), requested_by),
+            "INSERT INTO api_jobs (business_id, job_type, status, args, requested_by, depends_on) "
+            "VALUES (%s,%s,'queued',%s,%s,%s) "
+            "ON CONFLICT (business_id, job_type) WHERE status IN ('queued','running') DO NOTHING "
+            "RETURNING id",
+            (business_id, job_type, json.dumps(args or {}), requested_by, deps),
         ).fetchone()
         conn.commit()
-    return row["id"], None
+        if row:
+            return row["id"], None
+        active = conn.execute(
+            "SELECT id FROM api_jobs WHERE business_id=%s AND job_type=%s "
+            "AND status IN ('queued','running') ORDER BY id DESC LIMIT 1",
+            (business_id, job_type),
+        ).fetchone()
+        return None, (active["id"] if active else None)
 
 
 def run_job(job_id: int) -> Optional[str]:
@@ -223,27 +269,46 @@ def run_job(job_id: int) -> Optional[str]:
         conn.commit()
     if not job:
         return None
-    status, err = "complete", None
+    status, err, result = "complete", None, None
     try:
-        JOB_DISPATCH[job["job_type"]](job["business_id"], job.get("args") or {})
+        ret = JOB_DISPATCH[job["job_type"]](job["business_id"], job.get("args") or {})
+        # Persist the dispatch fn's structured return (e.g. local_rank's {skipped, reason} or
+        # {rows, queries}) so a job that did nothing reportable doesn't read as a bare "complete".
+        if isinstance(ret, dict):
+            result = ret
     except Exception as e:  # noqa: BLE001 -- record failure, never crash the runner
         status, err = "failed", str(e)[:2000]
         log.warning("job %s (%s) failed: %s", job_id, job["job_type"], e)
     with db() as conn:
         conn.execute(
-            "UPDATE api_jobs SET status=%s, error=%s, finished_at=now() WHERE id=%s",
-            (status, err, job_id),
+            "UPDATE api_jobs SET status=%s, error=%s, result=%s, finished_at=now() WHERE id=%s",
+            (status, err, json.dumps(result) if result is not None else None, job_id),
         )
         conn.commit()
     return status
 
 
 def pump() -> bool:
-    """Run the next queued job, if any. Returns True if one ran. Used by the in-process
-    scheduler loop (inline mode) and the worker so scheduler-enqueued jobs actually execute."""
+    """Run the next RUNNABLE queued job, if any. Returns True if one ran. A job is runnable only
+    once all of its `depends_on` jobs are 'complete' -- so a multi-step pipeline stays correctly
+    ordered with any number of workers, not just a single FIFO consumer."""
     with db() as conn:
+        # Cascade-fail a queued job whose prerequisite failed/aborted, so it can't wait forever.
+        # (Runs each tick, so the failure propagates down the chain over successive pumps.)
+        conn.execute(
+            "UPDATE api_jobs SET status='failed', "
+            "error='skipped: a prerequisite job failed', finished_at=now() "
+            "WHERE status='queued' AND depends_on IS NOT NULL AND EXISTS ("
+            "  SELECT 1 FROM api_jobs d WHERE d.id = ANY(api_jobs.depends_on) "
+            "  AND d.status IN ('failed','aborted'))"
+        )
+        conn.commit()
+        # Claim the oldest queued job whose dependencies are ALL complete (or it has none).
         row = conn.execute(
-            "SELECT id FROM api_jobs WHERE status='queued' ORDER BY id LIMIT 1"
+            "SELECT id FROM api_jobs j WHERE status='queued' "
+            "AND NOT EXISTS (SELECT 1 FROM api_jobs d "
+            "                WHERE d.id = ANY(j.depends_on) AND d.status <> 'complete') "
+            "ORDER BY id LIMIT 1"
         ).fetchone()
     if not row:
         return False

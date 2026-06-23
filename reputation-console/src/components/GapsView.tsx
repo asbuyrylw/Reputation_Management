@@ -38,7 +38,7 @@ function ActionItem({ text }: { text: string }) {
   if (i > 0 && i <= 48) {
     return (
       <li>
-        <span className="font-semibold text-gray-800">{text.slice(0, i)}:</span> {text.slice(i + 2)}
+        <span className="font-semibold text-slate-800">{text.slice(0, i)}:</span> {text.slice(i + 2)}
       </li>
     );
   }
@@ -62,7 +62,7 @@ function cleanStep(s: string): string {
 }
 
 function readinessTone(n: number): string {
-  if (n >= 60) return "text-green-700";
+  if (n >= 60) return "text-emerald-700";
   if (n >= 40) return "text-amber-700";
   return "text-rose-700";
 }
@@ -83,7 +83,7 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
     <div className="space-y-4">
       {/* scorecard */}
       <Card>
-        <div className="text-sm font-semibold text-gray-900">What the audit found</div>
+        <div className="text-sm font-semibold text-slate-900">What the audit found</div>
         <div className="mt-3 flex flex-wrap gap-2">
           <Chip n={weak.length} label="questions AI gets wrong" tone="bad" />
           <Chip n={missing.length} label="pages to create" tone="neutral" />
@@ -92,10 +92,10 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
         </div>
         {summary && (
           <details className="mt-3">
-            <summary className="cursor-pointer text-sm font-medium text-gray-500 hover:text-gray-800">
+            <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-800">
               ▸ Read the full summary
             </summary>
-            <div className="mt-2 text-sm leading-relaxed text-gray-700">
+            <div className="mt-2 text-sm leading-relaxed text-slate-700">
               {sum.lead && <p>{sum.lead}{sum.items.length ? ":" : ""}</p>}
               {sum.items.length > 0 && (
                 <ol className="mt-1 list-decimal space-y-1 pl-6">
@@ -105,7 +105,7 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
             </div>
           </details>
         )}
-        <p className="mt-3 text-xs text-gray-400">
+        <p className="mt-3 text-xs text-slate-400">
           Each item below links to the work it creates. {asOf ? `Based on the audit from ${asOf}.` : ""} Recheck after your next audit.
         </p>
       </Card>
@@ -126,13 +126,13 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
         <ul className="space-y-3">
           {weak.map((w, i) => (
             <li key={i}>
-              <div className="text-sm font-semibold text-gray-800">“{w.prompt}”</div>
+              <div className="text-sm font-semibold text-slate-800">“{w.prompt}”</div>
               {w.problem && (
-                <ul className="mt-1 list-disc space-y-0.5 pl-6 text-sm text-gray-600">
+                <ul className="mt-1 list-disc space-y-0.5 pl-6 text-sm text-slate-600">
                   {w.problem.split(/;\s+/).filter(Boolean).map((p, j) => <li key={j}>{p}</li>)}
                 </ul>
               )}
-              {w.engine && <div className="mt-0.5 pl-6 text-xs text-gray-400">Seen on {engineLabel(w.engine)}</div>}
+              {w.engine && <div className="mt-0.5 pl-6 text-xs text-slate-400">Seen on {engineLabel(w.engine)}</div>}
             </li>
           ))}
         </ul>
@@ -149,10 +149,10 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
       >
         <ul className="space-y-3">
           {missing.map((m, i) => (
-            <li key={i} className="rounded-lg border border-gray-100 p-3">
-              <div className="text-sm font-semibold text-gray-800">{m.topic}</div>
-              {m.asset_type && <div className="text-xs text-gray-400">{m.asset_type}</div>}
-              {m.why && <div className="mt-1 text-sm text-gray-600"><span className="font-medium">What goes in it: </span>{m.why}</div>}
+            <li key={i} className="rounded-lg border border-slate-100 p-3">
+              <div className="text-sm font-semibold text-slate-800">{m.topic}</div>
+              {m.asset_type && <div className="text-xs text-slate-400">{m.asset_type}</div>}
+              {m.why && <div className="mt-1 text-sm text-slate-600"><span className="font-medium">What goes in it: </span>{m.why}</div>}
             </li>
           ))}
         </ul>
@@ -171,11 +171,11 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
             const proof = splitNumbered(t.where_to_get_it || "");
             return (
               <li key={i}>
-                <div className="text-sm font-semibold text-gray-800">{t.claim}</div>
+                <div className="text-sm font-semibold text-slate-800">{t.claim}</div>
                 {t.where_to_get_it && (
                   <div className="mt-1 pl-6">
-                    <div className="text-xs font-medium uppercase tracking-wide text-gray-400">Where to get proof</div>
-                    <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-sm text-gray-600">
+                    <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Where to get proof</div>
+                    <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-sm text-slate-600">
                       {proof.items.length > 0
                         ? proof.items.map((it, j) => <li key={j}>{it}</li>)
                         : <li>{t.where_to_get_it}</li>}
@@ -188,20 +188,30 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
         </ul>
       </DataSection>
 
-      {/* where to show up */}
+      {/* recommended social presence (NOT verified gaps) */}
       {surfaceEntries.length > 0 && (
         <DataSection
-          title="Where to show up"
+          title="Recommended social presence"
           severity="low"
-          headline="Specific, honest actions to add accurate presence on the places AI reads — grouped by platform."
+          headline="Best-practice actions to build accurate presence on the platforms AI reads — grouped by platform."
           highlights={[{ label: "Platforms", value: String(surfaceEntries.length) }]}
-          detailsLabel="See the actions by platform"
+          detailsLabel="See the recommendations by platform"
         >
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <span className="mt-0.5 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+              Recommendation
+            </span>
+            <span>
+              These are best-practice suggestions, <span className="font-semibold">not confirmed gaps</span> — we haven’t yet
+              verified which of these profiles already exist or what’s posted on them. Treat each as “create or improve,” and
+              confirm the current state before acting.
+            </span>
+          </div>
           <div className="space-y-4">
             {surfaceEntries.map(([platform, actions]) => (
               <div key={platform}>
-                <div className="text-sm font-semibold text-gray-900">{PLATFORM_LABEL[platform] ?? platform.replace(/_/g, " ")}</div>
-                <ul className="mt-1 list-disc space-y-1 pl-6 text-sm text-gray-600">
+                <div className="text-sm font-semibold text-slate-900">{PLATFORM_LABEL[platform] ?? platform.replace(/_/g, " ")}</div>
+                <ul className="mt-1 list-disc space-y-1 pl-6 text-sm text-slate-600">
                   {arr<string>(actions).map((a, i) => <ActionItem key={i} text={a} />)}
                 </ul>
               </div>
@@ -218,12 +228,12 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
         highlights={[{ label: "Gaps", value: String(schema.length) }]}
         detailsLabel="See the technical gaps"
       >
-        <p className="mb-2 text-sm text-gray-600">
+        <p className="mb-2 text-sm text-slate-600">
           <Term name="schema">Schema</Term> is hidden labels in your site&apos;s code that spell out your
           official name, reviews, and FAQs so AI reads them correctly. These {schema.length} are missing —
           a developer task.
         </p>
-        <ul className="list-disc space-y-1 pl-6 text-sm text-gray-600">
+        <ul className="list-disc space-y-1 pl-6 text-sm text-slate-600">
           {schema.map((g, i) => <li key={i}>{g}</li>)}
         </ul>
       </DataSection>
@@ -238,7 +248,7 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
           action={{ label: "Open your task list", href: "/content/work-orders" }}
           detailsLabel="See the order"
         >
-          <ol className="list-decimal space-y-1.5 pl-6 text-sm text-gray-700">
+          <ol className="list-decimal space-y-1.5 pl-6 text-sm text-slate-700">
             {priority.map((p, i) => <li key={i}>{cleanStep(p)}</li>)}
           </ol>
         </DataSection>
@@ -246,14 +256,14 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
 
       {typeof readiness === "number" && (
         <Card>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-700">
-            <Term name="semantic readiness"><span className="font-medium text-gray-900">Site readiness for AI</span></Term>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-700">
+            <Term name="semantic readiness"><span className="font-medium text-slate-900">Site readiness for AI</span></Term>
             <span className={`text-base font-bold ${readinessTone(Math.round(readiness))}`}>{Math.round(readiness)}/100</span>
-            <span className="text-gray-600">— how easily AI can pull a clean answer from your pages (healthy sites score 60+).</span>
+            <span className="text-slate-600">— how easily AI can pull a clean answer from your pages (healthy sites score 60+).</span>
           </div>
           <Link
             href="/seo"
-            className="mt-2 inline-block rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            className="mt-2 inline-block rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
           >
             See your website report →
           </Link>
@@ -264,7 +274,7 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
 }
 
 function Chip({ n, label, tone = "neutral" }: { n: number; label: string; tone?: "bad" | "neutral" | "good" }) {
-  const c = tone === "bad" && n > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-gray-100 text-gray-700 border-gray-200";
+  const c = tone === "bad" && n > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-slate-100 text-slate-700 border-slate-200";
   return (
     <span className={`rounded-lg border px-2.5 py-1 text-sm ${c}`}>
       <span className="font-semibold">{n}</span> {label}

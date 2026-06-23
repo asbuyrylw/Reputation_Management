@@ -18,7 +18,7 @@ const PERIODS: { value: Period; label: string }[] = [
 ];
 
 const selectClass =
-  "rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-700 focus:border-gray-400 focus:outline-none";
+  "rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none";
 
 // Period + model filters. Applies to the views that have something to filter (per-engine
 // analytics, per-prompt results, the visibility trend); other views ignore it.

@@ -28,8 +28,8 @@ def list_businesses(user: dict = Depends(get_current_user), conn=Depends(get_con
     # owners/admins edit every business in their org; otherwise an 'editor' access row.
     if user["role"] == "admin":
         rows = conn.execute(
-            "SELECT id, name, domain, geo, goal, contested_terms, created_at, true AS can_edit "
-            "FROM businesses ORDER BY name"
+            "SELECT id, name, domain, geo, goal, contested_terms, services, industry, "
+            "created_at, true AS can_edit FROM businesses ORDER BY name"
         ).fetchall()
         return [dict(r) for r in rows]
     ids = auth.accessible_business_ids(conn, user) or []   # incl. org businesses for managers
@@ -44,7 +44,7 @@ def list_businesses(user: dict = Depends(get_current_user), conn=Depends(get_con
         editable.update(r["id"] for r in conn.execute(
             "SELECT id FROM businesses WHERE org_id=%s", (user["org_id"],)).fetchall())
     rows = conn.execute(
-        "SELECT id, name, domain, geo, goal, contested_terms, created_at "
+        "SELECT id, name, domain, geo, goal, contested_terms, services, industry, created_at "
         "FROM businesses WHERE id = ANY(%s) ORDER BY name", (ids,),
     ).fetchall()
     return [{**dict(r), "can_edit": r["id"] in editable} for r in rows]

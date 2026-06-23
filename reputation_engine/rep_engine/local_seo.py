@@ -241,16 +241,20 @@ def track(business_id: int, quiet: bool = False) -> dict:
             "SELECT name, domain FROM competitors WHERE business_id=%s", (business_id,)
         ).fetchall()
 
-        run = conn.execute("INSERT INTO audit_runs (business_id) VALUES (%s) RETURNING id",
+        # kind='local_rank' so this run is NOT mistaken for an AI-reputation audit in the
+        # Audits list (audit_runs is shared across audit/local-rank/competitor surfaces).
+        run = conn.execute("INSERT INTO audit_runs (business_id, kind) VALUES (%s,'local_rank') RETURNING id",
                            (business_id,)).fetchone()
         run_id = run["id"]
         subj_name = biz["name"]
         subj_domain = biz.get("domain") or ""
         stop = _category_stop(dict(biz))   # drop the business's own category words from title matching
         recorded = 0
+        failed_calls = 0
         for q in queries:
             data = _serper_local(q, location)
             if data is None:
+                failed_calls += 1
                 continue  # failed call -> skip (never counted as an absence)
             organic = data.get("organic", []) or []
             places = data.get("places", []) or data.get("local", []) or []
@@ -267,7 +271,20 @@ def track(business_id: int, quiet: bool = False) -> dict:
                 _record(conn, business_id, run_id, q, location, c["name"], False,
                         co_rank, cp_rank, curl, ctitle)
                 recorded += 1
-        conn.execute("UPDATE audit_runs SET finished_at=now() WHERE id=%s", (run_id,))
+        # If EVERY SERP call failed (Serper outage / quota / bad key) we recorded nothing —
+        # report that as a skip, not a clean "0 rankings" run that reads as "you rank nowhere".
+        # Drop the empty run so it doesn't surface as a finished snapshot with null metrics.
+        if recorded == 0 and failed_calls > 0:
+            conn.execute("DELETE FROM audit_runs WHERE id=%s", (run_id,))
+            conn.commit()
+            if not quiet:
+                log.warning("Local rank for business %d: all %d SERP calls failed; nothing recorded.",
+                            business_id, failed_calls)
+            return {"skipped": True, "reason": "all SERP calls failed", "failed_calls": failed_calls}
+        # Intentionally leave finished_at NULL: this run is a local-rank snapshot, not an AI
+        # reputation audit. Every "latest AI audit" query filters `finished_at IS NOT NULL`, so
+        # leaving it NULL (plus kind='local_rank') keeps these runs out of the AI score/report/
+        # timeline paths. local_seo.latest() reads its own local_rankings rows, not this flag.
         conn.commit()
     if not quiet:
         log.info("Local rank run %d complete (%d rows across %d queries).",

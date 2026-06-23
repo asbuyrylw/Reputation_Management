@@ -7,8 +7,8 @@ const BADGE: Record<ChallengeProfile, string> = {
   awareness_gap: "bg-indigo-50 text-indigo-700 border-indigo-200",
   negative_narrative: "bg-rose-50 text-rose-700 border-rose-200",
   mixed: "bg-amber-50 text-amber-700 border-amber-200",
-  established_positive: "bg-green-50 text-green-700 border-green-200",
-  unknown: "bg-gray-100 text-gray-500 border-gray-200",
+  established_positive: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  unknown: "bg-slate-100 text-slate-500 border-slate-200",
 };
 
 // Per-engine row: the challenge is often bimodal (one engine doesn't know the business,
@@ -19,12 +19,12 @@ function EngineRow({ name, e }: { name: string; e: ChallengeEngine }) {
   return (
     <div className="flex items-center justify-between gap-3 py-1.5 text-sm">
       <div className="flex items-center gap-2">
-        <span className="font-medium text-gray-700">{ENGINE_LABELS[name] ?? name}</span>
+        <span className="font-medium text-slate-700">{ENGINE_LABELS[name] ?? name}</span>
         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${BADGE[e.profile]}`}>
           {e.label}
         </span>
       </div>
-      <div className="flex items-center gap-4 tabular-nums text-xs text-gray-500">
+      <div className="flex items-center gap-4 tabular-nums text-xs text-slate-500">
         <span title="Recognition gap (doesn't know the business / wrong entity)">
           gap <span className="text-indigo-600">{pct(e.recognition_gap)}</span>
         </span>
@@ -54,7 +54,7 @@ const STYLE: Record<
     badge: "bg-indigo-50 text-indigo-700 border-indigo-200",
     accent: "text-indigo-700",
     speed: "Faster to fix",
-    speedTone: "bg-green-50 text-green-700 border-green-200",
+    speedTone: "bg-emerald-50 text-emerald-700 border-emerald-200",
   },
   negative_narrative: {
     badge: "bg-rose-50 text-rose-700 border-rose-200",
@@ -69,16 +69,16 @@ const STYLE: Record<
     speedTone: "bg-amber-50 text-amber-700 border-amber-200",
   },
   established_positive: {
-    badge: "bg-green-50 text-green-700 border-green-200",
-    accent: "text-green-700",
+    badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    accent: "text-emerald-700",
     speed: "Defend",
-    speedTone: "bg-green-50 text-green-700 border-green-200",
+    speedTone: "bg-emerald-50 text-emerald-700 border-emerald-200",
   },
   unknown: {
-    badge: "bg-gray-100 text-gray-500 border-gray-200",
-    accent: "text-gray-600",
+    badge: "bg-slate-100 text-slate-500 border-slate-200",
+    accent: "text-slate-600",
     speed: "Pending audit",
-    speedTone: "bg-gray-100 text-gray-500 border-gray-200",
+    speedTone: "bg-slate-100 text-slate-500 border-slate-200",
   },
 };
 
@@ -97,13 +97,13 @@ function Track({
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between text-sm">
-        <span className="font-medium text-gray-700">{label}</span>
-        <span className="tabular-nums text-gray-500">{pct == null ? "—" : `${w}%`}</span>
+        <span className="font-medium text-slate-700">{label}</span>
+        <span className="tabular-nums text-slate-500">{pct == null ? "—" : `${w}%`}</span>
       </div>
-      <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
         <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${w}%` }} />
       </div>
-      <div className="mt-1 text-sm text-gray-600">{note}</div>
+      <div className="mt-1 text-sm text-slate-600">{note}</div>
     </div>
   );
 }
@@ -115,8 +115,8 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
   if (!challenge || challenge.profile === "unknown") {
     return (
       <Card>
-        <div className="text-sm font-medium text-gray-700">Primary challenge</div>
-        <p className="mt-2 text-sm text-gray-500">
+        <div className="text-sm font-medium text-slate-700">Primary challenge</div>
+        <p className="mt-2 text-sm text-slate-500">
           {challenge?.headline ??
             "Run a completed audit to diagnose whether the main challenge is an awareness gap or an entrenched negative narrative."}
         </p>
@@ -130,7 +130,7 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
   return (
     <Card>
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium text-gray-700">Primary challenge</div>
+        <div className="text-sm font-medium text-slate-700">Primary challenge</div>
         <div className="flex items-center gap-2">
           <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${st.speedTone}`}>
             {st.speed}
@@ -167,11 +167,11 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
       </div>
 
       {challenge.by_engine && Object.keys(challenge.by_engine).length > 0 && (
-        <div className="mt-4 border-t border-gray-100 pt-3">
-          <div className="text-xs font-medium uppercase tracking-wide text-gray-400">
+        <div className="mt-4 border-t border-slate-100 pt-3">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
             By engine — the challenge is often different per assistant
           </div>
-          <div className="mt-1 divide-y divide-gray-50">
+          <div className="mt-1 divide-y divide-slate-50">
             {Object.entries(challenge.by_engine)
               .sort((a, b) => (b[1].recognition_gap ?? 0) + (b[1].negative_score ?? 0) - (a[1].recognition_gap ?? 0) - (a[1].negative_score ?? 0))
               .map(([name, e]) => (
@@ -181,9 +181,9 @@ export function PrimaryChallengeCard({ challenge }: { challenge: Challenge | nul
         </div>
       )}
 
-      <div className="mt-4 border-t border-gray-100 pt-3">
-        <div className="text-xs font-medium uppercase tracking-wide text-gray-400">What this means</div>
-        <p className="mt-1 text-[15px] leading-relaxed text-gray-700">{challenge.recommendation}</p>
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <div className="text-xs font-medium uppercase tracking-wide text-slate-400">What this means</div>
+        <p className="mt-1 text-[15px] leading-relaxed text-slate-700">{challenge.recommendation}</p>
       </div>
     </Card>
   );

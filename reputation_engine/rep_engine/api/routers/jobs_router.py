@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .. import auth as _auth
+from .. import job_deps as _job_deps
 from .. import jobs as _jobs
 from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
 from ..settings import api_settings
@@ -56,15 +57,23 @@ def trigger_job(
     job_id, active = _jobs.enqueue(business_id, job_type, requested_by=user["id"])
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a {job_type} job is already running (#{active})")
+    # Auto-chain downstream jobs so one click does the whole expected thing: e.g. "Regenerate
+    # plan" also materializes work-orders (sync_plan) + content-to-produce (production_briefs).
+    # Children carry depends_on=[parent], so the worker runs them in order; dedup prevents
+    # double-runs. (In inline dev mode only the root runs here; the worker pumps the chain.)
+    chained = _job_deps.enqueue_downstream(business_id, job_type, job_id, requested_by=user["id"])
     if api_settings().job_worker == "inline":
         background.add_task(_jobs.run_job, job_id)
-    return JSONResponse(status_code=202, content={"job_id": job_id, "job_type": job_type, "status": "queued"})
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job_id, "job_type": job_type, "status": "queued", "chained": chained},
+    )
 
 
 @router.get("/businesses/{business_id}/jobs")
 def list_jobs(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
-        "SELECT id, job_type, status, error, created_at, started_at, finished_at "
+        "SELECT id, job_type, status, error, result, created_at, started_at, finished_at "
         "FROM api_jobs WHERE business_id=%s ORDER BY id DESC LIMIT 20",
         (business_id,),
     ).fetchall()

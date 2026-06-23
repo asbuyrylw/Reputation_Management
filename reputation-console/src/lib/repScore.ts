@@ -19,10 +19,10 @@ export function repBand(score: number | null | undefined): { label: string; tone
 }
 
 const TONE_CLASSES: Record<RepTone, string> = {
-  red: "text-red-700 bg-red-50 border-red-200",
+  red: "text-rose-700 bg-rose-50 border-rose-200",
   orange: "text-orange-700 bg-orange-50 border-orange-200",
-  gray: "text-gray-600 bg-gray-100 border-gray-200",
-  green: "text-green-700 bg-green-50 border-green-200",
+  gray: "text-slate-600 bg-slate-100 border-slate-200",
+  green: "text-emerald-700 bg-emerald-50 border-emerald-200",
   emerald: "text-emerald-700 bg-emerald-50 border-emerald-200",
 };
 

@@ -389,6 +389,11 @@ def audit_page(seed: str, url: str, targets: dict | None = None) -> tuple[PageAu
         clean = l.split("#")[0]
         if re.search(r"\.(pdf|jpg|jpeg|png|gif|zip|mp4|css|js)$", clean, re.IGNORECASE):
             continue
+        # Don't spend crawl budget on WordPress system URLs (feeds, wp-json, xmlrpc, oembed).
+        # On a small WP site these dominate the link graph and crowd real pages out of the
+        # capped queue, which is why a one-page site showed "only 2 content pages."
+        if _is_crawl_artifact(clean):
+            continue
         next_urls.append(clean)
     return pa, next_urls
 

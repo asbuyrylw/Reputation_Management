@@ -61,11 +61,13 @@ _ALL_TABLES = [
     "business_access",
     "business_config", "businesses", "citation_momentum", "competitor_answers",
     "competitors", "content_drafts", "cost_ledger", "custom_prompts", "discovery_targets",
+    "discovery_target_work_orders",
     "external_signals", "gap_models",
-    "incidents", "learned_baseline", "learned_effectiveness", "local_rankings",
+    "incidents", "learned_baseline", "learned_effectiveness", "local_rankings", "local_seo_goals",
     "mention_replies",
     "mentions", "monitor_keywords", "organizations", "pipeline_runs", "pipeline_steps",
-    "plan_catalog", "production_briefs", "reports", "root_cause", "stripe_events", "subscriptions",
+    "plan_catalog", "production_briefs", "reports", "root_cause", "social_presence", "stripe_events",
+    "subscriptions",
     "site_audits", "strategy_plans", "users", "work_orders",
 ]
 

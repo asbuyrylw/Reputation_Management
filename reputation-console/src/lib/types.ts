@@ -15,9 +15,11 @@ export interface Business {
   id: number;
   name: string;
   domain: string | null;
-  geo: string | null;
+  geo: string | null; // "Areas served" in the UI
   goal: string | null;
   contested_terms: string | null;
+  services?: string | null; // comma-joined service keywords (edited as tags)
+  industry?: string | null;
   created_at?: string;
   can_edit?: boolean; // may the current user take actions on this business?
 }
@@ -91,6 +93,8 @@ export interface AuditRun {
   contested_rate: number | null;
   owned_rate: number | null;
   n_answers: number;
+  failed_count: number;
+  failed_engines: number;
 }
 
 export interface Answer {
@@ -264,9 +268,26 @@ export interface ApiJob {
   job_type: string;
   status: string;
   error: string | null;
+  result: Record<string, unknown> | null;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+}
+
+export interface CostItem {
+  provider: string;
+  operation: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+}
+export interface CostBreakdown {
+  run_id: number | null;
+  items: CostItem[];
+  run_total: number;
+  month_total: number;
+  estimated: boolean;
 }
 
 export interface PipelineStep {
@@ -305,6 +326,10 @@ export interface HeadToHead {
   competitor: string;
   subject_only_prompts: number;
   competitor_only_prompts: number;
+  // the actual questions behind each bucket (added by compare(); optional for back-compat)
+  prompts_subject_only?: string[];
+  prompts_competitor_only?: string[];
+  prompts_both?: string[];
 }
 export interface CompareResult {
   business?: string;
@@ -460,6 +485,9 @@ export interface Asset {
   work_order_id: number | null;
   body: string | null;
   target_query: string | null;
+  published_url?: string | null;
+  published_status?: string | null; // 'pending' | 'live'
+  summary?: string | null;
 }
 
 export interface ExternalSignal {

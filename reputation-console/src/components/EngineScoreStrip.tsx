@@ -25,18 +25,18 @@ export function EngineScoreStrip({
         const score = repScore(m.goal_alignment?.mean ?? null);
         const state = engineState(byEngine[key]?.profile);
         return (
-          <div key={key} className="rounded-lg border border-gray-100 p-2.5 text-center">
-            <div className="text-xs font-medium text-gray-500">{engineLabel(key)}</div>
+          <div key={key} className="rounded-lg border border-slate-100 p-2.5 text-center">
+            <div className="text-xs font-medium text-slate-500">{engineLabel(key)}</div>
             <div className="mt-0.5">
               {score != null ? (
                 <span className={`inline-block rounded-full border px-2 py-0.5 text-sm font-semibold ${repClasses(score)}`}>
                   {score}
                 </span>
               ) : (
-                <span className="text-sm text-gray-400">—</span>
+                <span className="text-sm text-slate-400">—</span>
               )}
             </div>
-            <div className="mt-1 text-[11px] text-gray-500">{state}</div>
+            <div className="mt-1 text-[11px] text-slate-500">{state}</div>
           </div>
         );
       })}

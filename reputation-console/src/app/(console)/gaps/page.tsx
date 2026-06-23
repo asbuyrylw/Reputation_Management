@@ -15,6 +15,7 @@ export default function GapsPage() {
   return (
     <div>
       <PageHeader
+        eyebrow="Gaps"
         title="Your gaps"
         subtitle="What's holding your AI reputation back — and exactly what to do about each one."
       />

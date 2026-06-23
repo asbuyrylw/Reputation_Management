@@ -85,10 +85,11 @@ class GrantAccessRequest(BaseModel):
 class CreateBusinessRequest(BaseModel):
     name: str
     domain: Optional[str] = None
-    services: Optional[str] = None
+    services: Optional[str] = None        # comma-joined service keywords (edited as tags in the UI)
+    industry: Optional[str] = None        # the vertical, distinct from the specific services
     goal: Optional[str] = None
     contested_terms: Optional[str] = None
-    geo: Optional[str] = None
+    geo: Optional[str] = None             # "Areas served" in the UI
     org_id: Optional[int] = None          # organization that owns this business
 
 
@@ -96,6 +97,7 @@ class UpdateBusinessRequest(BaseModel):
     name: Optional[str] = None
     domain: Optional[str] = None
     services: Optional[str] = None
+    industry: Optional[str] = None
     goal: Optional[str] = None
     contested_terms: Optional[str] = None
     geo: Optional[str] = None

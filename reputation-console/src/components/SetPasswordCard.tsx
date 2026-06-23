@@ -46,27 +46,27 @@ export function SetPasswordCard({
 
   return (
     <div className="flex min-h-screen flex-1 items-center justify-center p-4">
-      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold text-gray-900">{title}</h1>
+      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+        <h1 className="text-xl font-semibold text-slate-900">{title}</h1>
         {!token && (
-          <p className="mt-2 text-sm text-red-600">Missing token — use the link from your email.</p>
+          <p className="mt-2 text-sm text-rose-600">Missing token — use the link from your email.</p>
         )}
-        <label className="mt-6 block text-sm font-medium text-gray-700" htmlFor="pw">New password</label>
+        <label className="mt-6 block text-sm font-medium text-slate-700" htmlFor="pw">New password</label>
         <input
           id="pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
           required minLength={8} autoComplete="new-password"
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
         />
-        <label className="mt-4 block text-sm font-medium text-gray-700" htmlFor="cf">Confirm password</label>
+        <label className="mt-4 block text-sm font-medium text-slate-700" htmlFor="cf">Confirm password</label>
         <input
           id="cf" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
           required autoComplete="new-password"
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
         />
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
         <button
           type="submit" disabled={busy || !token}
-          className="mt-6 w-full rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+          className="mt-6 w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
         >
           {busy ? "Saving…" : cta}
         </button>

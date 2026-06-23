@@ -12,8 +12,9 @@ import { VerdictBanner } from "@/components/VerdictBanner";
 import { WorstAnswers } from "@/components/WorstAnswers";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
 import OnboardingCard from "@/components/OnboardingCard";
+import { JobProgressBanner } from "@/components/JobProgressBanner";
 import VisibilityTrendChart from "@/components/VisibilityTrendChart";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Card, PageHeader, SectionCard, Spinner } from "@/components/ui";
 import { EmptyState, Freshness, ToneLegend } from "@/components/primitives";
 import { repScore } from "@/lib/repScore";
 import type { SeriesPoint, WorkOrder } from "@/lib/types";
@@ -28,36 +29,40 @@ function DoThisNext({ workOrders }: { workOrders: WorkOrder[] | undefined }) {
   const ranked = [...open].sort((a, b) => (a.execution === "auto" ? 1 : 0) - (b.execution === "auto" ? 1 : 0));
   const top = ranked.slice(0, 3);
   return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900">Do this next — to raise your score</h3>
-        <Link href="/content/work-orders" className="text-sm font-medium text-blue-600 hover:underline">
-          View full plan →
-        </Link>
-      </div>
+    <SectionCard
+      title="Do this next"
+      subtitle="The highest-impact moves to raise your score."
+      accent="info"
+      action={{ label: "View full plan", href: "/content/work-orders" }}
+    >
       {top.length === 0 ? (
-        <p className="mt-2 text-sm text-gray-500">
-          No open tasks yet. Run an audit to generate your action plan.
-        </p>
+        <p className="text-sm text-slate-500">No open tasks yet. Run an audit to generate your action plan.</p>
       ) : (
-        <ol className="mt-3 space-y-2">
+        <ol className="space-y-3.5">
           {top.map((w, i) => (
-            <li key={w.id} className="flex gap-2 text-sm">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-900 text-xs font-semibold text-white">
+            <li key={w.id} className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white shadow-sm">
                 {i + 1}
               </span>
-              <div>
-                <div className="font-medium text-gray-800">{w.title ?? w.wo_code}</div>
-                {w.instruction && <div className="text-xs text-gray-500">{w.instruction}</div>}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-bold text-slate-900">{w.title ?? w.wo_code}</div>
+                {w.instruction && (
+                  <div className="mt-1 flex gap-2 text-sm leading-relaxed text-slate-600">
+                    <span className="select-none text-slate-300" aria-hidden>–</span>
+                    <span>{w.instruction}</span>
+                  </div>
+                )}
               </div>
             </li>
           ))}
         </ol>
       )}
       {open.length > 0 && (
-        <div className="mt-3 text-xs text-gray-400">{open.length} open task{open.length === 1 ? "" : "s"} in your plan</div>
+        <div className="mt-4 border-t border-slate-100 pt-3 text-xs font-medium text-slate-400">
+          {open.length} open task{open.length === 1 ? "" : "s"} in your plan
+        </div>
       )}
-    </Card>
+    </SectionCard>
   );
 }
 
@@ -66,26 +71,35 @@ function BiggestGaps({ gap }: { gap: Json | undefined }) {
   const weak = (gap?.weak_queries as WeakQuery[] | undefined) ?? [];
   const top = weak.slice(0, 3);
   return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900">Your biggest gaps</h3>
-        <Link href="/gaps" className="text-sm font-medium text-blue-600 hover:underline">
-          Close these gaps →
-        </Link>
-      </div>
+    <SectionCard
+      title="Your biggest gaps"
+      subtitle="The questions AI answers worst about you."
+      accent="bad"
+      action={{ label: "Close these gaps", href: "/gaps" }}
+    >
       {top.length === 0 ? (
-        <p className="mt-2 text-sm text-gray-500">Run an audit to see where AI answers fall short.</p>
+        <p className="text-sm text-slate-500">Run an audit to see where AI answers fall short.</p>
       ) : (
-        <ul className="mt-3 space-y-2">
+        <ol className="space-y-3.5">
           {top.map((w, i) => (
-            <li key={i} className="text-sm">
-              <div className="font-medium text-gray-800">“{w.prompt}”</div>
-              {w.problem && <div className="text-xs text-gray-500">{w.problem}</div>}
+            <li key={i} className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-rose-500 text-xs font-bold text-white shadow-sm">
+                {i + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-bold text-slate-900">“{w.prompt}”</div>
+                {w.problem && (
+                  <div className="mt-1 flex gap-2 text-sm leading-relaxed text-slate-600">
+                    <span className="select-none text-slate-300" aria-hidden>–</span>
+                    <span>{w.problem}</span>
+                  </div>
+                )}
+              </div>
             </li>
           ))}
-        </ul>
+        </ol>
       )}
-    </Card>
+    </SectionCard>
   );
 }
 
@@ -98,20 +112,31 @@ function ProjectionStrip({ timeline }: { timeline: Json | undefined }) {
   const date = proj?.target_date as string | undefined;
   const confidence = timeline.confidence as string | undefined;
   return (
-    <Card className="bg-gray-50">
+    <Card accent="info" className="bg-linear-to-br from-indigo-50/60 to-white">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900">When will I know it improved?</h3>
-        <Link href="/timeline" className="text-sm font-medium text-blue-600 hover:underline">
+        <h3 className="text-base font-semibold tracking-tight text-slate-900">When will I know it improved?</h3>
+        <Link href="/timeline" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
           See full projection →
         </Link>
       </div>
-      <p className="mt-2 text-sm text-gray-700">
-        Today <span className="font-semibold">{cur ?? "—"}</span> → on track to reach your goal of{" "}
-        <span className="font-semibold">{goal ?? "—"}/100</span>
-        {date ? <> around <span className="font-semibold">{date}</span></> : null}.{" "}
-        {confidence && <span className="text-gray-500">Confidence: {confidence} (sharpens after each audit).</span>}
-      </p>
-      <p className="mt-1 text-xs text-gray-500">
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-900/5">
+          <span className="text-2xl font-bold text-slate-900">{cur ?? "—"}</span>
+          <span className="text-xs font-medium text-slate-400">today</span>
+        </div>
+        <span className="text-lg text-slate-300">→</span>
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 ring-1 ring-emerald-200">
+          <span className="text-2xl font-bold text-emerald-600">{goal ?? "—"}</span>
+          <span className="text-xs font-medium text-emerald-700">goal</span>
+        </div>
+        {date && (
+          <div className="text-sm text-slate-600">
+            on track to arrive around <span className="font-semibold text-slate-900">{date}</span>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-xs text-slate-500">
+        {confidence && <>Confidence: <span className="font-medium text-slate-600">{confidence}</span> (sharpens after each audit). </>}
         Your score updates every time an audit runs — recheck after your next audit to see movement.
       </p>
     </Card>
@@ -133,13 +158,23 @@ export default function DashboardPage() {
   if (bizLoading) return <Spinner />;
   if (businesses.length === 0) {
     return (
-      <Card>
-        <p className="text-sm text-gray-600">No businesses are available to your account yet.</p>
+      <Card accent="info" className="text-center">
+        <h2 className="text-lg font-bold tracking-tight text-slate-900">Let&apos;s get you set up</h2>
+        <p className="mx-auto mt-1 max-w-md text-sm text-slate-600">
+          No businesses yet. The guided setup captures your goals, competitors, locations and keywords, then runs the
+          full audit, prompts, SEO, gaps and rankings for you.
+        </p>
+        <Link
+          href="/onboarding"
+          className="mt-4 inline-block rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+        >
+          Set up a business →
+        </Link>
       </Card>
     );
   }
   if (isLoading || !data) return <Spinner />;
-  if (error) return <p className="text-sm text-red-600">Could not load the dashboard.</p>;
+  if (error) return <p className="text-sm text-rose-600">Could not load the dashboard.</p>;
 
   const s = data.series;
   const latest: SeriesPoint | undefined = s[s.length - 1];
@@ -165,9 +200,13 @@ export default function DashboardPage() {
   return (
     <div>
       <PageHeader
+        eyebrow="Overview"
         title={`Dashboard — ${data.business.name}`}
         subtitle="Where you stand with AI assistants, what to do next, and when it'll improve."
       />
+
+      {/* Live progress for any audit/benchmark/etc. running in the background. */}
+      <JobProgressBanner businessId={businessId} className="mb-4" />
 
       {notifs && notifs.unread > 0 && (
         <Link
@@ -229,13 +268,13 @@ export default function DashboardPage() {
           <VisibilityTrendChart businessId={businessId} />
 
           {/* 5. what AI is saying now + per-engine */}
-          <Card>
-            <h3 className="text-sm font-semibold text-gray-900">Worst things AI is saying right now</h3>
+          <Card accent="bad">
+            <h3 className="text-base font-semibold tracking-tight text-slate-900">Worst things AI is saying right now</h3>
             <div className="mt-3">
               <WorstAnswers answers={answers} runId={latestRunId} limit={3} />
             </div>
-            <div className="mt-4 border-t border-gray-100 pt-3">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 Each AI assistant&apos;s score
               </div>
               <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
@@ -245,7 +284,7 @@ export default function DashboardPage() {
           {/* 6. trend (0-100) + sentiment */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">
-              <div className="mb-3 text-sm font-medium text-gray-700">Your score over time (0–100)</div>
+              <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
               <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
             </Card>
             <ScoreDonut
@@ -258,7 +297,7 @@ export default function DashboardPage() {
 
           {/* 7. details on demand */}
           <details className="group">
-            <summary className="cursor-pointer text-sm font-medium text-gray-500 hover:text-gray-800">
+            <summary className="cursor-pointer text-sm font-semibold text-indigo-600 hover:text-indigo-700">
               ▸ More detail: why this challenge, and what each engine says ({pct(latest.contested_rate)} raise concerns)
             </summary>
             <div className="mt-3 space-y-6">

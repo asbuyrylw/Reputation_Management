@@ -34,34 +34,34 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-1 items-center justify-center p-4">
-      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold text-gray-900">Reputation Console</h1>
-        <p className="mt-1 text-sm text-gray-500">Sign in to your account</p>
+      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+        <h1 className="text-xl font-semibold text-slate-900">Reputation Console</h1>
+        <p className="mt-1 text-sm text-slate-500">Sign in to your account</p>
 
-        <label className="mt-6 block text-sm font-medium text-gray-700" htmlFor="email">Email</label>
+        <label className="mt-6 block text-sm font-medium text-slate-700" htmlFor="email">Email</label>
         <input
           id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
           required autoComplete="username"
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
         />
 
-        <label className="mt-4 block text-sm font-medium text-gray-700" htmlFor="password">Password</label>
+        <label className="mt-4 block text-sm font-medium text-slate-700" htmlFor="password">Password</label>
         <input
           id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
           required autoComplete="current-password"
-          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
         />
 
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
 
         <button
           type="submit" disabled={busy}
-          className="mt-6 w-full rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+          className="mt-6 w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
 
-        <Link href="/forgot-password" className="mt-4 block text-center text-sm text-blue-600 hover:underline">
+        <Link href="/forgot-password" className="mt-4 block text-center text-sm text-indigo-600 hover:underline">
           Forgot your password?
         </Link>
       </form>

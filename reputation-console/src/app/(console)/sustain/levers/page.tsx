@@ -42,7 +42,7 @@ export default function LeversPage() {
         />
       ) : (
         <Card>
-          <div className="mb-3 text-sm text-gray-600">
+          <div className="mb-3 text-sm text-slate-600">
             Each bar shows how much that action moves your score per effort, relative to the others.
           </div>
           <div className="space-y-3">
@@ -51,8 +51,8 @@ export default function LeversPage() {
               return (
                 <div key={k}>
                   <div className="mb-1 flex items-center justify-between text-sm">
-                    <span className="font-medium text-gray-800">{leverLabel(k)}</span>
-                    <span className={`text-xs ${tier === "Do more" ? "text-green-700" : tier === "Keep" ? "text-gray-500" : "text-gray-400"}`}>{tier}</span>
+                    <span className="font-medium text-slate-800">{leverLabel(k)}</span>
+                    <span className={`text-xs ${tier === "Do more" ? "text-emerald-700" : tier === "Keep" ? "text-slate-500" : "text-slate-400"}`}>{tier}</span>
                   </div>
                   <ToneBar pct={(Math.abs(v) / max) * 100} tone={v >= 0 ? "good" : "bad"} />
                 </div>
@@ -60,9 +60,9 @@ export default function LeversPage() {
             })}
           </div>
           <details className="mt-4">
-            <summary className="cursor-pointer text-xs font-medium text-gray-400 hover:text-gray-700">▸ Show the raw numbers</summary>
+            <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-700">▸ Show the raw numbers</summary>
             <table className="mt-2 w-full text-sm">
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-slate-100">
                 {levers.map(([k, v]) => (
                   <tr key={k}><td className="py-1">{leverLabel(k)}</td><td className="py-1 text-right font-medium">{v.toFixed(4)}</td></tr>
                 ))}

@@ -36,10 +36,10 @@ export function AnswersByPrompt({ answers }: { answers: Answer[] }) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs text-gray-400">
+        <span className="text-xs text-slate-400">
           {entries.length} questions · {answers.length} answers
         </span>
-        <button onClick={toggleAll} className="text-xs font-medium text-blue-600 hover:underline">
+        <button onClick={toggleAll} className="text-xs font-medium text-indigo-600 hover:underline">
           {allOpen ? "Collapse all" : "Expand all"}
         </button>
       </div>
@@ -50,23 +50,23 @@ export function AnswersByPrompt({ answers }: { answers: Answer[] }) {
           const contested = arr.some((a) => a.mentions_contested);
           const owned = arr.some((a) => a.surfaces_owned);
           return (
-            <div key={prompt} className="overflow-hidden rounded-lg border border-gray-200">
+            <div key={prompt} className="overflow-hidden rounded-lg border border-slate-200">
               <button
                 onClick={() => toggle(prompt)}
-                className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50"
+                className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
               >
                 <RepScoreBadge goalAlignment={avgGA(arr)} />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-gray-900">{prompt}</div>
-                  <div className="truncate text-xs text-gray-400">
+                  <div className="truncate text-sm font-medium text-slate-900">{prompt}</div>
+                  <div className="truncate text-xs text-slate-400">
                     {arr.length} {arr.length === 1 ? "answer" : "answers"} · {engines.join(", ")}
-                    {contested && <span className="text-red-500"> · ⚠ contested</span>}
-                    {owned && <span className="text-green-600"> · owned source</span>}
+                    {contested && <span className="text-rose-500"> · ⚠ contested</span>}
+                    {owned && <span className="text-emerald-600"> · owned source</span>}
                   </div>
                 </div>
                 <svg
                   viewBox="0 0 20 20"
-                  className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                  className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
                   fill="currentColor"
                   aria-hidden
                 >
@@ -74,7 +74,7 @@ export function AnswersByPrompt({ answers }: { answers: Answer[] }) {
                 </svg>
               </button>
               {isOpen && (
-                <div className="space-y-2 border-t border-gray-100 bg-gray-50/40 p-3">
+                <div className="space-y-2 border-t border-slate-100 bg-slate-50/40 p-3">
                   {arr.map((a) => (
                     <AnswerCard key={a.id} a={a} />
                   ))}

@@ -13,6 +13,7 @@ import os
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
 from .. import auth, ratelimit
 from ..deps import get_conn, require_org_manager
@@ -110,3 +111,123 @@ def reset_password(body: ResetPasswordRequest, conn=Depends(get_conn)):
     auth.set_password(conn, user_id, body.password)
     conn.commit()
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------------------
+# Guided first-run setup: capture a business profile (name, site, goals, competitors,
+# locations, keywords) in one call and kick off the full pipeline, so a new org goes from
+# nothing to a populated dashboard without manually visiting every page + every "run" button.
+# --------------------------------------------------------------------------------------
+class CompetitorIn(BaseModel):
+    name: str
+    domain: str = ""
+
+
+class OnboardingSetupRequest(BaseModel):
+    name: str
+    domain: str = ""
+    services: str = ""           # comma-joined service keywords (edited as tags in the UI)
+    industry: str = ""           # the vertical, distinct from the specific services
+    goal: str = ""               # the positioning goal AI should reflect
+    contested_terms: str = ""    # narratives/terms working against them
+    geo: str = ""                # areas served (city/region) for local rankings
+    competitors: list[CompetitorIn] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    run_pipeline: bool = True
+
+
+# Full first-run pipeline so a new customer gets EVERY section populated, run once. The worker
+# is strictly FIFO + one-at-a-time (pump() = "WHERE status='queued' ORDER BY id LIMIT 1"), so
+# listing these in dependency order is sufficient: each completes before the next starts. The
+# downstream steps that need the audit/gap (gap_model, plan, citation) therefore always run
+# after it, and `report` runs LAST so the client report reflects everything above.
+# NOTE: this is a one-time onboarding cost (audit ~$4 + benchmark + discovery, etc. -> ~$8-12)
+# and takes ~30-50 min; progress shows live on the dashboard/audits banner.
+_SETUP_PIPELINE = [
+    "audit",             # AI-state audit -> scored answers (everything downstream needs this)
+    "site_crawl",        # technical / on-page SEO crawl
+    "gap_model",         # the gap analysis (needs the audit)
+    "plan",              # strategy -> improvement tasks (needs the gap model)
+    "sync_plan",         # materialize the plan into trackable work orders
+    "citation_analyze",  # AI-citation share-of-voice / who AI quotes (needs the audit)
+    "benchmark",         # competitor AI share-of-voice
+    "local_rank",        # local Google rankings (needs SERPER_API_KEY)
+    "suggest_prompts",   # AI-suggested tracking prompts
+    "mentions_scan",     # web mentions + drafted (human-gated) replies
+    "discovery",         # outreach targets (journalists / outlets / communities)
+    "production_briefs", # content-to-produce briefs
+    "report",            # client report LAST, so it reflects audit + gaps + plan + rankings
+]
+
+# Explicit prerequisites (job_type -> the job_types that must complete first). The worker
+# enforces these via api_jobs.depends_on, so ordering is correct with ANY number of workers
+# (not just a single FIFO consumer). Centralized in job_deps so the ad-hoc trigger path and
+# the onboarding pipeline share one source of truth. Jobs not listed have no prerequisites.
+from .. import job_deps as _job_deps
+
+_SETUP_DEPS = _job_deps.SETUP_PREREQS
+
+
+@router.post("/onboarding/setup", status_code=status.HTTP_201_CREATED)
+def onboarding_setup(body: OnboardingSetupRequest, user: dict = Depends(require_org_manager),
+                     conn=Depends(get_conn)):
+    """Create a business under the caller's org from the setup wizard, register its
+    competitors + keywords, and enqueue the full pipeline. Returns the new business id
+    and the queued jobs so the UI can poll progress."""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Business name is required")
+    org_id = user.get("org_id")
+
+    row = conn.execute(
+        "INSERT INTO businesses (name, domain, services, industry, goal, contested_terms, geo, org_id) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (name, (body.domain or "").strip(), (body.services or "").strip(),
+         (body.industry or "").strip(), (body.goal or "").strip(),
+         (body.contested_terms or "").strip(), (body.geo or "").strip(), org_id),
+    ).fetchone()
+    business_id = row["id"]
+    conn.commit()
+
+    from ... import competitor as _c, mention_monitor as _mm
+
+    competitors_added = 0
+    for c in body.competitors:
+        cn = (c.name or "").strip()
+        if cn:
+            _c.register_competitor(business_id, cn, (c.domain or "").strip())
+            competitors_added += 1
+
+    keywords_added = 0
+    for k in body.keywords:
+        kw = (k or "").strip()
+        if kw:
+            _mm.add_keyword(business_id, kw)
+            keywords_added += 1
+
+    jobs_enqueued = []
+    if body.run_pipeline:
+        from .. import jobs as _jobs
+        id_by_type: dict = {}   # job_type -> enqueued job id, to wire dependencies
+        for jt in _SETUP_PIPELINE:
+            try:
+                dep_ids = [id_by_type[d] for d in _SETUP_DEPS.get(jt, []) if d in id_by_type]
+                job_id, active = _jobs.enqueue(business_id, jt, requested_by=user["id"],
+                                               depends_on=dep_ids or None)
+                if job_id:
+                    id_by_type[jt] = job_id
+                jobs_enqueued.append({
+                    "job_type": jt,
+                    "job_id": job_id or active,
+                    "already_running": job_id is None,
+                })
+            except Exception as e:  # a single bad job type must not abort the whole setup
+                jobs_enqueued.append({"job_type": jt, "job_id": None, "error": str(e)[:120]})
+
+    return {
+        "business_id": business_id,
+        "name": name,
+        "competitors_added": competitors_added,
+        "keywords_added": keywords_added,
+        "jobs": jobs_enqueued,
+    }

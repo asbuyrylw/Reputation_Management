@@ -19,11 +19,11 @@ export default function SeoPage() {
       />
       {!data ? (
         <Card>
-          <p className="text-sm text-gray-600">No site audit yet — it runs as part of a full audit.</p>
+          <p className="text-sm text-slate-600">No site audit yet — it runs as part of a full audit.</p>
         </Card>
       ) : (
         <>
-          <div className="mb-3 text-xs text-gray-400">As of {new Date(data.created_at).toLocaleDateString()}</div>
+          <div className="mb-3 text-xs text-slate-400">As of {new Date(data.created_at).toLocaleDateString()}</div>
           <SiteAuditView summary={data.summary} />
         </>
       )}

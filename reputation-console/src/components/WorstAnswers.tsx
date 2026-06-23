@@ -38,9 +38,9 @@ export function WorstAnswers({
         const score = repScore(a.goal_alignment);
         const snippet = (a.answer_text ?? "").slice(0, 150);
         return (
-          <div key={a.id} className="rounded-lg border border-gray-100 p-3">
+          <div key={a.id} className="rounded-lg border border-slate-100 p-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="rounded bg-gray-900 px-1.5 py-0.5 text-xs font-medium text-white">
+              <span className="rounded bg-slate-900 px-1.5 py-0.5 text-xs font-medium text-white">
                 {engineLabel(a.engine)}
               </span>
               {score != null && (
@@ -48,14 +48,14 @@ export function WorstAnswers({
                   {score}/100 · {repBand(score).label}
                 </span>
               )}
-              <span className="font-medium text-gray-800">“{a.prompt}”</span>
+              <span className="font-medium text-slate-800">“{a.prompt}”</span>
             </div>
-            {snippet && <p className="mt-1 text-sm text-gray-600">“{snippet}…”</p>}
+            {snippet && <p className="mt-1 text-sm text-slate-600">“{snippet}…”</p>}
             <div className="mt-1 flex items-center justify-between">
               <span className="text-xs text-rose-600">Why: {reason(a)}</span>
               <Link
                 href={runId ? `/audits/${runId}` : href}
-                className="text-xs font-medium text-blue-600 hover:underline"
+                className="text-xs font-medium text-indigo-600 hover:underline"
               >
                 See in audit →
               </Link>

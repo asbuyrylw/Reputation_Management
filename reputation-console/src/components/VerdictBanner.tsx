@@ -40,12 +40,24 @@ export function VerdictBanner({
 }) {
   if (score == null) return null;
   const band = repBand(score);
+  const dot =
+    band.tone === "red"
+      ? "bg-rose-500"
+      : band.tone === "orange"
+        ? "bg-amber-500"
+        : band.tone === "gray"
+          ? "bg-slate-400"
+          : "bg-emerald-500";
   return (
-    <div className={`rounded-xl border p-4 ${repClasses(score)}`}>
-      <p className="text-base font-medium leading-relaxed">
-        AI assistants currently {leanPhrase(score)} <span className="font-semibold">{businessName}</span> (
-        <span className="font-semibold">{score}/100, {band.label}</span>). {issuePhrase(challenge)}
-      </p>
+    <div className={`relative overflow-hidden rounded-2xl border p-5 shadow-sm ${repClasses(score)}`}>
+      <span aria-hidden className={`absolute inset-y-0 left-0 w-1.5 ${dot}`} />
+      <div className="flex items-start gap-3">
+        <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${dot} ring-4 ring-white/60`} aria-hidden />
+        <p className="text-[15px] font-medium leading-relaxed">
+          AI assistants currently {leanPhrase(score)} <span className="font-bold">{businessName}</span> (
+          <span className="font-bold">{score}/100, {band.label}</span>). {issuePhrase(challenge)}
+        </p>
+      </div>
     </div>
   );
 }

@@ -29,6 +29,14 @@ def test_negative_keyword_filter():
     assert mm._matches_negative("a normal post", ["hiring"]) is False
 
 
+def test_split_keyword_on_commas():
+    from rep_engine import mention_monitor as mm
+    assert mm._split_keyword("Team Unstoppable, Chris Koob, Team Unstoppable Cincinnati") == [
+        "Team Unstoppable", "Chris Koob", "Team Unstoppable Cincinnati"]
+    assert mm._split_keyword("Acme Financial") == ["Acme Financial"]
+    assert mm._split_keyword("  , ,a,  ") == ["a"]
+
+
 def test_score_sentiment_falls_back_to_heuristic_offline(monkeypatch):
     from rep_engine import mention_monitor as mm
     from rep_engine import ai_state_audit as m
@@ -105,6 +113,24 @@ def test_add_keyword_and_discover_with_fake_source(fresh_schema):
         mm.score_sentiment = real
     n = conn.execute("SELECT COUNT(*) n FROM mentions WHERE business_id=%s", (bid,)).fetchone()["n"]
     assert n == 1
+
+
+@requires_db
+def test_compound_keyword_discovers_partial_match(fresh_schema):
+    """A comma-joined keyword must be split so a mention matching ONE variant is found
+    (regression: the whole phrase scored below the relevance threshold and dropped)."""
+    conn = fresh_schema
+    from rep_engine import mention_monitor as mm
+    bid = _biz(conn)
+    mm.add_keyword(bid, "Acme Financial, Chris Acme, Acme Financial Cincinnati")
+
+    def fake(keyword):
+        # the source returns a realistic mention that matches only ONE variant
+        return [{"source": "fake", "source_url": "https://x.com/9", "external_id": "9",
+                 "author": "u", "title": "Is Acme Financial legit?", "body": "Is Acme Financial legit?"}]
+    mm.register_source("fake", fake)
+    out = mm.discover(bid, sources=["fake"], quiet=True)
+    assert out["found"] == 1
 
 
 @requires_db

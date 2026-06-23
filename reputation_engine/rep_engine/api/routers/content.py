@@ -122,13 +122,48 @@ def assets(business_id: int = Depends(authorize_business), conn=Depends(get_conn
     produced piece is logged. The approved draft's body is attached when available."""
     rows = conn.execute(
         "SELECT a.id, a.asset_type, a.title, a.url, a.surface, a.published_at, a.work_order_id, "
-        "d.body, d.target_query "
+        "a.published_url, a.published_status, a.summary, d.body, d.target_query "
         "FROM assets a "
         "LEFT JOIN content_drafts d ON d.work_order_id = a.work_order_id AND d.status='approved' "
         "WHERE a.business_id=%s ORDER BY a.published_at DESC NULLS LAST, a.id DESC",
         (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+class AssetPublishUpdate(BaseModel):
+    published_url: Optional[str] = None
+    published_status: Optional[str] = None   # 'pending' | 'live'
+
+
+@router.patch("/assets/{asset_id}")
+def update_asset(
+    asset_id: int,
+    body: AssetPublishUpdate,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Record WHERE a finalized asset was published (manual link entry, since there's no live
+    site/social integration yet) and flip its status pending -> live."""
+    fields: dict = {}
+    if body.published_url is not None:
+        fields["published_url"] = body.published_url.strip()
+        # entering a link implies it's live, unless the caller says otherwise
+        fields["published_status"] = (body.published_status or "live").strip()
+    elif body.published_status is not None:
+        fields["published_status"] = body.published_status.strip()
+    if not fields:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing to update")
+    set_clause = ", ".join(f"{k}=%s" for k in fields)  # keys are fixed literals above
+    params = list(fields.values()) + [asset_id, business_id]
+    row = conn.execute(
+        f"UPDATE assets SET {set_clause} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
+        params,
+    ).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Asset not found")
+    conn.commit()
+    return {"id": asset_id, **fields}
 
 
 @router.post("/discovery-targets", status_code=201)
@@ -203,7 +238,10 @@ def approve_draft(
     conn=Depends(get_conn),
 ):
     _assert_draft_in_business(conn, draft_id, business_id)
-    _cg.approve(draft_id, _actor(user))   # promotes draft -> assets, advances the work order
+    try:
+        _cg.approve(draft_id, _actor(user))   # promotes draft -> assets, advances the work order
+    except ValueError as e:  # compliance gate / not-approvable -> 422, not a 500
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
     return {"ok": True, "draft_id": draft_id, "status": "approved"}
 
 

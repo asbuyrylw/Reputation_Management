@@ -6,12 +6,13 @@ import { useBusiness } from "@/lib/business";
 import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTargetStatus } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import { JobProgressBanner } from "@/components/JobProgressBanner";
 
 function matchLabel(s: number | null): { label: string; cls: string } {
-  if (s == null) return { label: "—", cls: "text-gray-400" };
-  if (s >= 0.7) return { label: "High", cls: "text-green-700" };
+  if (s == null) return { label: "—", cls: "text-slate-400" };
+  if (s >= 0.7) return { label: "High", cls: "text-emerald-700" };
   if (s >= 0.4) return { label: "Medium", cls: "text-amber-700" };
-  return { label: "Low", cls: "text-gray-500" };
+  return { label: "Low", cls: "text-slate-500" };
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -46,23 +47,25 @@ export default function OutreachPage() {
         subtitle="Journalists, outlets, and communities worth pitching — earning a mention from them builds the outside proof AI trusts."
       />
 
+      <JobProgressBanner businessId={businessId} className="mb-4" />
+
       {canEdit && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-gray-600">
+            <span className="text-sm text-slate-600">
               Targets are found automatically by the Discovery agent — or add your own.
             </span>
             <div className="flex gap-2">
               <button
                 onClick={runFind}
                 disabled={find.isPending}
-                className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
               >
                 {find.isPending ? "Finding…" : "Find targets"}
               </button>
               <button
                 onClick={() => setShowAdd((s) => !s)}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100"
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
               >
                 {showAdd ? "Cancel" : "Add manually"}
               </button>
@@ -70,14 +73,14 @@ export default function OutreachPage() {
           </div>
           {showAdd && (
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input placeholder="Name (journalist / outlet / podcast)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
-              <input placeholder="Outlet / publication" value={form.outlet} onChange={(e) => setForm({ ...form, outlet: e.target.value })} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
-              <input placeholder="URL" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
-              <input placeholder="Beat / topic they cover" value={form.beat} onChange={(e) => setForm({ ...form, beat: e.target.value })} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm" />
+              <input placeholder="Name (journalist / outlet / podcast)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+              <input placeholder="Outlet / publication" value={form.outlet} onChange={(e) => setForm({ ...form, outlet: e.target.value })} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+              <input placeholder="URL" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+              <input placeholder="Beat / topic they cover" value={form.beat} onChange={(e) => setForm({ ...form, beat: e.target.value })} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
               <button
                 onClick={() => form.name.trim() && add.mutate({ ...form, channel: "manual" }, { onSuccess: () => { setForm({ name: "", outlet: "", url: "", beat: "" }); setShowAdd(false); } })}
                 disabled={add.isPending || !form.name.trim()}
-                className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50 sm:w-32"
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50 sm:w-32"
               >
                 Add target
               </button>
@@ -96,7 +99,7 @@ export default function OutreachPage() {
       ) : (
         <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-2">Name</th>
                 <th className="px-4 py-2">Channel</th>
@@ -106,12 +109,12 @@ export default function OutreachPage() {
                 <th className="px-4 py-2">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-slate-100">
               {data.map((t) => (
-                <tr key={t.id} className="hover:bg-gray-50">
+                <tr key={t.id} className="hover:bg-slate-50">
                   <td className="px-4 py-2">
                     {t.url ? (
-                      <a href={t.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{t.name}</a>
+                      <a href={t.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">{t.name}</a>
                     ) : (
                       t.name
                     )}
@@ -125,7 +128,7 @@ export default function OutreachPage() {
                       <select
                         value={t.status ?? "suggested"}
                         onChange={(e) => setStatus.mutate({ targetId: t.id, status: e.target.value })}
-                        className="rounded border border-gray-200 px-1.5 py-0.5 text-xs"
+                        className="rounded border border-slate-200 px-1.5 py-0.5 text-xs"
                       >
                         {Object.entries(STATUS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                       </select>

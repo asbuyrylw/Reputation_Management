@@ -28,8 +28,16 @@ def get_pool() -> ConnectionPool:
         # Keep max_size modest: the engine's per-call db() and the langgraph
         # PostgresSaver pool also consume connections -- combined must stay under
         # Postgres max_connections.
+        #
+        # Server-side safety net (set at connect time, no extra round-trip): a
+        # request-path connection that ever leaks an open transaction self-aborts
+        # after 20s instead of sitting `idle in transaction` holding AccessShareLocks
+        # for minutes -- which is what let a long inline job's DDL deadlock the whole
+        # app. statement_timeout caps any runaway request query at 120s. Heavy engine
+        # jobs use their OWN db() connections, so neither limit touches them.
+        opts = "-c idle_in_transaction_session_timeout=20000 -c statement_timeout=120000"
         _POOL = ConnectionPool(conninfo=dsn(), min_size=1, max_size=8, open=True,
-                               kwargs={"row_factory": dict_row})
+                               kwargs={"row_factory": dict_row, "options": opts})
     return _POOL
 
 

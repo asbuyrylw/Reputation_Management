@@ -8,13 +8,13 @@ export function BusinessSwitcher() {
 
   // Clients are pinned to their business -- no switcher, just the name.
   if (!isAdmin) {
-    return <span className="text-sm font-medium text-gray-900">{current?.name ?? "—"}</span>;
+    return <span className="text-sm font-medium text-slate-900">{current?.name ?? "—"}</span>;
   }
   return (
     <select
       value={businessId ?? ""}
       onChange={(e) => setBusinessId(Number(e.target.value))}
-      className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-900"
+      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-900"
       aria-label="Select business"
     >
       {businesses.map((b) => (
