@@ -6,15 +6,29 @@ import { useContentDrafts } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 
+type Tab = "ready" | "fixes" | "all";
+
 export default function DraftsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useContentDrafts(businessId);
-  const [showAll, setShowAll] = useState(false);
+  const [tab, setTab] = useState<Tab>("ready");
 
   if (isLoading || !data) return <Spinner />;
 
-  const pending = data.filter((d) => d.status === "pending_review" || d.status === "needs_fix");
-  const shown = showAll ? data : pending;
+  // "Ready" = passed our checks and waiting on you. "Needs fixes" = flagged (usually a missing
+  // disclosure) — high quality can still land here; it's a compliance gate, not a quality one.
+  const ready = data.filter((d) => d.status === "pending_review" && d.compliance_pass !== false);
+  const fixes = data.filter((d) => d.status === "needs_fix" || (d.status === "pending_review" && d.compliance_pass === false));
+  const shown = tab === "all" ? data : tab === "ready" ? ready : fixes;
+
+  const TabBtn = ({ id, label, n }: { id: Tab; label: string; n: number }) => (
+    <button
+      onClick={() => setTab(id)}
+      className={`rounded-full px-3 py-1 text-sm ${tab === id ? "bg-slate-900 font-medium text-white" : "text-slate-500 hover:text-slate-700"}`}
+    >
+      {label} ({n})
+    </button>
+  );
 
   return (
     <div>
@@ -22,17 +36,25 @@ export default function DraftsPage() {
         title="Content drafts"
         subtitle="AI-drafted content waiting for your review. Approving publishes it as an asset and advances its work order — nothing publishes without you."
       />
-      <div className="mb-4 flex items-center gap-4 text-sm">
-        <button onClick={() => setShowAll(false)} className={!showAll ? "font-medium text-slate-900" : "text-slate-500"}>
-          Pending ({pending.length})
-        </button>
-        <button onClick={() => setShowAll(true)} className={showAll ? "font-medium text-slate-900" : "text-slate-500"}>
-          All ({data.length})
-        </button>
-      </div>
+
+      <Card className="mb-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <TabBtn id="ready" label="Ready to review" n={ready.length} />
+          <TabBtn id="fixes" label="Needs fixes first" n={fixes.length} />
+          <TabBtn id="all" label="All" n={data.length} />
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          {tab === "fixes"
+            ? "These passed the writing-quality bar but were flagged on a compliance check — usually a missing disclosure (e.g. broker-dealer / licensing). Edit the draft to resolve the flag, which re-screens it, then approve."
+            : "“Ready to review” passed our quality + compliance checks and just needs your sign-off. Approving publishes it and advances its task."}
+        </p>
+      </Card>
+
       {shown.length === 0 ? (
         <Card>
-          <p className="text-sm text-slate-600">No drafts to review.</p>
+          <p className="text-sm text-slate-600">
+            {tab === "ready" ? "Nothing waiting on you right now — check “Needs fixes first” or generate a draft from a content task." : "No drafts here."}
+          </p>
         </Card>
       ) : (
         <div className="space-y-3">
