@@ -279,6 +279,7 @@ export interface Mention {
 export interface LearnedLevers {
   baseline: { monthly_gain: number | null; confidence: string | null };
   levers: Record<string, number>;
+  predicted_levers?: Record<string, number>;
 }
 
 export interface AdminUser {

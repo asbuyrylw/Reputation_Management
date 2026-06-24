@@ -59,6 +59,35 @@ export default function LeversPage() {
               );
             })}
           </div>
+          {/* Predicted vs measured — the plan's estimate calibrating to your real results */}
+          {data.predicted_levers && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="text-sm font-semibold text-slate-900">Predicted vs. measured</div>
+              <p className="mb-2 text-xs text-slate-500">
+                What the plan estimated each action would add, vs. what we&apos;ve actually measured from your
+                results. This is how the per-task “predicted points” calibrate over time.
+              </p>
+              <table className="w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                  <tr><th className="py-1">Action</th><th className="py-1 text-right">Predicted /unit</th><th className="py-1 text-right">Measured /unit</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {levers.map(([k, v]) => {
+                    const pred = data.predicted_levers?.[k];
+                    const meas = v * 100;
+                    return (
+                      <tr key={k}>
+                        <td className="py-1">{leverLabel(k)}</td>
+                        <td className="py-1 text-right text-slate-500">{pred != null ? `+${pred.toFixed(2)} pts` : "—"}</td>
+                        <td className={`py-1 text-right font-medium ${pred != null && meas >= pred ? "text-emerald-700" : "text-amber-700"}`}>+{meas.toFixed(2)} pts</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           <details className="mt-4">
             <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-700">▸ Show the raw numbers</summary>
             <table className="mt-2 w-full text-sm">

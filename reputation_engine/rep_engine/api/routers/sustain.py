@@ -63,9 +63,13 @@ def acceleration(business_id: int = Depends(authorize_business)):
 @router.get("/learned-levers")
 def learned_levers(business_id: int = Depends(authorize_business)):
     monthly_gain, confidence = _fb.learned_baseline(business_id)
+    # predicted_levers = the industry-baseline per-unit gain in SCORE POINTS (the plan's estimate);
+    # levers = what we've actually MEASURED from this business -> the predicted-vs-actual view.
+    predicted = {k: round((v.get("weight", 0) or 0) * 100, 2) for k, v in _acc.LEVERS.items()}
     return {
         "baseline": {"monthly_gain": monthly_gain, "confidence": confidence},
         "levers": _fb.learned_lever_weights(business_id),
+        "predicted_levers": predicted,
     }
 
 
