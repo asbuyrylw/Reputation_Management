@@ -93,7 +93,9 @@ def _run_sync_plan(business_id: int, args: dict) -> None:
 
 
 def _run_generate_drafts(business_id: int, args: dict) -> None:
-    _imp("content_generator").generate(business_id)
+    # args.only_wo lets the UI generate a draft for a SINGLE content work order (the per-item
+    # "Generate draft" button) instead of the whole batch.
+    _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"))
 
 
 def _run_report(business_id: int, args: dict) -> None:

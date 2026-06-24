@@ -10,11 +10,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from .. import jobs as _jobs
 from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
 from ..schemas import RejectRequest, StatusRequest
+from ..settings import api_settings
 
 
 class DiscoveryTargetCreate(BaseModel):
@@ -275,3 +278,31 @@ def set_work_order_status(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
     _tracking.set_status(wo_id, body.status, body.assignee, body.notes)
     return {"ok": True, "wo_id": wo_id, "status": body.status}
+
+
+@router.post("/work-orders/{wo_id}/generate-draft", status_code=202)
+def generate_draft_for_wo(
+    wo_id: int,
+    background: BackgroundTasks,
+    business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
+    conn=Depends(get_conn),
+):
+    """Generate an AI content draft for a SINGLE content work order (the per-item
+    'Generate draft' button). Runs as a background job (never inline) so the LLM spend stays
+    out of the request path; the draft then shows up in the review queue."""
+    row = conn.execute(
+        "SELECT business_id, capability, execution FROM work_orders WHERE id=%s", (wo_id,)
+    ).fetchone()
+    if not row or row["business_id"] != business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
+    job_id, active = _jobs.enqueue(
+        business_id, "generate_drafts", requested_by=user["id"], args={"only_wo": wo_id}
+    )
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a draft-generation job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(
+        status_code=202, content={"job_id": job_id, "job_type": "generate_drafts", "status": "queued"}
+    )

@@ -206,6 +206,16 @@ export function useSetWorkOrderStatus(businessId: number | null) {
   );
 }
 
+// Generate an AI draft for a single content work order (background job -> shows in the
+// review queue). Invalidates jobs so the progress banner picks it up.
+export function useGenerateDraftForWo(businessId: number | null) {
+  return useApiMutation<{ woId: number }>(
+    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/generate-draft`,
+    () => ({}),
+    [["jobs", businessId], ["content-drafts", businessId]],
+  );
+}
+
 // ---- rankings / timeline / sustain ----
 const base = (businessId: number | null, suffix: string) =>
   businessId ? `/businesses/${businessId}${suffix}` : null;

@@ -2,10 +2,14 @@
 
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
+import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { WorkOrder } from "@/lib/types";
+
+// Capabilities whose work the AI can draft for you (the per-item "Generate draft" button).
+const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
 
 const COLUMNS = ["pending", "in_progress", "done", "verified", "blocked", "skipped"];
 const LABEL: Record<string, string> = {
@@ -62,9 +66,16 @@ function bulletize(text: string): string[] | null {
   return parts.length > 1 ? parts : null;
 }
 
-function WorkOrderCard({ wo, canEdit, onStatus }: { wo: WorkOrder; canEdit: boolean; onStatus: (s: string) => void }) {
+function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string) => void }) {
   const tool = TOOL_GUIDE[wo.capability ?? ""];
   const bullets = bulletize(wo.instruction || "");
+  const gen = useGenerateDraftForWo(businessId);
+  // Offer "Generate draft" on AI-draftable content tasks that aren't finished yet.
+  const canDraft =
+    canEdit &&
+    DRAFTABLE.has(wo.capability ?? "") &&
+    (wo.execution ?? "auto") !== "manual" &&
+    !["done", "verified"].includes(wo.status);
   return (
     <Card className="p-3">
       {/* category (left) · phase above date (right) */}
@@ -101,6 +112,22 @@ function WorkOrderCard({ wo, canEdit, onStatus }: { wo: WorkOrder; canEdit: bool
       </div>
 
       {wo.result_notes && <div className="mt-1 text-xs text-emerald-700">Result: {wo.result_notes}</div>}
+
+      {canDraft && (
+        <div className="mt-2">
+          <button
+            onClick={() => gen.mutate({ woId: wo.id })}
+            disabled={gen.isPending || gen.isSuccess}
+            className="w-full rounded-md bg-indigo-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {gen.isPending ? "Generating draft…" : gen.isSuccess ? "Draft queued ✓" : "✨ Generate draft"}
+          </button>
+          {gen.isSuccess && (
+            <p className="mt-1 text-[11px] text-slate-500">It’ll appear under <span className="font-medium">Content → Review drafts</span> in a minute.</p>
+          )}
+        </div>
+      )}
+
       {canEdit && (
         <select
           value={wo.status}
@@ -177,6 +204,7 @@ export default function WorkOrdersPage() {
         title="Reputation Improvement Task List"
         subtitle="Every task that improves your AI reputation, and where each one stands. Change a status to move it."
       />
+      <JobProgressBanner businessId={businessId} className="mb-4" />
       {canEdit && <AddTask businessId={businessId} />}
       {total === 0 ? (
         <EmptyState
@@ -209,6 +237,7 @@ export default function WorkOrdersPage() {
                     <WorkOrderCard
                       key={w.id}
                       wo={w}
+                      businessId={businessId}
                       canEdit={canEdit}
                       onStatus={(st) => setStatus.mutate({ woId: w.id, status: st })}
                     />
