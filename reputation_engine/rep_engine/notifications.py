@@ -76,12 +76,18 @@ def _avg_alignment(conn, run_id: int) -> Optional[float]:
 
 def check_and_notify(business_id: int, quiet: bool = True) -> dict:
     """Inspect the latest state and raise any needed alerts. Returns counts."""
-    created = {"score_drop": 0, "new_incident": 0, "negative_mention": 0, "drafts_waiting": 0}
+    created = {"score_drop": 0, "new_incident": 0, "negative_mention": 0, "drafts_waiting": 0,
+               "degraded_audit": 0}
 
     with db() as conn:
         runs = conn.execute(
             "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
             "ORDER BY id DESC LIMIT 2", (business_id,)).fetchall()
+        # latest completed run's provider-failure info (an AI provider was down/erroring)
+        degraded = conn.execute(
+            "SELECT id, failed_count, failed_engines FROM audit_runs WHERE business_id=%s "
+            "AND finished_at IS NOT NULL AND kind='ai_audit' AND COALESCE(failed_count,0) > 0 "
+            "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
         incidents = conn.execute(
             "SELECT id, severity FROM incidents WHERE business_id=%s AND status='pending_human_review'",
             (business_id,)).fetchall()
@@ -105,6 +111,16 @@ def check_and_notify(business_id: int, quiet: bool = True) -> dict:
                           "Review what changed and prioritize the plan.",
                           severity="warning", dedup_key=f"score_drop_run_{runs[0]['id']}"):
                     created["score_drop"] += 1
+
+    # 1b. degraded audit — an AI provider was down/erroring, so the run is partial
+    if degraded:
+        engines = degraded.get("failed_engines")
+        eng_txt = ", ".join(engines) if isinstance(engines, list) and engines else "one or more AI engines"
+        if notify(business_id, "degraded_audit", "Your last audit was partial",
+                  f"{degraded['failed_count']} answer(s) failed ({eng_txt} was unavailable). The score "
+                  "may be incomplete — retry the failed engines from the Audits page.",
+                  severity="warning", dedup_key=f"degraded_run_{degraded['id']}", email=False):
+            created["degraded_audit"] += 1
 
     # 2. new incidents
     for inc in incidents:

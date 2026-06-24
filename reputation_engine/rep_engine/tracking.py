@@ -58,23 +58,27 @@ VALID_STATUS = {"pending", "in_progress", "done", "verified", "skipped", "blocke
 # sync-plan: materialize plan work orders into trackable rows
 # ----------------------------------------------------------------------------
 def _norm_title(t: str | None) -> str:
-    """Normalized task identity: lowercase, strip punctuation, collapse whitespace. Lets us
-    recognize 'the same task' across plan regenerations (titles are specific -- they embed the
-    topic/query), so a task already done or in-progress isn't duplicated."""
+    """Normalized task identity: lowercase, strip punctuation, collapse whitespace."""
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", (t or "").lower())).strip()
 
 
+def _task_key(capability: str | None, title: str | None) -> str:
+    """Stable identity for a task (capability + normalized title). Computed the same way for a
+    plan item and for an existing row, so the merge recognizes 'the same task' across
+    regenerations -- and, because it's stored at creation, even survives a human renaming the
+    displayed title."""
+    return f"{(capability or '').lower()}|{_norm_title(title)}"
+
+
 def sync_plan(business_id: int) -> dict:
-    """Materialize the latest strategy plan into trackable work_orders -- as an ADDITIVE MERGE,
-    not a replace.
+    """Materialize the latest strategy plan into trackable work_orders -- as an ADDITIVE MERGE.
 
-    Existing work orders (and their status/progress) are PRESERVED. Only tasks in the regenerated
-    plan that don't already exist (matched by normalized title) are added, tagged with the current
-    plan revision so the UI can mark them "Revision N · added". Tasks that are already done, or
-    already in progress with a draft, are recognized and carried forward, never duplicated.
-    Idempotent: re-running on the same plan adds nothing.
-
-    Returns {revision, created, carried_forward, done, drafted, open}.
+    - Existing tasks (and their status/progress) are PRESERVED; matched by stable task_key.
+    - Only genuinely-new tasks are added, tagged with the current plan revision ("Revision N · new").
+    - A not-yet-started, plan-generated task that the new plan no longer recommends is ARCHIVED
+      (superseded=TRUE) rather than left to pile up; it REVIVES if a later plan recommends it again.
+    - Done / in-progress / manual tasks are never archived.
+    Idempotent. Returns {revision, created, carried_forward, retired, revived, done, drafted, open}.
     """
     with db() as conn:
         plan_row = conn.execute(
@@ -85,33 +89,41 @@ def sync_plan(business_id: int) -> dict:
             raise SystemExit("No strategy plan found -- generate one first.")
         plan = plan_row["plan"] if isinstance(plan_row["plan"], dict) else json.loads(plan_row["plan"])
         wos = plan.get("work_orders", []) or []
-        # revision = ordinal of this plan (1st generated -> rev 1, 2nd -> rev 2, ...).
         revision = conn.execute(
             "SELECT COUNT(*) c FROM strategy_plans WHERE business_id=%s", (business_id,)
         ).fetchone()["c"]
-        # existing tasks by normalized title, with status + whether a draft already exists for it.
         existing = conn.execute(
-            "SELECT w.id, w.title, w.status, "
+            "SELECT w.id, w.title, w.capability, w.status, w.plan_id, w.superseded, w.task_key, "
             "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id=w.id) AS has_draft "
             "FROM work_orders w WHERE w.business_id=%s",
             (business_id,),
         ).fetchall()
-        by_title: dict = {}
+        # index existing by stable key (fall back to a computed key for pre-task_key rows)
+        by_key: dict = {}
         for e in existing:
-            by_title.setdefault(_norm_title(e["title"]), e)
+            k = e["task_key"] or _task_key(e["capability"], e["title"])
+            by_key.setdefault(k, e)
 
+        plan_keys: set = set()
         created = 0
+        revived = 0
         carried = {"done": 0, "drafted": 0, "open": 0}
         for w in wos:
-            match = by_title.get(_norm_title(w.get("title")))
+            key = _task_key(w.get("capability"), w.get("title"))
+            plan_keys.add(key)
+            match = by_key.get(key)
             if match:
-                # already tracked -> carry forward untouched (preserve its progress)
                 if match["status"] in ("done", "verified"):
                     carried["done"] += 1
                 elif match["has_draft"]:
                     carried["drafted"] += 1
                 else:
                     carried["open"] += 1
+                # a task the plan recommends again should not stay archived
+                if match["superseded"]:
+                    conn.execute("UPDATE work_orders SET superseded=FALSE, updated_at=now() WHERE id=%s",
+                                 (match["id"],))
+                    revived += 1
                 continue
             td = w.get("target_date")
             sd = w.get("start_date")
@@ -121,22 +133,37 @@ def sync_plan(business_id: int) -> dict:
                    (business_id, plan_id, wo_code, title, capability, execution,
                     recommended_tool, instruction, phase, target_date, status,
                     rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision,
-                    start_date, predicted_ai_points, predicted_seo_impact, predicted_basis)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, task_key)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (business_id, plan_row["id"], w.get("wo_id"), w.get("title"), w.get("capability"),
                  w.get("execution"), w.get("recommended_tool"), w.get("instruction"),
                  w.get("phase"), date.fromisoformat(td) if td else None,
                  json.dumps(rationale), rationale.get("gap_source"),
                  w.get("why_helps_ai_rep"), w.get("why_helps_seo"), revision,
                  date.fromisoformat(sd) if sd else None, w.get("predicted_ai_points"),
-                 w.get("predicted_seo_impact"), w.get("predicted_basis")),
+                 w.get("predicted_seo_impact"), w.get("predicted_basis"), key),
             )
             created += 1
+
+        # Retire: plan-generated, not-yet-started tasks the new plan dropped (preserve done/
+        # in-progress/manual). Backfill task_key on existing rows so the comparison is stable.
+        retired = 0
+        for e in existing:
+            k = e["task_key"] or _task_key(e["capability"], e["title"])
+            if e["task_key"] is None:
+                conn.execute("UPDATE work_orders SET task_key=%s WHERE id=%s", (k, e["id"]))
+            if (e["plan_id"] is not None and e["status"] == "pending"
+                    and not e["superseded"] and k not in plan_keys):
+                conn.execute("UPDATE work_orders SET superseded=TRUE, updated_at=now() WHERE id=%s",
+                             (e["id"],))
+                retired += 1
         conn.commit()
     carried_total = sum(carried.values())
-    log.info("sync-plan rev %d: %d new task(s) added; carried forward %d (%d done, %d drafted, %d open)",
-             revision, created, carried_total, carried["done"], carried["drafted"], carried["open"])
-    return {"revision": revision, "created": created, "carried_forward": carried_total, **carried}
+    log.info("sync-plan rev %d: +%d new, carried %d (%d done/%d drafted/%d open), retired %d, revived %d",
+             revision, created, carried_total, carried["done"], carried["drafted"], carried["open"],
+             retired, revived)
+    return {"revision": revision, "created": created, "carried_forward": carried_total,
+            "retired": retired, "revived": revived, **carried}
 
 
 # ----------------------------------------------------------------------------

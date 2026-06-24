@@ -233,6 +233,34 @@ def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
     return len(rows)
 
 
+# Per-(business, job_type) trigger rate limits: (max_attempts, window_seconds). The enqueue
+# dedup already prevents two of the same job running at once; these cap how fast a client can
+# re-trigger EXPENSIVE (LLM/search-spending) work over time, so a stuck finger can't run up spend.
+_JOB_RATE_LIMITS = {
+    "audit": (4, 3600), "cycle": (3, 3600), "benchmark": (6, 3600), "report": (6, 3600),
+    "discovery": (8, 3600), "enrich_outreach": (6, 3600), "social_verify": (6, 3600),
+    "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
+    "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
+    "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
+    "refresh_failed": (6, 3600), "incident_scan": (10, 3600),
+}
+
+
+def rate_ok(business_id: int, job_type: str) -> bool:
+    """True if triggering this job for this business is within its per-window rate limit.
+    Cheap/internal jobs (not in the table) are unlimited. Disabled under pytest."""
+    try:
+        from . import ratelimit as _rl
+    except ImportError:  # pragma: no cover
+        import ratelimit as _rl  # type: ignore
+    if not _rl.enabled():
+        return True
+    limit = _JOB_RATE_LIMITS.get(job_type)
+    if not limit:
+        return True
+    return _rl.rate_check_window(f"job:{business_id}:{job_type}", limit[0], limit[1])
+
+
 def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
             args: Optional[dict] = None,
             depends_on: Optional[list] = None) -> tuple[Optional[int], Optional[int]]:

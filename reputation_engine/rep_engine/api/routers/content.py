@@ -76,7 +76,8 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "SELECT id, wo_code, title, capability, execution, phase, status, assignee, "
         "target_date, instruction, recommended_tool, result_notes, created_at, "
         "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision, "
-        "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis "
+        "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, "
+        "COALESCE(superseded, false) AS superseded "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
@@ -390,6 +391,9 @@ def generate_draft_for_wo(
     ).fetchone()
     if not row or row["business_id"] != business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
+    if not _jobs.rate_ok(business_id, "generate_drafts"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "Generating drafts too often — give it a little while and try again.")
     job_id, active = _jobs.enqueue(
         business_id, "generate_drafts", requested_by=user["id"], args={"only_wo": wo_id}
     )

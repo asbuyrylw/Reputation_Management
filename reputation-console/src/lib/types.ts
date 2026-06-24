@@ -46,6 +46,7 @@ export interface WorkOrder {
   predicted_ai_points?: number | null;
   predicted_seo_impact?: string | null;
   predicted_basis?: string | null;
+  superseded?: boolean | null;
 }
 
 export interface ContentDraft {

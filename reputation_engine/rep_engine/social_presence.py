@@ -9,6 +9,7 @@ search), so confidence is 'inferred', never asserted as ground truth -- the UI l
 from __future__ import annotations
 
 import logging
+import re
 
 try:
     from . import agent_tools as tools
@@ -37,6 +38,10 @@ def verify(business_id: int, quiet: bool = False) -> dict:
     if not b:
         return {"skipped": True, "reason": "no business"}
     name = b["name"]
+    # significant name tokens, to require the result is plausibly THIS business (not a same-named
+    # other) before we call a profile "found".
+    name_tokens = [t for t in re.findall(r"[a-z0-9]+", (name or "").lower()) if len(t) > 2]
+    need = max(1, len(name_tokens) // 2) if name_tokens else 0
     out: dict = {}
     for platform, domains in _PLATFORM_DOMAINS.items():
         if tools.over_budget(business_id):
@@ -48,9 +53,15 @@ def verify(business_id: int, quiet: bool = False) -> dict:
         found_url = None
         for r in results:
             url = (r.get("url") or "").lower()
-            if any(d in url for d in domains):
-                found_url = r.get("url")
-                break
+            title = (r.get("title") or "").lower()
+            if not any(d in url for d in domains):
+                continue
+            # the profile URL is on the right platform; also require the business name to appear
+            hay = f"{url} {title}"
+            if need and sum(1 for t in name_tokens if t in hay) < need:
+                continue  # likely a different, same-named entity -> don't claim it as "found"
+            found_url = r.get("url")
+            break
         exists = found_url is not None
         with db() as conn:
             conn.execute(

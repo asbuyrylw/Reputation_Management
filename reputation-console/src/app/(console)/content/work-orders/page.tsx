@@ -90,6 +90,9 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
           {wo.added_in_revision != null && wo.added_in_revision > 1 && (
             <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-700">Revision {wo.added_in_revision} · new</span>
           )}
+          {wo.superseded && (
+            <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">archived (no longer in plan)</span>
+          )}
         </div>
         <div className="text-right">
           {wo.phase && <div className="text-[11px] font-medium text-slate-500">{wo.phase}</div>}
@@ -254,14 +257,17 @@ export default function WorkOrdersPage() {
   const { data, isLoading } = useWorkOrders(businessId);
   const setStatus = useSetWorkOrderStatus(businessId);
   const [sortRoi, setSortRoi] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   if (isLoading || !data) return <Spinner />;
 
+  const archivedCount = data.filter((w) => w.superseded).length;
+  const visible = showArchived ? data : data.filter((w) => !w.superseded);
   const byStatus = (s: string) => {
-    const rows = data.filter((w) => w.status === s);
+    const rows = visible.filter((w) => w.status === s);
     return sortRoi ? [...rows].sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1)) : rows;
   };
-  const total = data.length;
+  const total = visible.length;
   const done = byStatus("done").length + byStatus("verified").length;
   const inProgress = byStatus("in_progress").length;
   const donePct = total ? Math.round((done / total) * 100) : 0;
@@ -294,6 +300,12 @@ export default function WorkOrdersPage() {
                   <input type="checkbox" checked={sortRoi} onChange={(e) => setSortRoi(e.target.checked)} />
                   Highest impact first
                 </label>
+                {archivedCount > 0 && (
+                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                    <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+                    Show archived ({archivedCount})
+                  </label>
+                )}
                 <span className="text-slate-500">{done} of {total} done · {inProgress} in progress</span>
               </div>
             </div>

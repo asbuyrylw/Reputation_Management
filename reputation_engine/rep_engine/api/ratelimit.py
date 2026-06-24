@@ -19,11 +19,17 @@ _ATTEMPTS: Dict[str, List[float]] = {}
 
 def rate_check(key: str) -> bool:
     """Record an attempt for `key`; return True if under the limit, False if over."""
+    return rate_check_window(key, MAX_ATTEMPTS, WINDOW)
+
+
+def rate_check_window(key: str, max_attempts: int, window: float) -> bool:
+    """Record an attempt for `key` and return True if at/under `max_attempts` within `window`
+    seconds, False if over. Lets callers set stricter limits (e.g. a few expensive jobs/hour)."""
     now = time.monotonic()
-    bucket = [t for t in _ATTEMPTS.get(key, []) if now - t < WINDOW]
+    bucket = [t for t in _ATTEMPTS.get(key, []) if now - t < window]
     bucket.append(now)
     _ATTEMPTS[key] = bucket
-    return len(bucket) <= MAX_ATTEMPTS
+    return len(bucket) <= max_attempts
 
 
 def enabled() -> bool:

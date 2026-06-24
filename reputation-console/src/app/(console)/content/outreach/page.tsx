@@ -156,6 +156,13 @@ export default function OutreachPage() {
         </Card>
       )}
 
+      {data.some((t) => t.contact_verified === false) && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          ⚠ Some contacts were <span className="font-semibold">auto-found and are unverified</span>. Confirm the right
+          person and address on the outlet&apos;s own site before reaching out — don&apos;t send to an unconfirmed contact.
+        </div>
+      )}
+
       {data.length === 0 ? (
         <EmptyState
           title="No outreach targets yet"

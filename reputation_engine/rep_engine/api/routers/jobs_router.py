@@ -54,6 +54,10 @@ def trigger_job(
     ok, reason, code = _billing.check_can_trigger(conn, business_id, job_type)
     if not ok:
         raise HTTPException(code, reason)
+    # Per-(business, job_type) rate limit so a stuck finger can't run up LLM/search spend.
+    if not _jobs.rate_ok(business_id, job_type):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            f"You're triggering {job_type} too often — give it a little while and try again.")
     job_id, active = _jobs.enqueue(business_id, job_type, requested_by=user["id"])
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a {job_type} job is already running (#{active})")
