@@ -145,6 +145,39 @@ function ProjectionStrip({ timeline }: { timeline: Json | undefined }) {
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
+// --- B2: progress narrative — what you've done and how the score moved ---
+function ProgressStrip({ workOrders, series }: { workOrders: WorkOrder[] | undefined; series: SeriesPoint[] }) {
+  const wos = workOrders ?? [];
+  const done = wos.filter((w) => w.status === "done" || w.status === "verified").length;
+  const total = wos.length;
+  if (total === 0 && series.length < 2) return null;
+  const first = series[0];
+  const last = series[series.length - 1];
+  const delta = series.length >= 2 ? repScore(last?.goal_alignment ?? null)! - repScore(first?.goal_alignment ?? null)! : null;
+  const donePct = total ? Math.round((done / total) * 100) : 0;
+  return (
+    <Card className="bg-linear-to-br from-emerald-50/50 to-white">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div>
+          <div className="text-2xl font-bold text-slate-900">{done}<span className="text-base font-medium text-slate-400">/{total}</span></div>
+          <div className="text-xs text-slate-500">tasks done ({donePct}% of your plan)</div>
+        </div>
+        {delta != null && (
+          <div>
+            <div className={`text-2xl font-bold ${delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{delta >= 0 ? "+" : ""}{delta}</div>
+            <div className="text-xs text-slate-500">score change since your first audit</div>
+          </div>
+        )}
+        <div className="ml-auto text-xs text-slate-500">
+          {delta != null && delta > 0
+            ? "It's working — keep shipping tasks and re-run an audit to measure the next move."
+            : "Complete tasks, then re-run an audit to measure the impact."}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function DashboardPage() {
   const { businessId, businesses, loading: bizLoading } = useBusiness();
   const { data, isLoading, error } = useDashboard(businessId);
@@ -254,6 +287,9 @@ export default function DashboardPage() {
               <ToneLegend />
             </div>
           </div>
+
+          {/* 2b. your progress — tasks done + score movement */}
+          <ProgressStrip workOrders={workOrders} series={s} />
 
           {/* 3. problem beside action */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

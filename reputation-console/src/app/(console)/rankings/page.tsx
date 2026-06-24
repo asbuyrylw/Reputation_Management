@@ -292,6 +292,24 @@ export default function RankingsPage() {
             </div>
           )}
 
+          {/* B3: turn citation gaps into outreach */}
+          {data!.top_domains.length > 0 && (
+            <Card className="bg-linear-to-br from-indigo-50/40 to-white">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-slate-900">Want AI to cite you more?</h3>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    AI quotes the sources above. To get onto more of them — and earn the third-party
+                    coverage and links that move your score — work your outreach list.
+                  </p>
+                </div>
+                <Link href="/content/outreach" className="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700">
+                  Find outreach targets →
+                </Link>
+              </div>
+            </Card>
+          )}
+
           {/* all cited sources */}
           {data!.top_domains.length > 0 && (
             <DataSection
