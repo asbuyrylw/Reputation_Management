@@ -151,6 +151,34 @@ class WorkOrder:
     phase: str
     week: int
     depends_on: list[str] = field(default_factory=list)
+    rationale: dict = field(default_factory=dict)   # B1: {gap_source, why, source}
+    why_helps_ai_rep: str = ""                       # C10: how it helps AI reputation
+    why_helps_seo: str = ""                          # C10: how it helps local/SEO
+
+
+# Plain-English "how this helps" by capability, so EVERY task shows its why (C10).
+_WHY_AI = {
+    "content_writing": "Publishes accurate, ownable content AI assistants can cite about you.",
+    "schema_markup": "Helps AI engines cleanly extract and trust your facts.",
+    "review_generation": "More genuine reviews shift the sentiment AI sees about you.",
+    "press_outreach": "Third-party coverage corroborates your narrative from outside your site.",
+    "media_list_building": "Builds the outreach list that earns corroborating coverage.",
+    "social_publishing": "Adds accurate owned presence for AI to surface instead of the negatives.",
+    "local_content_creation": "Geo-specific content AI can cite for local questions about you.",
+    "link_building": "Editorial citations raise how often AI surfaces and trusts your sources.",
+    "ai_visibility_tracking": "Measures what AI says so you can see the plan working.",
+}
+_WHY_SEO = {
+    "content_writing": "An owned page that can rank for the target search.",
+    "schema_markup": "Rich-result eligibility + clearer relevance signals to Google.",
+    "review_generation": "Reviews lift your Google Business Profile and map-pack rank.",
+    "press_outreach": "Earned links + brand mentions raise domain authority.",
+    "media_list_building": "Feeds the earned-link/PR pipeline that lifts rankings.",
+    "social_publishing": "Brand signals + a complete GBP help your local rank.",
+    "local_content_creation": "A geo landing page to break onto page 1 locally.",
+    "link_building": "Backlinks raise domain authority and rankings.",
+    "ai_visibility_tracking": "",
+}
 
 
 PHASES = [
@@ -172,7 +200,7 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
 
-    def add(title, capability, instruction, week, deps=None):
+    def add(title, capability, instruction, week, deps=None, *, gap_source="", why="", source="audited gap"):
         nonlocal n
         n += 1
         tool = best_tool(capability)
@@ -184,6 +212,9 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
             alternatives=alts,
             instruction=instruction, phase=_phase_for_week(week), week=week,
             depends_on=deps or [],
+            rationale={"gap_source": gap_source, "why": why, "source": source},
+            why_helps_ai_rep=_WHY_AI.get(capability, ""),
+            why_helps_seo=_WHY_SEO.get(capability, ""),
         ))
 
     # --- Phase 0: fast wins (reviews, tracking baseline, one explainer) ---
@@ -203,7 +234,8 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         cap = "video_creation" if "video" in atype.lower() else "content_writing"
         add(f"Create owned asset: {topic}", cap,
             f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
-            f"fact-check trust-sensitive claims; publish on the business domain.", 3)
+            f"fact-check trust-sensitive claims; publish on the business domain.", 3,
+            gap_source="audited gap: missing owned content", why=why)
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
@@ -235,8 +267,34 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
             if surface == "reddit":
                 note = (" NOTE: Reddit must be genuine, human, value-add participation only "
                         "-- never automated reputation posting (ban risk + policy violation).")
-            add(f"{surface.replace('_',' ').title()} action", cap,
-                f"{act}{note}", wk)
+            add(f"Improve {surface.replace('_', ' ').title()} presence", cap,
+                f"{act}{note}", wk,
+                gap_source=f"recommended social presence ({surface})", why="",
+                source="recommendation")
+
+    # --- Local-SEO gaps -> tasks (from first-party SERP reads, via the gap model) ---
+    for i, g in enumerate(gap.get("local_seo_gaps", []) or []):
+        q = g.get("query", f"local query {i + 1}")
+        rec = g.get("recommendation", "Create geo-specific content + strengthen GBP / local citations.")
+        add(f"Reach page 1 for '{q}'", "local_content_creation",
+            f"{rec} Current position: {g.get('current_rank', 'off page 1')}.", 4,
+            gap_source="local search ranking", why=g.get("why", ""))
+
+    # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
+    for i, g in enumerate(gap.get("competitor_defense", []) or []):
+        q = g.get("query", f"query {i + 1}")
+        rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
+        add(f"Compete for '{q}'", "content_writing",
+            f"{rec} A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.", 4,
+            gap_source="competitor analysis", why=g.get("why", ""))
+
+    # --- Site-technical gaps -> tasks (thin/missing pages, schema, weak coverage) ---
+    for i, g in enumerate(gap.get("site_technical_gaps", []) or []):
+        issue = g.get("issue", f"site issue {i + 1}")
+        rec = g.get("recommendation", "Fix the on-site issue so AI engines can extract your facts.")
+        scap = "schema_markup" if "schema" in f"{issue} {rec}".lower() else "content_writing"
+        add(f"Fix site: {issue}", scap, rec, 3,
+            gap_source="site crawl", why=g.get("why", ""))
 
     # --- Phase 3: steady-state monitoring ---
     add("Recurring AI-visibility monitor", "ai_visibility_tracking",

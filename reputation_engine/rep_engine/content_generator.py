@@ -269,6 +269,52 @@ def _compliance(body: str) -> dict:
 
 
 # ----------------------------------------------------------------------------
+# Placeholder extraction + compliance auto-fix
+# ----------------------------------------------------------------------------
+_PLACEHOLDER_RE = re.compile(r"\[INSERT:[^\]]*\]", re.I)
+
+
+def _extract_placeholders(body: str) -> list[str]:
+    """Pull every [INSERT: ...] marker out of a draft. These are facts the AI didn't have
+    (a license number, a contact email) that a human must fill in before publishing -- the
+    UI shows them as a red pre-publish checklist and approval is blocked until they're gone."""
+    seen, out = set(), []
+    for m in _PLACEHOLDER_RE.findall(body or ""):
+        key = m.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(m)
+    return out
+
+
+COMPLIANCE_FIX_SYSTEM = (
+    "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
+    "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
+    "(guaranteed/implied returns, performance promises, 'risk-free', unverifiable superlatives "
+    "like 'best'/'#1' stated as fact). ADD any missing required disclosures -- e.g. the "
+    "broker-dealer / representative relationship where financial products are marketed, and that "
+    "any testimonials are individual experiences and not typical results. Do NOT fabricate facts: "
+    "use a [INSERT: ...] placeholder for any specific detail you don't have (a license number, an "
+    "affiliated firm name). Output ONLY the revised content, no preamble."
+)
+
+
+def _compliance_autofix(biz: dict, body: str, flags: list) -> Optional[str]:
+    """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
+    disclosures (using what we know about the business). Returns the revised body, or None if
+    the LLM is unavailable / produced nothing. The caller re-screens the result -- this never
+    decides compliance itself."""
+    ctx = (
+        f"Business: {biz.get('name', '')} -- services: {biz.get('services', '')}.\n"
+        f"Narratives working against them (context only): {biz.get('contested_terms', '')}.\n"
+        "Compliance issues to resolve:\n- " + "\n- ".join(str(f) for f in (flags or []))
+        + f"\n\nContent to revise:\n{body}"
+    )
+    revised = llm.orchestrator_text(COMPLIANCE_FIX_SYSTEM, ctx, max_tokens=2400, tier="mid")
+    return (revised or "").strip() or None
+
+
+# ----------------------------------------------------------------------------
 # Orchestrated generation for a work order
 # ----------------------------------------------------------------------------
 def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
@@ -315,6 +361,23 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     comp_pass = comp.get("pass")
     comp_flags = comp.get("flags", [])
 
+    # Compliance AUTO-FIX: rather than dumping a flagged draft on the human as "needs_fix", try
+    # once to resolve the issues (strip prohibited claims + add the missing disclosures) and
+    # re-screen. If it now passes (or is at least no longer a hard fail), keep the fixed version
+    # and record WHAT was changed so the human can confirm the added language is accurate.
+    highlighted: list = []
+    if comp_pass is False and not eval_unavailable:
+        fixed = _compliance_autofix(biz, body, comp_flags)
+        if fixed and fixed != body:
+            recheck = _compliance(fixed)
+            if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews
+                body = fixed
+                highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
+                comp_pass = recheck.get("pass")
+                comp_flags = list(recheck.get("flags", []))
+
+    placeholders = _extract_placeholders(body)
+
     # status:
     #  - a REAL evaluation below threshold, or a REAL compliance failure -> needs_fix
     #  - could-not-evaluate (eval JSON malformed/unavailable) must NOT become a false
@@ -334,15 +397,16 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
             """INSERT INTO content_drafts
                (business_id, work_order_id, asset_type, title, body, target_query,
                 quality_score, quality_notes, revision_count, compliance_pass,
-                compliance_flags, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                compliance_flags, status, highlighted_sections, placeholders_pending)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, wo.get("_db_id"), asset_type, topic, body,
              wo.get("target_query"), round(score, 2), json.dumps(evaluation),
-             revisions, comp_pass, json.dumps(comp_flags), status),
+             revisions, comp_pass, json.dumps(comp_flags), status,
+             json.dumps(highlighted), json.dumps(placeholders)),
         ).fetchone()
         conn.commit()
-    log.info("Draft %d for '%s' (type=%s, score=%.2f, rev=%d, compliance=%s, status=%s)",
-             row["id"], topic, asset_type, score, revisions, comp_pass, status)
+    log.info("Draft %d for '%s' (type=%s, score=%.2f, rev=%d, compliance=%s, status=%s, placeholders=%d)",
+             row["id"], topic, asset_type, score, revisions, comp_pass, status, len(placeholders))
     return row["id"]
 
 
@@ -438,6 +502,16 @@ def approve(draft_id: int, reviewer: str) -> None:
                 + (f" (flags: {', '.join(str(f) for f in flags)})" if flags else "")
                 + ". Edit it to resolve the issues, which re-screens it, then approve."
             )
+        # Unresolved [INSERT: ...] placeholders are facts the human still has to supply -- a
+        # draft can't go live with "[INSERT: contact email]" in it. Block until they're filled.
+        pending_ph = d.get("placeholders_pending") or []
+        if pending_ph:
+            conn.commit()   # release the FOR UPDATE lock before raising
+            raise ValueError(
+                f"This draft still has {len(pending_ph)} placeholder(s) to fill in before it can "
+                f"publish: {', '.join(str(p) for p in pending_ph)}. Edit the draft to replace them, "
+                "then approve."
+            )
         # Seed a short summary (for the Published list) + published_status='pending' so the owner
         # can paste the live URL later. No site/social integration yet -> the link is manual.
         body = (d.get("body") or "").strip()
@@ -505,13 +579,17 @@ def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[s
         flags = _deterministic_compliance(new_body or "")
         comp_pass = False if flags else None
         comp_flags = flags or ["content edited after screening -- re-screen recommended"]
+        # Re-extract the [INSERT: ...] checklist from the edited body (the human may have filled
+        # some in) and clear highlighted_sections -- editing IS the human review of those.
+        placeholders = _extract_placeholders(new_body or "")
         sets, args = [], []
         if title is not None:
             sets.append("title=%s"); args.append(title)
         if body is not None:
             sets.append("body=%s"); args.append(body)
-        sets += ["quality_score=NULL", "compliance_pass=%s", "compliance_flags=%s", "updated_at=now()"]
-        args += [comp_pass, json.dumps(comp_flags)]
+        sets += ["quality_score=NULL", "compliance_pass=%s", "compliance_flags=%s",
+                 "placeholders_pending=%s", "highlighted_sections='[]'::jsonb", "updated_at=now()"]
+        args += [comp_pass, json.dumps(comp_flags), json.dumps(placeholders)]
         conn.execute(f"UPDATE content_drafts SET {', '.join(sets)} WHERE id=%s",
                      tuple(args) + (draft_id,))
         conn.commit()

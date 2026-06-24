@@ -60,7 +60,8 @@ def _to_float(d: dict, *keys: str) -> dict:
 def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
         "SELECT id, wo_code, title, capability, execution, phase, status, assignee, "
-        "target_date, instruction, recommended_tool, result_notes, created_at "
+        "target_date, instruction, recommended_tool, result_notes, created_at, "
+        "rationale, gap_source, why_helps_ai_rep, why_helps_seo "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
@@ -90,10 +91,12 @@ def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_
 @router.get("/content-drafts")
 def content_drafts(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
-        "SELECT id, work_order_id, asset_type, title, body, target_query, quality_score, "
-        "quality_notes, compliance_pass, compliance_flags, status, revision_count, "
-        "reviewer, reviewed_at, created_at "
-        "FROM content_drafts WHERE business_id=%s ORDER BY id DESC",
+        "SELECT d.id, d.work_order_id, d.asset_type, d.title, d.body, d.target_query, "
+        "d.quality_score, d.quality_notes, d.compliance_pass, d.compliance_flags, d.status, "
+        "d.revision_count, d.reviewer, d.reviewed_at, d.created_at, "
+        "d.highlighted_sections, d.placeholders_pending, w.instruction AS wo_instruction "
+        "FROM content_drafts d LEFT JOIN work_orders w ON w.id = d.work_order_id "
+        "WHERE d.business_id=%s ORDER BY d.id DESC",
         (business_id,),
     ).fetchall()
     return [_to_float(dict(r), "quality_score") for r in rows]

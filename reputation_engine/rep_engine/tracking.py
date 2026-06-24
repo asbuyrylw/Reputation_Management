@@ -77,14 +77,18 @@ def sync_plan(business_id: int) -> int:
                 skipped += 1
                 continue
             td = w.get("target_date")
+            rationale = w.get("rationale") or {}
             conn.execute(
                 """INSERT INTO work_orders
                    (business_id, plan_id, wo_code, title, capability, execution,
-                    recommended_tool, instruction, phase, target_date, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending')""",
+                    recommended_tool, instruction, phase, target_date, status,
+                    rationale, gap_source, why_helps_ai_rep, why_helps_seo)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s)""",
                 (business_id, plan_row["id"], code, w.get("title"), w.get("capability"),
                  w.get("execution"), w.get("recommended_tool"), w.get("instruction"),
-                 w.get("phase"), date.fromisoformat(td) if td else None),
+                 w.get("phase"), date.fromisoformat(td) if td else None,
+                 json.dumps(rationale), rationale.get("gap_source"),
+                 w.get("why_helps_ai_rep"), w.get("why_helps_seo")),
             )
             created += 1
         conn.commit()

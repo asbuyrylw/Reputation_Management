@@ -113,6 +113,26 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
 
       {wo.result_notes && <div className="mt-1 text-xs text-emerald-700">Result: {wo.result_notes}</div>}
 
+      {/* Why this task — what it closes + how it helps (B1 + C10) */}
+      {(wo.rationale?.why || wo.gap_source || wo.why_helps_ai_rep || wo.why_helps_seo) && (
+        <details className="mt-1.5 text-[11px]">
+          <summary className="cursor-pointer text-slate-500 hover:text-slate-700">Why this task?</summary>
+          <div className="mt-1 space-y-0.5 rounded bg-slate-50 p-2 text-slate-600">
+            {wo.gap_source && (
+              <div>
+                <span className="font-medium text-slate-500">From:</span> {wo.gap_source}
+                {wo.rationale?.source === "recommendation" && (
+                  <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-amber-700">recommendation</span>
+                )}
+              </div>
+            )}
+            {wo.rationale?.why && <div>{wo.rationale.why}</div>}
+            {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {wo.why_helps_ai_rep}</div>}
+            {wo.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {wo.why_helps_seo}</div>}
+          </div>
+        </details>
+      )}
+
       {canDraft && (
         <div className="mt-2">
           <button

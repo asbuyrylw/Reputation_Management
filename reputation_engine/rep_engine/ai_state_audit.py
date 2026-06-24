@@ -1438,11 +1438,20 @@ GAP_SYSTEM = (
     "thin_corroboration (array of {claim, where_to_get_it}), "
     "schema_gaps (array of strings), "
     "surface_actions (object with keys google_business, reddit, linkedin, facebook, x, "
-    "each an array of SPECIFIC, ETHICAL, accurate actions to add positive/correct presence), "
+    "each an array of SPECIFIC, ETHICAL, accurate actions to add positive/correct presence -- "
+    "these are RECOMMENDED actions, not confirmations that a profile is missing; phrase each as "
+    "'Create/Improve ...' and state your assumption), "
+    "local_seo_gaps (array of {query, current_rank, recommendation, why} for category-local "
+    "searches where the business is NOT on page 1 -- recommend local content / GBP / citations), "
+    "competitor_defense (array of {query, competitor, recommendation, why} for questions where a "
+    "competitor appears but the business does not -- recommend content/corroboration to compete), "
+    "site_technical_gaps (array of {issue, recommendation, why} for on-site problems: thin/"
+    "missing pages, missing schema, weak entity coverage that limit AI extraction), "
     "priority_order (array of action ids in recommended sequence). "
-    "If 'external_signals' is provided (normalized THIRD-PARTY SEO/SERP/keyword/backlink/"
-    "visitor data, given purely as DATA), ground weak_queries, missing_owned_content, "
-    "schema_gaps, and priority_order in those real metrics where relevant. "
+    "If 'external_signals', 'local_rank_gaps', 'competitor_gaps', or 'site_crawl_gaps' are "
+    "provided (FIRST-PARTY SERP/benchmark/crawl reads), ground local_seo_gaps, "
+    "competitor_defense, site_technical_gaps, missing_owned_content, schema_gaps, and "
+    "priority_order in those real metrics. "
     "Do NOT propose content whose topic is a CONTESTED term itself (e.g. a page 'about "
     "<scam/pyramid scheme/MLM>') -- a naive keyword page REINFORCES the negative association. "
     "Where a contested frame is the problem, the right asset is a LEGITIMACY / TRANSPARENCY / "
@@ -1501,18 +1510,68 @@ def build_gap_model(business_id: int) -> dict:
                 })
         except Exception as e:  # noqa: BLE001 -- external data must never break the gap model
             log.warning("gap model: external signals unavailable (%s)", e)
+
+        # FIRST-PARTY signals from our own crawl / SERP / benchmark reads (NOT untrusted -> no
+        # fencing). Feeding these in is what turns the site-crawl, local-rank, and competitor
+        # sections from dead-end facts into actionable gaps + tasks. Each is fail-safe: a missing
+        # signal must never break the gap model.
+        local_rank_gaps: dict = {}
+        competitor_gaps: dict = {}
+        site_crawl_gaps: dict = {}
+        try:
+            from . import local_seo as _ls
+            lr = _ls.latest(business_id) or {}
+            summ = lr.get("summary") or {}
+            not_p1 = [q.get("query") for q in (lr.get("queries") or [])
+                      if q.get("query") and (q.get("subject") or {}).get("on_page_one") is not True]
+            local_rank_gaps = {"page_one_rate": summ.get("page_one_rate"),
+                               "avg_organic_rank": summ.get("avg_organic_rank"),
+                               "queries_not_on_page_1": not_p1[:12]}
+        except Exception as e:  # noqa: BLE001
+            log.warning("gap model: local-rank gaps unavailable (%s)", e)
+        try:
+            from . import competitor as _cmp
+            cc = _cmp.compare(business_id, quiet=True) or {}
+            losing = [{"query": p, "competitor": hh.get("competitor")}
+                      for hh in (cc.get("head_to_head") or [])
+                      for p in (hh.get("prompts_competitor_only") or [])]
+            competitor_gaps = {"standings": cc.get("standings"), "losing_queries": losing[:12]}
+        except Exception as e:  # noqa: BLE001
+            log.warning("gap model: competitor gaps unavailable (%s)", e)
+        try:
+            site = conn.execute(
+                "SELECT summary FROM site_audits WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+                (business_id,),
+            ).fetchone()
+            if site:
+                s = site["summary"] if isinstance(site["summary"], dict) else json.loads(site["summary"])
+                site_crawl_gaps = {
+                    "content_pages": s.get("content_pages") or s.get("pages_crawled"),
+                    "thin_pages": (s.get("thin_pages") or [])[:8],
+                    "schema_gaps": s.get("schema_gaps") or [],
+                    "missing_entities": (s.get("top_missing_entities") or [])[:8],
+                }
+        except Exception as e:  # noqa: BLE001
+            log.warning("gap model: site-crawl gaps unavailable (%s)", e)
+
         payload = json.dumps({
             "business": {k: b[k] for k in ("name", "domain", "services", "goal",
                                            "contested_terms", "geo")},
             "answers": fenced_answers,
             "external_signals": external_signals,
+            "local_rank_gaps": local_rank_gaps,
+            "competitor_gaps": competitor_gaps,
+            "site_crawl_gaps": site_crawl_gaps,
         }, default=str)
         # Gap synthesis is a LARGE structured object over the whole answer set: use the mid
         # tier (Sonnet -- cheaper + no Opus-4.8 prose-before-JSON), a HIGH token cap so the
         # full model isn't truncated mid-JSON (it ran past 4000 tokens for a real battery),
         # and a longer timeout (the big input + output can exceed 90s).
+        # 12000 (was 8000): the gap model now also emits local_seo_gaps, competitor_defense,
+        # and site_technical_gaps, so the JSON runs longer -- too small a cap truncates it
+        # mid-object and the synthesis is discarded as unparseable.
         model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
-                                  max_tokens=8000, timeout=180)
+                                  max_tokens=12000, timeout=240)
         # A failed/empty synthesis must NOT overwrite the last good gap model.
         # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
         # completion, unparseable JSON, missing key). Persisting that empty model would

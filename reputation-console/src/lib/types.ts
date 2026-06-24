@@ -37,6 +37,10 @@ export interface WorkOrder {
   instruction: string | null;
   recommended_tool: string | null;
   result_notes: string | null;
+  rationale?: { gap_source?: string; why?: string; source?: string } | null;
+  gap_source?: string | null;
+  why_helps_ai_rep?: string | null;
+  why_helps_seo?: string | null;
 }
 
 export interface ContentDraft {
@@ -52,6 +56,9 @@ export interface ContentDraft {
   status: string;
   revision_count: number | null;
   reviewer: string | null;
+  highlighted_sections?: { type?: string; note?: string }[] | null;
+  placeholders_pending?: string[] | null;
+  wo_instruction?: string | null;
 }
 
 export interface ProductionBrief {

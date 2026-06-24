@@ -49,6 +49,14 @@ export function DraftReviewCard({
   const pending = draft.status === "pending_review" || draft.status === "needs_fix";
   const flags = Array.isArray(draft.compliance_flags) ? draft.compliance_flags : [];
   const q = quality(draft.quality_score);
+  const added = Array.isArray(draft.highlighted_sections) ? draft.highlighted_sections : [];
+  const placeholders = Array.isArray(draft.placeholders_pending) ? draft.placeholders_pending : [];
+  // "Why this helps" — derived from the question it targets + the work-order instruction.
+  const whyHelps = draft.target_query
+    ? `Helps your AI reputation + SEO by publishing accurate, ownable content for “${draft.target_query}”.`
+    : draft.wo_instruction
+      ? `Supports the task: ${draft.wo_instruction.slice(0, 140)}${draft.wo_instruction.length > 140 ? "…" : ""}`
+      : null;
 
   return (
     <Card>
@@ -127,10 +135,37 @@ export function DraftReviewCard({
           ))}
         </ul>
       )}
+
+      {/* compliance language the AI auto-added — the human confirms it's accurate */}
+      {added.length > 0 && (
+        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+          <div className="font-semibold">We added compliance language — please confirm it&apos;s accurate:</div>
+          <ul className="mt-1 list-disc pl-5">
+            {added.map((a, i) => <li key={i}>{a?.note || a?.type || "compliance edit"}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {/* unresolved [INSERT: ...] placeholders — a red pre-publish checklist that blocks approval */}
+      {placeholders.length > 0 && (
+        <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700">
+          <div className="font-semibold">Fill these in before publishing ({placeholders.length}):</div>
+          <ul className="mt-1 space-y-0.5">
+            {placeholders.map((p, i) => (
+              <li key={i} className="font-mono">☐ {p}</li>
+            ))}
+          </ul>
+          <div className="mt-1 text-rose-500">Click “Edit” and replace each one, then approve.</div>
+        </div>
+      )}
+
+      {whyHelps && <p className="mt-2 text-xs text-slate-500">💡 {whyHelps}</p>}
+
       {canEdit && pending && !rejecting && !editing && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
-            disabled={approve.isPending}
+            disabled={approve.isPending || placeholders.length > 0}
+            title={placeholders.length > 0 ? "Fill in the placeholders first" : undefined}
             onClick={() => approve.mutate({ draftId: draft.id })}
             className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
           >
