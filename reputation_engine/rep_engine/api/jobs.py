@@ -140,8 +140,14 @@ def _run_benchmark(business_id: int, args: dict):
 def _run_local_rank(business_id: int, args: dict):
     """Local SEO: capture Google front-page + local-pack rankings for the category-local
     queries (subject + competitors). No-op without SERPER_API_KEY. Returns a summary dict
-    ({skipped, reason} or {run_id, rows, queries}) so the UI can explain what happened."""
-    return _imp("local_seo").track(business_id, quiet=True)
+    ({skipped, reason} or {run_id, rows, queries}) so the UI can explain what happened.
+    Also refreshes the 'time to page 1' projection so the goal/timeline stays current."""
+    out = _imp("local_seo").track(business_id, quiet=True)
+    try:
+        _imp("local_seo_goals").estimate(business_id, quiet=True, persist=True)
+    except Exception:  # noqa: BLE001 -- the goal is best-effort; never fail the rank job
+        pass
+    return out
 
 
 def _run_suggest_prompts(business_id: int, args: dict):

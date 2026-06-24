@@ -23,12 +23,14 @@ try:
     from ... import acceleration_advisor as _acc
     from ... import challenge as _challenge
     from ... import feedback_loop as _fb
+    from ... import local_seo_goals as _lsg
     from ... import timeline_estimator as _te
     from ... import tracking as _tracking
 except ImportError:  # pragma: no cover
     import acceleration_advisor as _acc  # type: ignore
     import challenge as _challenge  # type: ignore
     import feedback_loop as _fb  # type: ignore
+    import local_seo_goals as _lsg  # type: ignore
     import timeline_estimator as _te  # type: ignore
     import tracking as _tracking  # type: ignore
 
@@ -38,6 +40,12 @@ router = APIRouter(prefix="/businesses/{business_id}", tags=["sustain"])
 @router.get("/timeline")
 def timeline(business_id: int = Depends(authorize_business)):
     return _te.estimate(business_id, quiet=True)
+
+
+@router.get("/local-seo-goal")
+def local_seo_goal(business_id: int = Depends(authorize_business)):
+    """Projected time to reach page 1 of Google for the local category searches (read-only)."""
+    return _lsg.estimate(business_id, quiet=True, persist=False)
 
 
 @router.get("/challenge")

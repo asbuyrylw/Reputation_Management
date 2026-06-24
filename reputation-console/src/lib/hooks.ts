@@ -17,6 +17,7 @@ import type {
   CompareResult,
   CustomPrompt,
   LocalRankings,
+  LocalSeoGoal,
   OnboardingStatus,
   PromptResults,
   Report,
@@ -257,6 +258,10 @@ export function useCompare(businessId: number | null) {
 }
 export function useLocalRankings(businessId: number | null) {
   return useApiQuery<LocalRankings>(["local-rankings", businessId], base(businessId, "/local-rankings"));
+}
+
+export function useLocalSeoGoal(businessId: number | null) {
+  return useApiQuery<LocalSeoGoal>(["local-seo-goal", businessId], base(businessId, "/local-seo-goal"));
 }
 
 // ---- user-managed prompts / topics ----

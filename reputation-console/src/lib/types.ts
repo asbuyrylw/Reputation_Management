@@ -451,6 +451,27 @@ export interface LocalRankings {
   summary: LocalRankSummary | null;
 }
 
+export interface ProjWindow {
+  months: number;
+  weeks: number;
+  target_date: string;
+}
+export interface LocalSeoGoal {
+  business?: string;
+  current_page_one_rate: number | null;
+  target_page_one_rate: number;
+  remaining_gap?: number;
+  avg_organic_rank?: number | null;
+  monthly_gain_estimate?: number;
+  confidence?: string;
+  no_data?: boolean;
+  note?: string;
+  status?: string;
+  target_searches?: string[];
+  projection?: { optimistic: ProjWindow; expected: ProjWindow; conservative: ProjWindow };
+  disclaimer?: string;
+}
+
 export interface Notification {
   id: number;
   kind: string;

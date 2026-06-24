@@ -15,6 +15,9 @@ type Json = Record<string, unknown>;
 type WeakQuery = { prompt?: string; engine?: string; problem?: string };
 type Missing = { topic?: string; asset_type?: string; why?: string };
 type Thin = { claim?: string; where_to_get_it?: string };
+type LocalGap = { query?: string; current_rank?: unknown; recommendation?: string; why?: string };
+type CompGap = { query?: string; competitor?: string; recommendation?: string; why?: string };
+type SiteGap = { issue?: string; recommendation?: string; why?: string };
 
 function arr<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
@@ -73,6 +76,9 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
   const missing = arr<Missing>(model.missing_owned_content);
   const thin = arr<Thin>(model.thin_corroboration);
   const schema = arr<string>(model.schema_gaps);
+  const localSeo = arr<LocalGap>(model.local_seo_gaps);
+  const compDef = arr<CompGap>(model.competitor_defense);
+  const siteTech = arr<SiteGap>(model.site_technical_gaps);
   const priority = arr<string>(model.priority_order);
   const surface = (model.surface_actions as Record<string, unknown>) || {};
   const surfaceEntries = Object.entries(surface).filter(([, v]) => arr<string>(v).length > 0);
@@ -88,7 +94,9 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
           <Chip n={weak.length} label="questions AI gets wrong" tone="bad" />
           <Chip n={missing.length} label="pages to create" tone="neutral" />
           <Chip n={thin.length} label="claims needing proof" tone="neutral" />
-          <Chip n={schema.length} label="technical (schema) gaps" tone="neutral" />
+          <Chip n={localSeo.length} label="local searches to win" tone="neutral" />
+          <Chip n={compDef.length} label="questions rivals win" tone="bad" />
+          <Chip n={siteTech.length} label="website fixes" tone="neutral" />
         </div>
         {summary && (
           <details className="mt-3">
@@ -187,6 +195,74 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
           })}
         </ul>
       </DataSection>
+
+      {/* local searches not on page 1 (from live Google rankings) */}
+      {localSeo.length > 0 && (
+        <DataSection
+          title="Local searches to win"
+          severity="med"
+          headline={`${localSeo.length} local searches your neighbors type where you're not yet on Google's first page. Each becomes a local-SEO task.`}
+          highlights={[{ label: "Searches", value: String(localSeo.length) }]}
+          action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+          detailsLabel="See the searches + what to do"
+        >
+          <ul className="space-y-3">
+            {localSeo.map((g, i) => (
+              <li key={i} className="rounded-lg border border-slate-100 p-3">
+                <div className="text-sm font-semibold text-slate-800">“{g.query}”</div>
+                {g.current_rank != null && <div className="text-xs text-slate-400">Current position: {String(g.current_rank)}</div>}
+                {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
+                {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+              </li>
+            ))}
+          </ul>
+        </DataSection>
+      )}
+
+      {/* questions where a competitor appears and you don't */}
+      {compDef.length > 0 && (
+        <DataSection
+          title="Questions your rivals win"
+          severity={compDef.length > 3 ? "high" : "med"}
+          headline={`${compDef.length} questions where a competitor shows up in AI answers and you don't. Close these to take back the conversation.`}
+          highlights={[{ label: "Questions", value: String(compDef.length), tone: "bad" }]}
+          action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+          detailsLabel="See the questions + how to compete"
+        >
+          <ul className="space-y-3">
+            {compDef.map((g, i) => (
+              <li key={i} className="rounded-lg border border-slate-100 p-3">
+                <div className="text-sm font-semibold text-slate-800">“{g.query}”</div>
+                {g.competitor && <div className="text-xs text-rose-600">A rival wins here: {g.competitor}</div>}
+                {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
+                {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+              </li>
+            ))}
+          </ul>
+        </DataSection>
+      )}
+
+      {/* on-site technical issues that limit AI extraction */}
+      {siteTech.length > 0 && (
+        <DataSection
+          title="Website fixes"
+          severity="med"
+          headline={`${siteTech.length} fixes on your own site that would help AI read and trust your facts (thin/missing pages, schema, weak coverage).`}
+          highlights={[{ label: "Fixes", value: String(siteTech.length) }]}
+          action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+          detailsLabel="See the fixes"
+        >
+          <ul className="space-y-3">
+            {siteTech.map((g, i) => (
+              <li key={i} className="rounded-lg border border-slate-100 p-3">
+                <div className="text-sm font-semibold text-slate-800">{g.issue}</div>
+                {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
+                {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+              </li>
+            ))}
+          </ul>
+        </DataSection>
+      )}
 
       {/* recommended social presence (NOT verified gaps) */}
       {surfaceEntries.length > 0 && (
