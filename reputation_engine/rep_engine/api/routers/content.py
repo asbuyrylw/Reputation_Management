@@ -8,6 +8,7 @@ business_id matches the path (the engine functions don't check tenancy).
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -74,11 +75,12 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
     rows = conn.execute(
         "SELECT id, wo_code, title, capability, execution, phase, status, assignee, "
         "target_date, instruction, recommended_tool, result_notes, created_at, "
-        "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision "
+        "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision, "
+        "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [_to_float(dict(r), "predicted_ai_points") for r in rows]
 
 
 class WorkOrderCreate(BaseModel):
@@ -330,6 +332,46 @@ def set_work_order_status(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
     _tracking.set_status(wo_id, body.status, body.assignee, body.notes)
     return {"ok": True, "wo_id": wo_id, "status": body.status}
+
+
+class WorkOrderEdit(BaseModel):
+    assignee: Optional[str] = None
+    start_date: Optional[str] = None
+    target_date: Optional[str] = None
+
+
+@router.patch("/work-orders/{wo_id}")
+def edit_work_order(
+    wo_id: int,
+    body: WorkOrderEdit,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Assign a task to someone and set its start / due dates (so the owner sees who's
+    responsible for what, by when). Empty string clears a field."""
+    fields: dict = {}
+    if body.assignee is not None:
+        fields["assignee"] = body.assignee.strip() or None
+    for k in ("start_date", "target_date"):
+        v = getattr(body, k)
+        if v is not None:
+            v = v.strip()
+            try:
+                fields[k] = date.fromisoformat(v) if v else None
+            except ValueError:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{k} must be YYYY-MM-DD")
+    if not fields:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing to update")
+    set_clause = ", ".join(f"{k}=%s" for k in fields) + ", updated_at=now()"  # keys are fixed literals
+    params = list(fields.values()) + [wo_id, business_id]
+    row = conn.execute(
+        f"UPDATE work_orders SET {set_clause} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
+        params,
+    ).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
+    conn.commit()
+    return {"id": wo_id, **fields}
 
 
 @router.post("/work-orders/{wo_id}/generate-draft", status_code=202)

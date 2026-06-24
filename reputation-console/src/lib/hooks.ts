@@ -215,6 +215,16 @@ export function useSetWorkOrderStatus(businessId: number | null) {
   );
 }
 
+// Assign a task + set its start/due dates.
+export function useEditWorkOrder(businessId: number | null) {
+  return useApiMutation<{ woId: number; assignee?: string; start_date?: string; target_date?: string }>(
+    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}`,
+    ({ assignee, start_date, target_date }) => ({ assignee, start_date, target_date }),
+    [["work-orders", businessId]],
+    "PATCH",
+  );
+}
+
 // Generate an AI draft for a single content work order (background job -> shows in the
 // review queue). Invalidates jobs so the progress banner picks it up.
 export function useGenerateDraftForWo(businessId: number | null) {

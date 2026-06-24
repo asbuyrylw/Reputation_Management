@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
@@ -70,6 +70,11 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
   const tool = TOOL_GUIDE[wo.capability ?? ""];
   const bullets = bulletize(wo.instruction || "");
   const gen = useGenerateDraftForWo(businessId);
+  const edit = useEditWorkOrder(businessId);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignee, setAssignee] = useState(wo.assignee ?? "");
+  const [startDate, setStartDate] = useState(wo.start_date ?? "");
+  const [dueDate, setDueDate] = useState(wo.target_date ?? "");
   // Offer "Generate draft" on AI-draftable content tasks that aren't finished yet.
   const canDraft =
     canEdit &&
@@ -136,6 +141,41 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
             {wo.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {wo.why_helps_seo}</div>}
           </div>
         </details>
+      )}
+
+      {/* predicted impact + owner / dates */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+        {wo.predicted_ai_points != null && wo.predicted_ai_points > 0 && (
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700" title={`AI-score estimate (${wo.predicted_basis || "estimate"})`}>
+            ≈ +{wo.predicted_ai_points} AI pts
+          </span>
+        )}
+        {wo.predicted_seo_impact && wo.predicted_seo_impact !== "—" && (
+          <span className="rounded-full bg-sky-50 px-2 py-0.5 font-medium text-sky-700">SEO: {wo.predicted_seo_impact}</span>
+        )}
+        {wo.assignee && <span className="text-slate-500">👤 {wo.assignee}</span>}
+        {wo.start_date && <span className="text-slate-400">{fmtDate(wo.start_date)} → {fmtDate(wo.target_date)}</span>}
+        {canEdit && (
+          <button onClick={() => setAssignOpen((o) => !o)} className="text-indigo-600 hover:underline">
+            {assignOpen ? "close" : wo.assignee ? "reassign / dates" : "assign / dates"}
+          </button>
+        )}
+      </div>
+      {assignOpen && canEdit && (
+        <div className="mt-2 space-y-1.5 rounded-md bg-slate-50 p-2">
+          <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Owner (who's responsible)" className="w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+          <div className="flex gap-1.5">
+            <label className="flex-1 text-[10px] text-slate-500">Start<input type="date" value={(startDate ?? "").slice(0, 10)} onChange={(e) => setStartDate(e.target.value)} className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1 text-xs" /></label>
+            <label className="flex-1 text-[10px] text-slate-500">Due<input type="date" value={(dueDate ?? "").slice(0, 10)} onChange={(e) => setDueDate(e.target.value)} className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1 text-xs" /></label>
+          </div>
+          <button
+            onClick={() => edit.mutate({ woId: wo.id, assignee, start_date: startDate, target_date: dueDate }, { onSuccess: () => setAssignOpen(false) })}
+            disabled={edit.isPending}
+            className="rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {edit.isPending ? "Saving…" : "Save"}
+          </button>
+        </div>
       )}
 
       {canDraft && (
@@ -213,10 +253,14 @@ export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useWorkOrders(businessId);
   const setStatus = useSetWorkOrderStatus(businessId);
+  const [sortRoi, setSortRoi] = useState(false);
 
   if (isLoading || !data) return <Spinner />;
 
-  const byStatus = (s: string) => data.filter((w) => w.status === s);
+  const byStatus = (s: string) => {
+    const rows = data.filter((w) => w.status === s);
+    return sortRoi ? [...rows].sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1)) : rows;
+  };
   const total = data.length;
   const done = byStatus("done").length + byStatus("verified").length;
   const inProgress = byStatus("in_progress").length;
@@ -245,7 +289,13 @@ export default function WorkOrdersPage() {
           <Card className="mb-4">
             <div className="mb-1.5 flex items-center justify-between text-sm">
               <span className="font-medium text-slate-700">Plan progress</span>
-              <span className="text-slate-500">{done} of {total} done · {inProgress} in progress</span>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1 text-xs text-slate-500">
+                  <input type="checkbox" checked={sortRoi} onChange={(e) => setSortRoi(e.target.checked)} />
+                  Highest impact first
+                </label>
+                <span className="text-slate-500">{done} of {total} done · {inProgress} in progress</span>
+              </div>
             </div>
             <ToneBar pct={donePct} tone="good" />
           </Card>

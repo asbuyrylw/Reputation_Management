@@ -42,6 +42,10 @@ export interface WorkOrder {
   why_helps_ai_rep?: string | null;
   why_helps_seo?: string | null;
   added_in_revision?: number | null;
+  start_date?: string | null;
+  predicted_ai_points?: number | null;
+  predicted_seo_impact?: string | null;
+  predicted_basis?: string | null;
 }
 
 export interface ContentDraft {

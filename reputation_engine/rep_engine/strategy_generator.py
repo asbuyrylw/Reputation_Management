@@ -154,6 +154,9 @@ class WorkOrder:
     rationale: dict = field(default_factory=dict)   # B1: {gap_source, why, source}
     why_helps_ai_rep: str = ""                       # C10: how it helps AI reputation
     why_helps_seo: str = ""                          # C10: how it helps local/SEO
+    predicted_ai_points: Optional[float] = None      # estimated AI-score points this task adds
+    predicted_seo_impact: str = ""                   # qualitative SEO impact: High|Medium|Low
+    predicted_basis: str = ""                        # "measured from your results" | "industry baseline"
 
 
 # Plain-English "how this helps" by capability, so EVERY task shows its why (C10).
@@ -179,6 +182,61 @@ _WHY_SEO = {
     "link_building": "Backlinks raise domain authority and rankings.",
     "ai_visibility_tracking": "",
 }
+
+# Predicted IMPACT: map each capability to the acceleration lever whose effectiveness predicts
+# how much one task of this type moves the AI-reputation score. The per-unit gain comes from the
+# business's LEARNED weights when available (refines over time), else the industry baseline.
+_CAPABILITY_TO_LEVER = {
+    "content_writing": "third_party_articles",
+    "local_content_creation": "third_party_articles",
+    "video_creation": "videos",
+    "press_outreach": "earned_press",
+    "media_list_building": "earned_press",
+    "link_building": "earned_links",
+    "review_generation": "reviews",
+    "social_publishing": "third_party_articles",
+    "gbp_optimization": "reviews",
+    # structural / tracking tasks have no direct per-unit score lever
+    "schema_markup": None,
+    "ai_visibility_tracking": None,
+}
+# Qualitative SEO impact (point prediction for local rank isn't reliable yet, so we keep it honest).
+_CAPABILITY_SEO = {
+    "local_content_creation": "High", "gbp_optimization": "High", "link_building": "High",
+    "schema_markup": "Medium", "content_writing": "Medium", "review_generation": "Medium",
+    "press_outreach": "Medium", "video_creation": "Medium",
+    "social_publishing": "Low", "media_list_building": "Low", "ai_visibility_tracking": "—",
+}
+
+
+def predict_impact(business_id: int, capability: str) -> dict:
+    """Estimate one task's impact: predicted AI-score points (from learned-or-baseline lever
+    effectiveness) + a qualitative SEO impact. Honest about basis + confidence; best used to RANK
+    tasks by return, and snapshotted so we can later compare predicted vs measured."""
+    lever = _CAPABILITY_TO_LEVER.get(capability)
+    ai_points = None
+    basis = ""
+    confidence = "low"
+    if lever:
+        try:
+            from . import feedback_loop as _fb, acceleration_advisor as _acc
+        except ImportError:  # pragma: no cover
+            import feedback_loop as _fb  # type: ignore
+            import acceleration_advisor as _acc  # type: ignore
+        learned = {}
+        try:
+            learned = _fb.learned_lever_weights(business_id) or {}
+        except Exception:  # noqa: BLE001 -- prediction must never break planning
+            learned = {}
+        if lever in learned and learned[lever] > 0:
+            gain = learned[lever]
+            basis, confidence = "measured from your results", "medium"
+        else:
+            gain = (_acc.LEVERS.get(lever, {}) or {}).get("weight", 0.0)
+            basis, confidence = "industry baseline", "low"
+        ai_points = round(gain * 100.0, 1)  # 0-1 alignment gain per unit -> 0-100 score points
+    return {"ai_points": ai_points, "ai_confidence": confidence,
+            "seo_impact": _CAPABILITY_SEO.get(capability, "—"), "basis": basis}
 
 
 PHASES = [
@@ -318,9 +376,17 @@ METRICS = [
 
 def assemble_plan(business: dict, gap: dict, start: date) -> dict:
     wos = build_work_orders(gap)
+    bid = business.get("id")
     for w in wos:
         w_start = start + timedelta(weeks=w.week)
-        w.__dict__["target_date"] = w_start.isoformat()
+        # start = the planned start; target_date = the due/end date (~2 weeks to act on it).
+        w.__dict__["start_date"] = w_start.isoformat()
+        w.__dict__["target_date"] = (w_start + timedelta(weeks=2)).isoformat()
+        if bid is not None:
+            imp = predict_impact(bid, w.capability)
+            w.predicted_ai_points = imp["ai_points"]
+            w.predicted_seo_impact = imp["seo_impact"]
+            w.predicted_basis = imp["basis"]
     phases = {}
     for name, lo, hi in PHASES:
         phases[name] = {
