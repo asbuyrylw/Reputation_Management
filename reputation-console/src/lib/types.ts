@@ -61,6 +61,14 @@ export interface ContentDraft {
   wo_instruction?: string | null;
 }
 
+export interface AmplificationPlaybook {
+  primary?: string;
+  post_to?: string[];
+  cross_share?: string[];
+  sequence?: string;
+  why_helps_ai_rep?: string;
+  why_helps_seo?: string;
+}
 export interface ProductionBrief {
   id: number;
   channel: string;
@@ -69,6 +77,9 @@ export interface ProductionBrief {
   target_query: string | null;
   brief: Record<string, unknown>;
   status: string;
+  amplification_playbook?: AmplificationPlaybook | null;
+  why_helps_ai_rep?: string | null;
+  why_helps_seo?: string | null;
 }
 
 export interface DiscoveryTarget {

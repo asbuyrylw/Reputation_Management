@@ -214,6 +214,37 @@ def _generate(channel: str, system: str, user: str, business_id: int, limit: int
     return out
 
 
+def _amplification(channel: str, platform: str | None) -> dict:
+    """A deterministic multi-channel distribution plan for a piece of content -- where to post it,
+    how to cross-share it, and WHY it helps. Turns "make one video" into a campaign: e.g. post to
+    your site + GBP + the platform, then share the link on X/FB/LinkedIn/Instagram."""
+    plat = (platform or "").replace("_", " ") or channel
+    if channel == "video":
+        return {
+            "primary": plat,
+            "post_to": [plat, "your website (embed)", "Google Business Profile"],
+            "cross_share": ["X", "Facebook", "LinkedIn", "Instagram"],
+            "sequence": (
+                f"Publish on {plat} first (for search + dwell time), embed it on a page of your "
+                "website, cut 15-30s clips for TikTok/Reels/Shorts, then share the website link on "
+                "X, Facebook, LinkedIn and Instagram over the following week."
+            ),
+            "why_helps_ai_rep": "More owned, accurate video content for AI assistants to surface and cite about you.",
+            "why_helps_seo": "Embeds + social links + dwell time lift rankings and drive referral traffic back to your site.",
+        }
+    return {
+        "primary": plat,
+        "post_to": [plat, "link back to a page on your website"],
+        "cross_share": ["your other social profiles", "Google Business Profile"],
+        "sequence": (
+            f"Post on {plat}, repurpose the core message for your other social channels, and link "
+            "back to relevant content on your own site so the traffic and authority compound there."
+        ),
+        "why_helps_ai_rep": "Consistent, accurate owned presence AI can reference instead of the negatives.",
+        "why_helps_seo": "Brand signals + referral traffic that support your local and organic rankings.",
+    }
+
+
 def _persist(business_id: int, briefs: list) -> None:
     with db() as conn:
         # A fresh batch supersedes the prior OPEN set so the report's "to_produce"
@@ -221,11 +252,14 @@ def _persist(business_id: int, briefs: list) -> None:
         conn.execute("UPDATE production_briefs SET status='superseded' "
                      "WHERE business_id=%s AND status='to_produce'", (business_id,))
         for b in briefs:
+            amp = _amplification(b["channel"], b.get("platform"))
             conn.execute(
                 "INSERT INTO production_briefs (business_id, channel, platform, title, "
-                "target_query, brief, status) VALUES (%s,%s,%s,%s,%s,%s,'to_produce')",
+                "target_query, brief, status, amplification_playbook, why_helps_ai_rep, why_helps_seo) "
+                "VALUES (%s,%s,%s,%s,%s,%s,'to_produce',%s,%s,%s)",
                 (business_id, b["channel"], b.get("platform"), b.get("title"),
-                 b.get("target_query"), json.dumps(b)))
+                 b.get("target_query"), json.dumps(b), json.dumps(amp),
+                 amp["why_helps_ai_rep"], amp["why_helps_seo"]))
         conn.commit()
 
 

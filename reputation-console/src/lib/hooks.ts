@@ -96,6 +96,13 @@ export function useGapModel(businessId: number | null) {
   return useApiQuery<GapModel | null>(["gap-model", businessId], businessId ? `/businesses/${businessId}/gap-model` : null);
 }
 
+export function useSocialPresence(businessId: number | null) {
+  return useApiQuery<Record<string, { exists: boolean | null; profile_url: string | null; confidence: string | null }>>(
+    ["social-presence", businessId],
+    businessId ? `/businesses/${businessId}/social-presence` : null,
+  );
+}
+
 // ---- content / work ----
 export function useWorkOrders(businessId: number | null) {
   return useApiQuery<WorkOrder[]>(["work-orders", businessId], businessId ? `/businesses/${businessId}/work-orders` : null);

@@ -112,6 +112,12 @@ def _run_enrich_outreach(business_id: int, args: dict):
     return _imp("agent_discovery").enrich_contacts(business_id, quiet=True)
 
 
+def _run_social_verify(business_id: int, args: dict):
+    """Best-effort: check whether the business actually has a profile on each platform, so the
+    social recommendations can become confirmed 'create' vs 'improve'."""
+    return _imp("social_presence").verify(business_id, quiet=True)
+
+
 def _run_mentions_scan(business_id: int, args: dict):
     """Scan the configured sources for new mentions, then draft (human-gated) replies.
     Returns the discovered/drafted counts so a scan that found nothing reads as such in the
@@ -187,6 +193,7 @@ JOB_DISPATCH = {
     # monitoring + outreach + learning
     "discovery": _run_discovery,
     "enrich_outreach": _run_enrich_outreach,
+    "social_verify": _run_social_verify,
     "mentions_scan": _run_mentions_scan,
     "incident_scan": _run_incident_scan,
     "citation_analyze": _run_citation_analyze,

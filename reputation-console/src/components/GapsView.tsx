@@ -5,6 +5,7 @@
 // DataSection (highlight first, details on click) — and the action-bearing ones link to the
 // work orders / content the same gap model already produces.
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Card } from "./ui";
 import { DataSection } from "./primitives";
@@ -70,7 +71,19 @@ function readinessTone(n: number): string {
   return "text-rose-700";
 }
 
-export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
+type Presence = Record<string, { exists: boolean | null; profile_url: string | null; confidence: string | null }>;
+
+export function GapsView({
+  model,
+  asOf,
+  socialPresence,
+  verifyButton,
+}: {
+  model: Json;
+  asOf?: string;
+  socialPresence?: Presence;
+  verifyButton?: ReactNode;
+}) {
   const summary = (model.summary as string) || "";
   const weak = arr<WeakQuery>(model.weak_queries);
   const missing = arr<Missing>(model.missing_owned_content);
@@ -273,25 +286,39 @@ export function GapsView({ model, asOf }: { model: Json; asOf?: string }) {
           highlights={[{ label: "Platforms", value: String(surfaceEntries.length) }]}
           detailsLabel="See the recommendations by platform"
         >
-          <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <div className="mb-3 flex flex-wrap items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             <span className="mt-0.5 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
               Recommendation
             </span>
-            <span>
-              These are best-practice suggestions, <span className="font-semibold">not confirmed gaps</span> — we haven’t yet
-              verified which of these profiles already exist or what’s posted on them. Treat each as “create or improve,” and
-              confirm the current state before acting.
+            <span className="min-w-0 flex-1">
+              These are best-practice suggestions, <span className="font-semibold">not confirmed gaps</span> — treat each as
+              “create or improve.” Use <span className="font-semibold">Check my profiles</span> to confirm which already exist.
             </span>
+            {verifyButton}
           </div>
           <div className="space-y-4">
-            {surfaceEntries.map(([platform, actions]) => (
-              <div key={platform}>
-                <div className="text-sm font-semibold text-slate-900">{PLATFORM_LABEL[platform] ?? platform.replace(/_/g, " ")}</div>
-                <ul className="mt-1 list-disc space-y-1 pl-6 text-sm text-slate-600">
-                  {arr<string>(actions).map((a, i) => <ActionItem key={i} text={a} />)}
-                </ul>
-              </div>
-            ))}
+            {surfaceEntries.map(([platform, actions]) => {
+              const p = socialPresence?.[platform];
+              return (
+                <div key={platform}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-slate-900">{PLATFORM_LABEL[platform] ?? platform.replace(/_/g, " ")}</span>
+                    {p?.exists === true && p.profile_url && (
+                      <a href={p.profile_url} target="_blank" rel="noreferrer" className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700 hover:underline">
+                        profile found — improve it ↗
+                      </a>
+                    )}
+                    {p?.exists === false && (
+                      <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">no profile found — create one</span>
+                    )}
+                    {p && <span className="text-[10px] text-slate-400">({p.confidence} check)</span>}
+                  </div>
+                  <ul className="mt-1 list-disc space-y-1 pl-6 text-sm text-slate-600">
+                    {arr<string>(actions).map((a, i) => <ActionItem key={i} text={a} />)}
+                  </ul>
+                </div>
+              );
+            })}
           </div>
         </DataSection>
       )}

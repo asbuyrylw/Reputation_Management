@@ -118,7 +118,8 @@ def content_drafts(business_id: int = Depends(authorize_business), conn=Depends(
 @router.get("/production-briefs")
 def production_briefs(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
-        "SELECT id, channel, platform, title, target_query, brief, status, created_at "
+        "SELECT id, channel, platform, title, target_query, brief, status, created_at, "
+        "amplification_playbook, why_helps_ai_rep, why_helps_seo "
         "FROM production_briefs WHERE business_id=%s AND status='to_produce' ORDER BY channel, id",
         (business_id,),
     ).fetchall()

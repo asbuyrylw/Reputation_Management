@@ -36,6 +36,14 @@ def gap_model(business_id: int = Depends(authorize_business), conn=Depends(get_c
     return dict(row) if row else None
 
 
+@router.get("/social-presence")
+def social_presence(business_id: int = Depends(authorize_business)):
+    """Latest best-effort verification of which social profiles the business actually has,
+    so the social recommendations can show confirmed 'create' vs 'improve'."""
+    from ... import social_presence as _sp
+    return _sp.latest(business_id)
+
+
 # ---- competitor benchmarking (share-of-voice vs rivals) ----
 @router.get("/competitors")
 def competitors(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):

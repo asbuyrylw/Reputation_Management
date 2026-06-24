@@ -83,6 +83,22 @@ export default function BriefsPage() {
               <div className="mt-3 border-t border-slate-100 pt-3">
                 <Recipe brief={b.brief} />
               </div>
+              {b.amplification_playbook && (
+                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-indigo-500">How to share it (don’t just post once)</div>
+                  {b.amplification_playbook.post_to && b.amplification_playbook.post_to.length > 0 && (
+                    <div className="mt-1 text-sm text-slate-700"><span className="font-medium">Post to:</span> {b.amplification_playbook.post_to.join(", ")}</div>
+                  )}
+                  {b.amplification_playbook.cross_share && b.amplification_playbook.cross_share.length > 0 && (
+                    <div className="text-sm text-slate-700"><span className="font-medium">Then share on:</span> {b.amplification_playbook.cross_share.join(", ")}</div>
+                  )}
+                  {b.amplification_playbook.sequence && <div className="mt-1 text-xs text-slate-600">{b.amplification_playbook.sequence}</div>}
+                  <div className="mt-2 space-y-0.5 text-xs">
+                    {b.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {b.why_helps_ai_rep}</div>}
+                    {b.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {b.why_helps_seo}</div>}
+                  </div>
+                </div>
+              )}
             </Card>
           ))}
         </div>
