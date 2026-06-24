@@ -81,6 +81,12 @@ export interface DiscoveryTarget {
   score: number | null;
   rationale: string | null;
   status: string | null;
+  target_type?: string | null;
+  capabilities?: string[] | null;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  contact_verified?: boolean | null;
 }
 
 export interface SeriesPoint {

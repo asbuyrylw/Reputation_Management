@@ -47,6 +47,8 @@ export const JOB_LABELS: Record<string, JobMeta> = {
     hint: "Draft the owned content the plan calls for (human-reviewed before publishing)." },
   discovery: { type: "discovery", label: "Find outreach targets", navGroup: "Content", secs: 90,
     hint: "Find journalists / outlets / podcasts / communities to reach out to." },
+  enrich_outreach: { type: "enrich_outreach", label: "Find contacts for your targets", navGroup: "Content", secs: 90,
+    hint: "Best-effort public contact lookup for your outreach targets (you confirm before sending)." },
 
   // Monitor
   mentions_scan: { type: "mentions_scan", label: "Scan for new mentions", navGroup: "Monitor", secs: 60,

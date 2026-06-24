@@ -27,6 +27,19 @@ class DiscoveryTargetCreate(BaseModel):
     url: Optional[str] = None
     beat: Optional[str] = None
     rationale: Optional[str] = None
+    target_type: Optional[str] = None
+    capabilities: Optional[list[str]] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+
+
+class DiscoveryTargetUpdate(BaseModel):
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    target_type: Optional[str] = None
+    capabilities: Optional[list[str]] = None
 
 
 class TargetStatusRequest(BaseModel):
@@ -115,7 +128,8 @@ def production_briefs(business_id: int = Depends(authorize_business), conn=Depen
 @router.get("/discovery-targets")
 def discovery_targets(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
-        "SELECT id, channel, name, outlet, url, beat, score, rationale, status, created_at "
+        "SELECT id, channel, name, outlet, url, beat, score, rationale, status, created_at, "
+        "target_type, capabilities, contact_name, contact_email, contact_phone, contact_verified "
         "FROM discovery_targets WHERE business_id=%s ORDER BY score DESC NULLS LAST, id",
         (business_id,),
     ).fetchall()
@@ -180,12 +194,46 @@ def add_discovery_target(
 ):
     """Manually add an outreach target (in addition to the ones the Discovery agent finds)."""
     row = conn.execute(
-        "INSERT INTO discovery_targets (business_id, channel, name, outlet, url, beat, rationale, status) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,'suggested') RETURNING id",
-        (business_id, payload.channel, payload.name, payload.outlet, payload.url, payload.beat, payload.rationale),
+        "INSERT INTO discovery_targets (business_id, channel, name, outlet, url, beat, rationale, "
+        "status, target_type, capabilities, contact_name, contact_email, contact_phone, contact_verified) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,'suggested',%s,%s,%s,%s,%s,%s) RETURNING id",
+        (business_id, payload.channel, payload.name, payload.outlet, payload.url, payload.beat,
+         payload.rationale, payload.target_type, payload.capabilities,
+         payload.contact_name, payload.contact_email, payload.contact_phone,
+         bool(payload.contact_name or payload.contact_email or payload.contact_phone)),
     ).fetchone()
     conn.commit()
     return {"id": row["id"]}
+
+
+@router.patch("/discovery-targets/{target_id}")
+def update_discovery_target(
+    target_id: int,
+    body: DiscoveryTargetUpdate,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Edit an outreach target's contact info / type / capabilities (manual override of what the
+    discovery agent found). Setting any contact field marks the contact as verified (you entered it)."""
+    fields: dict = {}
+    for k in ("contact_name", "contact_email", "contact_phone", "target_type", "capabilities"):
+        v = getattr(body, k)
+        if v is not None:
+            fields[k] = v
+    if not fields:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing to update")
+    if any(k.startswith("contact_") for k in fields):
+        fields["contact_verified"] = True
+    set_clause = ", ".join(f"{k}=%s" for k in fields)  # keys are fixed literals
+    params = list(fields.values()) + [target_id, business_id]
+    row = conn.execute(
+        f"UPDATE discovery_targets SET {set_clause} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
+        params,
+    ).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Target not found")
+    conn.commit()
+    return {"id": target_id, **fields}
 
 
 @router.post("/discovery-targets/{target_id}/status")

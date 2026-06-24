@@ -107,6 +107,11 @@ def _run_discovery(business_id: int, args: dict) -> None:
     _imp("agent_discovery").discover(business_id)
 
 
+def _run_enrich_outreach(business_id: int, args: dict):
+    """Best-effort: auto-find public contact info for outreach targets (marked unverified)."""
+    return _imp("agent_discovery").enrich_contacts(business_id, quiet=True)
+
+
 def _run_mentions_scan(business_id: int, args: dict):
     """Scan the configured sources for new mentions, then draft (human-gated) replies.
     Returns the discovered/drafted counts so a scan that found nothing reads as such in the
@@ -181,6 +186,7 @@ JOB_DISPATCH = {
     "cycle": _run_cycle,
     # monitoring + outreach + learning
     "discovery": _run_discovery,
+    "enrich_outreach": _run_enrich_outreach,
     "mentions_scan": _run_mentions_scan,
     "incident_scan": _run_incident_scan,
     "citation_analyze": _run_citation_analyze,

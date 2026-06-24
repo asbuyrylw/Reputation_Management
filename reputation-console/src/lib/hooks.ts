@@ -118,11 +118,12 @@ function useApiMutation<TVars>(
   pathFor: (vars: TVars) => string,
   bodyFor: (vars: TVars) => unknown,
   invalidate: unknown[][],
+  method: "POST" | "PATCH" | "PUT" | "DELETE" = "POST",
 ) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: TVars) =>
-      apiFetch(pathFor(vars), { method: "POST", body: bodyFor(vars) }),
+      apiFetch(pathFor(vars), { method, body: bodyFor(vars) }),
     onSuccess: () => {
       for (const key of invalidate) qc.invalidateQueries({ queryKey: key });
     },
@@ -437,6 +438,14 @@ export function useSetTargetStatus(businessId: number | null) {
     ({ targetId }) => `/businesses/${businessId}/discovery-targets/${targetId}/status`,
     ({ status }) => ({ status }),
     [["discovery-targets", businessId]],
+  );
+}
+export function useUpdateTargetContact(businessId: number | null) {
+  return useApiMutation<{ targetId: number; contact_name?: string; contact_email?: string; contact_phone?: string }>(
+    ({ targetId }) => `/businesses/${businessId}/discovery-targets/${targetId}`,
+    ({ contact_name, contact_email, contact_phone }) => ({ contact_name, contact_email, contact_phone }),
+    [["discovery-targets", businessId]],
+    "PATCH",
   );
 }
 export function useResumeIncident(businessId: number | null) {
