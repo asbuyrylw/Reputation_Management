@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from datetime import date, datetime
 
 
@@ -56,7 +57,25 @@ VALID_STATUS = {"pending", "in_progress", "done", "verified", "skipped", "blocke
 # ----------------------------------------------------------------------------
 # sync-plan: materialize plan work orders into trackable rows
 # ----------------------------------------------------------------------------
-def sync_plan(business_id: int) -> int:
+def _norm_title(t: str | None) -> str:
+    """Normalized task identity: lowercase, strip punctuation, collapse whitespace. Lets us
+    recognize 'the same task' across plan regenerations (titles are specific -- they embed the
+    topic/query), so a task already done or in-progress isn't duplicated."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", (t or "").lower())).strip()
+
+
+def sync_plan(business_id: int) -> dict:
+    """Materialize the latest strategy plan into trackable work_orders -- as an ADDITIVE MERGE,
+    not a replace.
+
+    Existing work orders (and their status/progress) are PRESERVED. Only tasks in the regenerated
+    plan that don't already exist (matched by normalized title) are added, tagged with the current
+    plan revision so the UI can mark them "Revision N · added". Tasks that are already done, or
+    already in progress with a draft, are recognized and carried forward, never duplicated.
+    Idempotent: re-running on the same plan adds nothing.
+
+    Returns {revision, created, carried_forward, done, drafted, open}.
+    """
     with db() as conn:
         plan_row = conn.execute(
             "SELECT id, plan FROM strategy_plans WHERE business_id=%s ORDER BY id DESC LIMIT 1",
@@ -66,15 +85,33 @@ def sync_plan(business_id: int) -> int:
             raise SystemExit("No strategy plan found -- generate one first.")
         plan = plan_row["plan"] if isinstance(plan_row["plan"], dict) else json.loads(plan_row["plan"])
         wos = plan.get("work_orders", []) or []
-        created, skipped = 0, 0
+        # revision = ordinal of this plan (1st generated -> rev 1, 2nd -> rev 2, ...).
+        revision = conn.execute(
+            "SELECT COUNT(*) c FROM strategy_plans WHERE business_id=%s", (business_id,)
+        ).fetchone()["c"]
+        # existing tasks by normalized title, with status + whether a draft already exists for it.
+        existing = conn.execute(
+            "SELECT w.id, w.title, w.status, "
+            "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id=w.id) AS has_draft "
+            "FROM work_orders w WHERE w.business_id=%s",
+            (business_id,),
+        ).fetchall()
+        by_title: dict = {}
+        for e in existing:
+            by_title.setdefault(_norm_title(e["title"]), e)
+
+        created = 0
+        carried = {"done": 0, "drafted": 0, "open": 0}
         for w in wos:
-            code = w.get("wo_id")
-            exists = conn.execute(
-                "SELECT id FROM work_orders WHERE business_id=%s AND plan_id=%s AND wo_code=%s",
-                (business_id, plan_row["id"], code),
-            ).fetchone()
-            if exists:
-                skipped += 1
+            match = by_title.get(_norm_title(w.get("title")))
+            if match:
+                # already tracked -> carry forward untouched (preserve its progress)
+                if match["status"] in ("done", "verified"):
+                    carried["done"] += 1
+                elif match["has_draft"]:
+                    carried["drafted"] += 1
+                else:
+                    carried["open"] += 1
                 continue
             td = w.get("target_date")
             rationale = w.get("rationale") or {}
@@ -82,18 +119,20 @@ def sync_plan(business_id: int) -> int:
                 """INSERT INTO work_orders
                    (business_id, plan_id, wo_code, title, capability, execution,
                     recommended_tool, instruction, phase, target_date, status,
-                    rationale, gap_source, why_helps_ai_rep, why_helps_seo)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s)""",
-                (business_id, plan_row["id"], code, w.get("title"), w.get("capability"),
+                    rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s)""",
+                (business_id, plan_row["id"], w.get("wo_id"), w.get("title"), w.get("capability"),
                  w.get("execution"), w.get("recommended_tool"), w.get("instruction"),
                  w.get("phase"), date.fromisoformat(td) if td else None,
                  json.dumps(rationale), rationale.get("gap_source"),
-                 w.get("why_helps_ai_rep"), w.get("why_helps_seo")),
+                 w.get("why_helps_ai_rep"), w.get("why_helps_seo"), revision),
             )
             created += 1
         conn.commit()
-    log.info("sync-plan: %d created, %d already tracked", created, skipped)
-    return created
+    carried_total = sum(carried.values())
+    log.info("sync-plan rev %d: %d new task(s) added; carried forward %d (%d done, %d drafted, %d open)",
+             revision, created, carried_total, carried["done"], carried["drafted"], carried["open"])
+    return {"revision": revision, "created": created, "carried_forward": carried_total, **carried}
 
 
 # ----------------------------------------------------------------------------

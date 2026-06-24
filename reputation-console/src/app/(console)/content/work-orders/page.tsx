@@ -80,7 +80,12 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
     <Card className="p-3">
       {/* category (left) · phase above date (right) */}
       <div className="flex items-start justify-between gap-2">
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">{capLabel(wo.capability)}</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">{capLabel(wo.capability)}</span>
+          {wo.added_in_revision != null && wo.added_in_revision > 1 && (
+            <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-700">Revision {wo.added_in_revision} · new</span>
+          )}
+        </div>
         <div className="text-right">
           {wo.phase && <div className="text-[11px] font-medium text-slate-500">{wo.phase}</div>}
           {wo.target_date && <div className="text-[11px] text-slate-400">Due {fmtDate(wo.target_date)}</div>}

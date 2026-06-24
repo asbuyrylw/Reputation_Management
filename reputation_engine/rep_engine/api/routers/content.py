@@ -74,7 +74,7 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
     rows = conn.execute(
         "SELECT id, wo_code, title, capability, execution, phase, status, assignee, "
         "target_date, instruction, recommended_tool, result_notes, created_at, "
-        "rationale, gap_source, why_helps_ai_rep, why_helps_seo "
+        "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()

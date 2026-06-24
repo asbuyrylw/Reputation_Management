@@ -124,7 +124,7 @@ def test_tracking_lifecycle_and_attribution(fresh_schema):
     conn.commit()
 
     created = tr.sync_plan(bid)
-    assert created == 1
+    assert created["created"] == 1 and created["revision"] == 1
 
     wo_id = conn.execute("SELECT id FROM work_orders WHERE business_id=%s", (bid,)).fetchone()["id"]
     tr.set_status(wo_id, "done", assignee="tester", notes="ok")

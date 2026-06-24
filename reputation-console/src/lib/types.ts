@@ -41,6 +41,7 @@ export interface WorkOrder {
   gap_source?: string | null;
   why_helps_ai_rep?: string | null;
   why_helps_seo?: string | null;
+  added_in_revision?: number | null;
 }
 
 export interface ContentDraft {

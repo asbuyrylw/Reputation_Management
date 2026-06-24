@@ -43,7 +43,12 @@ function TaskRow({ w }: { w: WorkOrder }) {
   return (
     <li className="rounded-lg border border-slate-100 p-2.5">
       <div className="flex items-start justify-between gap-2">
-        <div className="text-sm font-medium text-slate-800">{w.title}</div>
+        <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-slate-800">
+          {w.title}
+          {w.added_in_revision != null && w.added_in_revision > 1 && (
+            <span className="rounded bg-indigo-100 px-1 py-0.5 text-[10px] font-semibold text-indigo-700">Rev {w.added_in_revision}</span>
+          )}
+        </div>
         <span className="shrink-0 text-[11px] text-slate-400">{STATUS_WORDS[w.status] ?? humanize(w.status)}</span>
       </div>
       {w.gap_source && (
