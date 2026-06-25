@@ -235,6 +235,7 @@ def _coerce_date(v) -> date | None:
 
 
 def promote_work_order(wo_id: int, business_id: int, *, assignee: str | None = None,
+                       assignee_user_id: int | None = None,
                        start_date=None, target_date=None, note: str | None = None,
                        actor: str | None = None) -> bool:
     """Promote a recommendation onto the managed 'Improvement tasks' board: mark it planned,
@@ -248,6 +249,8 @@ def promote_work_order(wo_id: int, business_id: int, *, assignee: str | None = N
         sets.append("promoted_by=COALESCE(promoted_by, %s)"); params.append(actor)
     if assignee is not None:
         sets.append("assignee=%s"); params.append(assignee.strip() or None)
+    if assignee_user_id is not None:
+        sets.append("assignee_user_id=%s"); params.append(assignee_user_id or None)
     if start_date is not None:
         sets.append("start_date=%s"); params.append(sd)
     if target_date is not None:

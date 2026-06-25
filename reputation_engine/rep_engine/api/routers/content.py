@@ -78,7 +78,7 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision, "
         "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, "
         "COALESCE(superseded, false) AS superseded, "
-        "COALESCE(planned, false) AS planned, promoted_at, "
+        "COALESCE(planned, false) AS planned, promoted_at, assignee_user_id, "
         "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
@@ -104,6 +104,20 @@ def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return {"id": wid}
+
+
+@router.get("/team")
+def team(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """People who can be assigned tasks on this business (org members + business-access editors +
+    platform admins) — powers the FK-backed assignee dropdown so assignees stop fragmenting."""
+    rows = conn.execute(
+        "SELECT DISTINCT u.id, u.full_name, u.email FROM users u WHERE u.is_active AND ("
+        " u.org_id = (SELECT org_id FROM businesses WHERE id=%s)"
+        " OR u.id IN (SELECT user_id FROM business_access WHERE business_id=%s)"
+        " OR u.role='admin') ORDER BY u.full_name NULLS LAST, u.email",
+        (business_id, business_id),
+    ).fetchall()
+    return [{"id": r["id"], "name": r["full_name"] or r["email"], "email": r["email"]} for r in rows]
 
 
 @router.get("/content-drafts")
@@ -155,6 +169,63 @@ def assets(business_id: int = Depends(authorize_business), conn=Depends(get_conn
         (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- multi-surface distribution log (where each asset was posted) ---
+@router.get("/assets/{asset_id}/placements")
+def asset_placements(asset_id: int, business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    rows = conn.execute(
+        "SELECT id, channel, status, url, published_at FROM asset_placements "
+        "WHERE asset_id=%s AND business_id=%s ORDER BY id", (asset_id, business_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+class PlacementCreate(BaseModel):
+    channel: str
+
+
+@router.post("/assets/{asset_id}/placements", status_code=201)
+def add_placement(asset_id: int, body: PlacementCreate, business_id: int = Depends(require_business_editor),
+                  conn=Depends(get_conn)):
+    """Add a channel this asset should be distributed to (the per-surface checklist)."""
+    row = conn.execute("SELECT business_id FROM assets WHERE id=%s", (asset_id,)).fetchone()
+    if not row or row["business_id"] != business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Asset not found")
+    ch = (body.channel or "").strip()
+    if not ch:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "channel required")
+    r = conn.execute(
+        "INSERT INTO asset_placements (business_id, asset_id, channel) VALUES (%s,%s,%s) "
+        "ON CONFLICT (asset_id, channel) DO NOTHING RETURNING id", (business_id, asset_id, ch),
+    ).fetchone()
+    conn.commit()
+    return {"id": r["id"] if r else None, "channel": ch}
+
+
+class PlacementUpdate(BaseModel):
+    status: Optional[str] = None   # planned | published | skipped
+    url: Optional[str] = None
+
+
+@router.patch("/placements/{placement_id}")
+def update_placement(placement_id: int, body: PlacementUpdate,
+                     business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Mark a placement published (with its live URL) or skipped."""
+    sets, params = ["status=COALESCE(%s, status)"], [body.status]
+    if body.url is not None:
+        sets.append("url=%s"); params.append(body.url.strip() or None)
+    if (body.status or "") == "published":
+        sets.append("published_at=COALESCE(published_at, now())")
+    params += [placement_id, business_id]
+    r = conn.execute(
+        f"UPDATE asset_placements SET {', '.join(sets)} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
+        params,
+    ).fetchone()
+    if not r:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Placement not found")
+    conn.commit()
+    return {"id": placement_id}
 
 
 class AssetPublishUpdate(BaseModel):
@@ -242,6 +313,53 @@ def update_discovery_target(
     return {"id": target_id, **fields}
 
 
+@router.post("/discovery-targets/{target_id}/push")
+def push_target(target_id: int, business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Push an outreach target out to the client's stack (GoHighLevel/Zapier/...) via the webhook
+    bus — turns a target into a CRM opportunity. No-op (returns sent=false) until WEBHOOK_URL is set."""
+    t = conn.execute(
+        "SELECT name, outlet, url, beat, contact_name, contact_email, contact_phone, target_type, capabilities "
+        "FROM discovery_targets WHERE id=%s AND business_id=%s", (target_id, business_id)).fetchone()
+    if not t:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Target not found")
+    try:
+        from ... import webhooks as _wh
+    except ImportError:  # pragma: no cover
+        import webhooks as _wh  # type: ignore
+    sent = _wh.enabled()
+    _wh.emit(business_id, "outreach.target", {"target_id": target_id, **{k: t[k] for k in t.keys()}})
+    return {"sent": sent}
+
+
+class PitchRequest(BaseModel):
+    pass
+
+
+@router.post("/discovery-targets/{target_id}/draft-pitch")
+def draft_pitch(target_id: int, business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Draft a short, human-reviewed outreach pitch for a target (the operator edits + sends it)."""
+    t = conn.execute(
+        "SELECT name, outlet, beat, target_type, capabilities FROM discovery_targets "
+        "WHERE id=%s AND business_id=%s", (target_id, business_id)).fetchone()
+    if not t:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Target not found")
+    b = conn.execute("SELECT name, services, geo, goal FROM businesses WHERE id=%s", (business_id,)).fetchone()
+    try:
+        from ... import ai_state_audit as _llm
+    except ImportError:  # pragma: no cover
+        import ai_state_audit as _llm  # type: ignore
+    system = ("You write concise, genuine outreach pitches (4-6 sentences) to journalists/outlets/"
+              "podcasts to earn a mention or feature. Warm, specific, no fluff or false claims. "
+              "Output ONLY the pitch (subject line + body), no preamble.")
+    ctx = (f"From: {b['name']} ({b.get('services','')}) in {b.get('geo','')}. Goal: {b.get('goal','')}.\n"
+           f"To: {t['name']} at {t.get('outlet','')} — covers {t.get('beat','')} ({t.get('target_type','')}).\n"
+           "Write a pitch proposing a relevant story/contribution that would interest their audience.")
+    pitch = (_llm.orchestrator_text(system, ctx, max_tokens=500, tier="mid") or "").strip()
+    if not pitch:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Drafting is unavailable right now.")
+    return {"pitch": pitch}
+
+
 @router.post("/discovery-targets/{target_id}/status")
 def set_discovery_status(
     target_id: int,
@@ -290,19 +408,42 @@ def edit_draft(
     return {"updated": draft_id}
 
 
+class ApproveRequest(BaseModel):
+    override_reason: Optional[str] = None
+
+
 @router.post("/content-drafts/{draft_id}/approve")
 def approve_draft(
     draft_id: int,
+    body: ApproveRequest = ApproveRequest(),
     business_id: int = Depends(require_business_editor),
     user: dict = Depends(get_current_user),
     conn=Depends(get_conn),
 ):
     _assert_draft_in_business(conn, draft_id, business_id)
     try:
-        _cg.approve(draft_id, _actor(user))   # promotes draft -> assets, advances the work order
+        # promotes draft -> assets, advances the work order, records an immutable compliance sign-off
+        _cg.approve(draft_id, _actor(user), override_reason=body.override_reason)
     except ValueError as e:  # compliance gate / not-approvable -> 422, not a 500
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
     return {"ok": True, "draft_id": draft_id, "status": "approved"}
+
+
+@router.get("/compliance-ledger")
+def compliance_ledger(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """The immutable compliance sign-off record (who approved what, when, with which verdict) —
+    the audit trail a broker-dealer/RIA principal review requires."""
+    rows = conn.execute(
+        "SELECT cs.id, cs.draft_id, cs.asset_id, cs.approver, cs.compliance_pass, "
+        "cs.compliance_flags, cs.override_reason, cs.body_hash, cs.signed_at, "
+        "COALESCE(d.title, a.title) AS title "
+        "FROM compliance_signoffs cs "
+        "LEFT JOIN content_drafts d ON d.id = cs.draft_id "
+        "LEFT JOIN assets a ON a.id = cs.asset_id "
+        "WHERE cs.business_id=%s ORDER BY cs.signed_at DESC LIMIT 100",
+        (business_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @router.post("/content-drafts/{draft_id}/reject")
@@ -337,8 +478,17 @@ def set_work_order_status(
     return {"ok": True, "wo_id": wo_id, "status": body.status}
 
 
+def _resolve_assignee(conn, assignee_user_id: Optional[int]) -> Optional[str]:
+    """Map a team-member user id to a display name (for the FK-backed assignee dropdown)."""
+    if not assignee_user_id:
+        return None
+    r = conn.execute("SELECT full_name, email FROM users WHERE id=%s", (assignee_user_id,)).fetchone()
+    return (r["full_name"] or r["email"]) if r else None
+
+
 class WorkOrderEdit(BaseModel):
     assignee: Optional[str] = None
+    assignee_user_id: Optional[int] = None
     start_date: Optional[str] = None
     target_date: Optional[str] = None
 
@@ -353,7 +503,11 @@ def edit_work_order(
     """Assign a task to someone and set its start / due dates (so the owner sees who's
     responsible for what, by when). Empty string clears a field."""
     fields: dict = {}
-    if body.assignee is not None:
+    # FK-backed assignment (preferred): set the user id + the display name from the roster.
+    if body.assignee_user_id is not None:
+        fields["assignee_user_id"] = body.assignee_user_id or None
+        fields["assignee"] = _resolve_assignee(conn, body.assignee_user_id)
+    elif body.assignee is not None:
         fields["assignee"] = body.assignee.strip() or None
     for k in ("start_date", "target_date"):
         v = getattr(body, k)
@@ -379,6 +533,7 @@ def edit_work_order(
 
 class WorkOrderPromote(BaseModel):
     assignee: Optional[str] = None
+    assignee_user_id: Optional[int] = None
     start_date: Optional[str] = None
     target_date: Optional[str] = None
     note: Optional[str] = None
@@ -390,6 +545,7 @@ def promote_work_order(
     body: WorkOrderPromote,
     business_id: int = Depends(require_business_editor),
     user: dict = Depends(get_current_user),
+    conn=Depends(get_conn),
 ):
     """Promote a recommendation (from 'Do this next') onto the managed 'Improvement tasks'
     board, capturing the owner + start/due dates + an optional first progress note."""
@@ -400,9 +556,11 @@ def promote_work_order(
                 date.fromisoformat(v.strip())
             except ValueError:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{k} must be YYYY-MM-DD")
+    # Prefer the FK-backed assignee (resolve its display name); fall back to free text.
+    assignee = _resolve_assignee(conn, body.assignee_user_id) if body.assignee_user_id else body.assignee
     ok = _tracking.promote_work_order(
-        wo_id, business_id, assignee=body.assignee, start_date=body.start_date,
-        target_date=body.target_date, note=body.note, actor=_actor(user),
+        wo_id, business_id, assignee=assignee, assignee_user_id=body.assignee_user_id,
+        start_date=body.start_date, target_date=body.target_date, note=body.note, actor=_actor(user),
     )
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")

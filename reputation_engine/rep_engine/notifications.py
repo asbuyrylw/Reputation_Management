@@ -65,7 +65,52 @@ def notify(business_id: int, kind: str, title: str, body: str = "", severity: st
                     email_service.send_email(to, f"[Reputation] {title}", body or title)
         except Exception as e:  # noqa: BLE001 -- email must never break alerting
             log.debug("alert email skipped: %s", e)
+    # Fan out to the client's stack (GHL/Zapier/...). No-op until WEBHOOK_URL is set; best-effort.
+    try:
+        from . import webhooks as _wh
+        _wh.emit(business_id, "notification", {"kind": kind, "title": title, "severity": severity})
+    except Exception as e:  # noqa: BLE001 -- webhook must never break alerting
+        log.debug("notification webhook skipped: %s", e)
     return row["id"]
+
+
+def _regression_causes(business_id: int) -> list[str]:
+    """Ranked probable causes for a score drop: new negative mentions, overdue/unshipped tasks,
+    and a competitor surge — so the alert says WHY, not just THAT, the score fell."""
+    causes: list[str] = []
+    with db() as conn:
+        neg = conn.execute(
+            "SELECT COUNT(*) c FROM mentions WHERE business_id=%s AND sentiment='negative' "
+            "AND discovered_at > now() - interval '35 days'", (business_id,)).fetchone()["c"]
+        overdue = conn.execute(
+            "SELECT COUNT(*) c FROM work_orders WHERE business_id=%s AND target_date IS NOT NULL "
+            "AND target_date < CURRENT_DATE AND status NOT IN ('done','verified','skipped')",
+            (business_id,)).fetchone()["c"]
+    if neg:
+        causes.append(f"{neg} new negative mention(s)")
+    if overdue:
+        causes.append(f"{overdue} overdue task(s) not yet shipped")
+    for cname, gain in _competitor_surges(business_id):
+        causes.append(f"{cname} gained visibility (+{round(gain * 100)}pp)")
+    return causes
+
+
+def _competitor_surges(business_id: int, threshold: float = 0.15) -> list[tuple[str, float]]:
+    """Competitors whose appearance rate jumped >= threshold between the last two benchmark runs."""
+    try:
+        from . import competitor as _c
+        pts = (_c.trend(business_id) or {}).get("points", [])
+        if len(pts) < 2:
+            return []
+        last, prev = pts[-1], pts[-2]
+        out = []
+        for cname, rate in (last.get("competitors") or {}).items():
+            gain = float(rate) - float((prev.get("competitors") or {}).get(cname, 0) or 0)
+            if gain >= threshold:
+                out.append((cname, round(gain, 4)))
+        return sorted(out, key=lambda x: x[1], reverse=True)
+    except Exception:  # noqa: BLE001 -- competitor data is optional
+        return []
 
 
 def _avg_alignment(conn, run_id: int) -> Optional[float]:
@@ -77,7 +122,8 @@ def _avg_alignment(conn, run_id: int) -> Optional[float]:
 def check_and_notify(business_id: int, quiet: bool = True) -> dict:
     """Inspect the latest state and raise any needed alerts. Returns counts."""
     created = {"score_drop": 0, "new_incident": 0, "negative_mention": 0, "drafts_waiting": 0,
-               "degraded_audit": 0}
+               "degraded_audit": 0, "task_overdue": 0, "cadence_stalled": 0, "audit_ready": 0,
+               "competitor_surge": 0}
 
     with db() as conn:
         runs = conn.execute(
@@ -105,9 +151,11 @@ def check_and_notify(business_id: int, quiet: bool = True) -> dict:
         if cur is not None and prev is not None:
             cur_s, prev_s = round((cur + 1) / 2 * 100), round((prev + 1) / 2 * 100)
             if prev_s - cur_s >= SCORE_DROP_POINTS:
+                causes = _regression_causes(business_id)
+                cause_txt = (" Likely contributors: " + "; ".join(causes) + ".") if causes else ""
                 if notify(business_id, "score_drop",
                           f"Your AI reputation score dropped to {cur_s}/100",
-                          f"Down {prev_s - cur_s} points from {prev_s} since the last audit. "
+                          f"Down {prev_s - cur_s} points from {prev_s} since the last audit.{cause_txt} "
                           "Review what changed and prioritize the plan.",
                           severity="warning", dedup_key=f"score_drop_run_{runs[0]['id']}"):
                     created["score_drop"] += 1
@@ -149,6 +197,48 @@ def check_and_notify(business_id: int, quiet: bool = True) -> dict:
                   "Approve or send back the drafts to keep the plan moving.",
                   severity="info", dedup_key=f"drafts_waiting_{last_draft}"):
             created["drafts_waiting"] += 1
+
+    # 5. SLA / cadence on the managed task board + audit-ready re-engagement
+    import datetime as _dt
+    today_iso = _dt.date.today().isoformat()
+    week_key = _dt.date.today().strftime("%Y-W%U")
+    with db() as conn:
+        overdue = conn.execute(
+            "SELECT COUNT(*) c FROM work_orders WHERE business_id=%s AND COALESCE(planned,false) "
+            "AND target_date IS NOT NULL AND target_date < CURRENT_DATE "
+            "AND status NOT IN ('done','verified','skipped')", (business_id,)).fetchone()["c"]
+        stalled = conn.execute(
+            "SELECT COUNT(*) c FROM work_orders WHERE business_id=%s AND COALESCE(planned,false) "
+            "AND status IN ('pending','in_progress') AND updated_at < now() - interval '14 days'",
+            (business_id,)).fetchone()["c"]
+        last_audit = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+            "AND finished_at IS NOT NULL AND finished_at > now() - interval '48 hours' "
+            "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+    # overdue tasks — nudge at most once a day
+    if overdue and notify(business_id, "task_overdue", f"{overdue} task(s) are past due",
+                          "Some improvement tasks are overdue — reassign, reschedule, or close them out.",
+                          severity="warning", dedup_key=f"task_overdue_{business_id}_{today_iso}", email=False):
+        created["task_overdue"] += 1
+    # stalled cadence — once a week
+    if stalled and notify(business_id, "cadence_stalled", f"{stalled} task(s) have stalled",
+                          "These tasks haven't moved in 14+ days — the plan may be slipping. Re-engage them.",
+                          severity="info", dedup_key=f"cadence_stalled_{business_id}_{week_key}", email=False):
+        created["cadence_stalled"] += 1
+    # a freshly-finished audit — pull the owner back to see results (once per run)
+    if last_audit and notify(business_id, "audit_ready", "Your latest audit results are ready",
+                             "See your updated reputation score, your biggest gaps, and the #1 next step.",
+                             severity="info", dedup_key=f"audit_ready_{last_audit['id']}"):
+        created["audit_ready"] += 1
+    # competitor-velocity threat — a rival's AI visibility surged between the last two benchmarks
+    surges = _competitor_surges(business_id)
+    if surges:
+        names = ", ".join(f"{n} (+{round(g * 100)}pp)" for n, g in surges[:3])
+        if notify(business_id, "competitor_surge", "A competitor is gaining AI visibility",
+                  f"{names} surged in how often AI surfaces them for your category. Consider pushing "
+                  "earned links / articles to defend your share.",
+                  severity="warning", dedup_key=f"competitor_surge_{business_id}_{week_key}", email=False):
+            created["competitor_surge"] += 1
 
     if not quiet:
         log.info("alerts for business %d: %s", business_id, created)

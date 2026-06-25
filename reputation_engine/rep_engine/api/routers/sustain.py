@@ -83,7 +83,10 @@ def incidents(business_id: int = Depends(authorize_business), conn=Depends(get_c
     rows = conn.execute(
         "SELECT id, mention_url, sentiment, severity, severity_score, delay_impact, "
         "draft_response, sla_hours, status, created_at, resolved_at "
-        "FROM incidents WHERE business_id=%s ORDER BY id DESC LIMIT 100",
+        "FROM incidents WHERE business_id=%s "
+        # genuinely 'by urgency': unresolved first, then severity, then cost-of-waiting
+        "ORDER BY (resolved_at IS NULL) DESC, severity_score DESC NULLS LAST, "
+        "delay_impact DESC NULLS LAST, id DESC LIMIT 100",
         (business_id,),
     ).fetchall()
     out = []

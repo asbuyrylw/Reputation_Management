@@ -28,6 +28,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -166,7 +167,62 @@ def _asset_type_for(wo: dict) -> Optional[str]:
     return None
 
 
-def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None) -> str:
+def _brand_voice(business_id: int) -> str:
+    """A short sample of the brand's own APPROVED writing, so new content matches the voice
+    they've already signed off on. Empty until something has been approved."""
+    try:
+        with db() as conn:
+            r = conn.execute(
+                "SELECT body FROM content_drafts WHERE business_id=%s AND status='approved' "
+                "AND body IS NOT NULL AND length(body) > 120 ORDER BY id DESC LIMIT 1",
+                (business_id,)).fetchone()
+        if r and r["body"]:
+            return str(r["body"])[:1200]
+    except Exception:  # noqa: BLE001 -- voice is best-effort
+        pass
+    return ""
+
+
+_OUTLINE_SYSTEM = (
+    "You are an SEO content strategist. Produce a TIGHT outline for the asset: an H1 plus 4-7 H2 "
+    "section headings, each with a one-line note on what it covers. MAP the target keywords and "
+    "the gap-to-close onto specific sections. Plain-text outline only -- no preamble, no prose."
+)
+
+
+def _outline(biz: dict, wo: dict, asset_type: str, grounding: dict) -> str:
+    """Pass 1 of the multi-pass pipeline (long-form only): a keyword-mapped outline the draft
+    pass then writes from, so structure + keyword coverage are planned, not accidental."""
+    prompt = _gen_prompt(biz, wo, asset_type, grounding) + "\n\nProduce ONLY the outline."
+    return (llm.orchestrator_text(_OUTLINE_SYSTEM, prompt, max_tokens=700, tier="mid") or "").strip()
+
+
+def _keyword_coverage(body: str, grounding: dict) -> dict:
+    """Deterministic SEO self-check: which target keywords does the draft actually contain?
+    A keyword counts as covered if it appears verbatim OR all of its significant words appear.
+    `important_missing` (primary/local) is what we force one revision pass to fix."""
+    kws = grounding.get("keywords") or []
+    text = (body or "").lower()
+    covered, missing, important_missing = [], [], []
+    for k in kws:
+        kw = (k.get("keyword") or "").strip()
+        if not kw:
+            continue
+        words = [w for w in re.findall(r"[a-z0-9]+", kw.lower()) if len(w) > 2]
+        present = kw.lower() in text or (bool(words) and all(w in text for w in words))
+        if present:
+            covered.append(kw)
+        else:
+            missing.append(kw)
+            if k.get("kind") in ("primary", "local"):
+                important_missing.append(kw)
+    total = len(covered) + len(missing)
+    return {"covered": covered, "missing": missing, "important_missing": important_missing,
+            "rate": round(len(covered) / total, 2) if total else None}
+
+
+def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
+                outline: str = "", voice: str = "") -> str:
     grounding = grounding or {"site_facts": "", "gap_focus": "", "keywords": []}
     name = biz.get("name", "the business")
     geo = biz.get("geo", "")
@@ -218,6 +274,10 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         kw_line + f"Target question this should answer when someone asks AI: "
         f"{wo.get('target_query','(general trust/visibility)')}",
         "",
+        ("FOLLOW THIS OUTLINE (it maps the keywords + gap to sections):\n" + outline) if outline else "",
+        ("MATCH THIS BRAND VOICE (a sample of their approved writing — tone/cadence only, do not "
+         "copy facts):\n\"\"\"\n" + voice + "\n\"\"\"") if voice else "",
+        "",
         f"Task: {spec}",
     ]
     return "\n".join(p for p in parts if p != "")
@@ -227,9 +287,11 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
 _ASSET_TIER = {"article": "full", "faq": "full", "bio": "full"}
 
 
-def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None) -> str:
+def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
+                  outline: str = "", voice: str = "") -> str:
     tier = _ASSET_TIER.get(asset_type, "mid")
-    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type, grounding),
+    return llm.orchestrator_text(GEN_SYSTEM,
+                                 _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
                                  max_tokens=2600, tier=tier)
 
 
@@ -289,6 +351,47 @@ COMPLIANCE_SYSTEM = (
     "non-financial or purely informational, pass it unless it makes false claims."
 )
 
+# Firm-type-specific guidance so the screen demands the RIGHT disclosures (or none) per tenant,
+# instead of always assuming a broker-dealer-affiliated firm.
+_FIRM_TYPE_RULES = {
+    "ria": ("This business is a Registered Investment Adviser (RIA), held to the SEC/state "
+            "Marketing Rule. Require fiduciary-consistent language; flag performance/return "
+            "promises and testimonials lacking the required disclosures; do NOT demand a "
+            "broker-dealer relationship disclosure (an RIA is not a BD)."),
+    "broker_dealer": ("This business is or represents a broker-dealer (FINRA Rule 2210). Require "
+                      "the broker-dealer relationship disclosure where financial products are "
+                      "marketed; flag performance promises and unbalanced testimonials."),
+    "insurance": ("This business is an insurance agency. Flag guaranteed-return/risk-free language "
+                  "on insurance/annuity products and require suitability-consistent framing; a "
+                  "broker-dealer disclosure is generally NOT required."),
+    "non_financial": ("This business is NON-FINANCIAL. Do NOT require any financial/broker-dealer "
+                      "disclosures. Only flag genuinely false or misleading claims."),
+}
+
+
+def _reg_profile(business_id: int) -> dict:
+    try:
+        with db() as conn:
+            r = conn.execute("SELECT regulatory_profile FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        rp = r["regulatory_profile"] if r else None
+        return rp if isinstance(rp, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _compliance_system(reg: dict | None) -> str:
+    """Adapt the base compliance prompt to the tenant's firm type + required disclosures."""
+    if not reg:
+        return COMPLIANCE_SYSTEM
+    extra = []
+    ft = (reg.get("firm_type") or "").lower()
+    if ft in _FIRM_TYPE_RULES:
+        extra.append(_FIRM_TYPE_RULES[ft])
+    disc = reg.get("disclosures") or []
+    if disc:
+        extra.append("Required disclosures for this business: " + "; ".join(str(d) for d in disc) + ".")
+    return COMPLIANCE_SYSTEM + ("\n\n" + "\n".join(extra) if extra else "")
+
 
 # Hard financial-marketing prohibitions, matched deterministically. Unlike the LLM
 # screen these cannot be talked out of their verdict by a hostile/garbled draft, so
@@ -312,11 +415,12 @@ def _deterministic_compliance(body: str) -> list[str]:
     return [msg for pat, msg in _COMPLIANCE_PATTERNS if pat.search(text)]
 
 
-def _compliance(body: str) -> dict:
+def _compliance(body: str, system: Optional[str] = None) -> dict:
     # Deterministic, non-injectable screen first -- its verdict is authoritative.
     det_flags = _deterministic_compliance(body)
-    # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini).
-    res = llm.orchestrator_json(COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
+    # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini). `system` is the
+    # firm-type-adapted prompt (falls back to the generic financial screen).
+    res = llm.orchestrator_json(system or COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
     # default-safe: if the screener couldn't run (no keys), mark unknown -> needs
     # human; but if the deterministic rules tripped, FAIL CLOSED regardless of LLM.
     if not res:
@@ -373,13 +477,23 @@ COMPLIANCE_FIX_SYSTEM = (
 )
 
 
-def _compliance_autofix(biz: dict, body: str, flags: list) -> Optional[str]:
+def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None) -> Optional[str]:
     """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
-    disclosures (using what we know about the business). Returns the revised body, or None if
-    the LLM is unavailable / produced nothing. The caller re-screens the result -- this never
-    decides compliance itself."""
+    disclosures (using what we know about the business + its regulatory profile). Returns the
+    revised body, or None. The caller re-screens the result -- this never decides compliance."""
+    reg = reg or {}
+    ft = (reg.get("firm_type") or "").lower()
+    disc = reg.get("disclosures") or []
+    reg_line = ""
+    if ft:
+        reg_line = f"Firm type: {ft}. "
+        if ft == "non_financial":
+            reg_line += "Do NOT add any financial/broker-dealer disclosures. "
+    if disc:
+        reg_line += "Use ONLY these required disclosures (verbatim where possible): " + "; ".join(str(d) for d in disc) + ". "
     ctx = (
         f"Business: {biz.get('name', '')} -- services: {biz.get('services', '')}.\n"
+        f"{reg_line}\n"
         f"Narratives working against them (context only): {biz.get('contested_terms', '')}.\n"
         "Compliance issues to resolve:\n- " + "\n- ".join(str(f) for f in (flags or []))
         + f"\n\nContent to revise:\n{body}"
@@ -402,7 +516,13 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         return None
 
     grounding = _grounding_context(business_id)
-    body = _generate_one(biz, wo, asset_type, grounding)
+    voice = _brand_voice(business_id)
+    reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
+    comp_system = _compliance_system(reg)
+    # Pass 1 (long-form): a keyword-mapped outline the draft writes from.
+    outline = _outline(biz, wo, asset_type, grounding) if asset_type in ("article", "faq") else ""
+    # Pass 2: the grounded draft.
+    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice)
     if not body:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
@@ -431,8 +551,21 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     # usable, eval_unavailable stays True and the draft still routes to a human.
     body, score, evaluation, eval_unavailable = best_body, best_score, best_eval, best_unavailable
 
-    # compliance gate
-    comp = _compliance(body)
+    # Pass 3: SEO/keyword self-check. If important (primary/local) target keywords are missing,
+    # do ONE targeted revision to weave them in, and keep it only if coverage actually improved.
+    coverage = _keyword_coverage(body, grounding)
+    if coverage["important_missing"]:
+        fixed = _revise(body, ["Naturally weave in these target SEO keywords that are currently "
+                               "missing (no keyword-stuffing, keep it readable): "
+                               + ", ".join(coverage["important_missing"][:8])])
+        if fixed:
+            recov = _keyword_coverage(fixed, grounding)
+            if len(recov["covered"]) > len(coverage["covered"]):
+                body, coverage = fixed, recov
+                revisions += 1
+
+    # compliance gate (firm-type-adapted)
+    comp = _compliance(body, system=comp_system)
     comp_pass = comp.get("pass")
     comp_flags = comp.get("flags", [])
 
@@ -442,9 +575,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     # and record WHAT was changed so the human can confirm the added language is accurate.
     highlighted: list = []
     if comp_pass is False and not eval_unavailable:
-        fixed = _compliance_autofix(biz, body, comp_flags)
+        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg)
         if fixed and fixed != body:
-            recheck = _compliance(fixed)
+            recheck = _compliance(fixed, system=comp_system)
             if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews
                 body = fixed
                 highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
@@ -466,6 +599,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     if comp_pass is False:
         status = "needs_fix"
 
+    # quality_notes carries the rubric eval + the SEO keyword-coverage scorecard (CI-3 UI reads it).
+    quality_notes = {**(evaluation or {}), "keyword_coverage": coverage}
+
     _ensure_table()
     with db() as conn:
         row = conn.execute(
@@ -475,7 +611,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
                 compliance_flags, status, highlighted_sections, placeholders_pending)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, wo.get("_db_id"), asset_type, topic, body,
-             wo.get("target_query"), round(score, 2), json.dumps(evaluation),
+             wo.get("target_query"), round(score, 2), json.dumps(quality_notes),
              revisions, comp_pass, json.dumps(comp_flags), status,
              json.dumps(highlighted), json.dumps(placeholders)),
         ).fetchone()
@@ -546,9 +682,14 @@ def list_drafts(business_id: int) -> None:
         print("  (no drafts yet)")
 
 
-def approve(draft_id: int, reviewer: str) -> None:
+def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None) -> None:
     """Approve a draft and promote it into the assets table (the only path to
     'published' state). Human action only.
+
+    Records an immutable compliance sign-off (approver, verdict, flags, body hash) for the
+    regulatory recordkeeping requirement. A draft that was never compliance-screened
+    (compliance_pass IS NULL) can only be approved with an explicit `override_reason` (a
+    principal attestation); a hard compliance FAILURE still cannot be published at all.
 
     Idempotent: a double-submit (impatient reviewer, retried request, two editors at
     once) must not mint duplicate assets. The draft row is locked FOR UPDATE so the
@@ -587,6 +728,13 @@ def approve(draft_id: int, reviewer: str) -> None:
                 f"publish: {', '.join(str(p) for p in pending_ph)}. Edit the draft to replace them, "
                 "then approve."
             )
+        # An UNSCREENED draft (compliance_pass IS NULL) requires an explicit principal attestation.
+        if d.get("compliance_pass") is None and not (override_reason or "").strip():
+            conn.commit()
+            raise ValueError(
+                "This draft wasn't compliance-screened (the screener was unavailable). A principal "
+                "must provide a sign-off reason to approve it."
+            )
         # Seed a short summary (for the Published list) + published_status='pending' so the owner
         # can paste the live URL later. No site/social integration yet -> the link is manual.
         body = (d.get("body") or "").strip()
@@ -610,6 +758,16 @@ def approve(draft_id: int, reviewer: str) -> None:
                 "updated_at=now() WHERE id=%s AND status IN ('pending','in_progress')",
                 (d["work_order_id"],),
             )
+        # Immutable compliance sign-off record (FINRA 2210 / SEC recordkeeping).
+        body_hash = hashlib.sha256((d.get("body") or "").encode("utf-8")).hexdigest()
+        conn.execute(
+            "INSERT INTO compliance_signoffs (business_id, draft_id, asset_id, approver, "
+            "compliance_pass, compliance_flags, placeholders, body_hash, override_reason) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (d["business_id"], draft_id, asset["id"], reviewer, d.get("compliance_pass"),
+             json.dumps(d.get("compliance_flags") or []), json.dumps(d.get("placeholders_pending") or []),
+             body_hash, (override_reason or "").strip() or None),
+        )
         conn.commit()
     log.info("Draft %d approved by %s -> asset %d", draft_id, reviewer, asset["id"])
 

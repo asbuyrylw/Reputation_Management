@@ -101,6 +101,7 @@ class UpdateBusinessRequest(BaseModel):
     goal: Optional[str] = None
     contested_terms: Optional[str] = None
     geo: Optional[str] = None
+    regulatory_profile: Optional[dict] = None   # {firm_type, disclosures[], crd, notes}
 
 
 class IngestSignalRequest(BaseModel):

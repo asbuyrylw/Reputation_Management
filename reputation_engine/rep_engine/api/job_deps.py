@@ -37,11 +37,13 @@ SETUP_PIPELINE: list[str] = [
     "audit",             # AI-state audit -> scored answers (everything downstream needs this)
     "site_crawl",        # technical / on-page SEO crawl
     "gap_model",         # the gap analysis (needs the audit)
+    "keyword_research",  # SEO target keywords (LLM seed + Serper grounding) for content + plan
     "plan",              # strategy -> improvement tasks (needs the gap model)
     "sync_plan",         # materialize the plan into trackable work orders
     "citation_analyze",  # AI-citation share-of-voice / who AI quotes (needs the audit)
     "benchmark",         # competitor AI share-of-voice
     "local_rank",        # local Google rankings (needs SERPER_API_KEY)
+    "ingest_gbp_reviews", # Google rating + reviews snapshot (Serper places)
     "suggest_prompts",   # AI-suggested tracking prompts
     "mentions_scan",     # web mentions + drafted (human-gated) replies
     "discovery",         # outreach targets (journalists / outlets / communities)
@@ -53,14 +55,15 @@ SETUP_PIPELINE: list[str] = [
 # Onboarding pipeline prerequisites (the full board enqueued together).
 SETUP_PREREQS: dict[str, list[str]] = {
     "gap_model": ["audit"],
+    "keyword_research": ["site_crawl", "gap_model"],
     "plan": ["gap_model"],
     "sync_plan": ["plan"],
     "citation_analyze": ["audit"],
     "production_briefs": ["plan"],
     # the client report runs after everything that feeds it
-    "report": ["audit", "site_crawl", "gap_model", "plan", "sync_plan", "citation_analyze",
-               "benchmark", "local_rank", "suggest_prompts", "mentions_scan", "discovery",
-               "production_briefs"],
+    "report": ["audit", "site_crawl", "gap_model", "keyword_research", "plan", "sync_plan",
+               "citation_analyze", "benchmark", "local_rank", "ingest_gbp_reviews",
+               "suggest_prompts", "mentions_scan", "discovery", "production_briefs"],
 }
 
 
@@ -70,7 +73,7 @@ SETUP_PREREQS: dict[str, list[str]] = {
 # click; the depends_on chain + dedup keep it safe and ordered.
 TRIGGER_DOWNSTREAM: dict[str, list[str]] = {
     "audit": ["gap_model", "citation_analyze"],
-    "gap_model": ["plan"],
+    "gap_model": ["plan", "keyword_research"],
     "plan": ["sync_plan"],
     "sync_plan": ["production_briefs"],
 }

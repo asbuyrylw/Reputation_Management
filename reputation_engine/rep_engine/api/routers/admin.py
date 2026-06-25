@@ -23,7 +23,8 @@ except ImportError:  # pragma: no cover
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-_BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo")
+_BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo",
+                    "regulatory_profile")
 
 
 @router.get("/organizations")
@@ -146,7 +147,9 @@ def update_business(business_id: int, body: UpdateBusinessRequest, _: dict = Dep
     # keys are restricted to the fixed _BUSINESS_FIELDS whitelist (not user-supplied
     # column names); all values are bound parameters.
     set_clause = ", ".join(f"{k}=%s" for k in fields)
-    params = list(fields.values()) + [business_id]
+    # JSONB columns must be wrapped so psycopg adapts a dict -> jsonb (not a bare Python dict).
+    from psycopg.types.json import Json
+    params = [Json(v) if k == "regulatory_profile" else v for k, v in fields.items()] + [business_id]
     row = conn.execute(
         f"UPDATE businesses SET {set_clause} WHERE id=%s RETURNING *", params  # nosec B608
     ).fetchone()

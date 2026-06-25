@@ -29,6 +29,11 @@ def _run_audit(business_id: int, args: dict) -> None:
     except ImportError:  # pragma: no cover
         import ai_state_audit as m  # type: ignore
     m.audit(business_id)
+    # Persist a durable per-run metric rollup so per-engine trends survive answer pruning.
+    try:
+        _imp("run_metrics").persist_latest(business_id)
+    except Exception as e:  # noqa: BLE001 -- rollup is best-effort
+        log.debug("run_metrics persist skipped: %s", e)
 
 
 def _run_cycle(business_id: int, args: dict) -> None:
@@ -180,6 +185,19 @@ def _run_suggest_keywords(business_id: int, args: dict):
     return _imp("mention_monitor").suggest_keywords(business_id, n=int(args.get("n", 10)), quiet=True)
 
 
+def _run_keyword_research(business_id: int, args: dict):
+    """SEO keyword intelligence: LLM-seed grounded with real Google data (Serper related/PAA/
+    autocomplete) -> ranked target_keywords the content generator + gap model + UI consume.
+    Returns a summary {seeds, serper_candidates, stored, serper_used}."""
+    return _imp("keyword_research").research(business_id)
+
+
+def _run_ingest_gbp_reviews(business_id: int, args: dict):
+    """Snapshot the business's Google rating + review count and ingest recent reviews (Serper).
+    Returns {rating, review_count, reviews_ingested, place} or {skipped, reason}."""
+    return _imp("gbp_reviews").ingest(business_id)
+
+
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -204,6 +222,8 @@ JOB_DISPATCH = {
     "refresh_failed": _run_refresh_failed,
     "suggest_prompts": _run_suggest_prompts,
     "suggest_keywords": _run_suggest_keywords,
+    "keyword_research": _run_keyword_research,
+    "ingest_gbp_reviews": _run_ingest_gbp_reviews,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
 }
@@ -242,6 +262,7 @@ _JOB_RATE_LIMITS = {
     "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
     "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
+    "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600),
     "refresh_failed": (6, 3600), "incident_scan": (10, 3600),
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),
@@ -308,6 +329,29 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
         return None, (active["id"] if active else None)
 
 
+def _annotate_budget(business_id: int, status: str, result):
+    """If the business is over its monthly budget, tag the job result with {budget_exhausted,
+    spent, cap} and fire a once-a-month 'budget_exhausted' notification. Best-effort: never let
+    a budget check break job recording."""
+    try:
+        cost = _imp("cost")
+        if not cost.over_budget(business_id):
+            return result
+        spent = round(float(cost.month_spend(business_id)), 2)
+        cap = round(float(cost.budget_for(business_id)), 2)
+        result = {**(result or {}), "budget_exhausted": True, "spent": spent, "cap": cap}
+        import datetime as _dt
+        month = _dt.date.today().strftime("%Y-%m")
+        _imp("notifications").notify(
+            business_id, "budget_exhausted", "You've used this month's AI budget",
+            f"You've spent about ${spent:.2f} of your ${cap:.2f} monthly cap, so new audits and "
+            "content generation will pause until it resets next month (or you raise the cap).",
+            severity="warning", dedup_key=f"budget_exhausted_{business_id}_{month}")
+    except Exception as e:  # noqa: BLE001
+        log.debug("budget annotation skipped: %s", e)
+    return result
+
+
 def run_job(job_id: int) -> Optional[str]:
     """Atomically claim a queued job and execute it; record terminal status. Returns
     the final status, or None if the job was already claimed/finished."""
@@ -330,12 +374,26 @@ def run_job(job_id: int) -> Optional[str]:
     except Exception as e:  # noqa: BLE001 -- record failure, never crash the runner
         status, err = "failed", str(e)[:2000]
         log.warning("job %s (%s) failed: %s", job_id, job["job_type"], e)
+    # Budget-abort made LOUD: if this business is over its monthly cap, don't leave a cryptic red
+    # "failed" -- annotate the result with the spend/cap and raise a clear, deduped alert so the
+    # owner sees "you've used your budget" (and can self-serve an upgrade) instead of "it's broken".
+    result = _annotate_budget(job["business_id"], status, result)
+    if isinstance(result, dict) and result.get("budget_exhausted") and status == "failed":
+        err = (f"Budget reached: ${result['spent']:.2f} of your ${result['cap']:.2f} monthly cap. "
+               "It resets at the start of next month — or raise the cap to keep going.")
     with db() as conn:
         conn.execute(
             "UPDATE api_jobs SET status=%s, error=%s, result=%s, finished_at=now() WHERE id=%s",
             (status, err, json.dumps(result) if result is not None else None, job_id),
         )
         conn.commit()
+    # Fan out a job.finished event to the client's stack (GHL/Zapier/...). No-op until
+    # WEBHOOK_URL is set; best-effort -- never let a webhook affect job recording.
+    try:
+        _imp("webhooks").emit(job["business_id"], "job.finished",
+                              {"job_type": job["job_type"], "status": status, "result": result})
+    except Exception as e:  # noqa: BLE001
+        log.debug("job webhook skipped: %s", e)
     return status
 
 
