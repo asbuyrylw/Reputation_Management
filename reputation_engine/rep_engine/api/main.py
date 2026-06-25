@@ -29,6 +29,7 @@ from .routers import (
     integrations,
     jobs_router,
     onboarding_router,
+    platform_router,
     prompts_router,
     rankings,
     reports_router,
@@ -87,6 +88,12 @@ async def lifespan(app: FastAPI):
             log.info("Seed admin ready (user id=%s)", admin_id)
     except Exception as e:  # noqa: BLE001 -- never let seeding crash startup
         log.warning("seed_admin skipped: %s", e)
+    try:
+        super_id = auth.seed_super_admin()
+        if super_id:
+            log.info("Super-admin ready (user id=%s)", super_id)
+    except Exception as e:  # noqa: BLE001 -- never let seeding crash startup
+        log.warning("seed_super_admin skipped: %s", e)
     try:
         from .. import billing
         billing.seed_plans()
@@ -226,6 +233,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router.router)
     app.include_router(admin.router)
     app.include_router(integrations.router)
+    app.include_router(platform_router.router)
     return app
 
 

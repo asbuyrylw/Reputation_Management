@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useJobs } from "@/lib/hooks";
+import { useJobs, useRunEverything } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
@@ -48,6 +49,8 @@ function resultNote(result: Record<string, unknown> | null): string | null {
 export default function JobsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useJobs(businessId);
+  const runAll = useRunEverything(businessId);
+  const [confirmAll, setConfirmAll] = useState(false);
 
   if (isLoading || !data) return <Spinner />;
   const latest = data.pipeline_runs[0];
@@ -59,6 +62,34 @@ export default function JobsPage() {
         subtitle="Trigger an audit or the monthly cycle, then watch it progress. Long jobs run in the background — you can leave this page. Some jobs auto-chain (e.g. regenerating the plan also syncs tasks and content to produce)."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      {canEdit && (
+        <Card className="mb-4 border-indigo-100 bg-indigo-50/40">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">Run everything</div>
+              <div className="text-xs text-slate-600">
+                Refresh every section at once — audit, site crawl, gap analysis, plan, AI citations,
+                competitor benchmark, local rankings, prompts, mentions, outreach, content &amp; the report.
+              </div>
+            </div>
+            <button
+              onClick={() => setConfirmAll(true)}
+              disabled={runAll.isPending}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {runAll.isPending ? "Starting…" : "▶ Run everything"}
+            </button>
+          </div>
+          {runAll.isError && (
+            <div className="mt-2 text-xs text-rose-600">{(runAll.error as Error)?.message ?? "Couldn't start the run."}</div>
+          )}
+          {runAll.isSuccess && (
+            <div className="mt-2 text-xs text-emerald-700">Pipeline queued — watch it progress above.</div>
+          )}
+        </Card>
+      )}
+
       {canEdit && (
         <Card className="mb-4">
           <div className="mb-2 text-sm font-medium text-slate-700">Trigger a job</div>
@@ -138,6 +169,35 @@ export default function JobsPage() {
           </tbody>
         </table>
       </Card>
+
+      {confirmAll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => setConfirmAll(false)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-slate-900">Run the entire pipeline?</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              This runs <span className="font-semibold">audit → site crawl → gap analysis → plan → sync → AI citations →
+              competitor benchmark → local rankings → prompts → mentions → outreach → content briefs → report</span>,
+              in order.
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              It costs roughly <span className="font-semibold">$8–12</span> in AI &amp; search usage and takes about
+              <span className="font-semibold"> 30–50 minutes</span>. You can only start it once a day.
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => setConfirmAll(false)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+                Cancel
+              </button>
+              <button
+                onClick={() => runAll.mutate(undefined, { onSettled: () => setConfirmAll(false) })}
+                disabled={runAll.isPending}
+                className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {runAll.isPending ? "Starting…" : "Yes, run everything"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

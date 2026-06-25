@@ -22,8 +22,10 @@ from .settings import api_settings
 
 try:
     from ..db import db
+    from . import flags
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    import flags  # type: ignore
 
 _PBKDF2_ITERATIONS = 600_000
 
@@ -163,6 +165,9 @@ def public_user(conn, user: dict) -> dict:
         "role": user["role"], "is_active": user["is_active"],
         "org_id": user.get("org_id"), "org_role": user.get("org_role"),
         "business_ids": ids,   # None => all (admin)
+        # platform-level capability + the global billing master switch, so the SPA can gate UI
+        "is_super_admin": bool(user.get("is_super_admin")),
+        "billing_enabled": flags.billing_enabled(conn),
     }
 
 
@@ -222,6 +227,34 @@ def seed_admin() -> Optional[int]:
             "INSERT INTO users (email, password_hash, full_name, role) "
             "VALUES (%s,%s,%s,'admin') RETURNING id",
             (s.admin_email, hash_password(s.admin_password), "Seed Admin"),
+        ).fetchone()
+        conn.commit()
+        return row["id"]
+
+
+# The single platform owner who can flip the billing master switch (nobody else).
+SUPER_ADMIN_EMAIL = "logan@nexgenixai.com"
+
+
+def seed_super_admin() -> Optional[int]:
+    """Ensure the platform super-admin (logan@nexgenixai.com) exists as an admin + is_super_admin,
+    using the SAME password as the seed admin (ADMIN_SEED_PASSWORD). Idempotent: creates the user
+    if missing, and always (re)asserts is_super_admin=TRUE so the switch can't be lost. No-op when
+    ADMIN_SEED_PASSWORD is unset. Returns the user id, else None."""
+    s = api_settings()
+    if not s.admin_password:
+        return None
+    with db() as conn:
+        existing = get_user_by_email(conn, SUPER_ADMIN_EMAIL)
+        if existing:
+            conn.execute("UPDATE users SET is_super_admin=TRUE, role='admin', is_active=TRUE WHERE id=%s",
+                         (existing["id"],))
+            conn.commit()
+            return existing["id"]
+        row = conn.execute(
+            "INSERT INTO users (email, password_hash, full_name, role, is_super_admin) "
+            "VALUES (%s,%s,%s,'admin',TRUE) RETURNING id",
+            (SUPER_ADMIN_EMAIL, hash_password(s.admin_password), "Logan (Platform Owner)"),
         ).fetchone()
         conn.commit()
         return row["id"]

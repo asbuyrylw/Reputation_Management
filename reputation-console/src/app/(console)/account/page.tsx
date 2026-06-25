@@ -4,9 +4,52 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useBusiness } from "@/lib/business";
-import { useRevokeSessions, useDeleteBusiness } from "@/lib/hooks";
+import { useRevokeSessions, useDeleteBusiness, usePlatformSettings, useSetBillingEnabled } from "@/lib/hooks";
 import { apiDownload } from "@/lib/api";
 import { Card, PageHeader } from "@/components/ui";
+
+// Platform owner (super-admin) only: the billing master switch. The whole billing system is
+// wired but dormant until this is flipped on.
+function PlatformCard() {
+  const { refresh } = useAuth();
+  const settings = usePlatformSettings();
+  const setBilling = useSetBillingEnabled();
+  const enabled = settings.data?.billing_enabled ?? false;
+  const toggle = (on: boolean) =>
+    setBilling.mutate(on, { onSuccess: () => refresh() });
+  return (
+    <Card className="border-amber-200 bg-amber-50/40">
+      <h3 className="text-sm font-semibold text-slate-900">Platform — billing master switch</h3>
+      <p className="mt-1 text-sm text-slate-600">
+        Turn the billing system on or off for the whole platform. While off, no one is metered or charged and the
+        billing UI is hidden. The pilot organization stays exempt even when this is on.
+      </p>
+      <div className="mt-3 flex items-center gap-3">
+        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+          {settings.isLoading ? "…" : enabled ? "Billing is ON" : "Billing is OFF"}
+        </span>
+        {enabled ? (
+          <button
+            onClick={() => toggle(false)}
+            disabled={setBilling.isPending}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
+          >
+            {setBilling.isPending ? "…" : "Turn billing off"}
+          </button>
+        ) : (
+          <button
+            onClick={() => toggle(true)}
+            disabled={setBilling.isPending}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {setBilling.isPending ? "…" : "Turn billing on"}
+          </button>
+        )}
+      </div>
+      {setBilling.isError && <p className="mt-2 text-xs text-rose-600">Couldn’t change the setting — try again.</p>}
+    </Card>
+  );
+}
 
 export default function AccountPage() {
   const router = useRouter();
@@ -45,6 +88,9 @@ export default function AccountPage() {
       <PageHeader title="Account & data" subtitle="Manage your sessions and your data." />
 
       <div className="space-y-4">
+        {/* platform owner only: the billing master switch */}
+        {user?.is_super_admin && <PlatformCard />}
+
         {/* sessions */}
         <Card>
           <h3 className="text-sm font-semibold text-slate-900">Sessions</h3>

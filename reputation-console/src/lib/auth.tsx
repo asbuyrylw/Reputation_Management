@@ -13,6 +13,7 @@ interface AuthState {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refresh: () => Promise<void>; // re-pull /auth/me (e.g. after a platform setting changes)
 }
 
 const AuthCtx = createContext<AuthState | null>(null);
@@ -26,6 +27,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((u) => setUser(u))
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
+  }, []);
+
+  const refresh = useCallback(async () => {
+    try {
+      setUser(await apiFetch<User>("/auth/me"));
+    } catch {
+      /* keep current user on a transient failure */
+    }
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
@@ -42,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
-  return <AuthCtx.Provider value={{ user, loading, login, logout }}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, loading, login, logout, refresh }}>{children}</AuthCtx.Provider>;
 }
 
 export function useAuth(): AuthState {

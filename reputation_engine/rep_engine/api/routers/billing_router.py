@@ -7,6 +7,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from .. import flags
 from ..deps import get_conn, get_current_user, require_org_manager
 from ..schemas import CheckoutRequest, PortalRequest
 
@@ -44,6 +45,8 @@ def my_subscription(user: dict = Depends(get_current_user), conn=Depends(get_con
 def checkout(body: CheckoutRequest, user: dict = Depends(require_org_manager),
              conn=Depends(get_conn)):
     """Create a Stripe Checkout Session for the caller's org to subscribe to a plan."""
+    if not flags.billing_enabled(conn):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not enabled yet")
     if not _stripe.enabled():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not configured")
     org_id = user.get("org_id")
@@ -65,6 +68,8 @@ def checkout(body: CheckoutRequest, user: dict = Depends(require_org_manager),
 def portal(body: PortalRequest, user: dict = Depends(require_org_manager),
            conn=Depends(get_conn)):
     """Create a Stripe Billing Portal session so the org can manage its subscription/card."""
+    if not flags.billing_enabled(conn):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not enabled yet")
     if not _stripe.enabled():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not configured")
     org_id = user.get("org_id")

@@ -153,10 +153,19 @@ def usage_summary(conn, org_id: Optional[int]) -> dict:
 def check_can_trigger(conn, business_id: int, job_type: str) -> tuple[bool, str, int]:
     """Gate for LLM-spending job triggers. Returns (ok, reason, http_code).
 
-    Order: no org or no subscription => unmetered/grandfathered (ok); inactive subscription
-    => 402; audit-type job over the monthly audit quota => 429; otherwise ok."""
+    Order: billing master switch OFF or org exempt => unmetered (ok); no org or no subscription
+    => unmetered/grandfathered (ok); inactive subscription => 402; audit-type job over the monthly
+    audit quota => 429; otherwise ok."""
     org_id = org_for_business(conn, business_id)
     if not org_id:
+        return True, "", 0
+    # Global master switch: billing is wired but dormant until the super-admin turns it on.
+    en = conn.execute("SELECT value FROM app_settings WHERE key='billing_enabled'").fetchone()
+    if not (en and str(en["value"]).strip().lower() in ("1", "true", "yes", "on")):
+        return True, "", 0
+    # Per-org exemption: the pilot (and any exempt org) is never metered/charged.
+    ex = conn.execute("SELECT billing_exempt FROM organizations WHERE id=%s", (org_id,)).fetchone()
+    if ex and ex["billing_exempt"]:
         return True, "", 0
     sub = get_subscription(conn, org_id)
     if not sub:

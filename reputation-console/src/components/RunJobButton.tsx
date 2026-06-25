@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useTriggerJob } from "@/lib/hooks";
+import { isBillingError } from "@/lib/api";
+import { UpgradeModal } from "@/components/UpgradeModal";
 
 // One consistent control for "run a background job" so every trigger across the console gives
 // the SAME immediate feedback: the button disables and shows a spinner + "…ing" the instant
@@ -29,17 +32,29 @@ export function RunJobButton({
   onSuccess?: () => void;
 }) {
   const trigger = useTriggerJob(businessId);
+  const [upgrade, setUpgrade] = useState<string | null>(null);
   const base =
     variant === "primary"
       ? "bg-slate-900 text-white hover:bg-slate-700"
       : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
+  const run = () =>
+    trigger.mutate(
+      { jobType },
+      {
+        onSuccess,
+        // A billing wall (402/429) becomes an upgrade prompt at the moment of intent.
+        onError: (e) => { if (isBillingError(e)) setUpgrade(e.message); },
+      },
+    );
+  // Don't also show the generic red error when we're showing the upgrade modal.
+  const showGenericError = trigger.isError && !isBillingError(trigger.error);
   return (
     <span className="inline-flex flex-col items-end gap-1">
       <button
         type="button"
         title={title}
         disabled={disabled || trigger.isPending || !businessId}
-        onClick={() => trigger.mutate({ jobType }, { onSuccess })}
+        onClick={run}
         className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${base} ${className}`}
       >
         {trigger.isPending && (
@@ -50,9 +65,10 @@ export function RunJobButton({
         )}
         {trigger.isPending ? pendingLabel ?? `${label}…` : label}
       </button>
-      {trigger.isError && (
+      {showGenericError && (
         <span className="text-xs text-rose-600">Couldn’t start — try again.</span>
       )}
+      {upgrade && <UpgradeModal message={upgrade} onClose={() => setUpgrade(null)} />}
     </span>
   );
 }

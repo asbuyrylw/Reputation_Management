@@ -55,6 +55,14 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+def require_super_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Platform-owner authorization — only the single super-admin (logan@nexgenixai.com) may
+    flip platform-wide switches like the billing master. Regular admins are NOT enough."""
+    if not user.get("is_super_admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Super-admin access required")
+    return user
+
+
 def require_org_manager(user: dict = Depends(get_current_user)) -> dict:
     """Org-management authorization (billing, members, org settings): platform admin, or
     an owner/admin of an organization."""

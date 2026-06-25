@@ -11,6 +11,12 @@ export class ApiError extends Error {
   }
 }
 
+// A billing/quota wall: 402 (subscription inactive/trial ended) or 429 (over the plan's
+// monthly limit). The UI turns these into an upgrade prompt instead of a generic red error.
+export function isBillingError(err: unknown): err is ApiError {
+  return err instanceof ApiError && (err.status === 402 || err.status === 429);
+}
+
 export interface FetchOpts {
   method?: string;
   body?: unknown;
