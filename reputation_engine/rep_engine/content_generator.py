@@ -99,13 +99,54 @@ def _already_covered(business_id: int, topic: str) -> bool:
 # Generation
 # ----------------------------------------------------------------------------
 GEN_SYSTEM = (
-    "You are an expert content writer for a reputation program that works by "
-    "publishing ACCURATE, helpful, well-structured content so it is what AI "
-    "assistants surface about a business. Never fabricate facts, credentials, "
-    "reviews, or statistics. If you don't have a fact, write around it or use a "
-    "clearly-labeled placeholder like [INSERT: founding year]. Write in a warm, "
-    "trustworthy, plain tone. Output ONLY the asset content -- no preamble."
+    "You are an expert content writer AND SEO strategist for a reputation program that "
+    "publishes ACCURATE, helpful, well-structured content so it becomes what AI assistants "
+    "and Google surface about a business. GROUND every claim in the REAL facts provided (the "
+    "business's crawled website + profile); prefer those facts over placeholders. Only use a "
+    "clearly-labeled [INSERT: ...] placeholder for a specific fact that is genuinely NOT "
+    "provided. Naturally weave in the target search keywords where they fit (never keyword-"
+    "stuff). Directly address the gap / narrative the content is meant to fix. Never fabricate "
+    "facts, credentials, reviews, or statistics. Write in a warm, trustworthy, plain tone. "
+    "Output ONLY the asset content -- no preamble."
 )
+
+
+def _grounding_context(business_id: int) -> dict:
+    """Pull the REAL grounding for content generation, so the writer works from facts and the
+    right language instead of generic filler:
+      - site_facts: what the business's own website actually says (latest crawl summary),
+      - gap_focus:  what AI currently gets wrong / the narrative this content must close,
+      - keywords:   the SEO keywords this piece should rank for (populated by the keyword-
+                    intelligence layer; a safe no-op until that table exists).
+    Everything is best-effort: missing data degrades to an empty section, never an error."""
+    site_facts = gap_focus = ""
+    keywords: list = []
+    try:
+        with db() as conn:
+            sa = conn.execute(
+                "SELECT summary FROM site_audits WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+                (business_id,)).fetchone()
+            if sa and sa["summary"]:
+                s = sa["summary"] if isinstance(sa["summary"], (dict, list)) else json.loads(sa["summary"])
+                site_facts = json.dumps(s, default=str)[:3500]
+            gm = conn.execute(
+                "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+                (business_id,)).fetchone()
+            if gm and gm["model"]:
+                m = gm["model"] if isinstance(gm["model"], (dict, list)) else json.loads(gm["model"])
+                gap_focus = json.dumps(m, default=str)[:2800]
+    except Exception as e:  # noqa: BLE001 -- grounding is best-effort; never block generation
+        log.debug("site/gap grounding unavailable: %s", e)
+    # Keyword layer reads in their own connection so a missing table can't poison the reads above.
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT keyword, kind FROM target_keywords WHERE business_id=%s "
+                "ORDER BY priority DESC NULLS LAST LIMIT 25", (business_id,)).fetchall()
+            keywords = [{"keyword": r["keyword"], "kind": r.get("kind")} for r in rows]
+    except Exception:  # noqa: BLE001 -- target_keywords doesn't exist yet (keyword layer is upcoming)
+        keywords = []
+    return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords}
 
 
 def _asset_type_for(wo: dict) -> Optional[str]:
@@ -125,38 +166,71 @@ def _asset_type_for(wo: dict) -> Optional[str]:
     return None
 
 
-def _gen_prompt(biz: dict, wo: dict, asset_type: str) -> str:
+def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None) -> str:
+    grounding = grounding or {"site_facts": "", "gap_focus": "", "keywords": []}
     name = biz.get("name", "the business")
     geo = biz.get("geo", "")
     svc = biz.get("services", "")
+    industry = biz.get("industry", "")
+    goal = biz.get("goal", "")
+    contested = biz.get("contested_terms", "")
     instr = wo.get("instruction", "")
     title = wo.get("title", "")
     specs = {
         "faq": "Write an FAQ page (6-10 Q&A pairs) in markdown that directly answers "
                "the real questions people ask about this business.",
         "schema": "Output ONLY valid JSON-LD schema markup (no prose) appropriate to the "
-                  "page -- choose from Organization, LocalBusiness, FAQPage, Person, Review.",
-        "article": "Write a 500-800 word helpful article in markdown with a clear H1 and "
-                   "subheadings, answering the target question accurately.",
-        "bio": "Write a professional bio page in markdown (200-350 words) establishing "
-               "authority and trust. Use placeholders for any facts you don't have.",
-        "gbp_post": "Write a short Google Business Profile post (80-150 words), friendly and local.",
+                  "page -- choose from Organization, LocalBusiness, FAQPage, Person, Review. "
+                  "Populate it with the REAL business facts provided above.",
+        "article": "Write a 600-900 word helpful, locally-relevant article in markdown with a "
+                   "clear H1 and subheadings, answering the target question accurately and "
+                   "working in the target keywords naturally.",
+        "bio": "Write a professional bio page in markdown (250-400 words) establishing "
+               "authority and trust, grounded in the real facts above.",
+        "gbp_post": "Write a short Google Business Profile post (80-150 words), friendly and "
+                    "local, naturally including a local keyword.",
         "review_request": "Write a short, warm review-request message (SMS + email versions) "
                           "asking a happy client to leave a Google review, with a placeholder for the link.",
     }
     spec = specs.get(asset_type, "Write the requested asset in markdown.")
-    return (
-        f"Business: {name}\nLocation: {geo}\nServices: {svc}\n"
-        f"Work order: {title}\nInstruction: {instr}\n"
-        f"Target AI query to satisfy: {wo.get('target_query','(general trust/visibility)')}\n\n"
-        f"Task: {spec}"
-    )
+    kw = grounding.get("keywords") or []
+    kw_line = ""
+    if kw:
+        kw_line = ("Target search keywords to weave in NATURALLY (do not keyword-stuff): "
+                   + ", ".join(str(k.get("keyword")) for k in kw if k.get("keyword")) + "\n")
+    parts = [
+        f"Business: {name}",
+        f"Industry: {industry}" if industry else "",
+        f"Location / areas served: {geo}" if geo else "",
+        f"Services: {svc}" if svc else "",
+        f"Positioning goal (what AI + customers should understand): {goal}" if goal else "",
+        f"Narratives working against them (counter, don't repeat): {contested}" if contested else "",
+        "",
+        "REAL FACTS FROM THE BUSINESS'S OWN WEBSITE (from our crawl) — ground your writing in "
+        "these and do not contradict them:",
+        grounding.get("site_facts") or "(no site crawl available — use [INSERT: ...] for unknown facts)",
+        "",
+        "WHAT AI CURRENTLY GETS WRONG / THE GAP THIS CONTENT MUST CLOSE:",
+        grounding.get("gap_focus") or "(general trust & visibility)",
+        "",
+        f"Work order: {title}",
+        f"Instruction: {instr}" if instr else "",
+        kw_line + f"Target question this should answer when someone asks AI: "
+        f"{wo.get('target_query','(general trust/visibility)')}",
+        "",
+        f"Task: {spec}",
+    ]
+    return "\n".join(p for p in parts if p != "")
 
 
-def _generate_one(biz: dict, wo: dict, asset_type: str) -> str:
-    # creative long-form generation -> mid tier (Sonnet/gpt-4o), not full Opus.
-    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type),
-                                 max_tokens=2200, tier="mid")
+# Marquee long-form assets get the best model; short/structured assets stay on the mid tier.
+_ASSET_TIER = {"article": "full", "faq": "full", "bio": "full"}
+
+
+def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None) -> str:
+    tier = _ASSET_TIER.get(asset_type, "mid")
+    return llm.orchestrator_text(GEN_SYSTEM, _gen_prompt(biz, wo, asset_type, grounding),
+                                 max_tokens=2600, tier=tier)
 
 
 # ----------------------------------------------------------------------------
@@ -327,7 +401,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         log.info("WO '%s' already covered (pgvector); skipping.", topic)
         return None
 
-    body = _generate_one(biz, wo, asset_type)
+    grounding = _grounding_context(business_id)
+    body = _generate_one(biz, wo, asset_type, grounding)
     if not body:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
