@@ -6,10 +6,17 @@ import { useAuth } from "@/lib/auth";
 
 // Nav grouped by the client's mental model (not the DB). Items flagged `soon`
 // are wired in later phases. Structure follows the two visibility surfaces (AI vs
-// Search) + strategy / content / monitoring / static outputs, so the flow reads
-// top-to-bottom the way an owner thinks about the problem.
-type NavItem = { href: string; label: string; soon?: boolean };
-type NavGroup = { group: string; items: NavItem[] };
+// Search) + strategy / content / monitoring / proof, so the flow reads top-to-bottom
+// the way an owner thinks about the problem: understand -> diagnose -> plan ->
+// execute -> watch -> prove.
+//
+// ROLE-BASED LABELS: the non-technical business OWNER (non-admin) sees plain-language
+// labels; the OPERATOR / agency admin sees the precise terms they work in. `label` is
+// the owner-facing string; `opLabel`/`opGroup` override it for admins (falling back to
+// the owner label when absent). The STRUCTURE (grouping + ordering) is identical for
+// both — only the wording changes — so there is one source of truth.
+type NavItem = { href: string; label: string; opLabel?: string; soon?: boolean; billingGated?: boolean };
+type NavGroup = { group: string; opGroup?: string; items: NavItem[] };
 
 const NAV: NavGroup[] = [
   {
@@ -18,64 +25,82 @@ const NAV: NavGroup[] = [
   },
   {
     // Everything about what AI assistants say about you.
-    group: "AI Visibility",
+    group: "Where you stand with AI",
+    opGroup: "AI Visibility",
     items: [
       { href: "/ai-overview", label: "AI overview" },
-      { href: "/audits", label: "Audits & AI answers" },
-      { href: "/prompts", label: "Prompts & topics" },
-      // Renamed from "Rankings": this page is AI citations / share-of-voice (who AI
-      // quotes), NOT search position -- the old name collided with Search rankings.
-      { href: "/rankings", label: "AI citations" },
+      { href: "/audits", label: "What AI says about you", opLabel: "Audits & AI answers" },
+      { href: "/prompts", label: "Questions customers ask AI", opLabel: "Prompts & topics" },
+      // /rankings is AI citations / share-of-voice (who AI quotes), NOT search position.
+      { href: "/rankings", label: "Who AI quotes about you", opLabel: "AI citations" },
+      // Moved from Search & SEO: this page benchmarks AI-answer share-of-voice (you vs.
+      // rivals in what AI says), not Google rank, so it belongs with the AI surfaces.
+      { href: "/competitors", label: "You vs. competitors in AI answers", opLabel: "Competitors (AI)" },
     ],
   },
   {
-    // Traditional search visibility.
-    group: "Search & SEO",
+    // Traditional Google search visibility.
+    group: "Where you stand on Google",
+    opGroup: "Search & SEO",
     items: [
-      { href: "/seo-overview", label: "SEO overview" },
-      { href: "/seo", label: "Site / technical SEO" },
-      { href: "/local-seo", label: "Local rankings" },
-      { href: "/competitors", label: "Competitors" },
+      { href: "/seo-overview", label: "Google overview", opLabel: "SEO overview" },
+      // Local map-pack / organic rank is the headline concern for a local SMB, so it
+      // leads; technical site health is the supporting detail.
+      { href: "/local-seo", label: "Local map & search rankings", opLabel: "Local rankings" },
+      { href: "/seo", label: "Website health", opLabel: "Site / technical SEO" },
     ],
   },
   {
-    // What to fix, in what order, and when it pays off.
-    group: "Strategy & Plan",
+    // What's wrong, what to fix, in what order, and when it pays off.
+    group: "Your problems & plan",
+    opGroup: "Strategy & Plan",
     items: [
+      // Diagnosis precedes prescription.
+      { href: "/gaps", label: "What's hurting you", opLabel: "Gaps" },
       { href: "/next-steps", label: "Do this next" },
-      { href: "/gaps", label: "Gaps" },
       { href: "/content/work-orders", label: "Improvement tasks" },
-      { href: "/timeline", label: "Time to goal" },
+      { href: "/timeline", label: "Time to your goal", opLabel: "Time to goal" },
     ],
   },
   {
     // The content production pipeline.
-    group: "Content",
+    group: "Getting it done",
+    opGroup: "Content",
     items: [
       { href: "/content/briefs", label: "Content to produce" },
-      { href: "/content/drafts", label: "Content drafts" },
+      { href: "/content/drafts", label: "Drafts to review", opLabel: "Content drafts" },
       { href: "/content/finalized", label: "Published content" },
       { href: "/content/outreach", label: "Outreach" },
     ],
   },
   {
-    // Live signals that need a human's eyes.
-    group: "Monitor",
+    // Live signals that need a human's eyes (incidents first — higher severity).
+    group: "Watch live",
+    opGroup: "Monitor",
     items: [
-      { href: "/notifications", label: "Notifications" },
-      { href: "/sustain/mentions", label: "Mentions" },
+      { href: "/notifications", label: "Needs your attention", opLabel: "Notifications" },
       { href: "/sustain/incidents", label: "Incidents" },
-      { href: "/sustain/levers", label: "What's working" },
+      { href: "/sustain/mentions", label: "Mentions" },
     ],
   },
   {
-    group: "Reports",
-    items: [{ href: "/reports", label: "Reports" }],
+    // Did it work? — retrospective proof + the client deliverable.
+    group: "Proof it's working",
+    opGroup: "Proof & reports",
+    items: [
+      // Moved from Monitor: a retrospective ranking of which actions moved the score
+      // (ROI evidence), not a live signal.
+      { href: "/sustain/levers", label: "What's working" },
+      { href: "/reports", label: "Reports" },
+    ],
   },
   {
     group: "Settings",
     items: [
       { href: "/account", label: "Account & data" },
+      // Billing is wired but hidden until the platform billing switch is on (the super-admin
+      // always sees it so they can preview before flipping it on).
+      { href: "/billing", label: "Billing", opLabel: "Billing & plans", billingGated: true },
       { href: "/integrations", label: "Integrations" },
       { href: "/automation", label: "Automation" },
       { href: "/glossary", label: "Glossary" },
@@ -95,7 +120,14 @@ const ADMIN_GROUP: NavGroup = {
 export function Sidebar() {
   const path = usePathname();
   const { user } = useAuth();
-  const groups = user?.role === "admin" ? [...NAV, ADMIN_GROUP] : NAV;
+  // Admins are the operator/agency persona (precise labels + Admin group); everyone else
+  // is the client owner (plain-language labels). Same structure, role-specific wording.
+  const isOperator = user?.role === "admin";
+  const showBilling = !!(user?.billing_enabled || user?.is_super_admin);
+  const groups = (isOperator ? [...NAV, ADMIN_GROUP] : NAV).map((g) => ({
+    ...g,
+    items: g.items.filter((it) => !it.billingGated || showBilling),
+  }));
   return (
     <aside className="w-64 shrink-0 border-r border-slate-200/70 bg-white/80 p-4 backdrop-blur-xl">
       {/* Brand */}
@@ -112,11 +144,12 @@ export function Sidebar() {
         {groups.map((g) => (
           <div key={g.group}>
             <div className="px-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-              {g.group}
+              {isOperator && g.opGroup ? g.opGroup : g.group}
             </div>
             <div className="mt-1.5 space-y-0.5">
               {g.items.map((it) => {
                 const active = path === it.href;
+                const label = isOperator && it.opLabel ? it.opLabel : it.label;
                 return (
                   <Link
                     key={it.href}
@@ -134,7 +167,7 @@ export function Sidebar() {
                         }`}
                         aria-hidden
                       />
-                      {it.label}
+                      {label}
                     </span>
                     {it.soon && <span className="text-[10px] uppercase">soon</span>}
                   </Link>

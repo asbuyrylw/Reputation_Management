@@ -9,6 +9,35 @@ export interface User {
   role: Role;
   is_active: boolean;
   business_ids: number[] | null; // null => admin (all businesses)
+  org_id?: number | null;
+  org_role?: string | null; // owner | admin | member
+  is_super_admin?: boolean; // the single platform owner who can flip the billing switch
+  billing_enabled?: boolean; // global billing master switch (off until the super-admin turns it on)
+}
+
+// --- billing ---
+export interface BillingPlan {
+  code: string;
+  name: string;
+  price_usd_month: number;
+  max_businesses: number | null;
+  max_audits_per_month: number | null;
+  max_engines: number | null;
+  max_samples_per_prompt: number | null;
+  seats: number | null;
+  trial_days: number | null;
+}
+
+export interface SubscriptionSummary {
+  subscription: {
+    plan_code: string | null;
+    status: string;
+    trial_end?: string | null;
+    current_period_end?: string | null;
+  } | null;
+  plan: BillingPlan | null;
+  active: boolean;
+  usage: { audits_this_month: number; businesses: number };
 }
 
 export interface Business {
@@ -47,6 +76,15 @@ export interface WorkOrder {
   predicted_seo_impact?: string | null;
   predicted_basis?: string | null;
   superseded?: boolean | null;
+  planned?: boolean | null;
+  promoted_at?: string | null;
+  progress_notes?: ProgressNote[] | null;
+}
+
+export interface ProgressNote {
+  text: string;
+  author?: string | null;
+  at?: string | null;
 }
 
 export interface ContentDraft {

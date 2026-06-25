@@ -29,6 +29,27 @@ except ImportError:  # pragma: no cover -- loose-script fallback
     import jobs as _jobs  # type: ignore
 
 
+# The full pipeline, in dependency order, so a business goes from nothing to every section
+# populated in one shot. Shared by the onboarding wizard AND the "Run everything" button so
+# both stay in lock-step. The worker enforces ordering via api_jobs.depends_on (SETUP_PREREQS),
+# so it's correct with any number of workers. One-time cost ~$8-12, ~30-50 min.
+SETUP_PIPELINE: list[str] = [
+    "audit",             # AI-state audit -> scored answers (everything downstream needs this)
+    "site_crawl",        # technical / on-page SEO crawl
+    "gap_model",         # the gap analysis (needs the audit)
+    "plan",              # strategy -> improvement tasks (needs the gap model)
+    "sync_plan",         # materialize the plan into trackable work orders
+    "citation_analyze",  # AI-citation share-of-voice / who AI quotes (needs the audit)
+    "benchmark",         # competitor AI share-of-voice
+    "local_rank",        # local Google rankings (needs SERPER_API_KEY)
+    "suggest_prompts",   # AI-suggested tracking prompts
+    "mentions_scan",     # web mentions + drafted (human-gated) replies
+    "discovery",         # outreach targets (journalists / outlets / communities)
+    "production_briefs", # content-to-produce briefs
+    "report",            # client report LAST, so it reflects audit + gaps + plan + rankings
+]
+
+
 # Onboarding pipeline prerequisites (the full board enqueued together).
 SETUP_PREREQS: dict[str, list[str]] = {
     "gap_model": ["audit"],
@@ -53,6 +74,26 @@ TRIGGER_DOWNSTREAM: dict[str, list[str]] = {
     "plan": ["sync_plan"],
     "sync_plan": ["production_briefs"],
 }
+
+
+def enqueue_pipeline(business_id: int, requested_by: Optional[int] = None) -> list[dict]:
+    """Enqueue the full ``SETUP_PIPELINE`` in dependency order, wiring each job's
+    ``depends_on`` from ``SETUP_PREREQS`` so ordering holds with any number of workers.
+    Shared by the onboarding wizard and the "Run everything" button. Returns a list of
+    ``{job_type, job_id, already_running, error?}`` describing what was queued."""
+    enqueued: list[dict] = []
+    id_by_type: dict[str, int] = {}   # job_type -> enqueued job id, to wire dependencies
+    for jt in SETUP_PIPELINE:
+        try:
+            dep_ids = [id_by_type[d] for d in SETUP_PREREQS.get(jt, []) if d in id_by_type]
+            job_id, active = _jobs.enqueue(business_id, jt, requested_by=requested_by,
+                                           depends_on=dep_ids or None)
+            if job_id:
+                id_by_type[jt] = job_id
+            enqueued.append({"job_type": jt, "job_id": job_id or active, "already_running": job_id is None})
+        except Exception as e:  # a single bad job type must not abort the whole run
+            enqueued.append({"job_type": jt, "job_id": None, "error": str(e)[:120]})
+    return enqueued
 
 
 def enqueue_downstream(business_id: int, root_type: str, root_id: int,

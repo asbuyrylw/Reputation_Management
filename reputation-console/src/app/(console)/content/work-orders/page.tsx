@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import type { WorkOrder } from "@/lib/types";
+import type { WorkOrder, ProgressNote } from "@/lib/types";
 
 // Capabilities whose work the AI can draft for you (the per-item "Generate draft" button).
 const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
@@ -64,6 +64,59 @@ function bulletize(text: string): string[] | null {
   if (t.length <= 140) return null;
   const parts = t.split(/(?:;\s+|\.\s+(?=[A-Z]))/).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean);
   return parts.length > 1 ? parts : null;
+}
+
+// Short timestamp for a progress note ("Jun 24, 3:10 PM").
+function fmtWhen(at?: string | null): string {
+  if (!at) return "";
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// Progress-notes timeline + an "add note" box, so a managed task carries its own work log.
+function NotesSection({ wo, businessId, canEdit }: { wo: WorkOrder; businessId: number | null; canEdit: boolean }) {
+  const addNote = useAddWorkOrderNote(businessId);
+  const [text, setText] = useState("");
+  const notes: ProgressNote[] = wo.progress_notes ?? [];
+  const submit = () =>
+    text.trim() && addNote.mutate({ woId: wo.id, text }, { onSuccess: () => setText("") });
+  return (
+    <details className="mt-1.5 text-[11px]">
+      <summary className="cursor-pointer text-slate-500 hover:text-slate-700">Progress notes ({notes.length})</summary>
+      <div className="mt-1 space-y-1.5 rounded bg-slate-50 p-2">
+        {notes.length > 0 ? (
+          <ul className="space-y-1">
+            {notes.map((n, i) => (
+              <li key={i} className="border-l-2 border-slate-200 pl-2">
+                <div className="text-slate-700">{n.text}</div>
+                <div className="text-[10px] text-slate-400">{[n.author, fmtWhen(n.at)].filter(Boolean).join(" · ")}</div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-slate-400">No notes yet.</div>
+        )}
+        {canEdit && (
+          <div className="flex gap-1.5">
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              placeholder="Add a progress note…"
+              className="flex-1 rounded border border-slate-300 px-2 py-1 text-[11px]"
+            />
+            <button
+              onClick={submit}
+              disabled={addNote.isPending || !text.trim()}
+              className="rounded bg-slate-900 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+            >
+              {addNote.isPending ? "…" : "Add"}
+            </button>
+          </div>
+        )}
+      </div>
+    </details>
+  );
 }
 
 function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string) => void }) {
@@ -181,6 +234,9 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
         </div>
       )}
 
+      {/* per-task work log */}
+      <NotesSection wo={wo} businessId={businessId} canEdit={canEdit} />
+
       {canDraft && (
         <div className="mt-2">
           <button
@@ -252,49 +308,118 @@ function AddTask({ businessId }: { businessId: number | null }) {
   );
 }
 
+type ViewMode = "status" | "assignee" | "due";
+
+// Due-date buckets for the "by due date" view (computed against the local 'today').
+function dueBucket(target: string | null | undefined): { key: string; label: string; order: number } {
+  if (!target) return { key: "none", label: "No due date", order: 4 };
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(target.slice(0, 10) + "T00:00:00");
+  const days = Math.round((d.getTime() - today.getTime()) / 86400000);
+  if (days < 0) return { key: "overdue", label: "Overdue", order: 0 };
+  if (days <= 7) return { key: "week", label: "Due this week", order: 1 };
+  if (days <= 30) return { key: "month", label: "Due this month", order: 2 };
+  return { key: "later", label: "Later", order: 3 };
+}
+
 export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useWorkOrders(businessId);
   const setStatus = useSetWorkOrderStatus(businessId);
   const [sortRoi, setSortRoi] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [view, setView] = useState<ViewMode>("status");
 
   if (isLoading || !data) return <Spinner />;
 
-  const archivedCount = data.filter((w) => w.superseded).length;
-  const visible = showArchived ? data : data.filter((w) => !w.superseded);
-  const byStatus = (s: string) => {
-    const rows = visible.filter((w) => w.status === s);
-    return sortRoi ? [...rows].sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1)) : rows;
-  };
+  // The managed board = promoted recommendations + manual tasks + anything already engaged.
+  // Un-promoted, still-pending recommendations live on "Do this next", not here.
+  const managed = data.filter((w) => w.planned || w.status !== "pending");
+  const archivedCount = managed.filter((w) => w.superseded).length;
+  const visible = showArchived ? managed : managed.filter((w) => !w.superseded);
+  const sortRows = (rows: WorkOrder[]) =>
+    sortRoi ? [...rows].sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1)) : rows;
+  const byStatus = (s: string) => sortRows(visible.filter((w) => w.status === s));
   const total = visible.length;
-  const done = byStatus("done").length + byStatus("verified").length;
-  const inProgress = byStatus("in_progress").length;
+  const done = visible.filter((w) => w.status === "done" || w.status === "verified").length;
+  const inProgress = visible.filter((w) => w.status === "in_progress").length;
   const donePct = total ? Math.round((done / total) * 100) : 0;
   const visibleColumns = COLUMNS.filter((s) => byStatus(s).length > 0 || ["pending", "in_progress", "done"].includes(s));
+
+  const renderCard = (w: WorkOrder) => (
+    <WorkOrderCard
+      key={w.id}
+      wo={w}
+      businessId={businessId}
+      canEdit={canEdit}
+      onStatus={(st) => setStatus.mutate({ woId: w.id, status: st })}
+    />
+  );
+
+  // Grouping for the assignee / due views.
+  const assigneeGroups = (() => {
+    const map = new Map<string, WorkOrder[]>();
+    for (const w of visible) {
+      const k = w.assignee?.trim() || "Unassigned";
+      (map.get(k) ?? map.set(k, []).get(k)!).push(w);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => (a[0] === "Unassigned" ? 1 : b[0] === "Unassigned" ? -1 : a[0].localeCompare(b[0])))
+      .map(([name, items]) => ({ name, items: sortRows(items) }));
+  })();
+  const dueGroups = (() => {
+    const map = new Map<string, { label: string; order: number; items: WorkOrder[] }>();
+    for (const w of visible) {
+      const b = dueBucket(w.target_date);
+      if (!map.has(b.key)) map.set(b.key, { label: b.label, order: b.order, items: [] });
+      map.get(b.key)!.items.push(w);
+    }
+    return Array.from(map.values())
+      .sort((a, b) => a.order - b.order)
+      .map((g) => ({
+        ...g,
+        items: [...g.items].sort((a, b) => (a.target_date ?? "9999").localeCompare(b.target_date ?? "9999")),
+      }));
+  })();
+
+  const TABS: { key: ViewMode; label: string }[] = [
+    { key: "status", label: "By status" },
+    { key: "assignee", label: "By assignee" },
+    { key: "due", label: "By due date" },
+  ];
 
   return (
     <div>
       <PageHeader
-        title="Reputation Improvement Task List"
-        subtitle="Every task that improves your AI reputation, and where each one stands. Change a status to move it."
+        title="Improvement tasks"
+        subtitle="The recommendations you've taken on — assigned, scheduled, and tracked. Add more from “Do this next.”"
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
       {canEdit && <AddTask businessId={businessId} />}
       {total === 0 ? (
         <EmptyState
           title="No tasks yet"
-          why="Your task list is built from the gaps an audit finds."
-          produces="Once an audit + plan run, your prioritized tasks appear here — what to do, what it fixes, and when."
-          timing="An audit takes a few minutes."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          why="Improvement tasks are the recommendations you've chosen to manage."
+          produces="Open “Do this next,” pick a recommendation, and click “Add to my tasks” to assign an owner, set dates, and track progress here."
+          timing="You can also add an ad-hoc task above."
+          cta={{ label: "Go to Do this next", href: "/next-steps" }}
         />
       ) : (
         <>
-          {/* progress roll-up */}
+          {/* progress roll-up + view switcher */}
           <Card className="mb-4">
-            <div className="mb-1.5 flex items-center justify-between text-sm">
-              <span className="font-medium text-slate-700">Plan progress</span>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
+              <div className="inline-flex rounded-md border border-slate-200 p-0.5">
+                {TABS.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setView(t.key)}
+                    className={`rounded px-2.5 py-1 text-xs font-medium ${view === t.key ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-1 text-xs text-slate-500">
                   <input type="checkbox" checked={sortRoi} onChange={(e) => setSortRoi(e.target.checked)} />
@@ -312,28 +437,50 @@ export default function WorkOrdersPage() {
             <ToneBar pct={donePct} tone="good" />
           </Card>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {visibleColumns.map((s) => (
-              <div key={s}>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-700">{LABEL[s]}</span>
-                  <span className="text-xs text-slate-400">{byStatus(s).length}</span>
+          {view === "status" && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {visibleColumns.map((s) => (
+                <div key={s}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-700">{LABEL[s]}</span>
+                    <span className="text-xs text-slate-400">{byStatus(s).length}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {byStatus(s).map(renderCard)}
+                    {byStatus(s).length === 0 && <p className="text-xs text-slate-300">—</p>}
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  {byStatus(s).map((w) => (
-                    <WorkOrderCard
-                      key={w.id}
-                      wo={w}
-                      businessId={businessId}
-                      canEdit={canEdit}
-                      onStatus={(st) => setStatus.mutate({ woId: w.id, status: st })}
-                    />
-                  ))}
-                  {byStatus(s).length === 0 && <p className="text-xs text-slate-300">—</p>}
+              ))}
+            </div>
+          )}
+
+          {view === "assignee" && (
+            <div className="space-y-5">
+              {assigneeGroups.map((g) => (
+                <div key={g.name}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-700">👤 {g.name}</span>
+                    <span className="text-xs text-slate-400">{g.items.length}</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
+
+          {view === "due" && (
+            <div className="space-y-5">
+              {dueGroups.map((g) => (
+                <div key={g.label}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className={`text-sm font-semibold ${g.label === "Overdue" ? "text-rose-600" : "text-slate-700"}`}>{g.label}</span>
+                    <span className="text-xs text-slate-400">{g.items.length}</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

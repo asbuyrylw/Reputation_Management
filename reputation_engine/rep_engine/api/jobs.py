@@ -243,6 +243,8 @@ _JOB_RATE_LIMITS = {
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
     "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
     "refresh_failed": (6, 3600), "incident_scan": (10, 3600),
+    # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
+    "run_everything": (1, 86400),
 }
 
 

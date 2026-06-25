@@ -77,7 +77,9 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "target_date, instruction, recommended_tool, result_notes, created_at, "
         "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision, "
         "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, "
-        "COALESCE(superseded, false) AS superseded "
+        "COALESCE(superseded, false) AS superseded, "
+        "COALESCE(planned, false) AS planned, promoted_at, "
+        "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
@@ -373,6 +375,59 @@ def edit_work_order(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
     conn.commit()
     return {"id": wo_id, **fields}
+
+
+class WorkOrderPromote(BaseModel):
+    assignee: Optional[str] = None
+    start_date: Optional[str] = None
+    target_date: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.post("/work-orders/{wo_id}/promote")
+def promote_work_order(
+    wo_id: int,
+    body: WorkOrderPromote,
+    business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
+):
+    """Promote a recommendation (from 'Do this next') onto the managed 'Improvement tasks'
+    board, capturing the owner + start/due dates + an optional first progress note."""
+    for k in ("start_date", "target_date"):
+        v = getattr(body, k)
+        if v:
+            try:
+                date.fromisoformat(v.strip())
+            except ValueError:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{k} must be YYYY-MM-DD")
+    ok = _tracking.promote_work_order(
+        wo_id, business_id, assignee=body.assignee, start_date=body.start_date,
+        target_date=body.target_date, note=body.note, actor=_actor(user),
+    )
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
+    return {"ok": True, "wo_id": wo_id, "planned": True}
+
+
+class WorkOrderNote(BaseModel):
+    text: str
+
+
+@router.post("/work-orders/{wo_id}/note")
+def add_work_order_note(
+    wo_id: int,
+    body: WorkOrderNote,
+    business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
+):
+    """Append a progress note to a managed task's timeline."""
+    try:
+        ok = _tracking.add_progress_note(wo_id, business_id, body.text, author=_actor(user))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
+    return {"ok": True, "wo_id": wo_id}
 
 
 @router.post("/work-orders/{wo_id}/generate-draft", status_code=202)

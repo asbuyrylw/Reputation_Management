@@ -136,36 +136,12 @@ class OnboardingSetupRequest(BaseModel):
     run_pipeline: bool = True
 
 
-# Full first-run pipeline so a new customer gets EVERY section populated, run once. The worker
-# is strictly FIFO + one-at-a-time (pump() = "WHERE status='queued' ORDER BY id LIMIT 1"), so
-# listing these in dependency order is sufficient: each completes before the next starts. The
-# downstream steps that need the audit/gap (gap_model, plan, citation) therefore always run
-# after it, and `report` runs LAST so the client report reflects everything above.
-# NOTE: this is a one-time onboarding cost (audit ~$4 + benchmark + discovery, etc. -> ~$8-12)
-# and takes ~30-50 min; progress shows live on the dashboard/audits banner.
-_SETUP_PIPELINE = [
-    "audit",             # AI-state audit -> scored answers (everything downstream needs this)
-    "site_crawl",        # technical / on-page SEO crawl
-    "gap_model",         # the gap analysis (needs the audit)
-    "plan",              # strategy -> improvement tasks (needs the gap model)
-    "sync_plan",         # materialize the plan into trackable work orders
-    "citation_analyze",  # AI-citation share-of-voice / who AI quotes (needs the audit)
-    "benchmark",         # competitor AI share-of-voice
-    "local_rank",        # local Google rankings (needs SERPER_API_KEY)
-    "suggest_prompts",   # AI-suggested tracking prompts
-    "mentions_scan",     # web mentions + drafted (human-gated) replies
-    "discovery",         # outreach targets (journalists / outlets / communities)
-    "production_briefs", # content-to-produce briefs
-    "report",            # client report LAST, so it reflects audit + gaps + plan + rankings
-]
-
-# Explicit prerequisites (job_type -> the job_types that must complete first). The worker
-# enforces these via api_jobs.depends_on, so ordering is correct with ANY number of workers
-# (not just a single FIFO consumer). Centralized in job_deps so the ad-hoc trigger path and
-# the onboarding pipeline share one source of truth. Jobs not listed have no prerequisites.
+# The full first-run pipeline + its prerequisites live in job_deps so the onboarding wizard,
+# the ad-hoc trigger cascade, and the "Run everything" button share one source of truth. The
+# worker enforces ordering via api_jobs.depends_on, so it's correct with any number of workers.
+# One-time cost (audit ~$4 + benchmark + discovery, etc. -> ~$8-12), ~30-50 min; progress shows
+# live on the dashboard/audits banner.
 from .. import job_deps as _job_deps
-
-_SETUP_DEPS = _job_deps.SETUP_PREREQS
 
 
 @router.post("/onboarding/setup", status_code=status.HTTP_201_CREATED)
@@ -207,22 +183,7 @@ def onboarding_setup(body: OnboardingSetupRequest, user: dict = Depends(require_
 
     jobs_enqueued = []
     if body.run_pipeline:
-        from .. import jobs as _jobs
-        id_by_type: dict = {}   # job_type -> enqueued job id, to wire dependencies
-        for jt in _SETUP_PIPELINE:
-            try:
-                dep_ids = [id_by_type[d] for d in _SETUP_DEPS.get(jt, []) if d in id_by_type]
-                job_id, active = _jobs.enqueue(business_id, jt, requested_by=user["id"],
-                                               depends_on=dep_ids or None)
-                if job_id:
-                    id_by_type[jt] = job_id
-                jobs_enqueued.append({
-                    "job_type": jt,
-                    "job_id": job_id or active,
-                    "already_running": job_id is None,
-                })
-            except Exception as e:  # a single bad job type must not abort the whole setup
-                jobs_enqueued.append({"job_type": jt, "job_id": None, "error": str(e)[:120]})
+        jobs_enqueued = _job_deps.enqueue_pipeline(business_id, requested_by=user["id"])
 
     return {
         "business_id": business_id,

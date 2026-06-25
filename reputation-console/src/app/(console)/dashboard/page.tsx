@@ -2,12 +2,10 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications, useLocalRankings } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
-import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { ScoreDonut } from "@/components/ScoreDonut";
 import { ScoreTrend } from "@/components/ScoreTrend";
-import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { VerdictBanner } from "@/components/VerdictBanner";
 import { WorstAnswers } from "@/components/WorstAnswers";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
@@ -143,7 +141,51 @@ function ProjectionStrip({ timeline }: { timeline: Json | undefined }) {
   );
 }
 
-const pct = (v: number) => `${Math.round(v * 100)}%`;
+const pct = (v: number | null | undefined) => `${Math.round((v ?? 0) * 100)}%`;
+
+// --- Cross-cutting snapshot: a small SEO summary + tasks summary, so the Dashboard spans
+// AI *and* search *and* execution — not just the AI rollup (which is what AI overview is for). ---
+function CrossCutStrip({ businessId, workOrders }: { businessId: number | null; workOrders: WorkOrder[] | undefined }) {
+  const { data: ranks } = useLocalRankings(businessId);
+  const sum = ranks?.summary ?? null;
+  const wos = workOrders ?? [];
+  const open = wos.filter((w) => w.status !== "done" && w.status !== "verified" && !w.superseded).length;
+  const inProgress = wos.filter((w) => w.status === "in_progress").length;
+  const done = wos.filter((w) => w.status === "done" || w.status === "verified").length;
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* Local search snapshot */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold tracking-tight text-slate-900">📍 Local search</h3>
+          <Link href="/seo-overview" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">SEO overview →</Link>
+        </div>
+        {sum ? (
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div><div className="text-xl font-bold text-slate-900">{pct(sum.page_one_rate)}</div><div className="text-[11px] text-slate-500">on page 1</div></div>
+            <div><div className="text-xl font-bold text-slate-900">{pct(sum.local_pack_rate)}</div><div className="text-[11px] text-slate-500">in map pack</div></div>
+            <div><div className="text-xl font-bold text-slate-900">{sum.avg_organic_rank == null ? "—" : `#${sum.avg_organic_rank}`}</div><div className="text-[11px] text-slate-500">avg rank</div></div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-slate-500">No local-rank snapshot yet. <Link href="/local-seo" className="font-medium text-indigo-600 hover:text-indigo-700">Run a check →</Link></p>
+        )}
+      </Card>
+
+      {/* Tasks snapshot */}
+      <Card>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold tracking-tight text-slate-900">✅ Improvement tasks</h3>
+          <Link href="/content/work-orders" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">Manage tasks →</Link>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+          <div><div className="text-xl font-bold text-slate-900">{open}</div><div className="text-[11px] text-slate-500">open</div></div>
+          <div><div className="text-xl font-bold text-indigo-600">{inProgress}</div><div className="text-[11px] text-slate-500">in progress</div></div>
+          <div><div className="text-xl font-bold text-emerald-600">{done}</div><div className="text-[11px] text-slate-500">done</div></div>
+        </div>
+      </Card>
+    </div>
+  );
+}
 
 // --- B2: progress narrative — what you've done and how the score moved ---
 function ProgressStrip({ workOrders, series }: { workOrders: WorkOrder[] | undefined; series: SeriesPoint[] }) {
@@ -291,6 +333,9 @@ export default function DashboardPage() {
           {/* 2b. your progress — tasks done + score movement */}
           <ProgressStrip workOrders={workOrders} series={s} />
 
+          {/* 2c. cross-cutting: local search + tasks (the Dashboard spans AI + SEO + execution) */}
+          <CrossCutStrip businessId={businessId} workOrders={workOrders} />
+
           {/* 3. problem beside action */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <DoThisNext workOrders={workOrders} />
@@ -331,16 +376,15 @@ export default function DashboardPage() {
             />
           </div>
 
-          {/* 7. details on demand */}
-          <details className="group">
-            <summary className="cursor-pointer text-sm font-semibold text-indigo-600 hover:text-indigo-700">
-              ▸ More detail: why this challenge, and what each engine says ({pct(latest.contested_rate)} raise concerns)
-            </summary>
-            <div className="mt-3 space-y-6">
-              <PrimaryChallengeCard challenge={data.challenge} />
-              {perEngine && Object.keys(perEngine.engines).length > 0 && <PerEnginePanel data={perEngine} />}
+          {/* 7. why this challenge + per-engine detail now lives on the AI overview */}
+          <Card className="bg-slate-50/60">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-slate-600">
+                Want the why — your primary challenge and how each AI assistant differs?
+              </p>
+              <Link href="/ai-overview" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">AI overview →</Link>
             </div>
-          </details>
+          </Card>
         </div>
       )}
     </div>

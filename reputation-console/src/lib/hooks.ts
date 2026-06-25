@@ -11,6 +11,8 @@ import type {
   Asset,
   AuditRun,
   Answer,
+  BillingPlan,
+  SubscriptionSummary,
   CostBreakdown,
   AttributionRow,
   BeforeAfterPair,
@@ -232,6 +234,30 @@ export function useGenerateDraftForWo(businessId: number | null) {
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/generate-draft`,
     () => ({}),
     [["jobs", businessId], ["content-drafts", businessId]],
+  );
+}
+
+// Promote a recommendation ("Do this next") onto the managed "Improvement tasks" board,
+// capturing owner + start/due dates + an optional first progress note.
+export function usePromoteWorkOrder(businessId: number | null) {
+  return useApiMutation<{ woId: number; assignee?: string; start_date?: string; target_date?: string; note?: string }>(
+    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/promote`,
+    ({ assignee, start_date, target_date, note }) => ({
+      assignee: assignee ?? null,
+      start_date: start_date ?? null,
+      target_date: target_date ?? null,
+      note: note ?? null,
+    }),
+    [["work-orders", businessId], ["dashboard", businessId]],
+  );
+}
+
+// Append a progress note to a managed task's timeline.
+export function useAddWorkOrderNote(businessId: number | null) {
+  return useApiMutation<{ woId: number; text: string }>(
+    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/note`,
+    ({ text }) => ({ text }),
+    [["work-orders", businessId]],
   );
 }
 
@@ -498,6 +524,16 @@ export function useTriggerJob(businessId: number | null) {
   );
 }
 
+// Run the ENTIRE pipeline at once (audit → crawl → gap → plan → … → report). Expensive +
+// rate-limited to once/day server-side; the UI confirms before calling this.
+export function useRunEverything(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/businesses/${businessId}/jobs/run-everything`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs", businessId] }),
+  });
+}
+
 export function useAdminUsers() {
   const { user } = useAuth();
   return useQuery({
@@ -539,6 +575,56 @@ export function useUpdateBusiness() {
     mutationFn: ({ id, ...patch }: { id: number } & Record<string, unknown>) =>
       apiFetch(`/admin/businesses/${id}`, { method: "PATCH", body: patch }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["businesses"] }),
+  });
+}
+
+// ---- billing (org-level; wired but dormant until the platform billing switch is on) ----
+export function useBillingPlans() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["billing-plans"],
+    queryFn: () => apiFetch<BillingPlan[]>("/plans"),
+    enabled: !!user,
+  });
+}
+export function useSubscription() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["subscription"],
+    queryFn: () => apiFetch<SubscriptionSummary>("/orgs/me/subscription"),
+    enabled: !!user && !!user.org_id,
+  });
+}
+export function useCheckout() {
+  return useMutation({
+    mutationFn: (v: { plan_code: string }) =>
+      apiFetch<{ url: string; id: string }>("/billing/checkout", { method: "POST", body: v }),
+  });
+}
+export function useBillingPortal() {
+  return useMutation({
+    mutationFn: () => apiFetch<{ url: string }>("/billing/portal", { method: "POST", body: {} }),
+  });
+}
+
+// ---- platform settings (super-admin only: the billing master switch) ----
+export function usePlatformSettings() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["platform-settings"],
+    queryFn: () => apiFetch<{ billing_enabled: boolean }>("/platform/settings"),
+    enabled: !!user?.is_super_admin,
+  });
+}
+export function useSetBillingEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiFetch<{ billing_enabled: boolean }>("/platform/settings", { method: "PATCH", body: { billing_enabled: enabled } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["platform-settings"] });
+      qc.invalidateQueries({ queryKey: ["auth-me"] });
+    },
   });
 }
 

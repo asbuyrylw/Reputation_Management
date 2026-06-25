@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useRunAnswers } from "@/lib/hooks";
-import { ReputationHero } from "@/components/ReputationHero";
-import { VerdictBanner } from "@/components/VerdictBanner";
-import { WorstAnswers } from "@/components/WorstAnswers";
-import { EngineScoreStrip } from "@/components/EngineScoreStrip";
+import { useDashboard, usePerEngine, useTimeline } from "@/lib/hooks";
+import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
+import { PerEnginePanel } from "@/components/PerEnginePanel";
+import { ScoreTrend } from "@/components/ScoreTrend";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { repScore } from "@/lib/repScore";
+
+type Json = Record<string, unknown>;
 
 function LinkCard({ href, title, desc }: { href: string; title: string; desc: string }) {
   return (
@@ -24,15 +25,15 @@ function LinkCard({ href, title, desc }: { href: string; title: string; desc: st
   );
 }
 
-// Section landing page for "AI Visibility" — the AI-only rollup that the main Dashboard
-// links into. Reuses the reputation hero + worst-answers + per-engine, then deep-links to
-// the detailed AI pages.
+// "AI Visibility" deep-dive: the analytical view the Dashboard links into. The headline score,
+// verdict and worst-answers live on the Dashboard; here we explain WHY — the primary challenge,
+// the per-engine breakdown, the score trend — and link to the detailed AI pages.
 export default function AiOverviewPage() {
   const { businessId, businesses, loading } = useBusiness();
   const { data, isLoading } = useDashboard(businessId);
   const latestRunId = data?.series?.length ? data.series[data.series.length - 1].run_id : null;
   const { data: perEngine } = usePerEngine(businessId, latestRunId);
-  const { data: answers } = useRunAnswers(businessId, latestRunId);
+  const { data: timeline } = useTimeline(businessId);
 
   if (loading || (businessId != null && (isLoading || !data))) return <Spinner />;
   if (businesses.length === 0 || !data) {
@@ -50,19 +51,13 @@ export default function AiOverviewPage() {
 
   const s = data.series;
   const latest = s[s.length - 1];
-  const score = repScore(latest?.goal_alignment ?? null);
-  const engVals = perEngine ? Object.values(perEngine.engines) : [];
-  const grounded = engVals.filter((e) => e.grounded_rate);
-  const groundedRate = grounded.length
-    ? grounded.reduce((a, e) => a + (e.grounded_rate!.p ?? 0), 0) / grounded.length
-    : null;
 
   return (
     <div>
       <PageHeader
         eyebrow="AI Visibility"
         title="AI overview"
-        subtitle="How AI assistants portray you — your reputation score, the drivers behind it, and what they're saying right now."
+        subtitle="The why behind your AI reputation score — your primary challenge, how each assistant differs, and the trend over time. (The headline score and worst answers are on your Dashboard.)"
       />
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
@@ -71,32 +66,21 @@ export default function AiOverviewPage() {
         <EmptyState
           title="No audit has run yet"
           why="An audit checks what ChatGPT, Claude, Perplexity, and Gemini say about your business."
-          produces="Your reputation score, drivers, and the worst answers appear here once it finishes."
+          produces="Your primary challenge, per-engine breakdown, and score trend appear here once it finishes."
           cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
         />
       ) : (
         <div className="space-y-6">
-          <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} />
+          {/* Why you're scored this way */}
+          <PrimaryChallengeCard challenge={data.challenge} />
 
-          <ReputationHero
-            goalAlignment={latest.goal_alignment}
-            contestedRate={latest.contested_rate}
-            ownedRate={latest.owned_rate}
-            groundedRate={groundedRate}
-            coverage={perEngine?.coverage ?? null}
-            woCounts={data.wo_counts}
-            assetsN={data.assets_n}
-          />
+          {/* How each assistant differs */}
+          {perEngine && Object.keys(perEngine.engines).length > 0 && <PerEnginePanel data={perEngine} />}
 
-          <Card accent="bad">
-            <h3 className="text-base font-semibold tracking-tight text-slate-900">Worst things AI is saying right now</h3>
-            <div className="mt-3">
-              <WorstAnswers answers={answers} runId={latestRunId} limit={3} />
-            </div>
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Each AI assistant&apos;s score</div>
-              <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
-            </div>
+          {/* AI reputation trend over time */}
+          <Card>
+            <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your AI reputation score over time (0–100)</div>
+            <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
           </Card>
 
           <div>

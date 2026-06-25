@@ -187,8 +187,8 @@ def create_work_order(business_id: int, title: str, *, instruction: str | None =
         ).fetchone()["c"]
         row = conn.execute(
             """INSERT INTO work_orders (business_id, wo_code, title, capability, instruction,
-                recommended_tool, target_date, assignee, phase, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'manual','pending') RETURNING id""",
+                recommended_tool, target_date, assignee, phase, status, planned)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'manual','pending',TRUE) RETURNING id""",
             (business_id, f"MANUAL-{n + 1}", title, capability, instruction,
              recommended_tool, td, assignee),
         ).fetchone()
@@ -223,6 +223,67 @@ def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None)
         conn.execute(f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s", tuple(params))  # nosec B608
         conn.commit()
     log.info("WO %d -> %s", wo_id, status)
+
+
+# ----------------------------------------------------------------------------
+# promote / progress notes: move a recommendation onto the managed board
+# ----------------------------------------------------------------------------
+def _coerce_date(v) -> date | None:
+    if not v:
+        return None
+    return v if isinstance(v, date) else date.fromisoformat(str(v))
+
+
+def promote_work_order(wo_id: int, business_id: int, *, assignee: str | None = None,
+                       start_date=None, target_date=None, note: str | None = None,
+                       actor: str | None = None) -> bool:
+    """Promote a recommendation onto the managed 'Improvement tasks' board: mark it planned,
+    set the owner + start/due dates, stamp promoted_at/by, and log the first progress note.
+    Idempotent -- re-promoting just updates the fields (promoted_at/by are kept from first time).
+    Returns False if the work order isn't in this business."""
+    sd, td = _coerce_date(start_date), _coerce_date(target_date)
+    sets = ["planned=TRUE", "updated_at=now()", "promoted_at=COALESCE(promoted_at, now())"]
+    params: list = []
+    if actor:
+        sets.append("promoted_by=COALESCE(promoted_by, %s)"); params.append(actor)
+    if assignee is not None:
+        sets.append("assignee=%s"); params.append(assignee.strip() or None)
+    if start_date is not None:
+        sets.append("start_date=%s"); params.append(sd)
+    if target_date is not None:
+        sets.append("target_date=%s"); params.append(td)
+    if note and note.strip():
+        entry = {"text": note.strip(), "author": actor or "", "at": datetime.now().isoformat()}
+        sets.append("progress_notes = COALESCE(progress_notes,'[]'::jsonb) || %s::jsonb")
+        params.append(json.dumps([entry]))
+    params.append(wo_id); params.append(business_id)
+    with db() as conn:
+        # B608 false positive: `sets` elements are literal "col=..." fragments; values are bound.
+        row = conn.execute(
+            f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
+            tuple(params),
+        ).fetchone()
+        conn.commit()
+    if row:
+        log.info("WO %d promoted to managed board", wo_id)
+    return bool(row)
+
+
+def add_progress_note(wo_id: int, business_id: int, text: str, author: str | None = None) -> bool:
+    """Append a {text, author, at} entry to a task's progress-notes log. Returns False if the
+    work order isn't in this business."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("note text required")
+    entry = {"text": text, "author": author or "", "at": datetime.now().isoformat()}
+    with db() as conn:
+        row = conn.execute(
+            "UPDATE work_orders SET progress_notes = COALESCE(progress_notes,'[]'::jsonb) || %s::jsonb, "
+            "updated_at=now() WHERE id=%s AND business_id=%s RETURNING id",
+            (json.dumps([entry]), wo_id, business_id),
+        ).fetchone()
+        conn.commit()
+    return bool(row)
 
 
 # ----------------------------------------------------------------------------

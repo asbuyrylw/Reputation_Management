@@ -59,13 +59,13 @@ export const JOB_LABELS: Record<string, JobMeta> = {
     hint: "Triage negative mentions into incidents with drafted responses." },
   suggest_keywords: { type: "suggest_keywords", label: "Suggest monitoring keywords", navGroup: "Monitor", secs: 25,
     hint: "Propose brand-monitoring keywords for your review." },
-  learn: { type: "learn", label: "Recompute what's working", navGroup: "Monitor", secs: 20,
-    hint: "Re-learn which tactics moved your score, from your own results.", internal: true },
   alert_check: { type: "alert_check", label: "Check for alerts", navGroup: "Monitor", secs: 15,
     hint: "Raise proactive alerts (score drop, new negatives, drafts waiting).", internal: true },
 
-  // Reports
-  report: { type: "report", label: "Build client report", navGroup: "Reports", secs: 60,
+  // Proof & reports (retrospective ROI + the client deliverable)
+  learn: { type: "learn", label: "Recompute what's working", navGroup: "Proof & reports", secs: 20,
+    hint: "Re-learn which tactics moved your score, from your own results.", internal: true },
+  report: { type: "report", label: "Build client report", navGroup: "Proof & reports", secs: 60,
     hint: "Generate the monthly client report (reflects everything above)." },
 
   // Settings / Integrations
@@ -85,7 +85,7 @@ export const JOB_GROUP_ORDER = [
   "Strategy & Plan",
   "Content",
   "Monitor",
-  "Reports",
+  "Proof & reports",
   "Settings",
 ];
 

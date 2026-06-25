@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { MetricCard, EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
 
 const pct = (v: number | undefined | null) => `${Math.round((v ?? 0) * 100)}%`;
 
@@ -28,6 +29,7 @@ export default function SeoOverviewPage() {
   const ranks = useLocalRankings(businessId);
   const compare = useCompare(businessId);
   const site = useSiteAudit(businessId);
+  const goal = useLocalSeoGoal(businessId);
 
   if (loading) return <Spinner />;
   if (businesses.length === 0) {
@@ -61,6 +63,9 @@ export default function SeoOverviewPage() {
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
       <div className="space-y-6">
+        {/* Get-to-page-1 goal (the local-SEO timeline) */}
+        <LocalSeoGoalCard goal={goal.data} />
+
         {/* Local rankings scorecard */}
         <div>
           <div className="mb-2 flex items-center justify-between">
