@@ -117,7 +117,7 @@ const ADMIN_GROUP: NavGroup = {
   ],
 };
 
-export function Sidebar() {
+export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void } = {}) {
   const path = usePathname();
   const { user } = useAuth();
   // Admins are the operator/agency persona (precise labels + Admin group); everyone else
@@ -129,7 +129,11 @@ export function Sidebar() {
     items: g.items.filter((it) => !it.billingGated || showBilling),
   }));
   return (
-    <aside className="w-64 shrink-0 border-r border-slate-200/70 bg-white/80 p-4 backdrop-blur-xl">
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 w-64 shrink-0 transform overflow-y-auto border-r border-slate-200/70 bg-white p-4 backdrop-blur-xl transition-transform lg:static lg:z-auto lg:translate-x-0 lg:bg-white/80 ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       {/* Brand */}
       <div className="mb-7 flex items-center gap-2.5 px-1.5">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-linear-to-br from-indigo-500 to-violet-600 text-base font-bold text-white shadow-md shadow-indigo-500/25">
@@ -154,6 +158,7 @@ export function Sidebar() {
                   <Link
                     key={it.href}
                     href={it.soon ? "#" : it.href}
+                    onClick={() => onClose?.()}
                     className={`group flex items-center justify-between rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
                       active
                         ? "bg-linear-to-r from-indigo-600 to-indigo-500 text-white shadow-sm shadow-indigo-500/20"

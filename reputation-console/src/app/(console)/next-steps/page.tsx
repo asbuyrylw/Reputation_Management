@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useWorkOrders, useAcceleration, usePromoteWorkOrder } from "@/lib/hooks";
+import { useWorkOrders, useAcceleration, usePromoteWorkOrder, useTeam } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import type { WorkOrder } from "@/lib/types";
@@ -94,13 +94,21 @@ function TaskRow({ w, canEdit, onPromote }: { w: WorkOrder; canEdit: boolean; on
 // the managed Improvement-tasks board.
 function PromoteModal({ wo, businessId, onClose }: { wo: WorkOrder; businessId: number | null; onClose: () => void }) {
   const promote = usePromoteWorkOrder(businessId);
+  const { data: team } = useTeam(businessId);
   const [assignee, setAssignee] = useState(wo.assignee ?? "");
+  const [assigneeUserId, setAssigneeUserId] = useState(wo.assignee_user_id ? String(wo.assignee_user_id) : "");
   const [startDate, setStartDate] = useState((wo.start_date ?? "").slice(0, 10));
   const [dueDate, setDueDate] = useState((wo.target_date ?? "").slice(0, 10));
   const [note, setNote] = useState("");
+  const hasTeam = (team?.length ?? 0) > 0;
   const submit = () =>
     promote.mutate(
-      { woId: wo.id, assignee, start_date: startDate, target_date: dueDate, note },
+      {
+        woId: wo.id,
+        assignee_user_id: hasTeam && assigneeUserId ? Number(assigneeUserId) : null,
+        assignee: hasTeam ? undefined : assignee,
+        start_date: startDate, target_date: dueDate, note,
+      },
       { onSuccess: onClose },
     );
   return (
@@ -111,12 +119,23 @@ function PromoteModal({ wo, businessId, onClose }: { wo: WorkOrder; businessId: 
         <div className="mt-4 space-y-3">
           <label className="block text-xs font-medium text-slate-600">
             Assign to
-            <input
-              value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
-              placeholder="Who's responsible?"
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-            />
+            {hasTeam ? (
+              <select
+                value={assigneeUserId}
+                onChange={(e) => setAssigneeUserId(e.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              >
+                <option value="">Unassigned</option>
+                {team!.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            ) : (
+              <input
+                value={assignee}
+                onChange={(e) => setAssignee(e.target.value)}
+                placeholder="Who's responsible?"
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              />
+            )}
           </label>
           <div className="flex gap-2">
             <label className="flex-1 text-xs font-medium text-slate-600">

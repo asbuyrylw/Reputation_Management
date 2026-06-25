@@ -107,6 +107,18 @@ export default function OnboardingPage() {
             </p>
           </div>
 
+          <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">In ~30 minutes you&apos;ll be able to see</div>
+            <ul className="mt-2 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
+              <li>📊 Your <Link href="/dashboard" className="font-medium text-indigo-600 hover:underline">score vs your goal</Link></li>
+              <li>🎯 Your <Link href="/gaps" className="font-medium text-indigo-600 hover:underline">3 biggest gaps</Link> to fix</li>
+              <li>⚔ <Link href="/competitors" className="font-medium text-indigo-600 hover:underline">You vs competitors</Link> in AI answers</li>
+              <li>📍 Your <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">Google map-pack standing</Link> + rating</li>
+              <li>🔑 The <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">keywords to rank for</Link></li>
+              <li>✅ A <Link href="/next-steps" className="font-medium text-indigo-600 hover:underline">prioritized action plan</Link></li>
+            </ul>
+          </div>
+
           <div className="mt-4 flex flex-wrap gap-3">
             <Link href="/admin/jobs" className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
               Watch progress

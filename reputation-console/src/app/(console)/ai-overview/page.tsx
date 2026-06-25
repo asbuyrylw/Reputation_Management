@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useTimeline } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useTimeline, useMetricsTrend, useAnswerLenses } from "@/lib/hooks";
 import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { PerEnginePanel } from "@/components/PerEnginePanel";
+import { PerEngineTrend } from "@/components/PerEngineTrend";
 import { ScoreTrend } from "@/components/ScoreTrend";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { Card, PageHeader, Spinner } from "@/components/ui";
@@ -34,6 +35,8 @@ export default function AiOverviewPage() {
   const latestRunId = data?.series?.length ? data.series[data.series.length - 1].run_id : null;
   const { data: perEngine } = usePerEngine(businessId, latestRunId);
   const { data: timeline } = useTimeline(businessId);
+  const { data: trend } = useMetricsTrend(businessId);
+  const { data: lensData } = useAnswerLenses(businessId);
 
   if (loading || (businessId != null && (isLoading || !data))) return <Spinner />;
   if (businesses.length === 0 || !data) {
@@ -82,6 +85,59 @@ export default function AiOverviewPage() {
             <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your AI reputation score over time (0–100)</div>
             <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
           </Card>
+
+          {/* Per-engine trend — which AI assistant is rising or drifting */}
+          <Card>
+            <div className="mb-1 text-base font-semibold tracking-tight text-slate-900">Each AI assistant over time</div>
+            <p className="mb-3 text-xs text-slate-500">Spot a single engine drifting negative before it drags your overall score.</p>
+            <PerEngineTrend data={trend} />
+          </Card>
+
+          {/* Cross-engine divergence */}
+          {lensData?.divergence?.items && lensData.divergence.items.length > 0 && (
+            <Card>
+              <div className="mb-1 text-base font-semibold tracking-tight text-slate-900">Where AI engines disagree most</div>
+              <p className="mb-3 text-xs text-slate-500">Same question, very different answers — the gap to close first.</p>
+              <ul className="space-y-2">
+                {lensData.divergence.items.slice(0, 5).map((d, i) => (
+                  <li key={i} className="text-sm">
+                    <div className="font-medium text-slate-800">“{d.prompt}”</div>
+                    <div className="text-xs text-slate-500">
+                      <span className="font-semibold text-emerald-700">{d.best_engine} {d.best}</span> vs{" "}
+                      <span className="font-semibold text-rose-600">{d.worst_engine} {d.worst}</span>
+                      <span className="ml-1 text-slate-400">({d.spread}-pt gap)</span>
+                      {d.contested_engines.length > 0 && <span className="ml-1 text-amber-600">· contested on {d.contested_engines.join(", ")}</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {/* Persona / location lens */}
+          {((lensData?.lenses?.by_persona?.length ?? 0) > 0 || (lensData?.lenses?.by_location?.length ?? 0) > 0) && (
+            <Card>
+              <div className="mb-1 text-base font-semibold tracking-tight text-slate-900">How different audiences see you</div>
+              <p className="mb-3 text-xs text-slate-500">Whether a local prospect gets a worse answer than a generic one.</p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {[{ t: "By who's asking", rows: lensData!.lenses.by_persona }, { t: "By location", rows: lensData!.lenses.by_location }].map((g) =>
+                  g.rows.length > 0 ? (
+                    <div key={g.t}>
+                      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{g.t}</div>
+                      <ul className="space-y-1">
+                        {g.rows.map((r) => (
+                          <li key={r.lens} className="flex items-center justify-between text-sm">
+                            <span className="truncate text-slate-700">{r.lens}</span>
+                            <span className={`ml-2 shrink-0 font-semibold ${(r.score ?? 50) >= 60 ? "text-emerald-700" : (r.score ?? 50) < 40 ? "text-rose-600" : "text-amber-700"}`}>{r.score ?? "—"}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null,
+                )}
+              </div>
+            </Card>
+          )}
 
           <div>
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Go deeper</div>

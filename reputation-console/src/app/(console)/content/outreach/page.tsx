@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBusiness } from "@/lib/business";
-import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTargetStatus, useUpdateTargetContact } from "@/lib/hooks";
+import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTargetStatus, useUpdateTargetContact, usePushTarget, useDraftPitch } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
@@ -82,9 +82,13 @@ export default function OutreachPage() {
   const enrich = useTriggerJob(businessId);
   const add = useAddDiscoveryTarget(businessId);
   const setStatus = useSetTargetStatus(businessId);
+  const push = usePushTarget(businessId);
+  const pitch = useDraftPitch(businessId);
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", outlet: "", url: "", beat: "" });
+  const [pitchModal, setPitchModal] = useState<{ name: string; text: string } | null>(null);
+  const [pushed, setPushed] = useState<Record<number, boolean>>({});
 
   if (isLoading || !data) return <Spinner />;
 
@@ -93,6 +97,22 @@ export default function OutreachPage() {
       { jobType: "discovery" },
       { onSuccess: () => setTimeout(() => qc.invalidateQueries({ queryKey: ["discovery-targets", businessId] }), 10000) },
     );
+
+  const exportCsv = () => {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const cols = ["name", "outlet", "url", "beat", "target_type", "contact_name", "contact_email", "contact_phone", "score", "status"];
+    const rows = [cols.join(",")].concat(
+      (data ?? []).map((t) => cols.map((c) => esc((t as unknown as Record<string, unknown>)[c])).join(",")),
+    );
+    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "outreach_targets.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  const draftPitch = (t: DiscoveryTarget) =>
+    pitch.mutate(t.id, { onSuccess: (r) => setPitchModal({ name: t.name ?? "target", text: r.pitch }) });
 
   return (
     <div>
@@ -171,6 +191,10 @@ export default function OutreachPage() {
           timing="Finding targets takes a moment."
         />
       ) : (
+        <>
+        <div className="mb-2 flex justify-end">
+          <button onClick={exportCsv} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">Export CSV</button>
+        </div>
         <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -181,6 +205,7 @@ export default function OutreachPage() {
                 <th className="px-3 py-2">Contact</th>
                 <th className="px-3 py-2">Match</th>
                 <th className="px-3 py-2">Status</th>
+                {canEdit && <th className="px-3 py-2">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -222,11 +247,41 @@ export default function OutreachPage() {
                       STATUS_LABEL[t.status ?? "suggested"] ?? t.status
                     )}
                   </td>
+                  {canEdit && (
+                    <td className="px-3 py-2">
+                      <div className="flex flex-col gap-1">
+                        <button onClick={() => draftPitch(t)} disabled={pitch.isPending}
+                          className="rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                          {pitch.isPending ? "Drafting…" : "Draft pitch"}
+                        </button>
+                        <button onClick={() => push.mutate(t.id, { onSuccess: (r) => setPushed((s) => ({ ...s, [t.id]: r.sent })) })} disabled={push.isPending}
+                          className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                          title="Send to your CRM/stack via webhook (needs WEBHOOK_URL)">
+                          {pushed[t.id] === true ? "Sent ✓" : pushed[t.id] === false ? "Not configured" : "Push to CRM"}
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </Card>
+        </>
+      )}
+
+      {pitchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => setPitchModal(null)}>
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-slate-900">Draft pitch — {pitchModal.name}</h3>
+            <textarea readOnly value={pitchModal.text} rows={10} className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button onClick={() => navigator.clipboard?.writeText(pitchModal.text)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">Copy</button>
+              <button onClick={() => setPitchModal(null)} className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700">Close</button>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">Review &amp; personalize before sending — confirm the contact on the outlet&apos;s own site.</p>
+          </div>
+        </div>
       )}
     </div>
   );

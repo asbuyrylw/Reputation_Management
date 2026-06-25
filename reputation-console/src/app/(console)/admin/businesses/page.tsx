@@ -55,11 +55,16 @@ export default function AdminBusinessesPage() {
       goal: b.goal ?? "",
       contested_terms: b.contested_terms ?? "",
       services: b.services ?? "",
+      firm_type: b.regulatory_profile?.firm_type ?? "",
     });
   };
   const saveEdit = () => {
     if (editingId == null) return;
-    update.mutate({ id: editingId, ...editForm }, { onSuccess: () => setEditingId(null) });
+    const { firm_type, ...rest } = editForm;
+    const existing = businesses.find((b) => b.id === editingId)?.regulatory_profile ?? {};
+    const payload: Record<string, unknown> = { id: editingId, ...rest };
+    if (firm_type !== undefined) payload.regulatory_profile = { ...existing, firm_type };
+    update.mutate(payload as { id: number } & Record<string, unknown>, { onSuccess: () => setEditingId(null) });
   };
   const confirmDelete = () => {
     if (!deleting) return;
@@ -157,6 +162,21 @@ export default function AdminBusinessesPage() {
                           onChange={(v) => setEditForm((f) => ({ ...f, services: v }))}
                           placeholder="Type a service and press Enter"
                         />
+                      </label>
+                      <label className="text-xs text-slate-500">
+                        Firm type (drives compliance checks)
+                        <select
+                          value={editForm.firm_type ?? ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, firm_type: e.target.value }))}
+                          className="mt-0.5 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-900"
+                        >
+                          <option value="">— not set —</option>
+                          <option value="ria">RIA (Registered Investment Adviser)</option>
+                          <option value="broker_dealer">Broker-dealer / BD-affiliated</option>
+                          <option value="insurance">Insurance agency</option>
+                          <option value="non_financial">Non-financial</option>
+                          <option value="other">Other</option>
+                        </select>
                       </label>
                     </div>
                     <div className="mt-3 flex items-center gap-2">

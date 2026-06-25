@@ -2,11 +2,102 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { MetricCard, EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
+import type { TargetKeyword, ReviewsSummary } from "@/lib/types";
+
+function Stars({ rating }: { rating: number | null }) {
+  if (rating == null) return <span className="text-slate-400">—</span>;
+  const full = Math.round(rating);
+  return <span className="text-amber-500">{"★".repeat(full)}<span className="text-slate-300">{"★".repeat(5 - full)}</span></span>;
+}
+
+function ReviewsCard({ businessId, canEdit, data }: { businessId: number | null; canEdit: boolean; data: ReviewsSummary | undefined }) {
+  const cur = data?.current;
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Google reviews &amp; rating</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Your live Google star rating and review count — the biggest local-reputation signal (and what AI repeats about you).</p>
+        </div>
+        {canEdit && <RunJobButton businessId={businessId} jobType="ingest_gbp_reviews" label="Check reviews" variant="secondary" />}
+      </div>
+      {cur ? (
+        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div>
+            <div className="flex items-baseline gap-2"><span className="text-2xl font-bold text-slate-900">{cur.rating ?? "—"}</span><Stars rating={cur.rating} /></div>
+            <div className="text-[11px] text-slate-500">{cur.review_count ?? "—"} reviews{data?.rating_delta != null && data.rating_delta !== 0 ? ` · ${data.rating_delta > 0 ? "+" : ""}${data.rating_delta} since last check` : ""}{data?.new_reviews != null && data.new_reviews > 0 ? ` · +${data.new_reviews} new` : ""}</div>
+            {data?.history && data.history.length >= 2 && (
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                Rating over time: {data.history.filter((h) => h.rating != null).map((h) => h.rating).join(" → ")}
+              </div>
+            )}
+          </div>
+          {data?.reviews && data.reviews.length > 0 && (
+            <ul className="flex-1 space-y-1.5">
+              {data.reviews.slice(0, 3).map((r, i) => (
+                <li key={i} className="text-xs text-slate-600">
+                  <Stars rating={r.rating} /> <span className="text-slate-400">{r.author || "Google user"}:</span> {(r.body || "").slice(0, 120)}{(r.body || "").length > 120 ? "…" : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">No Google rating captured yet. Click “Check reviews” to pull it from Google.</p>
+      )}
+    </Card>
+  );
+}
+
+const KW_GROUPS: { key: string; label: string }[] = [
+  { key: "primary", label: "Primary" },
+  { key: "local", label: "Local" },
+  { key: "question", label: "Questions customers ask" },
+  { key: "secondary", label: "Secondary" },
+  { key: "long_tail", label: "Long-tail" },
+];
+
+function KeywordsCard({ businessId, canEdit, kws }: { businessId: number | null; canEdit: boolean; kws: TargetKeyword[] | undefined }) {
+  const list = kws ?? [];
+  const grouped = KW_GROUPS.map((g) => ({ ...g, items: list.filter((k) => (k.kind || "secondary") === g.key) })).filter((g) => g.items.length > 0);
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Keywords to rank for</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            The SEO terms to weave into your website, blog, social &amp; Google Business Profile — found from your site, your
+            competitors, and real Google searches. These feed every draft we generate.
+          </p>
+        </div>
+        {canEdit && <RunJobButton businessId={businessId} jobType="keyword_research" label="Find keywords" variant="secondary" />}
+      </div>
+      {list.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">No keywords yet. Click “Find keywords” to research the terms you should target.</p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {grouped.map((g) => (
+            <div key={g.key}>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{g.label}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {g.items.map((k) => (
+                  <span key={k.keyword} title={k.rationale || undefined}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{k.keyword}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 const pct = (v: number | undefined | null) => `${Math.round((v ?? 0) * 100)}%`;
 
@@ -25,11 +116,13 @@ function LinkCard({ href, title, desc }: { href: string; title: string; desc: st
 // Section landing page for "Search & SEO" — the traditional-search rollup: local Google
 // rankings scorecard, competitor standing, and site-audit freshness, with deep links.
 export default function SeoOverviewPage() {
-  const { businessId, businesses, loading } = useBusiness();
+  const { businessId, businesses, loading, canEdit } = useBusiness();
   const ranks = useLocalRankings(businessId);
   const compare = useCompare(businessId);
   const site = useSiteAudit(businessId);
   const goal = useLocalSeoGoal(businessId);
+  const kws = useTargetKeywords(businessId);
+  const revs = useReviews(businessId);
 
   if (loading) return <Spinner />;
   if (businesses.length === 0) {
@@ -65,6 +158,12 @@ export default function SeoOverviewPage() {
       <div className="space-y-6">
         {/* Get-to-page-1 goal (the local-SEO timeline) */}
         <LocalSeoGoalCard goal={goal.data} />
+
+        {/* Google reviews & rating (the local-reputation signal) */}
+        <ReviewsCard businessId={businessId} canEdit={canEdit} data={revs.data} />
+
+        {/* Keywords to rank for (the SEO keyword-intelligence set) */}
+        <KeywordsCard businessId={businessId} canEdit={canEdit} kws={kws.data} />
 
         {/* Local rankings scorecard */}
         <div>

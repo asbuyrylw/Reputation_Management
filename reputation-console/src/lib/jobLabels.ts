@@ -27,6 +27,10 @@ export const JOB_LABELS: Record<string, JobMeta> = {
   // Search & SEO
   site_crawl: { type: "site_crawl", label: "Crawl site (technical SEO)", navGroup: "Search & SEO", secs: 90,
     hint: "Crawl your website for technical / on-page SEO gaps." },
+  keyword_research: { type: "keyword_research", label: "Find keywords to rank for", navGroup: "Search & SEO", secs: 60,
+    hint: "LLM + Google data (Serper) find the SEO keywords to target on your site, blog, social & GBP." },
+  ingest_gbp_reviews: { type: "ingest_gbp_reviews", label: "Check Google reviews & rating", navGroup: "Search & SEO", secs: 40,
+    hint: "Snapshot your Google star rating + review count and pull in recent reviews." },
   local_rank: { type: "local_rank", label: "Check local search rankings", navGroup: "Search & SEO", secs: 45,
     hint: "Capture your Google organic + map-pack rank for local searches." },
   benchmark: { type: "benchmark", label: "Benchmark vs competitors", navGroup: "Search & SEO", secs: 300,

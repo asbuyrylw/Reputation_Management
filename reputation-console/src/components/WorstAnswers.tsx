@@ -51,14 +51,17 @@ export function WorstAnswers({
               <span className="font-medium text-slate-800">“{a.prompt}”</span>
             </div>
             {snippet && <p className="mt-1 text-sm text-slate-600">“{snippet}…”</p>}
-            <div className="mt-1 flex items-center justify-between">
+            <div className="mt-1 flex items-center justify-between gap-2">
               <span className="text-xs text-rose-600">Why: {reason(a)}</span>
-              <Link
-                href={runId ? `/audits/${runId}` : href}
-                className="text-xs font-medium text-indigo-600 hover:underline"
-              >
-                See in audit →
-              </Link>
+              <span className="flex shrink-0 items-center gap-3">
+                <Link href="/next-steps" className="text-xs font-medium text-emerald-700 hover:underline">Fix this →</Link>
+                <Link
+                  href={runId ? `/audits/${runId}` : href}
+                  className="text-xs font-medium text-indigo-600 hover:underline"
+                >
+                  See in audit →
+                </Link>
+              </span>
             </div>
           </div>
         );

@@ -38,6 +38,7 @@ export function DraftReviewCard({
   const [open, setOpen] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [notes, setNotes] = useState("");
+  const [signoff, setSignoff] = useState("");
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(draft.title || "");
   const [editBody, setEditBody] = useState(draft.body || "");
@@ -51,6 +52,11 @@ export function DraftReviewCard({
   const q = quality(draft.quality_score);
   const added = Array.isArray(draft.highlighted_sections) ? draft.highlighted_sections : [];
   const placeholders = Array.isArray(draft.placeholders_pending) ? draft.placeholders_pending : [];
+  // SEO keyword scorecard (from the multi-pass generator's self-check).
+  const cov = draft.quality_notes?.keyword_coverage;
+  const covCovered = cov?.covered ?? [];
+  const covMissing = cov?.missing ?? [];
+  const covRate = cov?.rate != null ? Math.round(cov.rate * 100) : null;
   // "Why this helps" — derived from the question it targets + the work-order instruction.
   const whyHelps = draft.target_query
     ? `Helps your AI reputation + SEO by publishing accurate, ownable content for “${draft.target_query}”.`
@@ -159,14 +165,51 @@ export function DraftReviewCard({
         </div>
       )}
 
+      {/* SEO keyword scorecard — does this draft contain the language it needs to rank? */}
+      {(covCovered.length > 0 || covMissing.length > 0) && (
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-slate-500 hover:text-slate-700">
+            Keyword coverage{covRate != null ? `: ${covRate}%` : ""} ({covCovered.length} included{covMissing.length ? `, ${covMissing.length} missing` : ""})
+          </summary>
+          <div className="mt-1 space-y-1.5 rounded bg-slate-50 p-2">
+            {covCovered.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {covCovered.slice(0, 14).map((k) => (
+                  <span key={k} className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700">✓ {k}</span>
+                ))}
+              </div>
+            )}
+            {covMissing.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {covMissing.slice(0, 12).map((k) => (
+                  <span key={k} className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-600">✗ {k}</span>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] text-slate-400">Target keywords this draft includes vs. is missing — edit to weave in the important ones.</p>
+          </div>
+        </details>
+      )}
+
       {whyHelps && <p className="mt-2 text-xs text-slate-500">💡 {whyHelps}</p>}
+
+      {/* unscreened draft (compliance not confirmed) needs a principal sign-off reason to approve */}
+      {canEdit && pending && draft.compliance_pass == null && !editing && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2">
+          <label className="text-xs font-medium text-amber-800">
+            Compliance wasn&apos;t auto-confirmed — add a principal sign-off reason to approve:
+            <input value={signoff} onChange={(e) => setSignoff(e.target.value)} placeholder="e.g. Reviewed by principal; disclosures verified"
+              className="mt-1 w-full rounded border border-amber-300 px-2 py-1 text-sm" />
+          </label>
+        </div>
+      )}
 
       {canEdit && pending && !rejecting && !editing && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
-            disabled={approve.isPending || placeholders.length > 0}
-            title={placeholders.length > 0 ? "Fill in the placeholders first" : undefined}
-            onClick={() => approve.mutate({ draftId: draft.id })}
+            disabled={approve.isPending || placeholders.length > 0 || (draft.compliance_pass == null && !signoff.trim())}
+            title={placeholders.length > 0 ? "Fill in the placeholders first" : draft.compliance_pass == null && !signoff.trim() ? "Add a sign-off reason first" : undefined}
+            onClick={() => approve.mutate({ draftId: draft.id, override_reason: draft.compliance_pass == null ? signoff.trim() : undefined })}
             className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
           >
             Approve &amp; publish

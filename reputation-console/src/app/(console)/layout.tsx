@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { BusinessProvider } from "@/lib/business";
@@ -13,6 +13,7 @@ import { Spinner } from "@/components/ui";
 export default function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
+  const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
@@ -30,10 +31,19 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     <BusinessProvider>
       <FilterProvider>
         <div className="flex min-h-screen flex-1">
-          <Sidebar />
-          <div className="flex flex-1 flex-col">
-            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-3">
+          {/* mobile backdrop when the nav drawer is open */}
+          {navOpen && <div className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setNavOpen(false)} />}
+          <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
               <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={() => setNavOpen(true)}
+                  aria-label="Open menu"
+                  className="rounded-md border border-slate-300 p-1.5 text-slate-700 hover:bg-slate-100 lg:hidden"
+                >
+                  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" /></svg>
+                </button>
                 <BusinessSwitcher />
                 <FilterBar />
               </div>

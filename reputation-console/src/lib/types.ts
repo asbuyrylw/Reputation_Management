@@ -15,6 +15,68 @@ export interface User {
   billing_enabled?: boolean; // global billing master switch (off until the super-admin turns it on)
 }
 
+export interface LensRow {
+  lens: string;
+  score: number | null;
+  contested_rate: number | null;
+  n: number;
+}
+export interface AnswerLenses {
+  divergence: {
+    run_id: number | null;
+    items: { prompt: string; spread: number; best_engine: string; best: number; worst_engine: string; worst: number; contested_engines: string[] }[];
+  };
+  lenses: { run_id: number | null; by_persona: LensRow[]; by_location: LensRow[] };
+}
+
+export interface ReportView {
+  business: string | null;
+  goal: string | null;
+  score: number | null;
+  biggest_gaps: string[];
+  tasks_done_this_month: number;
+  local_reputation: ReviewsSummary;
+}
+
+export interface MetricsTrend {
+  series: { run_id: number; date: string | null; score: number | null; per_engine: Record<string, number | null> }[];
+  engines: string[];
+}
+
+export interface GoogleReview {
+  author: string | null;
+  rating: number | null;
+  body: string | null;
+  sentiment: string | null;
+  review_url: string | null;
+  discovered_at: string | null;
+}
+export interface ReviewsSummary {
+  current: { rating: number | null; review_count: number | null; place_name: string | null; captured_at: string | null } | null;
+  rating_delta: number | null;
+  new_reviews: number | null;
+  history?: { date: string | null; rating: number | null; review_count: number | null }[];
+  reviews: GoogleReview[];
+}
+
+export interface ActivitySummary {
+  audits: number;
+  drafts: number;
+  published: number;
+  tasks_done: number;
+  mentions: number;
+  outreach: number;
+}
+
+export interface TargetKeyword {
+  keyword: string;
+  kind: string | null;     // primary | secondary | long_tail | local | question
+  source: string | null;   // llm_seed | serper_related | serper_paa | serper_autocomplete
+  intent: string | null;
+  priority: number | null;
+  rationale: string | null;
+}
+
 // --- billing ---
 export interface BillingPlan {
   code: string;
@@ -49,8 +111,16 @@ export interface Business {
   contested_terms: string | null;
   services?: string | null; // comma-joined service keywords (edited as tags)
   industry?: string | null;
+  regulatory_profile?: RegulatoryProfile | null;
   created_at?: string;
   can_edit?: boolean; // may the current user take actions on this business?
+}
+
+export interface RegulatoryProfile {
+  firm_type?: string; // ria | broker_dealer | insurance | non_financial | other
+  disclosures?: string[];
+  crd?: string;
+  notes?: string;
 }
 
 export interface WorkOrder {
@@ -79,6 +149,34 @@ export interface WorkOrder {
   planned?: boolean | null;
   promoted_at?: string | null;
   progress_notes?: ProgressNote[] | null;
+  assignee_user_id?: number | null;
+}
+
+export interface TeamMember {
+  id: number;
+  name: string;
+  email: string;
+}
+
+export interface ComplianceSignoff {
+  id: number;
+  draft_id: number | null;
+  asset_id: number | null;
+  approver: string | null;
+  compliance_pass: boolean | null;
+  compliance_flags: unknown;
+  override_reason: string | null;
+  body_hash: string | null;
+  signed_at: string | null;
+  title: string | null;
+}
+
+export interface AssetPlacement {
+  id: number;
+  channel: string;
+  status: string; // planned | published | skipped
+  url: string | null;
+  published_at: string | null;
 }
 
 export interface ProgressNote {
@@ -103,6 +201,14 @@ export interface ContentDraft {
   highlighted_sections?: { type?: string; note?: string }[] | null;
   placeholders_pending?: string[] | null;
   wo_instruction?: string | null;
+  quality_notes?: { keyword_coverage?: KeywordCoverage } & Record<string, unknown> | null;
+}
+
+export interface KeywordCoverage {
+  covered?: string[];
+  missing?: string[];
+  important_missing?: string[];
+  rate?: number | null;
 }
 
 export interface AmplificationPlaybook {

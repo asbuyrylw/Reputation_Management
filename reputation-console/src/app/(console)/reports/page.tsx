@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useReports, useTriggerJob, useEmailReport } from "@/lib/hooks";
+import { useReports, useTriggerJob, useEmailReport, useReportView } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
@@ -80,6 +80,45 @@ function ReportRow({
   );
 }
 
+// In-console report viewer — read the report in the browser instead of only downloading a docx.
+function ReportViewer({ businessId }: { businessId: number | null }) {
+  const { data } = useReportView(businessId);
+  const [open, setOpen] = useState(false);
+  if (!data) return null;
+  const lr = data.local_reputation?.current;
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-slate-900">View report in browser</div>
+        <button onClick={() => setOpen((o) => !o)} className="text-sm font-medium text-indigo-600 hover:text-indigo-700">{open ? "Hide" : "Open"}</button>
+      </div>
+      {open && (
+        <div className="mt-3 space-y-4 text-sm">
+          {data.goal && <div><span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Goal</span><p className="text-slate-800">{data.goal}</p></div>}
+          <div className="flex flex-wrap gap-6">
+            <div><div className="text-2xl font-bold text-slate-900">{data.score ?? "—"}<span className="text-sm text-slate-400">/100</span></div><div className="text-[11px] text-slate-500">AI reputation score</div></div>
+            <div><div className="text-2xl font-bold text-slate-900">{data.tasks_done_this_month}</div><div className="text-[11px] text-slate-500">tasks done this month</div></div>
+            {lr && <div><div className="text-2xl font-bold text-slate-900">{lr.rating ?? "—"}★</div><div className="text-[11px] text-slate-500">{lr.review_count ?? "—"} Google reviews</div></div>}
+          </div>
+          {data.biggest_gaps.length > 0 && (
+            <div>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Biggest gaps</span>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-slate-700">{data.biggest_gaps.map((g, i) => <li key={i}>“{g}”</li>)}</ul>
+            </div>
+          )}
+          {/* Local Reputation section */}
+          {data.local_reputation?.reviews && data.local_reputation.reviews.length > 0 && (
+            <div>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Local reputation — recent Google reviews</span>
+              <ul className="mt-1 space-y-1">{data.local_reputation.reviews.slice(0, 4).map((r, i) => <li key={i} className="text-xs text-slate-600">{r.rating}★ {r.author || "Google user"}: {(r.body || "").slice(0, 100)}</li>)}</ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function ReportsPage() {
   const { businessId, canEdit } = useBusiness();
   const [generating, setGenerating] = useState(false);
@@ -133,6 +172,8 @@ export default function ReportsPage() {
       />
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      <ReportViewer businessId={businessId} />
 
       {canEdit && (
         <Card className="mb-4">

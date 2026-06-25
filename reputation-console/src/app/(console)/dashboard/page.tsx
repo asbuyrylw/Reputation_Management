@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications, useLocalRankings } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications, useLocalRankings, useActivitySummary } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
 import { ScoreDonut } from "@/components/ScoreDonut";
 import { ScoreTrend } from "@/components/ScoreTrend";
@@ -15,7 +15,42 @@ import VisibilityTrendChart from "@/components/VisibilityTrendChart";
 import { Card, PageHeader, SectionCard, Spinner } from "@/components/ui";
 import { EmptyState, Freshness, ToneLegend } from "@/components/primitives";
 import { repScore } from "@/lib/repScore";
-import type { SeriesPoint, WorkOrder } from "@/lib/types";
+import type { SeriesPoint, WorkOrder, Business } from "@/lib/types";
+
+// "What we're tracking for you" — profile readback + setup-completeness meter. Each empty field
+// shows the capability it unlocks, so onboarding gaps are visible and fixable.
+function ProfileTrackingCard({ biz }: { biz?: Business }) {
+  if (!biz) return null;
+  const fields = [
+    { label: "Areas served", value: biz.geo, enables: "local rankings & Google reviews" },
+    { label: "Services", value: biz.services, enables: "keyword targeting & category prompts" },
+    { label: "Industry", value: biz.industry, enables: "sharper benchmarking" },
+    { label: "Goal", value: biz.goal, enables: "your North-Star score framing" },
+    { label: "Contested terms", value: biz.contested_terms, enables: "narrative defense" },
+    { label: "Firm type", value: biz.regulatory_profile?.firm_type, enables: "correct compliance checks" },
+  ];
+  const filled = fields.filter((f) => (f.value ?? "").toString().trim());
+  const empty = fields.filter((f) => !(f.value ?? "").toString().trim());
+  const pct = Math.round((filled.length / fields.length) * 100);
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold tracking-tight text-slate-900">What we&apos;re tracking for you</h3>
+        <span className="text-xs text-slate-400">{pct}% set up</span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {filled.map((f) => <span key={f.label} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">✓ {f.label}</span>)}
+      </div>
+      {empty.length > 0 && (
+        <ul className="mt-2 space-y-0.5 text-xs text-slate-500">
+          {empty.map((f) => (
+            <li key={f.label}>⚠ Add <Link href="/admin/businesses" className="font-medium text-indigo-600 hover:underline">{f.label}</Link> to enable {f.enables}.</li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
 
 type Json = Record<string, unknown>;
 type WeakQuery = { prompt?: string; engine?: string; problem?: string };
@@ -187,6 +222,37 @@ function CrossCutStrip({ businessId, workOrders }: { businessId: number | null; 
   );
 }
 
+// --- "This month's work" — the client-facing value narrative (what the service did) ---
+function ThisMonthPanel({ businessId }: { businessId: number | null }) {
+  const { data } = useActivitySummary(businessId);
+  if (!data) return null;
+  const items = [
+    { n: data.audits, label: "audits run" },
+    { n: data.drafts, label: "drafts created" },
+    { n: data.published, label: "published" },
+    { n: data.tasks_done, label: "tasks done" },
+    { n: data.mentions, label: "mentions found" },
+    { n: data.outreach, label: "outreach targets" },
+  ];
+  if (items.every((i) => !i.n)) return null; // nothing yet this month — don't show an empty panel
+  return (
+    <Card className="bg-linear-to-br from-indigo-50/50 to-white">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold tracking-tight text-slate-900">This month&apos;s work</h3>
+        <span className="text-[11px] text-slate-400">your reputation team, this month</span>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-6">
+        {items.map((i) => (
+          <div key={i.label} className="text-center">
+            <div className="text-2xl font-bold text-slate-900">{i.n}</div>
+            <div className="text-[11px] leading-tight text-slate-500">{i.label}</div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 // --- B2: progress narrative — what you've done and how the score moved ---
 function ProgressStrip({ workOrders, series }: { workOrders: WorkOrder[] | undefined; series: SeriesPoint[] }) {
   const wos = workOrders ?? [];
@@ -254,6 +320,8 @@ export default function DashboardPage() {
   const s = data.series;
   const latest: SeriesPoint | undefined = s[s.length - 1];
   const score = repScore(latest?.goal_alignment ?? null);
+  // North Star: the owner's stated positioning goal — what we want AI to say about them.
+  const goalText = (businesses.find((b) => b.id === businessId)?.goal || "").trim();
 
   // grounded rate across engines (from the latest run's per-engine metrics)
   const engVals = perEngine ? Object.values(perEngine.engines) : [];
@@ -310,6 +378,25 @@ export default function DashboardPage() {
         />
       ) : (
         <div className="space-y-6">
+          {/* 0. North Star — the stated goal, with the score framed as progress toward it */}
+          {goalText && (
+            <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Your goal</div>
+                  <p className="mt-0.5 text-base font-semibold tracking-tight text-slate-900">{goalText}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">Your score is how close AI is to saying this about you today.</p>
+                </div>
+                {score != null && (
+                  <div className="flex shrink-0 items-baseline gap-1 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-900/5">
+                    <span className="text-2xl font-bold text-slate-900">{score}</span>
+                    <span className="text-xs font-medium text-slate-400">/100 today</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
           {/* 1. plain-English verdict */}
           <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} />
 
@@ -335,6 +422,12 @@ export default function DashboardPage() {
 
           {/* 2c. cross-cutting: local search + tasks (the Dashboard spans AI + SEO + execution) */}
           <CrossCutStrip businessId={businessId} workOrders={workOrders} />
+
+          {/* 2d. this month's work — the value narrative (self-hides when nothing yet) */}
+          <ThisMonthPanel businessId={businessId} />
+
+          {/* 2e. profile readback + setup completeness */}
+          <ProfileTrackingCard biz={businesses.find((b) => b.id === businessId)} />
 
           {/* 3. problem beside action */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

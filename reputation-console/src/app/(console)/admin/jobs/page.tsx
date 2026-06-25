@@ -36,6 +36,7 @@ function JobStatus({ status }: { status: string }) {
 function resultNote(result: Record<string, unknown> | null): string | null {
   if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
+  if (r.budget_exhausted) return `budget reached — $${r.spent} of $${r.cap} this month (resets next month)`;
   if (r.skipped) return `skipped — ${(r.reason as string) ?? "nothing to do"}`;
   if (typeof r.rows === "number") {
     const q = typeof r.queries === "number" ? ` across ${r.queries} quer${r.queries === 1 ? "y" : "ies"}` : "";

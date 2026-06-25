@@ -1,12 +1,30 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import type { WorkOrder, ProgressNote } from "@/lib/types";
+import type { WorkOrder, ProgressNote, ContentDraft, Asset } from "@/lib/types";
+
+// The draft/asset a task produced, as a small deep-linked status (the execution narrative:
+// task -> draft -> published asset).
+function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset }) {
+  const published = asset && (asset.published_status === "live" || asset.published_url);
+  if (published) {
+    return asset?.published_url
+      ? <a href={asset.published_url} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline">✓ Published →</a>
+      : <Link href="/content/finalized" className="text-emerald-700 hover:underline">✓ Published →</Link>;
+  }
+  if (asset || draft?.status === "approved") return <Link href="/content/finalized" className="text-sky-700 hover:underline">Approved — publish →</Link>;
+  if (draft) {
+    const label = draft.status === "needs_fix" ? "Draft needs a fix" : draft.status === "rejected" ? "Draft rejected" : "Draft in review";
+    return <Link href="/content/drafts" className="text-amber-700 hover:underline">{label} →</Link>;
+  }
+  return null;
+}
 
 // Capabilities whose work the AI can draft for you (the per-item "Generate draft" button).
 const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
@@ -119,13 +137,16 @@ function NotesSection({ wo, businessId, canEdit }: { wo: WorkOrder; businessId: 
   );
 }
 
-function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string) => void }) {
+function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string) => void; draft?: ContentDraft; asset?: Asset }) {
   const tool = TOOL_GUIDE[wo.capability ?? ""];
   const bullets = bulletize(wo.instruction || "");
   const gen = useGenerateDraftForWo(businessId);
   const edit = useEditWorkOrder(businessId);
+  const { data: team } = useTeam(businessId);
+  const hasTeam = (team?.length ?? 0) > 0;
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignee, setAssignee] = useState(wo.assignee ?? "");
+  const [assigneeUserId, setAssigneeUserId] = useState(wo.assignee_user_id ? String(wo.assignee_user_id) : "");
   const [startDate, setStartDate] = useState(wo.start_date ?? "");
   const [dueDate, setDueDate] = useState(wo.target_date ?? "");
   // Offer "Generate draft" on AI-draftable content tasks that aren't finished yet.
@@ -219,13 +240,20 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
       </div>
       {assignOpen && canEdit && (
         <div className="mt-2 space-y-1.5 rounded-md bg-slate-50 p-2">
-          <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Owner (who's responsible)" className="w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+          {hasTeam ? (
+            <select value={assigneeUserId} onChange={(e) => setAssigneeUserId(e.target.value)} className="w-full rounded border border-slate-300 px-2 py-1 text-xs">
+              <option value="">Unassigned</option>
+              {team!.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          ) : (
+            <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Owner (who's responsible)" className="w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+          )}
           <div className="flex gap-1.5">
             <label className="flex-1 text-[10px] text-slate-500">Start<input type="date" value={(startDate ?? "").slice(0, 10)} onChange={(e) => setStartDate(e.target.value)} className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1 text-xs" /></label>
             <label className="flex-1 text-[10px] text-slate-500">Due<input type="date" value={(dueDate ?? "").slice(0, 10)} onChange={(e) => setDueDate(e.target.value)} className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1 text-xs" /></label>
           </div>
           <button
-            onClick={() => edit.mutate({ woId: wo.id, assignee, start_date: startDate, target_date: dueDate }, { onSuccess: () => setAssignOpen(false) })}
+            onClick={() => edit.mutate({ woId: wo.id, assignee_user_id: hasTeam && assigneeUserId ? Number(assigneeUserId) : (hasTeam ? null : undefined), assignee: hasTeam ? undefined : assignee, start_date: startDate, target_date: dueDate }, { onSuccess: () => setAssignOpen(false) })}
             disabled={edit.isPending}
             className="rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
           >
@@ -234,10 +262,15 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus }: { wo: WorkOrder; b
         </div>
       )}
 
+      {/* what this task produced (task -> draft -> published asset) */}
+      {(draft || asset) && (
+        <div className="mt-1.5 text-[11px] font-medium"><ProducedLink draft={draft} asset={asset} /></div>
+      )}
+
       {/* per-task work log */}
       <NotesSection wo={wo} businessId={businessId} canEdit={canEdit} />
 
-      {canDraft && (
+      {canDraft && !draft && !asset && (
         <div className="mt-2">
           <button
             onClick={() => gen.mutate({ woId: wo.id })}
@@ -325,12 +358,20 @@ function dueBucket(target: string | null | undefined): { key: string; label: str
 export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useWorkOrders(businessId);
+  const { data: drafts } = useContentDrafts(businessId);
+  const { data: assets } = useAssets(businessId);
   const setStatus = useSetWorkOrderStatus(businessId);
   const [sortRoi, setSortRoi] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [view, setView] = useState<ViewMode>("status");
 
   if (isLoading || !data) return <Spinner />;
+
+  // latest draft + published asset per work order (drafts come back newest-first) -> the stitch
+  const draftByWo = new Map<number, ContentDraft>();
+  for (const d of drafts ?? []) if (d.work_order_id != null && !draftByWo.has(d.work_order_id)) draftByWo.set(d.work_order_id, d);
+  const assetByWo = new Map<number, Asset>();
+  for (const a of assets ?? []) if (a.work_order_id != null && !assetByWo.has(a.work_order_id)) assetByWo.set(a.work_order_id, a);
 
   // The managed board = promoted recommendations + manual tasks + anything already engaged.
   // Un-promoted, still-pending recommendations live on "Do this next", not here.
@@ -353,6 +394,8 @@ export default function WorkOrdersPage() {
       businessId={businessId}
       canEdit={canEdit}
       onStatus={(st) => setStatus.mutate({ woId: w.id, status: st })}
+      draft={draftByWo.get(w.id)}
+      asset={assetByWo.get(w.id)}
     />
   );
 

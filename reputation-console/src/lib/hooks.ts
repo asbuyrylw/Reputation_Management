@@ -41,6 +41,15 @@ import type {
   ProductionBrief,
   ShareOfVoice,
   SiteAudit,
+  TargetKeyword,
+  ActivitySummary,
+  ReviewsSummary,
+  MetricsTrend,
+  AnswerLenses,
+  ReportView,
+  TeamMember,
+  AssetPlacement,
+  ComplianceSignoff,
   WorkOrder,
 } from "./types";
 
@@ -110,6 +119,11 @@ export function useWorkOrders(businessId: number | null) {
   return useApiQuery<WorkOrder[]>(["work-orders", businessId], businessId ? `/businesses/${businessId}/work-orders` : null);
 }
 
+// Team roster — people who can be assigned tasks on this business (FK-backed assignee dropdown).
+export function useTeam(businessId: number | null) {
+  return useApiQuery<TeamMember[]>(["team", businessId], businessId ? `/businesses/${businessId}/team` : null);
+}
+
 export function useContentDrafts(businessId: number | null) {
   return useApiQuery<ContentDraft[]>(["content-drafts", businessId], businessId ? `/businesses/${businessId}/content-drafts` : null);
 }
@@ -171,11 +185,16 @@ export function useSetupBusiness() {
 }
 
 export function useApproveDraft(businessId: number | null) {
-  return useApiMutation<{ draftId: number }>(
+  return useApiMutation<{ draftId: number; override_reason?: string }>(
     ({ draftId }) => `/businesses/${businessId}/content-drafts/${draftId}/approve`,
-    () => undefined,
-    [["content-drafts", businessId], ["work-orders", businessId], ["dashboard", businessId]],
+    ({ override_reason }) => ({ override_reason: override_reason ?? null }),
+    [["content-drafts", businessId], ["work-orders", businessId], ["dashboard", businessId], ["compliance-ledger", businessId]],
   );
+}
+
+// Immutable compliance sign-off record (the principal-review audit trail).
+export function useComplianceLedger(businessId: number | null) {
+  return useApiQuery<ComplianceSignoff[]>(["compliance-ledger", businessId], base(businessId, "/compliance-ledger"));
 }
 
 export function useEditDraft(businessId: number | null) {
@@ -217,11 +236,11 @@ export function useSetWorkOrderStatus(businessId: number | null) {
   );
 }
 
-// Assign a task + set its start/due dates.
+// Assign a task + set its start/due dates. assignee_user_id (FK) is preferred over free-text assignee.
 export function useEditWorkOrder(businessId: number | null) {
-  return useApiMutation<{ woId: number; assignee?: string; start_date?: string; target_date?: string }>(
+  return useApiMutation<{ woId: number; assignee?: string; assignee_user_id?: number | null; start_date?: string; target_date?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}`,
-    ({ assignee, start_date, target_date }) => ({ assignee, start_date, target_date }),
+    ({ assignee, assignee_user_id, start_date, target_date }) => ({ assignee, assignee_user_id, start_date, target_date }),
     [["work-orders", businessId]],
     "PATCH",
   );
@@ -240,10 +259,11 @@ export function useGenerateDraftForWo(businessId: number | null) {
 // Promote a recommendation ("Do this next") onto the managed "Improvement tasks" board,
 // capturing owner + start/due dates + an optional first progress note.
 export function usePromoteWorkOrder(businessId: number | null) {
-  return useApiMutation<{ woId: number; assignee?: string; start_date?: string; target_date?: string; note?: string }>(
+  return useApiMutation<{ woId: number; assignee?: string; assignee_user_id?: number | null; start_date?: string; target_date?: string; note?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/promote`,
-    ({ assignee, start_date, target_date, note }) => ({
+    ({ assignee, assignee_user_id, start_date, target_date, note }) => ({
       assignee: assignee ?? null,
+      assignee_user_id: assignee_user_id ?? null,
       start_date: start_date ?? null,
       target_date: target_date ?? null,
       note: note ?? null,
@@ -306,6 +326,37 @@ export function useLocalRankings(businessId: number | null) {
 
 export function useLocalSeoGoal(businessId: number | null) {
   return useApiQuery<LocalSeoGoal>(["local-seo-goal", businessId], base(businessId, "/local-seo-goal"));
+}
+
+// Google rating snapshot + recent reviews (from the ingest_gbp_reviews job).
+export function useReviews(businessId: number | null) {
+  return useApiQuery<ReviewsSummary>(["reviews", businessId], base(businessId, "/reviews"));
+}
+
+// Per-run overall + per-engine score trend (0-100) over time.
+export function useMetricsTrend(businessId: number | null) {
+  return useApiQuery<MetricsTrend>(["metrics-trend", businessId], base(businessId, "/metrics-trend"));
+}
+
+// Cross-engine divergence + persona/location lens.
+export function useAnswerLenses(businessId: number | null) {
+  return useApiQuery<AnswerLenses>(["answer-lenses", businessId], base(businessId, "/answer-lenses"));
+}
+
+// In-console viewable report bundle (score, gaps, local reputation, this-month work).
+export function useReportView(businessId: number | null) {
+  return useApiQuery<ReportView>(["report-view", businessId], base(businessId, "/report-view"));
+}
+
+// "This month's work" — client-facing activity counts (the retention narrative).
+export function useActivitySummary(businessId: number | null) {
+  return useApiQuery<ActivitySummary>(["activity-summary", businessId], base(businessId, "/activity-summary"));
+}
+
+// SEO keyword intelligence — the ranked terms to target (from the keyword_research job).
+// Distinct from useKeywords (brand-monitoring keyword list).
+export function useTargetKeywords(businessId: number | null) {
+  return useApiQuery<TargetKeyword[]>(["seo-keywords", businessId], base(businessId, "/seo-keywords"));
 }
 
 // ---- user-managed prompts / topics ----
@@ -455,6 +506,30 @@ export function useAssets(businessId: number | null) {
   return useApiQuery<Asset[]>(["assets", businessId], base(businessId, "/assets"));
 }
 
+// ---- multi-surface distribution log (where each asset was posted) ----
+export function useAssetPlacements(businessId: number | null, assetId: number | null) {
+  return useApiQuery<AssetPlacement[]>(
+    ["placements", businessId, assetId],
+    businessId && assetId ? `/businesses/${businessId}/assets/${assetId}/placements` : null,
+  );
+}
+export function useAddPlacement(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ assetId, channel }: { assetId: number; channel: string }) =>
+      apiFetch(`/businesses/${businessId}/assets/${assetId}/placements`, { method: "POST", body: { channel } }),
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ["placements", businessId, v.assetId] }),
+  });
+}
+export function useUpdatePlacement(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ placementId, status, url }: { assetId: number; placementId: number; status?: string; url?: string }) =>
+      apiFetch(`/businesses/${businessId}/placements/${placementId}`, { method: "PATCH", body: { status, url } }),
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ["placements", businessId, v.assetId] }),
+  });
+}
+
 // Record where a published asset went live (manual link) + flip pending -> live.
 export function usePatchAsset(businessId: number | null) {
   const qc = useQueryClient();
@@ -475,6 +550,20 @@ export function useAddDiscoveryTarget(businessId: number | null) {
     (v) => v,
     [["discovery-targets", businessId]],
   );
+}
+// Push an outreach target into the client's CRM/stack via the webhook bus.
+export function usePushTarget(businessId: number | null) {
+  return useMutation({
+    mutationFn: (targetId: number) =>
+      apiFetch<{ sent: boolean }>(`/businesses/${businessId}/discovery-targets/${targetId}/push`, { method: "POST" }),
+  });
+}
+// Draft an outreach pitch for a target (human reviews + sends).
+export function useDraftPitch(businessId: number | null) {
+  return useMutation({
+    mutationFn: (targetId: number) =>
+      apiFetch<{ pitch: string }>(`/businesses/${businessId}/discovery-targets/${targetId}/draft-pitch`, { method: "POST" }),
+  });
 }
 export function useSetTargetStatus(businessId: number | null) {
   return useApiMutation<{ targetId: number; status: string }>(
