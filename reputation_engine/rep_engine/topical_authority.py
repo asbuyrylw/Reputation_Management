@@ -61,23 +61,26 @@ def clusters(business_id: int) -> dict:
         b = conn.execute("SELECT name, geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
     generic = _tokens(f"{(b or {}).get('name') or ''} {(b or {}).get('geo') or ''}") if b else set()
 
-    cl: list[dict] = []  # each: {tokens:set, members:[kw...], theme:str}
+    # Greedy clustering requiring TWO shared significant tokens to merge -- the sweet spot between
+    # merging everything that shares one common word (one giant cluster) and splitting every keyword
+    # into its own topic. Keywords processed highest-priority-first so cluster themes are stable.
+    cl: list[dict] = []  # each: {tokens:set, members:[kw...]}
     for k in kws:
         toks = _tokens(k["keyword"]) - generic
         if not toks:
             toks = _tokens(k["keyword"])  # all-generic keyword (e.g. just the city) -> keep as-is
         if not toks:
             continue
-        best, best_overlap = None, 0
+        best, best_ov = None, 1  # init 1 so only an overlap >= 2 wins
         for c in cl:
             ov = len(toks & c["tokens"])
-            if ov > best_overlap:
-                best, best_overlap = c, ov
-        if best and best_overlap >= 1:
+            if ov > best_ov:
+                best, best_ov = c, ov
+        if best:
             best["members"].append(k)
             best["tokens"] |= toks
         else:
-            cl.append({"tokens": set(toks), "members": [k], "theme": k["keyword"]})
+            cl.append({"tokens": set(toks), "members": [k]})
 
     out = []
     for c in cl:

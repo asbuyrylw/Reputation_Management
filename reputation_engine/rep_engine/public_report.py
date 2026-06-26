@@ -60,17 +60,91 @@ def public_summary(business_id: int) -> dict:
 
 
 def branding(business_id: int) -> dict:
-    """Resolve report branding: per-business meta overrides, else env, else the default product brand."""
+    """Resolve report branding: per-business branding overrides, else env, else the default brand."""
     name = logo = accent = None
     try:
         with db() as conn:
-            r = conn.execute("SELECT meta FROM businesses WHERE id=%s", (business_id,)).fetchone()
-        meta = (r or {}).get("meta") or {}
-        if isinstance(meta, dict):
-            br = meta.get("branding") or {}
+            r = conn.execute("SELECT branding FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        br = (r or {}).get("branding") or {}
+        if isinstance(br, dict):
             name, logo, accent = br.get("brand_name"), br.get("logo_url"), br.get("accent")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 -- column may not exist on an un-migrated DB
         pass
     return {"brand_name": name or os.getenv("REPORT_BRAND_NAME") or "Reputation Console",
             "logo_url": logo or os.getenv("REPORT_BRAND_LOGO") or None,
             "accent": accent or os.getenv("REPORT_BRAND_ACCENT") or None}
+
+
+def set_branding(business_id: int, *, brand_name: Optional[str] = None, logo_url: Optional[str] = None,
+                 accent: Optional[str] = None) -> dict:
+    """Set the per-business white-label branding (merges into businesses.branding)."""
+    from psycopg.types.json import Json
+    fields = {k: v for k, v in (("brand_name", brand_name), ("logo_url", logo_url), ("accent", accent))
+              if v is not None}
+    with db() as conn:
+        conn.execute("UPDATE businesses SET branding = COALESCE(branding,'{}'::jsonb) || %s::jsonb WHERE id=%s",
+                     (Json(fields), business_id))
+        conn.commit()
+    return branding(business_id)
+
+
+# ---------------------------------------------------------------------------
+# Public lead-magnet funnel (item 20)
+# ---------------------------------------------------------------------------
+def _origin() -> str:
+    return (os.getenv("PUBLIC_APP_ORIGIN") or "http://localhost:3000").rstrip("/")
+
+
+def ensure_share_token(business_id: int) -> dict:
+    """Get-or-create the unguessable public token + return the public audit URL."""
+    import secrets
+    with db() as conn:
+        r = conn.execute("SELECT public_token FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        token = (r or {}).get("public_token")
+        if not token:
+            token = secrets.token_urlsafe(12)
+            conn.execute("UPDATE businesses SET public_token=%s WHERE id=%s", (token, business_id))
+            conn.commit()
+    return {"token": token, "url": f"{_origin()}/audit/{token}"}
+
+
+def resolve_token(token: str) -> Optional[int]:
+    if not token:
+        return None
+    with db() as conn:
+        r = conn.execute("SELECT id FROM businesses WHERE public_token=%s", (token,)).fetchone()
+    return r["id"] if r else None
+
+
+def summary_for_token(token: str) -> dict:
+    """Public read: the sanitized audit teaser + branding for the share page. None -> not found."""
+    bid = resolve_token(token)
+    if not bid:
+        return {"found": False}
+    out = public_summary(bid)
+    out["branding"] = branding(bid)
+    return out
+
+
+def capture_lead(token: str, email: str, name: Optional[str] = None) -> dict:
+    """Capture an email from the public page (idempotent per business+email)."""
+    bid = resolve_token(token)
+    if not bid:
+        return {"ok": False, "reason": "invalid link"}
+    email = (email or "").strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return {"ok": False, "reason": "invalid email"}
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO leads (business_id, email, name, source) VALUES (%s,%s,%s,'public_audit') "
+            "ON CONFLICT (business_id, email) DO NOTHING", (bid, email, name))
+        conn.commit()
+    return {"ok": True}
+
+
+def list_leads(business_id: int) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, email, name, source, captured_at FROM leads WHERE business_id=%s "
+            "ORDER BY captured_at DESC LIMIT 500", (business_id,)).fetchall()
+    return [dict(r) for r in rows]

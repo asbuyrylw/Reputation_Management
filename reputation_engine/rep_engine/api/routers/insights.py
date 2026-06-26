@@ -142,14 +142,49 @@ def keyword_intent(business_id: int = Depends(authorize_business)):
     return _ta.by_intent(business_id)
 
 
+def _pr():
+    try:
+        from ... import public_report as p
+    except ImportError:  # pragma: no cover
+        import public_report as p  # type: ignore
+    return p
+
+
 @router.get("/public-summary")
 def public_summary(business_id: int = Depends(authorize_business)):
     """Sanitized lead-magnet teaser (score + band + top gaps) (Wave 5, item 20)."""
-    try:
-        from ... import public_report as _pr
-    except ImportError:  # pragma: no cover
-        import public_report as _pr  # type: ignore
-    return _pr.public_summary(business_id)
+    return _pr().public_summary(business_id)
+
+
+@router.get("/branding")
+def get_branding(business_id: int = Depends(authorize_business)):
+    """The resolved white-label branding for this business (GTM item 21)."""
+    return _pr().branding(business_id)
+
+
+class BrandingUpdate(BaseModel):
+    brand_name: Optional[str] = None
+    logo_url: Optional[str] = None
+    accent: Optional[str] = None
+
+
+@router.patch("/branding")
+def set_branding(body: BrandingUpdate, business_id: int = Depends(require_business_editor)):
+    """Set the white-label branding (agency mode). Applies to the report + the public page."""
+    return _pr().set_branding(business_id, brand_name=body.brand_name, logo_url=body.logo_url,
+                              accent=body.accent)
+
+
+@router.post("/share-link")
+def share_link(business_id: int = Depends(require_business_editor)):
+    """Get-or-create the public lead-magnet share link for this business (GTM item 20)."""
+    return _pr().ensure_share_token(business_id)
+
+
+@router.get("/leads")
+def leads(business_id: int = Depends(authorize_business)):
+    """Emails captured by the public lead-magnet page (GTM item 20)."""
+    return {"leads": _pr().list_leads(business_id)}
 
 
 @router.get("/topical-authority")
