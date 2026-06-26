@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications, useLocalRankings, useActivitySummary } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications, useLocalRankings, useActivitySummary, useGscSummary } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
 import { ScoreDonut } from "@/components/ScoreDonut";
 import { ScoreTrend } from "@/components/ScoreTrend";
@@ -222,6 +222,58 @@ function CrossCutStrip({ businessId, workOrders }: { businessId: number | null; 
   );
 }
 
+// --- Organic search traffic: real Google clicks this period + delta vs prior 28d. Self-hides
+// when neither connected nor collecting (shows a subtle connect hint), so it never adds a dead
+// card for businesses that haven't linked Search Console. ---
+function OrganicSearchCard({ businessId }: { businessId: number | null }) {
+  const { data } = useGscSummary(businessId);
+  if (!data) return null;
+  const collecting = data.collecting;
+  const hasData = data.has_data;
+
+  // Not connected and not collecting → a subtle one-line connect hint (not a full card).
+  if (!hasData && !collecting) {
+    return (
+      <Card className="bg-slate-50/60">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-slate-600">
+            Want real Google clicks &amp; rankings alongside your AI score?
+          </p>
+          <Link href="/integrations" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">
+            Connect Search Console →
+          </Link>
+        </div>
+      </Card>
+    );
+  }
+
+  const delta = data.clicks_delta ?? null;
+  const deltaTone = delta == null ? "text-slate-400" : delta >= 0 ? "text-emerald-600" : "text-rose-600";
+  return (
+    <Card className="bg-linear-to-br from-sky-50/50 to-white">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold tracking-tight text-slate-900">🔍 Organic search traffic</h3>
+        <Link href="/search-performance" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+          Search traffic →
+        </Link>
+      </div>
+      {!hasData && collecting ? (
+        <p className="mt-3 text-sm text-slate-500">Collecting search data…</p>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-2xl font-bold text-slate-900">{(data.clicks ?? 0).toLocaleString()}</span>
+          <span className="text-xs text-slate-500">clicks from Google · last 28 days</span>
+          {delta != null && Math.abs(delta) >= 0.5 && (
+            <span className={`text-sm font-medium ${deltaTone}`}>
+              {delta >= 0 ? "▲ +" : "▼ "}{Math.round(delta)}% vs prior 28d
+            </span>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // --- "This month's work" — the client-facing value narrative (what the service did) ---
 function ThisMonthPanel({ businessId }: { businessId: number | null }) {
   const { data } = useActivitySummary(businessId);
@@ -422,6 +474,9 @@ export default function DashboardPage() {
 
           {/* 2c. cross-cutting: local search + tasks (the Dashboard spans AI + SEO + execution) */}
           <CrossCutStrip businessId={businessId} workOrders={workOrders} />
+
+          {/* 2c-ii. real Google search traffic (self-hides to a hint when not connected) */}
+          <OrganicSearchCard businessId={businessId} />
 
           {/* 2d. this month's work — the value narrative (self-hides when nothing yet) */}
           <ThisMonthPanel businessId={businessId} />

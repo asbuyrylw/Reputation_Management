@@ -4,9 +4,17 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useBusiness } from "@/lib/business";
-import { useRevokeSessions, useDeleteBusiness, usePlatformSettings, useSetBillingEnabled } from "@/lib/hooks";
-import { apiDownload } from "@/lib/api";
+import {
+  useRevokeSessions,
+  useDeleteBusiness,
+  usePlatformSettings,
+  useSetBillingEnabled,
+  useIntegrationSettings,
+  useUpdateIntegrationSettings,
+} from "@/lib/hooks";
+import { apiDownload, ApiError } from "@/lib/api";
 import { Card, PageHeader } from "@/components/ui";
+import type { IntegrationSettings } from "@/lib/types";
 
 // Platform owner (super-admin) only: the billing master switch. The whole billing system is
 // wired but dormant until this is flipped on.
@@ -51,10 +59,139 @@ function PlatformCard() {
   );
 }
 
+// A labeled toggle row. Auto-post toggles are disabled (with a lock hint) unless the user
+// is an org manager; other toggles (notifications, require-approval) are always editable.
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className={`flex items-start justify-between gap-3 py-2 ${disabled ? "opacity-60" : ""}`}>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-slate-800">{label}</span>
+        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-4 w-4 shrink-0 disabled:cursor-not-allowed"
+      />
+    </label>
+  );
+}
+
+// Per-business automation settings. The owner controls approval + notifications; auto-post
+// fields are org-manager-gated, and the platform kill-switch state is shown read-only.
+function AutomationCard({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useIntegrationSettings(businessId);
+  const update = useUpdateIntegrationSettings(businessId);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (isLoading || !data) return null;
+  const s = data.settings;
+  const canManageAuto = data.can_manage_autopost && canEdit;
+  const globallyOn = data.autopost_globally_enabled;
+
+  const save = (patch: Partial<IntegrationSettings>) => {
+    setErr(null);
+    update.mutate(patch, {
+      onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save — try again."),
+    });
+  };
+
+  // Auto-post is only truly active when the platform switch is on AND the business allows it.
+  const autoEffective = globallyOn && s.allow_owned_autopost;
+
+  return (
+    <Card>
+      <h3 className="text-sm font-semibold text-slate-900">Automation</h3>
+      <p className="mt-1 text-sm text-slate-600">
+        Control what posts on its own versus what waits for your approval. Approving keeps you in the loop;
+        automation moves faster once you trust it.
+      </p>
+
+      {/* platform kill-switch (read-only) */}
+      <div className={`mt-3 rounded-lg px-3 py-2 text-xs ${globallyOn ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+        {globallyOn
+          ? "Automated posting is enabled platform-wide."
+          : "Automated posting is currently OFF platform-wide — auto-post settings are saved but won't post until it's turned on."}
+      </div>
+
+      <div className="mt-2 divide-y divide-slate-100">
+        <ToggleRow
+          label="Require approval before anything is posted"
+          hint="Everything lands in your approval inbox first."
+          checked={s.require_approval}
+          disabled={!canEdit}
+          onChange={(v) => save({ require_approval: v })}
+        />
+        <ToggleRow
+          label="Auto-publish to surfaces you own"
+          hint={
+            canManageAuto
+              ? autoEffective
+                ? "Approved content publishes to your site / Google profile automatically."
+                : "Allowed for this business — activates when the platform switch is on."
+              : "Org manager only."
+          }
+          checked={s.allow_owned_autopost}
+          disabled={!canManageAuto}
+          onChange={(v) => save({ allow_owned_autopost: v })}
+        />
+        <ToggleRow
+          label="Auto-reply to reviews"
+          hint={canManageAuto ? `Only ${s.auto_reply_min_stars}★ and up, screened for compliance.` : "Org manager only."}
+          checked={s.auto_reply_reviews}
+          disabled={!canManageAuto}
+          onChange={(v) => save({ auto_reply_reviews: v })}
+        />
+        <ToggleRow
+          label="Auto-reply to mentions"
+          hint={canManageAuto ? "Drafts a reply and posts it on owned surfaces." : "Org manager only."}
+          checked={s.auto_reply_mentions}
+          disabled={!canManageAuto}
+          onChange={(v) => save({ auto_reply_mentions: v })}
+        />
+        <ToggleRow
+          label="Email me about items needing attention"
+          checked={s.notify_email}
+          disabled={!canEdit}
+          onChange={(v) => save({ notify_email: v })}
+        />
+        <ToggleRow
+          label="Email me when something posts automatically"
+          checked={s.notify_on_auto}
+          disabled={!canEdit}
+          onChange={(v) => save({ notify_on_auto: v })}
+        />
+      </div>
+
+      {!data.can_manage_autopost && (
+        <p className="mt-2 text-xs text-slate-400">
+          Auto-post settings are managed by an organization manager. You can still set approval and notification
+          preferences.
+        </p>
+      )}
+      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+    </Card>
+  );
+}
+
 export default function AccountPage() {
   const router = useRouter();
   const { user } = useAuth();
-  const { businessId, businesses } = useBusiness();
+  const { businessId, businesses, canEdit } = useBusiness();
   const revoke = useRevokeSessions();
   const del = useDeleteBusiness(businessId);
   const [exporting, setExporting] = useState(false);
@@ -90,6 +227,9 @@ export default function AccountPage() {
       <div className="space-y-4">
         {/* platform owner only: the billing master switch */}
         {user?.is_super_admin && <PlatformCard />}
+
+        {/* per-business automation / auto-post settings */}
+        <AutomationCard businessId={businessId} canEdit={canEdit} />
 
         {/* sessions */}
         <Card>

@@ -1,14 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { MetricCard, EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
-import type { TargetKeyword, ReviewsSummary } from "@/lib/types";
+import { SearchPerformanceCard } from "@/components/SearchPerformanceCard";
+import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact } from "@/lib/types";
 
 function Stars({ rating }: { rating: number | null }) {
   if (rating == null) return <span className="text-slate-400">—</span>;
@@ -99,7 +101,144 @@ function KeywordsCard({ businessId, canEdit, kws }: { businessId: number | null;
   );
 }
 
+// A small copy-to-clipboard button with transient "Copied ✓" feedback.
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+    >
+      {copied ? "Copied ✓" : label}
+    </button>
+  );
+}
+
+const NAP_LABELS: Record<string, string> = {
+  name: "Business name",
+  address: "Address",
+  phone: "Phone",
+  website: "Website",
+  areas_served: "Areas served",
+};
+
+// "Get more reviews" — the write-review link + copy-paste SMS/email asks, plus the NAP block
+// we keep consistent across directory citations (missing fields flagged in amber to fill in).
+function ReviewRequestCard({ kit }: { kit: ReviewRequestKit | undefined }) {
+  if (!kit) return null;
+  const { link, templates, nap } = kit;
+  const napRows: { key: string; label: string; value: string | null }[] = [
+    { key: "name", label: NAP_LABELS.name, value: nap.name },
+    { key: "address", label: NAP_LABELS.address, value: nap.address },
+    { key: "phone", label: NAP_LABELS.phone, value: nap.phone },
+    { key: "website", label: NAP_LABELS.website, value: nap.website },
+    { key: "areas_served", label: NAP_LABELS.areas_served, value: nap.areas_served },
+  ];
+  const emailText = `Subject: ${templates.email_subject}\n\n${templates.email_body}`;
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Get more reviews</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            More 5-star reviews lift your local ranking — and they&apos;re what AI repeats about you. Send happy
+            customers straight to your {link.source || "Google"} review page.
+          </p>
+        </div>
+      </div>
+
+      {/* write-review link (copyable) */}
+      {link.write_review_url && (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Your review link</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700 ring-1 ring-inset ring-slate-200">
+              {link.write_review_url}
+            </code>
+            <CopyButton text={link.write_review_url} label="Copy link" />
+            <a
+              href={link.write_review_url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-slate-50"
+            >
+              Open →
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* copy-paste templates */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500">Ask a customer:</span>
+        <CopyButton text={templates.sms} label="Copy SMS" />
+        <CopyButton text={emailText} label="Copy email" />
+      </div>
+
+      {/* NAP block — consistency across directory citations */}
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Business listing details (NAP)
+        </div>
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+          {napRows.map((r) => {
+            const missing = nap.missing_fields.includes(r.key);
+            return (
+              <div key={r.key} className="flex items-baseline justify-between gap-2 text-xs">
+                <dt className="text-slate-500">{r.label}</dt>
+                <dd className={`text-right font-medium ${missing ? "text-amber-600" : "text-slate-700"}`}>
+                  {r.value || (missing ? "Missing — add this" : "—")}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+        {nap.missing_fields.length > 0 && (
+          <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
+            {nap.consistency_note ||
+              "Fill in the highlighted fields so your name, address & phone match exactly across every directory — inconsistent listings hurt local SEO."}
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 const pct = (v: number | undefined | null) => `${Math.round((v ?? 0) * 100)}%`;
+
+// One-line proof line: how many pages WE published are earning search traffic. The deep view
+// (per-page clicks + sessions) lives on /search-performance. Hidden until something's published.
+function OurContentImpactLine({ impact }: { impact: OurContentImpact | undefined }) {
+  if (!impact || impact.totals.assets_published === 0) return null;
+  const { assets_with_traffic, assets_published, our_content_clicks } = impact.totals;
+  return (
+    <Card accent="good">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Our content impact</h3>
+          <p className="mt-0.5 text-sm text-slate-600">
+            <span className="font-bold text-emerald-700">{assets_with_traffic} of {assets_published}</span> page
+            {assets_published === 1 ? "" : "s"} we published {assets_with_traffic === 1 ? "is" : "are"} earning search
+            traffic{our_content_clicks > 0 ? ` — ${our_content_clicks.toLocaleString()} Google clicks so far` : ""}.
+          </p>
+        </div>
+        <Link href="/search-performance" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">
+          See proof →
+        </Link>
+      </div>
+    </Card>
+  );
+}
 
 function LinkCard({ href, title, desc }: { href: string; title: string; desc: string }) {
   return (
@@ -123,6 +262,8 @@ export default function SeoOverviewPage() {
   const goal = useLocalSeoGoal(businessId);
   const kws = useTargetKeywords(businessId);
   const revs = useReviews(businessId);
+  const reviewKit = useReviewRequest(businessId);
+  const impact = useOurContentImpact(businessId);
 
   if (loading) return <Spinner />;
   if (businesses.length === 0) {
@@ -159,8 +300,17 @@ export default function SeoOverviewPage() {
         {/* Get-to-page-1 goal (the local-SEO timeline) */}
         <LocalSeoGoalCard goal={goal.data} />
 
+        {/* Real Google search traffic (clicks/impressions/CTR/position) — the measured proof */}
+        <SearchPerformanceCard businessId={businessId} />
+
+        {/* One-line content-impact proof (deep view lives on /search-performance) */}
+        <OurContentImpactLine impact={impact.data} />
+
         {/* Google reviews & rating (the local-reputation signal) */}
         <ReviewsCard businessId={businessId} canEdit={canEdit} data={revs.data} />
+
+        {/* Get more reviews — copy-paste ask + NAP consistency */}
+        <ReviewRequestCard kit={reviewKit.data} />
 
         {/* Keywords to rank for (the SEO keyword-intelligence set) */}
         <KeywordsCard businessId={businessId} canEdit={canEdit} kws={kws.data} />

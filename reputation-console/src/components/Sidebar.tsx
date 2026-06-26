@@ -44,6 +44,8 @@ const NAV: NavGroup[] = [
     opGroup: "Search & SEO",
     items: [
       { href: "/seo-overview", label: "Google overview", opLabel: "SEO overview" },
+      // Real Google Search Console traffic — clicks, impressions, ranking (the measured proof).
+      { href: "/search-performance", label: "Search traffic & clicks", opLabel: "Search Console" },
       // Local map-pack / organic rank is the headline concern for a local SMB, so it
       // leads; technical site health is the supporting detail.
       { href: "/local-seo", label: "Local map & search rankings", opLabel: "Local rankings" },
@@ -81,6 +83,7 @@ const NAV: NavGroup[] = [
       { href: "/notifications", label: "Needs your attention", opLabel: "Notifications" },
       { href: "/sustain/incidents", label: "Incidents" },
       { href: "/sustain/mentions", label: "Mentions" },
+      { href: "/approvals", label: "Needs your approval", opLabel: "Approval queue" },
     ],
   },
   {

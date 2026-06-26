@@ -5,6 +5,7 @@ import { useBusiness } from "@/lib/business";
 import { useAssets, usePatchAsset, useAssetPlacements, useAddPlacement, useUpdatePlacement, useComplianceLedger } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import { AssetPublishPanel } from "@/components/AssetPublishPanel";
 import type { Asset } from "@/lib/types";
 
 function fmtDate(d?: string | null): string {
@@ -129,6 +130,9 @@ function AssetRow({ a, businessId, canEdit }: { a: Asset; businessId: number | n
 
       {/* multi-surface distribution log */}
       <DistributionChecklist assetId={a.id} businessId={businessId} canEdit={canEdit} />
+
+      {/* one-click publishing to connected channels (WordPress / GBP / social) */}
+      <AssetPublishPanel assetId={a.id} businessId={businessId} canEdit={canEdit} />
     </Card>
   );
 }

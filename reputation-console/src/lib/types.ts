@@ -708,3 +708,360 @@ export interface Dashboard {
   attribution: { metric: string; delta: number; assets_in_window: unknown }[];
   challenge?: Challenge | null; // primary-challenge profile (awareness gap vs negatives)
 }
+
+// =====================================================================================
+// Integrations & Publishing — connections vault, publishing, review replies, the unified
+// approval queue, and per-business integration/automation settings.
+// =====================================================================================
+
+// A stored credential/connection to an external surface we can publish to (or reply on).
+// `kind` is the provider; `status` is the live health of the credential.
+export type ConnectionKind = "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics";
+export type ConnectionStatus = "pending" | "active" | "error" | "revoked" | "expired" | "needs_reconnect";
+
+export interface Connection {
+  id: number;
+  business_id: number;
+  kind: string; // ConnectionKind, but the API may return others — keep it loose like other types
+  label: string | null;
+  status: string; // ConnectionStatus
+  token_type: string | null;
+  expires_at: string | null;
+  account_ref: string | null;
+  profile_ref: string | null;
+  gbp_access: string | null; // GBP review-reply approval state ('approved' once Google grants it)
+  meta: Record<string, unknown>;
+  last_error: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+  has_token: boolean;
+}
+
+export interface ConnectionsResponse {
+  vault_ready: boolean; // false when TOKEN_ENC_KEY isn't configured on the server
+  connections: Connection[];
+}
+
+// A channel we can publish an asset to. `connected` is false when no live connection backs it.
+export interface PublishChannel {
+  channel: string;
+  label: string;
+  kind: string | null;
+  connected: boolean;
+}
+
+// One publish attempt of an asset to a channel/network, with its live external URL + status.
+export interface PublishTarget {
+  id: number;
+  channel: string;
+  network: string;
+  status: string; // pending | scheduled | published | failed | skipped
+  external_url: string | null;
+  external_id: string | null;
+  scheduled_for: string | null;
+  published_at: string | null;
+  attempts: number;
+  last_error: string | null;
+  updated_at: string;
+}
+
+// A drafted reply to a Google/third-party review (compliance-screened, human-approved).
+export interface ReviewReply {
+  id: number;
+  review_id: number;
+  draft: string | null;
+  compliance_pass: boolean | null;
+  compliance_flags: string[];
+  status: string; // pending | approved | rejected | posted
+  reviewer: string | null;
+  reviewed_at: string | null;
+  posted_at: string | null;
+  external_url: string | null;
+  created_at: string;
+  // denormalized review context (so the card can render the review it answers)
+  author: string | null;
+  rating: number | null;
+  review_title: string | null;
+  review_body: string | null;
+  sentiment: string | null;
+  review_url: string | null;
+}
+
+// The unified approval inbox: mention replies, review replies, and scheduled posts in one feed.
+export type QueueItemKind = "mention_reply" | "review_reply" | "scheduled_post";
+
+export interface QueueItem {
+  kind: QueueItemKind;
+  id: number;
+  draft: string | null;
+  compliance: { pass: boolean | null; flags: string[] };
+  surface: "owned" | "third_party";
+  capability: "publish" | "publish_costed" | "review_reply" | "alert_only";
+  source: string | null;
+  url?: string | null;
+  title: string | null;
+  sentiment: string | null;
+  rating?: number | null;
+  status?: string;
+  scheduled_for?: string | null;
+  can_auto_post: boolean;
+  editable: boolean;
+}
+
+export interface ApprovalQueueResponse {
+  items: QueueItem[];
+}
+
+// Per-business automation/integration settings. Auto-post fields are org-manager-gated server-side.
+export interface IntegrationSettings {
+  business_timezone: string;
+  require_approval: boolean;
+  allow_owned_autopost: boolean;
+  auto_reply_reviews: boolean;
+  auto_reply_mentions: boolean;
+  auto_reply_min_stars: number;
+  auto_reply_max_len: number;
+  auto_platforms: string[];
+  never_auto_sentiments: string[];
+  daily_autopost_cap: number;
+  hourly_auto_cap: number;
+  warmup_manual_count: number;
+  quiet_hours: Record<string, number>;
+  banned_phrases: string[];
+  allowed_channels: string[];
+  blocked_channels: string[];
+  disclosure_text: string | null;
+  notify_email: boolean;
+  notify_on_auto: boolean;
+}
+
+export interface IntegrationSettingsResponse {
+  settings: IntegrationSettings;
+  can_manage_autopost: boolean; // is the current user an org manager (may change auto-post fields)?
+  autopost_globally_enabled: boolean; // platform-wide kill-switch state (read-only)
+}
+
+// =====================================================================================
+// Review-request kit — the copy-paste assets that ask happy customers for a Google
+// review, plus the NAP block we keep consistent across directory citations.
+// =====================================================================================
+
+// Name/Address/Phone (+ web/areas) the way it should appear in every directory listing.
+// `missing_fields` flags anything blank so the owner fills it in (citation consistency).
+export interface Nap {
+  name: string | null;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  areas_served: string | null;
+  missing_fields: string[];
+  consistency_note: string;
+}
+
+export interface ReviewRequestKit {
+  link: {
+    write_review_url: string;
+    listing_url: string;
+    source: string;
+    place_name: string;
+  };
+  templates: {
+    sms: string;
+    email_subject: string;
+    email_body: string;
+    link: string;
+  };
+  nap: Nap;
+}
+
+// =====================================================================================
+// Visual content (CI-4) — generated images / quote cards / video briefs for a work order.
+// Files live server-side; the console shows kind + status and gates approval by canEdit.
+// =====================================================================================
+
+export interface VisualAsset {
+  id: number;
+  work_order_id: number | null;
+  draft_id: number | null;
+  kind: string; // image | quote_card | video_brief
+  provider: string | null;
+  model: string | null;
+  prompt: string | null;
+  file_path: string | null;
+  url: string | null;
+  width: number | null;
+  height: number | null;
+  status: string; // pending | approved | rejected
+  compliance_note: string | null;
+  reviewer: string | null;
+  reviewed_at: string | null;
+  meta: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface VisualsResponse {
+  image_configured: boolean; // is an AI-image provider key set in .env?
+  video_configured: boolean; // is a video provider key set (else briefs are shootable only)?
+  visuals: VisualAsset[];
+}
+
+// =====================================================================================
+// Google Search Console — real Google "Search traffic": clicks, impressions, CTR, average
+// position. The honest, measured counterpart to the AI-visibility story. Nullable metrics
+// stay `T | null` (Search Console reports null position/CTR for rows with no rank data).
+// =====================================================================================
+
+// Top-line search-traffic summary for the current 28-day window vs the prior 28 days.
+// When `has_data` is false the API returns ONLY { has_data:false, collecting } — every
+// numeric field below is absent, so guard on has_data before reading them.
+export interface GscSummary {
+  has_data: boolean;
+  collecting: boolean; // connected + property set, but no rows imported yet (history is backfilling)
+  as_of?: string;
+  clicks?: number;
+  impressions?: number;
+  ctr?: number | null;
+  position?: number | null;
+  clicks_delta?: number; // % change vs the prior 28 days
+  impressions_delta?: number; // % change vs the prior 28 days
+  clicks_prev?: number;
+}
+
+// One day on the clicks/impressions trend.
+export interface GscTrendPoint {
+  date: string;
+  clicks: number;
+  impressions: number;
+  ctr: number | null;
+  position: number | null;
+}
+
+// A search query (the words people typed) with its performance.
+export interface GscQuery {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr: number | null;
+  position: number | null;
+}
+
+// A landing page with its performance + whether it's content we published.
+export interface GscPage {
+  page: string;
+  clicks: number;
+  impressions: number;
+  ctr: number | null;
+  position: number | null;
+  is_our_content: boolean;
+  asset_id: number | null;
+}
+
+// A "striking-distance" query — lots of impressions but a position that's just off page one,
+// so a small content push could win the click. Deep-links to brief generation.
+export interface GscOpportunity {
+  query: string;
+  impressions: number;
+  clicks: number;
+  position: number | null;
+  ctr: number | null;
+}
+
+// Equivalent-ad-value framing: total clicks vs the smaller subset earned by content we
+// published, with a labeled paid-search-equivalent estimate.
+export interface GscRoi {
+  has_data: boolean;
+  collecting: boolean;
+  baseline_clicks: number;
+  latest_clicks: number;
+  our_content_clicks: number; // the smaller, distinct subset earned by content we published
+  our_content_pages: number;
+  equivalent_ads_value: number; // a LABELED estimate, not a billed amount
+  window_days: number;
+}
+
+// A verified property the connected Google account can read (per-connection picker).
+export interface GscSite {
+  property: string; // e.g. "https://example.com/" or "sc-domain:example.com"
+  permission: string;
+}
+
+// =====================================================================================
+// Google Analytics (GA4) — what visitors DO after they arrive: sessions, users, pageviews,
+// conversions, engagement. The behavior-side counterpart to Search Console's traffic story.
+// Conversions are only meaningful if the client has configured GA4 conversion events, so the
+// UI notes that subtly. When `has_data` is false the API returns ONLY { has_data, collecting }.
+// =====================================================================================
+
+// Top-line behavior summary for the current window vs the prior period.
+export interface GaSummary {
+  has_data: boolean;
+  collecting: boolean; // connected + property set, but no rows imported yet
+  as_of?: string;
+  sessions: number;
+  users: number;
+  pageviews: number;
+  conversions: number;
+  engagement_rate: number | null; // 0..1; null if GA4 doesn't report it
+  sessions_delta: number; // % change vs the prior period
+  conversions_delta: number; // % change vs the prior period
+}
+
+// One day on the GA sessions/users/pageviews/conversions trend.
+export interface GaTrendPoint {
+  date: string;
+  sessions: number;
+  users: number;
+  pageviews: number;
+  conversions: number;
+}
+
+// A landing page with its GA performance + whether it's content we published.
+export interface GaPage {
+  page: string;
+  sessions: number;
+  conversions: number;
+  is_our_content: boolean;
+  asset_id: number | null;
+}
+
+// Acquisition channel (Organic Search, Direct, Referral, Social, …) with its session/conversion split.
+export interface GaChannel {
+  channel: string;
+  sessions: number;
+  conversions: number;
+}
+
+// A GA4 property the connected Google account can read (per-connection picker).
+export interface GaProperty {
+  property: string; // e.g. "properties/123456789"
+  display_name: string;
+  account: string;
+}
+
+// =====================================================================================
+// "Is our content working?" — the causal-proof panel. Each row is a page WE published
+// (a labeled subset of the whole site) with the real search clicks + GA sessions it earns,
+// so the value of the content we produce is provable rather than asserted.
+// =====================================================================================
+
+export interface OurContentAsset {
+  asset_id: number;
+  title: string | null;
+  published_url: string;
+  published_at: string | null;
+  gsc_clicks: number;
+  ga_sessions: number;
+  has_traffic: boolean;
+}
+
+export interface OurContentImpact {
+  assets: OurContentAsset[];
+  owned_citation_share: number; // 0..1 — share of citations pointing at content we own/published
+  totals: {
+    assets_published: number;
+    assets_with_traffic: number;
+    our_content_clicks: number;
+    our_content_sessions: number;
+  };
+}

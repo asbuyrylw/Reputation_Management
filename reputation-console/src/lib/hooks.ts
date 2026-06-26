@@ -51,6 +51,29 @@ import type {
   AssetPlacement,
   ComplianceSignoff,
   WorkOrder,
+  ConnectionsResponse,
+  PublishChannel,
+  PublishTarget,
+  ReviewReply,
+  ApprovalQueueResponse,
+  QueueItemKind,
+  IntegrationSettings,
+  IntegrationSettingsResponse,
+  ReviewRequestKit,
+  VisualsResponse,
+  GscSummary,
+  GscTrendPoint,
+  GscQuery,
+  GscPage,
+  GscOpportunity,
+  GscRoi,
+  GscSite,
+  GaSummary,
+  GaTrendPoint,
+  GaPage,
+  GaChannel,
+  GaProperty,
+  OurContentImpact,
 } from "./types";
 
 type Json = Record<string, unknown>;
@@ -736,4 +759,419 @@ export function useIngestSignal(businessId: number | null) {
     (v) => v,
     [["external-signals", businessId]],
   );
+}
+
+// =====================================================================================
+// Integrations & Publishing
+// =====================================================================================
+
+// ---- connections vault ----
+export function useConnections(businessId: number | null) {
+  return useApiQuery<ConnectionsResponse>(["connections", businessId], base(businessId, "/connections"));
+}
+
+// Start an OAuth flow (GBP only) — returns the provider authorize URL the caller redirects to.
+export function useAuthorizeConnection(businessId: number | null) {
+  return useMutation({
+    mutationFn: (kind: string) =>
+      apiFetch<{ authorize_url: string; state: string }>(
+        `/businesses/${businessId}/connections/${kind}/authorize`,
+        { method: "POST", body: {} },
+      ),
+  });
+}
+
+// Directly store a credential (WordPress app-password, or an Ayrshare profile key).
+export interface ConnectDirectVars {
+  kind: string;
+  site_url?: string;
+  wp_user?: string;
+  app_password?: string;
+  profile_key?: string;
+  display_name?: string;
+  label?: string;
+}
+export function useConnectDirect(businessId: number | null) {
+  return useApiMutation<ConnectDirectVars>(
+    () => `/businesses/${businessId}/connections`,
+    (v) => v,
+    [["connections", businessId], ["publish-channels", businessId]],
+  );
+}
+
+// Probe a stored connection (does the credential still work?). Returns the live status.
+export function useTestConnection(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (connId: number) =>
+      apiFetch<{ ok: boolean; status: string; detail?: string }>(
+        `/businesses/${businessId}/connections/${connId}/test`,
+        { method: "POST", body: {} },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["connections", businessId] }),
+  });
+}
+
+export function useDisconnectConnection(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (connId: number) =>
+      apiFetch<{ ok: true; id: number }>(`/businesses/${businessId}/connections/${connId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["connections", businessId] });
+      qc.invalidateQueries({ queryKey: ["publish-channels", businessId] });
+    },
+  });
+}
+
+// ---- publishing ----
+export function usePublishChannels(businessId: number | null) {
+  return useApiQuery<PublishChannel[]>(["publish-channels", businessId], base(businessId, "/publish-channels"));
+}
+
+export function usePublishTargets(businessId: number | null, assetId: number | null) {
+  return useApiQuery<PublishTarget[]>(
+    ["publish-targets", businessId, assetId],
+    businessId && assetId ? `/businesses/${businessId}/assets/${assetId}/publish-targets` : null,
+  );
+}
+
+// Publish an asset to one or more channels (optionally scheduled). Invalidates that asset's targets.
+export function usePublishAsset(businessId: number | null, assetId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { channels: string[]; scheduled_for?: string | null }) =>
+      apiFetch<{ ok: true; created: number[]; skipped: string[] }>(
+        `/businesses/${businessId}/assets/${assetId}/publish`,
+        { method: "POST", body: { channels: v.channels, scheduled_for: v.scheduled_for ?? null } },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["publish-targets", businessId, assetId] }),
+  });
+}
+
+// Retry a failed publish target. Invalidates the asset's targets (caller passes assetId for the key).
+export function useRetryPublishTarget(businessId: number | null, assetId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (targetId: number) =>
+      apiFetch<{ ok: true; id: number }>(`/businesses/${businessId}/publish-targets/${targetId}/retry`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["publish-targets", businessId, assetId] }),
+  });
+}
+
+// ---- review replies ----
+export function useReviewReplies(businessId: number | null, status?: string) {
+  return useApiQuery<ReviewReply[]>(
+    ["review-replies", businessId, status ?? "all"],
+    businessId ? `/businesses/${businessId}/review-replies${status ? `?status=${encodeURIComponent(status)}` : ""}` : null,
+  );
+}
+
+// Approve a review reply — may 422 with a compliance message (the caller surfaces err.message).
+export function useApproveReviewReply(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch(`/businesses/${businessId}/review-replies/${id}/approve`, { method: "POST", body: {} }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["review-replies", businessId] });
+      qc.invalidateQueries({ queryKey: ["approval-queue", businessId] });
+    },
+  });
+}
+export function useRejectReviewReply(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiFetch(`/businesses/${businessId}/review-replies/${id}/reject`, { method: "POST", body: {} }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["review-replies", businessId] });
+      qc.invalidateQueries({ queryKey: ["approval-queue", businessId] });
+    },
+  });
+}
+export function useEditReviewReply(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: number; draft: string }) =>
+      apiFetch(`/businesses/${businessId}/review-replies/${v.id}`, { method: "PATCH", body: { draft: v.draft } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["review-replies", businessId] });
+      qc.invalidateQueries({ queryKey: ["approval-queue", businessId] });
+    },
+  });
+}
+
+// ---- unified approval queue ----
+export function useApprovalQueue(businessId: number | null, surface?: string, kind?: string) {
+  const params = new URLSearchParams();
+  if (surface) params.set("surface", surface);
+  if (kind) params.set("kind", kind);
+  const qs = params.toString();
+  return useApiQuery<ApprovalQueueResponse>(
+    ["approval-queue", businessId, surface ?? "all", kind ?? "all"],
+    businessId ? `/businesses/${businessId}/approval-queue${qs ? `?${qs}` : ""}` : null,
+  );
+}
+
+// Approve/reject any queue item (kind ∈ mention_reply | review_reply). approve may 422 (compliance).
+export function useApproveQueueItem(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { kind: QueueItemKind; itemId: number }) =>
+      apiFetch(`/businesses/${businessId}/approval-queue/${v.kind}/${v.itemId}/approve`, { method: "POST", body: {} }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["approval-queue", businessId] });
+      qc.invalidateQueries({ queryKey: ["review-replies", businessId] });
+    },
+  });
+}
+export function useRejectQueueItem(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { kind: QueueItemKind; itemId: number }) =>
+      apiFetch(`/businesses/${businessId}/approval-queue/${v.kind}/${v.itemId}/reject`, { method: "POST", body: {} }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["approval-queue", businessId] });
+      qc.invalidateQueries({ queryKey: ["review-replies", businessId] });
+    },
+  });
+}
+
+// ---- integration / automation settings ----
+export function useIntegrationSettings(businessId: number | null) {
+  return useApiQuery<IntegrationSettingsResponse>(
+    ["integration-settings", businessId],
+    base(businessId, "/integration-settings"),
+  );
+}
+
+// PUT a partial settings patch. Auto-post fields 403 unless the user is an org manager
+// (the caller disables those inputs based on can_manage_autopost + surfaces the error).
+export function useUpdateIntegrationSettings(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: Partial<IntegrationSettings>) =>
+      apiFetch<{ ok: true; settings: IntegrationSettings }>(`/businesses/${businessId}/integration-settings`, {
+        method: "PUT",
+        body: patch,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["integration-settings", businessId] }),
+  });
+}
+
+// =====================================================================================
+// Review-request kit + visual content
+// =====================================================================================
+
+// Copy-paste "ask for a review" assets (write-review link + SMS/email templates) and the
+// NAP block we keep consistent across directory citations.
+export function useReviewRequest(businessId: number | null) {
+  return useApiQuery<ReviewRequestKit>(["review-request", businessId], base(businessId, "/review-request"));
+}
+
+// Generated visuals for the business (optionally filtered by status). `poll` refetches
+// while anything is still pending, so a freshly-queued visual appears when its job finishes.
+export function useVisuals(businessId: number | null, status?: string, poll = false) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["visuals", businessId, status ?? "all"],
+    queryFn: () =>
+      apiFetch<VisualsResponse>(
+        `/businesses/${businessId}/visuals${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+      ),
+    enabled: !!user && !!businessId,
+    refetchInterval: (q) => {
+      if (!poll) return false;
+      const visuals = (q.state.data as VisualsResponse | undefined)?.visuals ?? [];
+      return visuals.some((v) => v.status === "pending") ? 4000 : false;
+    },
+  });
+}
+
+// Enqueue a visual-generation job (quote card / AI image / video brief). Invalidates jobs
+// so the progress banner picks it up + the visuals list so it shows once the job finishes.
+export function useGenerateVisual(businessId: number | null) {
+  return useApiMutation<{
+    kind: "image" | "quote_card" | "video_brief";
+    prompt?: string;
+    text?: string;
+    attribution?: string;
+    topic?: string;
+    work_order_id?: number;
+  }>(
+    () => `/businesses/${businessId}/visuals/generate`,
+    (v) => ({
+      kind: v.kind,
+      prompt: v.prompt ?? null,
+      text: v.text ?? null,
+      attribution: v.attribution ?? null,
+      topic: v.topic ?? null,
+      work_order_id: v.work_order_id ?? null,
+    }),
+    [["visuals", businessId], ["jobs", businessId]],
+  );
+}
+
+export function useApproveVisual(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (visualId: number) =>
+      apiFetch<{ ok: true }>(`/businesses/${businessId}/visuals/${visualId}/approve`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+  });
+}
+
+export function useRejectVisual(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (visualId: number) =>
+      apiFetch<{ ok: true }>(`/businesses/${businessId}/visuals/${visualId}/reject`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+  });
+}
+
+// =====================================================================================
+// Google Search Console — real Google "Search traffic": clicks, impressions, CTR, position.
+// The measured counterpart to the AI-visibility story. Every key includes businessId so the
+// cache is tenant-isolated; the site/property hooks key by connId since they're per-connection.
+// =====================================================================================
+
+// Top-line clicks/impressions/CTR/position for the current 28d window vs the prior 28d.
+export function useGscSummary(businessId: number | null) {
+  return useApiQuery<GscSummary>(["gsc-summary", businessId], base(businessId, "/gsc-summary"));
+}
+
+// Daily clicks + impressions over the requested window (28 / 90 / 365 days).
+export function useGscTrend(businessId: number | null, days = 28) {
+  return useApiQuery<GscTrendPoint[]>(
+    ["gsc-trend", businessId, days],
+    businessId ? `/businesses/${businessId}/gsc-trend?days=${days}` : null,
+  );
+}
+
+// Top search queries (the words people typed to find the business).
+export function useGscQueries(businessId: number | null, limit = 25) {
+  return useApiQuery<GscQuery[]>(
+    ["gsc-queries", businessId, limit],
+    businessId ? `/businesses/${businessId}/gsc-queries?limit=${limit}` : null,
+  );
+}
+
+// Top landing pages. `oursOnly` filters to content we published (is_our_content) server-side.
+export function useGscPages(businessId: number | null, oursOnly = false, limit = 25) {
+  return useApiQuery<GscPage[]>(
+    ["gsc-pages", businessId, oursOnly, limit],
+    businessId ? `/businesses/${businessId}/gsc-pages?limit=${limit}&ours_only=${oursOnly ? "true" : "false"}` : null,
+  );
+}
+
+// Striking-distance queries — high-impression terms ranking just off page one.
+export function useGscOpportunities(businessId: number | null) {
+  return useApiQuery<GscOpportunity[]>(["gsc-opportunities", businessId], base(businessId, "/gsc-opportunities"));
+}
+
+// Equivalent-ad-value framing (total clicks vs the subset earned by content we published).
+export function useGscRoi(businessId: number | null) {
+  return useApiQuery<GscRoi>(["gsc-roi", businessId], base(businessId, "/gsc-roi"));
+}
+
+// Verified Search Console properties the connected Google account can read. GET, but keyed by
+// connId because it's per-connection (only enabled once a connection id exists).
+export function useGscSites(businessId: number | null, connId: number | null) {
+  return useApiQuery<{ sites: GscSite[] }>(
+    ["gsc-sites", businessId, connId],
+    businessId && connId ? `/businesses/${businessId}/connections/${connId}/gsc/sites` : null,
+  );
+}
+
+// Save which property this connection should pull. Invalidates connections (the picker reads
+// the saved value off connection.meta) and every GSC query so the new property's data loads.
+export function useSetGscProperty(businessId: number | null, connId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (property: string) =>
+      apiFetch<{ ok: true; property: string }>(
+        `/businesses/${businessId}/connections/${connId}/gsc/property`,
+        { method: "PUT", body: { property } },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["connections", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-summary", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-trend", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-queries", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-pages", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-opportunities", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-roi", businessId] });
+    },
+  });
+}
+
+// =====================================================================================
+// Google Analytics (GA4) — behavior & conversions: what visitors DO after they arrive.
+// Mirrors the GSC hooks: every key includes businessId for tenant isolation; the property
+// hooks key by connId since they're per-connection.
+// =====================================================================================
+
+// Top-line sessions/users/pageviews/conversions/engagement for the current window vs prior.
+export function useGaSummary(businessId: number | null) {
+  return useApiQuery<GaSummary>(["ga-summary", businessId], base(businessId, "/ga-summary"));
+}
+
+// Daily sessions/users/pageviews/conversions over the requested window.
+export function useGaTrend(businessId: number | null, days = 28) {
+  return useApiQuery<GaTrendPoint[]>(
+    ["ga-trend", businessId, days],
+    businessId ? `/businesses/${businessId}/ga-trend?days=${days}` : null,
+  );
+}
+
+// Top landing pages by GA sessions. `oursOnly` filters to content we published (is_our_content).
+export function useGaPages(businessId: number | null, oursOnly = false, limit = 25) {
+  return useApiQuery<GaPage[]>(
+    ["ga-pages", businessId, oursOnly, limit],
+    businessId ? `/businesses/${businessId}/ga-pages?limit=${limit}&ours_only=${oursOnly ? "true" : "false"}` : null,
+  );
+}
+
+// Acquisition channel mix (Organic Search / Direct / Referral / Social / …).
+export function useGaChannels(businessId: number | null) {
+  return useApiQuery<GaChannel[]>(["ga-channels", businessId], base(businessId, "/ga-channels"));
+}
+
+// GA4 properties the connected Google account can read (per-connection picker). Keyed by connId.
+export function useGaProperties(businessId: number | null, connId: number | null) {
+  return useApiQuery<{ properties: GaProperty[] }>(
+    ["ga-properties", businessId, connId],
+    businessId && connId ? `/businesses/${businessId}/connections/${connId}/ga/properties` : null,
+  );
+}
+
+// Save which GA4 property this connection should pull. Invalidates connections (the picker reads
+// the saved value off connection.meta.ga_property) and every GA query so the new data loads.
+export function useSetGaProperty(businessId: number | null, connId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (property: string) =>
+      apiFetch<{ ok: true; property: string }>(
+        `/businesses/${businessId}/connections/${connId}/ga/property`,
+        { method: "PUT", body: { property } },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["connections", businessId] });
+      qc.invalidateQueries({ queryKey: ["ga-summary", businessId] });
+      qc.invalidateQueries({ queryKey: ["ga-trend", businessId] });
+      qc.invalidateQueries({ queryKey: ["ga-pages", businessId] });
+      qc.invalidateQueries({ queryKey: ["ga-channels", businessId] });
+      qc.invalidateQueries({ queryKey: ["our-content-impact", businessId] });
+    },
+  });
+}
+
+// =====================================================================================
+// "Is our content working?" — the causal-proof panel. Each row is a page WE published
+// (a labeled subset of the whole site) with the real GSC clicks + GA sessions it earns.
+// =====================================================================================
+export function useOurContentImpact(businessId: number | null) {
+  return useApiQuery<OurContentImpact>(["our-content-impact", businessId], base(businessId, "/our-content-impact"));
 }

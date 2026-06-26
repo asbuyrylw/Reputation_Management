@@ -2,10 +2,26 @@
 
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useExternalSignals, useIngestSignal, useTriggerJob } from "@/lib/hooks";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import {
+  useExternalSignals,
+  useIngestSignal,
+  useTriggerJob,
+  useConnections,
+  useAuthorizeConnection,
+  useConnectDirect,
+  useTestConnection,
+  useDisconnectConnection,
+  useGscSites,
+  useSetGscProperty,
+  useGaProperties,
+  useSetGaProperty,
+} from "@/lib/hooks";
+import { Card, PageHeader, Spinner, Pill } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import type { Connection } from "@/lib/types";
+import type { Tone } from "@/lib/uiTokens";
+import { ApiError } from "@/lib/api";
 
 const TYPES = ["technical_seo", "keywords", "serp_rank", "backlinks", "brand", "visitors", "other"];
 const TYPE_LABELS: Record<string, string> = {
@@ -42,8 +58,469 @@ function KeyValues({ data }: { data: Record<string, unknown> }) {
   );
 }
 
-export default function IntegrationsPage() {
-  const { businessId, canEdit } = useBusiness();
+// ---- Connections tab ------------------------------------------------------------------
+
+// Map a connection status to a semantic tone + plain label for the status Pill.
+function statusTone(status: string): { tone: Tone; label: string } {
+  switch (status) {
+    case "active":
+      return { tone: "good", label: "Connected" };
+    case "pending":
+      return { tone: "info", label: "Pending" };
+    case "error":
+      return { tone: "bad", label: "Error" };
+    case "revoked":
+      return { tone: "neutral", label: "Revoked" };
+    case "expired":
+      return { tone: "bad", label: "Expired" };
+    case "needs_reconnect":
+      return { tone: "bad", label: "Reconnect needed" };
+    default:
+      return { tone: "neutral", label: status || "Not connected" };
+  }
+}
+
+const fmtWhen = (d?: string | null) => (d ? new Date(d).toLocaleString() : "never");
+
+interface ProviderDef {
+  kind: "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics";
+  name: string;
+  blurb: string;
+  surface: "owned" | "third_party";
+}
+
+const PROVIDERS: ProviderDef[] = [
+  {
+    kind: "wordpress_org",
+    name: "WordPress (self-hosted)",
+    blurb: "Your own site — approved content can be published straight to it (auto-eligible).",
+    surface: "owned",
+  },
+  {
+    kind: "google_business_profile",
+    name: "Google Business Profile",
+    blurb: "Post updates to your Google profile and reply to Google reviews (subject to Google approval).",
+    surface: "owned",
+  },
+  {
+    kind: "ayrshare_profile",
+    name: "Social (Facebook · Instagram · LinkedIn · Pinterest)",
+    blurb: "Third-party social via Ayrshare — drafts are prepared; you post and confirm manually.",
+    surface: "third_party",
+  },
+  {
+    kind: "google_search_console",
+    name: "Google Search Console",
+    blurb: "Import real Google clicks, impressions & ranking — the proof your SEO is working.",
+    surface: "owned",
+  },
+  {
+    kind: "google_analytics",
+    name: "Google Analytics",
+    blurb: "Import sessions, conversions & behavior — see what visitors do after they arrive.",
+    surface: "owned",
+  },
+];
+
+// Property picker (GSC only): once a Search Console connection exists, choose which verified
+// property to pull data from. Reads the saved value off connection.meta.gsc_property; saving
+// invalidates the connection + every GSC query. Gated to canEdit by the parent.
+function GscPropertyPicker({
+  connection,
+  businessId,
+}: {
+  connection: Connection;
+  businessId: number | null;
+}) {
+  const { data, isLoading, error } = useGscSites(businessId, connection.id);
+  const save = useSetGscProperty(businessId, connection.id);
+  const saved = (connection.meta?.gsc_property as string | undefined) ?? "";
+  const [selected, setSelected] = useState<string>(saved);
+  const [note, setNote] = useState<string | null>(null);
+
+  const sites = data?.sites ?? [];
+  const current = selected || saved;
+
+  const onSave = () => {
+    if (!current) return;
+    setNote(null);
+    save.mutate(current, {
+      onSuccess: () => setNote("Saved — importing this property's data."),
+      onError: (e) => setNote(e instanceof ApiError ? e.message : "Couldn't save the property."),
+    });
+  };
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Search Console property</div>
+      {isLoading ? (
+        <p className="text-xs text-slate-500">Loading your verified properties…</p>
+      ) : error ? (
+        <p className="text-xs text-rose-600">Couldn&apos;t load properties — try Test, or reconnect.</p>
+      ) : sites.length === 0 ? (
+        <p className="text-xs text-slate-500">No verified properties found on this Google account.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={current}
+            onChange={(e) => setSelected(e.target.value)}
+            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          >
+            <option value="" disabled>Choose a property…</option>
+            {sites.map((s) => (
+              <option key={s.property} value={s.property}>
+                {s.property}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={onSave}
+            disabled={save.isPending || !current || current === saved}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {save.isPending ? "Saving…" : "Save property"}
+          </button>
+        </div>
+      )}
+      <p className="mt-1.5 text-[11px] text-slate-400">
+        Search Console only has history from when the property was verified.
+      </p>
+      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
+    </div>
+  );
+}
+
+// Property picker (GA only): once a Google Analytics connection exists, choose which GA4
+// property to pull data from. Reads the saved value off connection.meta.ga_property; the
+// option label is the property's display_name but the saved value is the property id. Saving
+// invalidates the connection + every GA query. Gated to canEdit by the parent.
+function GaPropertyPicker({
+  connection,
+  businessId,
+}: {
+  connection: Connection;
+  businessId: number | null;
+}) {
+  const { data, isLoading, error } = useGaProperties(businessId, connection.id);
+  const save = useSetGaProperty(businessId, connection.id);
+  const saved = (connection.meta?.ga_property as string | undefined) ?? "";
+  const [selected, setSelected] = useState<string>(saved);
+  const [note, setNote] = useState<string | null>(null);
+
+  const properties = data?.properties ?? [];
+  const current = selected || saved;
+
+  const onSave = () => {
+    if (!current) return;
+    setNote(null);
+    save.mutate(current, {
+      onSuccess: () => setNote("Saved — importing this property's data."),
+      onError: (e) => setNote(e instanceof ApiError ? e.message : "Couldn't save the property."),
+    });
+  };
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Analytics property</div>
+      {isLoading ? (
+        <p className="text-xs text-slate-500">Loading your GA4 properties…</p>
+      ) : error ? (
+        <p className="text-xs text-rose-600">Couldn&apos;t load properties — try Test, or reconnect.</p>
+      ) : properties.length === 0 ? (
+        <p className="text-xs text-slate-500">No GA4 properties found on this Google account.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={current}
+            onChange={(e) => setSelected(e.target.value)}
+            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          >
+            <option value="" disabled>Choose a property…</option>
+            {properties.map((p) => (
+              <option key={p.property} value={p.property}>
+                {p.display_name}
+                {p.account ? ` · ${p.account}` : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={onSave}
+            disabled={save.isPending || !current || current === saved}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {save.isPending ? "Saving…" : "Save property"}
+          </button>
+        </div>
+      )}
+      <p className="mt-1.5 text-[11px] text-slate-400">
+        Conversions only show once you&apos;ve marked the key events (calls, forms, bookings) as conversions in GA4.
+      </p>
+      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
+    </div>
+  );
+}
+
+// A single provider card: status, last-checked, and connect/test/disconnect (canEdit + vault-gated).
+function ProviderCard({
+  provider,
+  connection,
+  businessId,
+  canEdit,
+  vaultReady,
+}: {
+  provider: ProviderDef;
+  connection: Connection | undefined;
+  businessId: number | null;
+  canEdit: boolean;
+  vaultReady: boolean;
+}) {
+  const authorize = useAuthorizeConnection(businessId);
+  const connect = useConnectDirect(businessId);
+  const test = useTestConnection(businessId);
+  const disconnect = useDisconnectConnection(businessId);
+  const [showForm, setShowForm] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [testNote, setTestNote] = useState<string | null>(null);
+
+  // WordPress form
+  const [siteUrl, setSiteUrl] = useState("");
+  const [wpUser, setWpUser] = useState("");
+  const [appPassword, setAppPassword] = useState("");
+  // Ayrshare form
+  const [profileKey, setProfileKey] = useState("");
+  const [displayName, setDisplayName] = useState("");
+
+  const status = connection?.status ?? "";
+  const { tone, label } = statusTone(status);
+  const connected = status === "active";
+  const canConnect = canEdit && vaultReady;
+
+  // OAuth start, used by all Google providers (GBP + Search Console + Analytics).
+  const isOauth =
+    provider.kind === "google_business_profile" ||
+    provider.kind === "google_search_console" ||
+    provider.kind === "google_analytics";
+  const startOauth = () => {
+    setErr(null);
+    authorize.mutate(provider.kind, {
+      onSuccess: (res) => {
+        if (res.authorize_url) window.location.href = res.authorize_url;
+      },
+      onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start the connection."),
+    });
+  };
+
+  const submitWordpress = () => {
+    setErr(null);
+    if (!/^https:\/\//i.test(siteUrl.trim())) {
+      setErr("Site URL must start with https:// for a secure connection.");
+      return;
+    }
+    connect.mutate(
+      { kind: "wordpress_org", site_url: siteUrl.trim(), wp_user: wpUser.trim(), app_password: appPassword.trim() },
+      {
+        onSuccess: () => {
+          setShowForm(false);
+          setSiteUrl(""); setWpUser(""); setAppPassword("");
+        },
+        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save the connection."),
+      },
+    );
+  };
+
+  const submitAyrshare = () => {
+    setErr(null);
+    connect.mutate(
+      { kind: "ayrshare_profile", profile_key: profileKey.trim(), display_name: displayName.trim() || undefined },
+      {
+        onSuccess: () => {
+          setShowForm(false);
+          setProfileKey(""); setDisplayName("");
+        },
+        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save the connection."),
+      },
+    );
+  };
+
+  const runTest = () => {
+    if (!connection) return;
+    setTestNote(null);
+    test.mutate(connection.id, {
+      onSuccess: (res) => setTestNote(res.ok ? `OK — ${res.status}` : `Failed — ${res.detail || res.status}`),
+      onError: (e) => setTestNote(e instanceof ApiError ? e.message : "Test failed."),
+    });
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold tracking-tight text-slate-900">{provider.name}</h3>
+            <Pill tone={tone}>{label}</Pill>
+            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${provider.surface === "owned" ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200"}`}>
+              {provider.surface === "owned" ? "You own this — auto-eligible" : "Third-party — draft + you post"}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">{provider.blurb}</p>
+          {connection && (
+            <p className="mt-1 text-xs text-slate-400">
+              Last checked {fmtWhen(connection.last_used_at)}
+              {connection.label ? ` · ${connection.label}` : ""}
+              {connection.account_ref ? ` · ${connection.account_ref}` : ""}
+            </p>
+          )}
+          {connection?.last_error && (
+            <p className="mt-1 text-xs text-rose-600">Last error: {connection.last_error}</p>
+          )}
+          {/* GBP review-reply approval gate */}
+          {provider.kind === "google_business_profile" && connected && connection?.gbp_access !== "approved" && (
+            <p className="mt-1 text-xs text-amber-700">Review replies need Google&apos;s approval — posting updates works now.</p>
+          )}
+        </div>
+
+        {canConnect && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {connected ? (
+              <>
+                <button
+                  onClick={runTest}
+                  disabled={test.isPending}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  {test.isPending ? "Testing…" : "Test"}
+                </button>
+                <button
+                  onClick={() => connection && window.confirm(`Disconnect ${provider.name}? Publishing to it will stop until you reconnect.`) && disconnect.mutate(connection.id)}
+                  disabled={disconnect.isPending}
+                  className="rounded-md border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  Disconnect
+                </button>
+              </>
+            ) : isOauth ? (
+              <button
+                onClick={startOauth}
+                disabled={authorize.isPending}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              >
+                {authorize.isPending ? "Redirecting…" : "Connect with Google"}
+              </button>
+            ) : (
+              <button
+                onClick={() => { setShowForm((s) => !s); setErr(null); }}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                {showForm ? "Cancel" : "Connect"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {testNote && <p className="mt-2 text-xs text-slate-500">{testNote}</p>}
+
+      {/* Direct-credential forms (WordPress app-password / Ayrshare profile key) */}
+      {canConnect && showForm && provider.kind === "wordpress_org" && (
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+          <p className="text-xs text-slate-500">
+            Create an <span className="font-medium">Application Password</span> in WordPress (Users → Profile) and paste it
+            here. We only accept secure <span className="font-medium">https://</span> sites.
+          </p>
+          <input value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} placeholder="https://yoursite.com"
+            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+          <div className="flex flex-wrap gap-2">
+            <input value={wpUser} onChange={(e) => setWpUser(e.target.value)} placeholder="WordPress username"
+              className="min-w-[12rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+            <input value={appPassword} onChange={(e) => setAppPassword(e.target.value)} placeholder="Application password"
+              type="password" className="min-w-[12rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+          </div>
+          <button onClick={submitWordpress} disabled={connect.isPending || !siteUrl || !wpUser || !appPassword}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
+            {connect.isPending ? "Saving…" : "Save connection"}
+          </button>
+        </div>
+      )}
+      {canConnect && showForm && provider.kind === "ayrshare_profile" && (
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+          <p className="text-xs text-slate-500">
+            Paste your Ayrshare <span className="font-medium">Profile Key</span>. Social posts are prepared as drafts —
+            you review and post them yourself (third-party platforms require manual posting).
+          </p>
+          <input value={profileKey} onChange={(e) => setProfileKey(e.target.value)} placeholder="Ayrshare profile key"
+            type="password" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (optional)"
+            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+          <button onClick={submitAyrshare} disabled={connect.isPending || !profileKey}
+            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
+            {connect.isPending ? "Saving…" : "Save connection"}
+          </button>
+        </div>
+      )}
+
+      {/* GSC property picker — choose which verified property to pull, once connected. */}
+      {provider.kind === "google_search_console" && connected && connection && canConnect && (
+        <GscPropertyPicker connection={connection} businessId={businessId} />
+      )}
+
+      {/* GA property picker — choose which GA4 property to pull, once connected. */}
+      {provider.kind === "google_analytics" && connected && connection && canConnect && (
+        <GaPropertyPicker connection={connection} businessId={businessId} />
+      )}
+
+      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+    </Card>
+  );
+}
+
+function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useConnections(businessId);
+
+  if (isLoading || !data) return <Spinner />;
+
+  const byKind: Record<string, Connection | undefined> = {};
+  for (const c of data.connections) if (!byKind[c.kind]) byKind[c.kind] = c;
+
+  return (
+    <div>
+      {!data.vault_ready && (
+        <Card className="mb-4 border-amber-200 bg-amber-50/50">
+          <div className="text-sm font-semibold text-slate-900">Connections aren&apos;t configured on this server yet</div>
+          <p className="mt-1 text-sm text-slate-700">
+            An administrator must set <span className="font-mono text-xs">TOKEN_ENC_KEY</span> before credentials can be
+            stored securely. Until then, connecting is disabled.
+          </p>
+        </Card>
+      )}
+
+      <Card className="mb-4 bg-indigo-50/50">
+        <div className="text-sm font-semibold text-slate-900">How publishing honesty works</div>
+        <p className="mt-1 text-sm text-slate-700">
+          <span className="font-medium">Surfaces you own</span> (your WordPress site, your Google Business Profile) can be
+          published to automatically once you approve. <span className="font-medium">Third-party platforms</span> (Facebook,
+          Instagram, LinkedIn, Pinterest) are draft-only — we prepare the post and alert you, but{" "}
+          <span className="font-medium">you post it manually</span> to stay within each platform&apos;s terms of service.
+        </p>
+      </Card>
+
+      <div className="space-y-3">
+        {PROVIDERS.map((p) => (
+          <ProviderCard
+            key={p.kind}
+            provider={p}
+            connection={byKind[p.kind]}
+            businessId={businessId}
+            canEdit={canEdit}
+            vaultReady={data.vault_ready}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- Data imports tab (the original page content) -------------------------------------
+function DataImportsTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
   const { data, isLoading } = useExternalSignals(businessId);
   const ingest = useIngestSignal(businessId);
   const normalize = useTriggerJob(businessId);
@@ -56,13 +533,6 @@ export default function IntegrationsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Connect your other data"
-        subtitle="Already pay for an SEO or analytics tool? Paste its report here and we'll fold those real numbers into your reputation plan."
-      />
-
-      <JobProgressBanner businessId={businessId} className="mb-4" />
-
       <Card className="mb-4 bg-indigo-50/50">
         <div className="text-sm font-semibold text-slate-900">What this is for</div>
         <p className="mt-1 text-sm text-slate-700">
@@ -162,6 +632,50 @@ export default function IntegrationsPage() {
             </Card>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+type Tab = "connections" | "imports";
+
+export default function IntegrationsPage() {
+  const { businessId, canEdit } = useBusiness();
+  const [tab, setTab] = useState<Tab>("connections");
+
+  return (
+    <div>
+      <PageHeader
+        title="Integrations"
+        subtitle="Connect the places you publish, and fold in data from other tools."
+      />
+
+      <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      {/* tabs */}
+      <div className="mb-4 flex gap-1 border-b border-slate-200">
+        {([
+          { key: "connections", label: "Connections" },
+          { key: "imports", label: "Data imports" },
+        ] as { key: Tab; label: string }[]).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              tab === t.key
+                ? "border-indigo-600 text-indigo-700"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "connections" ? (
+        <ConnectionsTab businessId={businessId} canEdit={canEdit} />
+      ) : (
+        <DataImportsTab businessId={businessId} canEdit={canEdit} />
       )}
     </div>
   );
