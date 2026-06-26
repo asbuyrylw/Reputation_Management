@@ -28,6 +28,10 @@ htmlcov/
 output/*.docx
 reports/*.docx
 
+# Local database backups (scripts/backup_db.sh) + local API log
+backups/
+reputation_engine/_repapi.log
+
 # OS
 .DS_Store
 Thumbs.db

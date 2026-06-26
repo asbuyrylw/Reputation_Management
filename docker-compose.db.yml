@@ -1,0 +1,40 @@
+# Durable local-dev Postgres for the Reputation engine/console.
+# -----------------------------------------------------------------------------
+# WHY THIS EXISTS: local dev historically ran an ad-hoc `rep_pg_test` container
+# started with `docker run` and NO explicit volume. The postgres:16 image then
+# used an ANONYMOUS volume, which Docker orphans (and replaces with a fresh empty
+# one) whenever the container is recreated -- silently wiping the database. That
+# is exactly how a live Team Unstoppable audit was lost.
+#
+# This file pins the data to a NAMED volume (rep_pg_data) that survives recreate,
+# adds restart:unless-stopped, and keeps the container name + port (:15432) the
+# tooling/docs already expect, so `reputation_engine/.env`
+# (REP_DB_DSN=...@localhost:15432/reputation) keeps working unchanged.
+#
+# Bring it up:   docker compose -f docker-compose.db.yml up -d
+# Back it up:    scripts/backup_db.ps1   (or scripts/backup_db.sh)
+# This is DB-only on purpose: run the API/worker locally via uvicorn (see
+# OPERATIONS_SETUP.md). The full app stack lives in docker-compose.yml.
+# -----------------------------------------------------------------------------
+services:
+  db:
+    image: postgres:16
+    container_name: rep_pg_test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: reputation
+    ports:
+      - "15432:5432"
+    volumes:
+      - rep_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  rep_pg_data:
+    name: rep_pg_data
