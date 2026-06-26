@@ -201,7 +201,14 @@ export interface ContentDraft {
   highlighted_sections?: { type?: string; note?: string }[] | null;
   placeholders_pending?: string[] | null;
   wo_instruction?: string | null;
-  quality_notes?: { keyword_coverage?: KeywordCoverage } & Record<string, unknown> | null;
+  quality_notes?:
+    | ({
+        keyword_coverage?: KeywordCoverage;
+        on_page?: DraftOnPage;
+        citation_ready?: DraftCitationReady;
+        fact_check?: DraftFactCheck;
+      } & Record<string, unknown>)
+    | null;
 }
 
 export interface KeywordCoverage {
@@ -1064,4 +1071,165 @@ export interface OurContentImpact {
     our_content_clicks: number;
     our_content_sessions: number;
   };
+}
+
+// =====================================================================================
+// Wave 2 — draft-quality scorecards (carried on ContentDraft.quality_notes), topical
+// authority, internal linking, and keyword-intent coverage.
+// =====================================================================================
+
+// On-page SEO self-check for a draft (word count, headings, images/alt, links, schema).
+export interface DraftOnPage {
+  score: number; // 0..100
+  word_count: number;
+  h1: number;
+  h2: number;
+  images: number;
+  images_with_alt: number;
+  links: number;
+  avg_sentence_len: number;
+  suggested_schema: string;
+  issues: { label: string; fix: string }[];
+}
+
+// "Will an AI quote this?" readiness — FAQ-shaped headings + tips to make it citable.
+export interface DraftCitationReady {
+  score: number; // 0..100
+  faq_headings: number;
+  tips: { label: string; fix: string }[];
+}
+
+// Best-effort fact-check of the claims in a draft. `status` is the verification verdict;
+// unverified claims may still be true — they just need a human to confirm.
+export interface DraftFactCheck {
+  claims: { claim: string; status: string; note: string }[];
+  unverified: number;
+}
+
+// Topic-authority clusters — pillar + spoke keywords grouped into the topics to own.
+export interface TopicalCluster {
+  topic: string;
+  pillar: string;
+  spokes: string[];
+  keyword_count: number;
+  total_search_volume: number | null;
+  owned_pieces: number;
+  needs_content: boolean;
+  priority: number;
+}
+export interface TopicalAuthority {
+  clusters: TopicalCluster[];
+  summary: { keywords: number; topics: number; uncovered: number };
+  next_to_write: { topic: string; covers_keywords: number; spokes: string[]; why: string }[];
+}
+
+// Internal-linking opportunities — under-linked owned pages + concrete link suggestions.
+export interface InternalLinks {
+  under_linked: { url: string; title: string; internal_links: number }[];
+  suggestions: { from: string; to: string; anchor: string; why: string }[];
+  summary: { pages: number; owned_pieces: number; under_linked: number; suggestions: number };
+}
+
+// Keyword coverage grouped by search intent (informational / commercial / …).
+export interface KeywordIntent {
+  by_intent: { intent: string; keywords: number; examples: string[]; owned_pieces: number; needs_content: boolean }[];
+  summary: { intents: number; uncovered: number };
+}
+
+// =====================================================================================
+// Wave 3 — directory citations, indexing status, sources-to-win, backlink profile.
+// =====================================================================================
+
+// Curated directory/citation submission list, with the NAP block to keep consistent.
+export interface DirectoryCitations {
+  nap: Nap;
+  directories: { key: string; name: string; submit_url: string; authority: string; category: string; financial: boolean }[];
+  note: string;
+  summary: { total: number; essential: number };
+}
+
+// Which of our owned pages Google has indexed vs. needs a manual "request indexing" in GSC.
+// When GSC isn't connected the API returns the `skipped` shape instead.
+export interface IndexingStatus {
+  indexed?: { url: string; title: string | null; coverage: string | null }[];
+  not_indexed?: { url: string; title: string | null; coverage: string | null }[];
+  summary?: { checked: number; indexed: number; needs_request: number };
+  skipped?: true;
+  reason?: string;
+  urls?: number;
+}
+
+// Non-owned domains AI cites about us, ranked, with the suggested action per source.
+export interface SourcesToWin {
+  run_id: number | null;
+  sources: { domain: string; cite_count: number; share: number; classification: string; action: string; capability: string }[];
+  summary: { total: number; contested: number };
+}
+
+// Backlink profile snapshot (present only when a backlink data source is configured).
+export interface BacklinkProfile {
+  has_data: boolean;
+  source?: string;
+  as_of?: string;
+  profile?: Record<string, unknown>;
+  lost_domains?: string[];
+}
+
+// =====================================================================================
+// Wave 4 — answer changes (what moved between audits) + review-reply SLA / requests.
+// =====================================================================================
+
+// What materially changed in AI answers between the last two audits, per prompt/engine.
+export interface AnswerChanges {
+  changes: {
+    engine: string;
+    prompt: string;
+    reasons: string[];
+    before: { goal_alignment: number | null; sentiment: string | null };
+    after: { goal_alignment: number | null; sentiment: string | null };
+  }[];
+  summary: { compared: boolean; changed: number };
+}
+
+// Negative reviews still awaiting a reply, with how long they've waited vs. the SLA.
+export interface ReviewSla {
+  sla_hours: number;
+  pending: { review_id: number; rating: number | null; hours_waiting: number; sla_breached: boolean; snippet: string }[];
+  summary: { awaiting: number; sla_breached: number };
+}
+
+// Result of POSTing review requests. When email isn't configured the API returns the
+// keyless `skipped` shape with a preview of what WOULD have been sent.
+export type ReviewRequestSendResult =
+  | { sent: number; failed?: number }
+  | { sent: 0; skipped: true; reason: string; preview: { subject: string; body: string } };
+
+// =====================================================================================
+// Wave 5 — shareable public summary + platform quota usage (super-admin).
+// =====================================================================================
+
+// The data behind a public lead-magnet page — score, band, top gaps, teaser line.
+export interface PublicSummary {
+  found: boolean;
+  business: string;
+  area: string | null;
+  score: number | null;
+  band: string;
+  top_gaps: string[];
+  teaser: string;
+  has_audit: boolean;
+}
+
+// One provider's quota line — `unlimited` when uncapped (then used/cap may be null).
+export interface QuotaLine {
+  within: boolean;
+  used: number | null;
+  cap: number | null;
+  unlimited: boolean;
+}
+// Platform-wide publishing/quota usage across the shared provider accounts (super-admin).
+export interface QuotaUsage {
+  ayrshare: QuotaLine;
+  x: QuotaLine;
+  gbp: QuotaLine;
 }

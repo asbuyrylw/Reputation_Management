@@ -57,6 +57,11 @@ export function DraftReviewCard({
   const covCovered = cov?.covered ?? [];
   const covMissing = cov?.missing ?? [];
   const covRate = cov?.rate != null ? Math.round(cov.rate * 100) : null;
+  // Extra self-check scorecards: on-page SEO, "will AI quote this?", and a fact-check.
+  const onPage = draft.quality_notes?.on_page;
+  const citationReady = draft.quality_notes?.citation_ready;
+  const factCheck = draft.quality_notes?.fact_check;
+  const scoreTone = (s: number) => (s >= 80 ? "text-emerald-700" : s >= 60 ? "text-amber-700" : "text-rose-600");
   // "Why this helps" — derived from the question it targets + the work-order instruction.
   const whyHelps = draft.target_query
     ? `Helps your AI reputation + SEO by publishing accurate, ownable content for “${draft.target_query}”.`
@@ -189,6 +194,63 @@ export function DraftReviewCard({
             <p className="text-[10px] text-slate-400">Target keywords this draft includes vs. is missing — edit to weave in the important ones.</p>
           </div>
         </details>
+      )}
+
+      {/* Draft-quality scorecards: on-page SEO, AI-citability, and a best-effort fact-check */}
+      {(onPage || citationReady || factCheck) && (
+        <div className="mt-2 space-y-1.5 rounded-md border border-slate-100 bg-slate-50/60 p-2 text-xs">
+          {onPage && (
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-slate-600">On-page SEO</span>
+                <span className={`font-semibold ${scoreTone(onPage.score)}`}>{onPage.score}/100</span>
+                <span className="text-slate-400">· {onPage.word_count} words · {onPage.images_with_alt}/{onPage.images} images with alt</span>
+              </div>
+              {onPage.issues.length > 0 && (
+                <ul className="mt-0.5 space-y-0.5 text-slate-500">
+                  {onPage.issues.slice(0, 2).map((it, i) => (
+                    <li key={i}>· {it.label} — <span className="text-slate-400">{it.fix}</span></li>
+                  ))}
+                </ul>
+              )}
+              {onPage.suggested_schema && (
+                <div className="mt-0.5 text-[10px] text-slate-400">Suggested schema: {onPage.suggested_schema}</div>
+              )}
+            </div>
+          )}
+          {citationReady && (
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-slate-600">Will AI quote this?</span>
+                <span className={`font-semibold ${scoreTone(citationReady.score)}`}>{citationReady.score}/100</span>
+                <span className="text-slate-400">· {citationReady.faq_headings} Q&amp;A heading{citationReady.faq_headings === 1 ? "" : "s"}</span>
+              </div>
+              {citationReady.tips.length > 0 && (
+                <ul className="mt-0.5 space-y-0.5 text-slate-500">
+                  {citationReady.tips.slice(0, 2).map((t, i) => (
+                    <li key={i}>· {t.label} — <span className="text-slate-400">{t.fix}</span></li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {factCheck && factCheck.unverified > 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-1.5 text-amber-800">
+              <div className="font-medium">
+                {factCheck.unverified} claim{factCheck.unverified === 1 ? "" : "s"} need confirming
+              </div>
+              <ul className="mt-0.5 space-y-0.5 text-amber-700">
+                {factCheck.claims
+                  .filter((c) => c.status !== "verified")
+                  .slice(0, 3)
+                  .map((c, i) => (
+                    <li key={i}>· “{c.claim}”{c.note ? ` — ${c.note}` : ""}</li>
+                  ))}
+              </ul>
+              <div className="mt-0.5 text-[10px] text-amber-600">May still be true — confirm before publishing.</div>
+            </div>
+          )}
+        </div>
       )}
 
       {whyHelps && <p className="mt-2 text-xs text-slate-500">💡 {whyHelps}</p>}

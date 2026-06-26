@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useTimeline, useMetricsTrend, useAnswerLenses } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useTimeline, useMetricsTrend, useAnswerLenses, useAnswerChanges } from "@/lib/hooks";
 import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { PerEngineTrend } from "@/components/PerEngineTrend";
@@ -37,6 +37,7 @@ export default function AiOverviewPage() {
   const { data: timeline } = useTimeline(businessId);
   const { data: trend } = useMetricsTrend(businessId);
   const { data: lensData } = useAnswerLenses(businessId);
+  const { data: answerChanges } = useAnswerChanges(businessId);
 
   if (loading || (businessId != null && (isLoading || !data))) return <Spinner />;
   if (businesses.length === 0 || !data) {
@@ -76,6 +77,53 @@ export default function AiOverviewPage() {
         <div className="space-y-6">
           {/* Why you're scored this way */}
           <PrimaryChallengeCard challenge={data.challenge} />
+
+          {/* What changed in AI answers since the previous audit */}
+          {answerChanges?.summary?.compared && (
+            <Card>
+              <div className="mb-1 text-base font-semibold tracking-tight text-slate-900">What changed in AI answers</div>
+              <p className="mb-3 text-xs text-slate-500">How specific answers moved since your previous audit — the wins to build on and the regressions to fix.</p>
+              {answerChanges.changes.length === 0 ? (
+                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">No material changes since the last audit — answers held steady.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {answerChanges.changes.slice(0, 6).map((ch, i) => {
+                    const beforeGA = ch.before.goal_alignment;
+                    const afterGA = ch.after.goal_alignment;
+                    const improved = beforeGA != null && afterGA != null ? afterGA > beforeGA : null;
+                    return (
+                      <li key={i} className="rounded-xl border border-slate-100 bg-white px-3.5 py-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded bg-slate-900 px-1.5 py-0.5 text-[11px] font-medium text-white">{ch.engine}</span>
+                          <span className="min-w-0 truncate text-sm font-medium text-slate-800">“{ch.prompt}”</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                          <span className="text-slate-400">Sentiment:</span>
+                          <span className="text-slate-600">{ch.before.sentiment ?? "—"}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className={`font-semibold ${ch.after.sentiment === "positive" ? "text-emerald-700" : ch.after.sentiment === "negative" ? "text-rose-600" : "text-slate-700"}`}>
+                            {ch.after.sentiment ?? "—"}
+                          </span>
+                          {improved != null && (
+                            <span className={`ml-1 font-semibold ${improved ? "text-emerald-700" : "text-rose-600"}`}>
+                              {improved ? "▲" : "▼"} goal alignment {beforeGA} → {afterGA}
+                            </span>
+                          )}
+                        </div>
+                        {ch.reasons.length > 0 && (
+                          <ul className="mt-1 space-y-0.5 text-xs text-slate-500">
+                            {ch.reasons.slice(0, 3).map((r, j) => (
+                              <li key={j}>· {r}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Card>
+          )}
 
           {/* How each assistant differs */}
           {perEngine && Object.keys(perEngine.engines).length > 0 && <PerEnginePanel data={perEngine} />}

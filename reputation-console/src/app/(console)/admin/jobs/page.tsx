@@ -2,11 +2,51 @@
 
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useJobs, useRunEverything } from "@/lib/hooks";
+import { useAuth } from "@/lib/auth";
+import { useJobs, useRunEverything, usePlatformQuotaUsage } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { JOB_LABELS, JOB_GROUP_ORDER, jobLabel, jobMeta } from "@/lib/jobLabels";
+import type { QuotaLine } from "@/lib/types";
+
+// "Platform quota usage" — the shared publishing-provider accounts' usage vs. their caps,
+// across all tenants. Super-admin / admin only. Shows "unlimited" when a provider has no cap.
+function QuotaUsageCard({ enabled }: { enabled: boolean }) {
+  const { data } = usePlatformQuotaUsage(enabled);
+  if (!enabled || !data) return null;
+  const providers: { key: string; label: string; line: QuotaLine }[] = [
+    { key: "ayrshare", label: "Ayrshare (social)", line: data.ayrshare },
+    { key: "x", label: "X / Twitter", line: data.x },
+    { key: "gbp", label: "Google Business Profile", line: data.gbp },
+  ];
+  return (
+    <Card className="mb-4">
+      <div className="text-sm font-semibold text-slate-900">Platform quota usage</div>
+      <p className="mt-0.5 text-xs text-slate-500">Shared publishing-provider accounts across all tenants. &ldquo;Unlimited&rdquo; means the provider has no cap.</p>
+      <ul className="mt-3 space-y-2">
+        {providers.map(({ key, label, line }) => {
+          const pct = line.unlimited || line.cap == null || !line.cap ? null : Math.min(100, Math.round(((line.used ?? 0) / line.cap) * 100));
+          return (
+            <li key={key} className="text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-slate-700">{label}</span>
+                <span className={`text-xs font-semibold ${line.within ? "text-slate-500" : "text-rose-600"}`}>
+                  {line.unlimited ? "Unlimited" : line.cap == null ? `${line.used ?? 0} used` : `${line.used ?? 0} / ${line.cap}`}
+                </span>
+              </div>
+              {pct != null && (
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className={`h-full rounded-full ${line.within ? "bg-indigo-500" : "bg-rose-500"}`} style={{ width: `${pct}%` }} />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
 
 // Trigger buttons grouped the way the sidebar is, so "what runs" lines up with "where the
 // result shows up." Derived from the shared jobLabels map (the single source of truth).
@@ -49,6 +89,8 @@ function resultNote(result: Record<string, unknown> | null): string | null {
 
 export default function JobsPage() {
   const { businessId, canEdit } = useBusiness();
+  const { user } = useAuth();
+  const isPlatformAdmin = !!user?.is_super_admin || user?.role === "admin";
   const { data, isLoading } = useJobs(businessId);
   const runAll = useRunEverything(businessId);
   const [confirmAll, setConfirmAll] = useState(false);
@@ -63,6 +105,8 @@ export default function JobsPage() {
         subtitle="Trigger an audit or the monthly cycle, then watch it progress. Long jobs run in the background — you can leave this page. Some jobs auto-chain (e.g. regenerating the plan also syncs tasks and content to produce)."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      <QuotaUsageCard enabled={isPlatformAdmin} />
 
       {canEdit && (
         <Card className="mb-4 border-indigo-100 bg-indigo-50/40">

@@ -3,11 +3,91 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBusiness } from "@/lib/business";
-import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTargetStatus, useUpdateTargetContact, usePushTarget, useDraftPitch } from "@/lib/hooks";
+import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTargetStatus, useUpdateTargetContact, usePushTarget, useDraftPitch, useDirectoryCitations } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import type { DiscoveryTarget } from "@/lib/types";
+import type { DiscoveryTarget, DirectoryCitations } from "@/lib/types";
+
+const NAP_DIR_LABELS: Record<string, string> = {
+  name: "Business name",
+  address: "Address",
+  phone: "Phone",
+  website: "Website",
+  areas_served: "Areas served",
+};
+
+// "Get listed (directories)" — the NAP block (consistent name/address/phone) plus a curated
+// list of high-authority directories to submit to. Consistent citations + listings on trusted
+// directories are a core local-SEO + AI-trust signal.
+function DirectoryCitationsSection({ data }: { data: DirectoryCitations | undefined }) {
+  if (!data || data.directories.length === 0) return null;
+  const { nap, directories, summary } = data;
+  const napRows: { key: string; label: string; value: string | null }[] = [
+    { key: "name", label: NAP_DIR_LABELS.name, value: nap.name },
+    { key: "address", label: NAP_DIR_LABELS.address, value: nap.address },
+    { key: "phone", label: NAP_DIR_LABELS.phone, value: nap.phone },
+    { key: "website", label: NAP_DIR_LABELS.website, value: nap.website },
+    { key: "areas_served", label: NAP_DIR_LABELS.areas_served, value: nap.areas_served },
+  ];
+  return (
+    <Card className="mb-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Get listed (directories)</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Listings on trusted directories — with your name, address &amp; phone matching exactly everywhere — are a core
+            local-SEO and AI-trust signal. {summary.essential} essential of {summary.total} suggested.
+          </p>
+        </div>
+      </div>
+
+      {/* NAP block — keep this identical on every directory you submit to */}
+      <div className="mt-3 rounded-lg bg-slate-50 p-3">
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Use these exact details (NAP)</div>
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+          {napRows.map((r) => {
+            const missing = nap.missing_fields.includes(r.key);
+            return (
+              <div key={r.key} className="flex items-baseline justify-between gap-2 text-xs">
+                <dt className="text-slate-500">{r.label}</dt>
+                <dd className={`text-right font-medium ${missing ? "text-amber-600" : "text-slate-700"}`}>
+                  {r.value || (missing ? "Missing — add this" : "—")}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+        {nap.missing_fields.length > 0 && (
+          <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
+            {nap.consistency_note || "Fill in the highlighted fields so your listing is consistent across every directory."}
+          </p>
+        )}
+      </div>
+
+      {/* curated directory rows */}
+      <ul className="mt-3 divide-y divide-slate-100">
+        {directories.map((d) => (
+          <li key={d.key} className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-slate-800">{d.name}</span>
+                {d.financial && <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">Financial</span>}
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] capitalize text-slate-500">{d.category.replace(/_/g, " ")}</span>
+              </div>
+              <div className="text-[11px] text-slate-400">{d.authority} authority</div>
+            </div>
+            <a href={d.submit_url} target="_blank" rel="noreferrer"
+              className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-slate-50">
+              Open submission ↗
+            </a>
+          </li>
+        ))}
+      </ul>
+      {data.note && <p className="mt-2 text-[11px] text-slate-400">{data.note}</p>}
+    </Card>
+  );
+}
 
 function matchLabel(s: number | null): { label: string; cls: string } {
   if (s == null) return { label: "—", cls: "text-slate-400" };
@@ -84,6 +164,7 @@ export default function OutreachPage() {
   const setStatus = useSetTargetStatus(businessId);
   const push = usePushTarget(businessId);
   const pitch = useDraftPitch(businessId);
+  const directories = useDirectoryCitations(businessId);
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", outlet: "", url: "", beat: "" });
@@ -122,6 +203,8 @@ export default function OutreachPage() {
       />
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      <DirectoryCitationsSection data={directories.data} />
 
       {canEdit && (
         <Card className="mb-4">

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useAttribution, useMomentum, useShareOfVoice, useGapModel } from "@/lib/hooks";
+import { useAttribution, useMomentum, useShareOfVoice, useGapModel, useSourcesToWin } from "@/lib/hooks";
 import { Card, PageHeader, Pill, Spinner, StatTile } from "@/components/ui";
 import { ShareOfVoiceBar } from "@/components/ShareOfVoiceBar";
 import { SourceMix } from "@/components/SourceMix";
@@ -42,6 +42,7 @@ export default function RankingsPage() {
   const momentum = useMomentum(businessId);
   const attr = useAttribution(businessId);
   const gap = useGapModel(businessId);
+  const sourcesToWin = useSourcesToWin(businessId);
 
   if (sov.isLoading) return <Spinner />;
 
@@ -307,6 +308,42 @@ export default function RankingsPage() {
                   Find outreach targets →
                 </Link>
               </div>
+            </Card>
+          )}
+
+          {/* Sources to win — top non-owned domains AI cites, with the action to get onto each */}
+          {sourcesToWin.data && sourcesToWin.data.sources.length > 0 && (
+            <Card>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold tracking-tight text-slate-900">Sources to win</h3>
+                  <p className="mt-0.5 text-sm text-slate-500">
+                    These sites AI already trusts and quotes about your category — getting cited or listed on them is the
+                    fastest way to be quoted more. {sourcesToWin.data.summary.contested > 0 ? `${sourcesToWin.data.summary.contested} are working against you.` : ""}
+                  </p>
+                </div>
+              </div>
+              <ul className="mt-3 space-y-2">
+                {sourcesToWin.data.sources.slice(0, 8).map((srcRow) => {
+                  const t: Tone = srcRow.classification === "contested" ? "bad" : srcRow.classification === "owned" ? "good" : "neutral";
+                  return (
+                    <li key={srcRow.domain} className="rounded-xl border border-slate-100 bg-white px-3.5 py-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-semibold text-slate-900">{srcRow.domain}</span>
+                          <Pill tone={t}>{srcRow.classification}</Pill>
+                          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] capitalize text-slate-500">{srcRow.capability.replace(/_/g, " ")}</span>
+                        </span>
+                        <span className="shrink-0 text-xs font-medium text-slate-500">{srcRow.cite_count} citations · {pct(srcRow.share)}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">{srcRow.action}</div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <Link href="/content/outreach" className="mt-3 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">
+                Work these in outreach →
+              </Link>
             </Card>
           )}
 

@@ -4,6 +4,12 @@
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
+// The API origin, for building absolute links to non-fetch endpoints (e.g. an RSS feed
+// or a download the browser opens directly).
+export function apiBase(): string {
+  return BASE;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);

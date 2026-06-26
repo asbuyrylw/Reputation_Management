@@ -74,6 +74,18 @@ import type {
   GaChannel,
   GaProperty,
   OurContentImpact,
+  TopicalAuthority,
+  InternalLinks,
+  KeywordIntent,
+  DirectoryCitations,
+  IndexingStatus,
+  SourcesToWin,
+  BacklinkProfile,
+  AnswerChanges,
+  ReviewSla,
+  ReviewRequestSendResult,
+  PublicSummary,
+  QuotaUsage,
 } from "./types";
 
 type Json = Record<string, unknown>;
@@ -1174,4 +1186,84 @@ export function useSetGaProperty(businessId: number | null, connId: number | nul
 // =====================================================================================
 export function useOurContentImpact(businessId: number | null) {
   return useApiQuery<OurContentImpact>(["our-content-impact", businessId], base(businessId, "/our-content-impact"));
+}
+
+// =====================================================================================
+// Content intelligence + SEO depth (waves 2–5). Topic authority, internal linking,
+// keyword intent, directory citations, indexing, sources-to-win, backlinks, answer
+// changes, review SLA / requests, public summary, and platform quota usage.
+// =====================================================================================
+
+// Topic-authority clusters (pillar/spoke keyword groups + what to write next).
+export function useTopicalAuthority(businessId: number | null) {
+  return useApiQuery<TopicalAuthority>(["topical-authority", businessId], base(businessId, "/topical-authority"));
+}
+
+// Keyword coverage grouped by search intent.
+export function useKeywordIntent(businessId: number | null) {
+  return useApiQuery<KeywordIntent>(["keyword-intent", businessId], base(businessId, "/keyword-intent"));
+}
+
+// Internal-linking opportunities (under-linked owned pages + link suggestions).
+export function useInternalLinks(businessId: number | null) {
+  return useApiQuery<InternalLinks>(["internal-links", businessId], base(businessId, "/internal-links"));
+}
+
+// Indexing status of our owned pages (or a skipped shape when GSC isn't connected).
+export function useIndexingStatus(businessId: number | null) {
+  return useApiQuery<IndexingStatus>(["indexing-status", businessId], base(businessId, "/indexing-status"));
+}
+
+// Backlink profile snapshot (has_data is false until a backlink source is configured).
+export function useBacklinkProfile(businessId: number | null) {
+  return useApiQuery<BacklinkProfile>(["backlink-profile", businessId], base(businessId, "/backlink-profile"));
+}
+
+// Curated directory/citation submission list + the NAP block to keep consistent.
+export function useDirectoryCitations(businessId: number | null) {
+  return useApiQuery<DirectoryCitations>(["directory-citations", businessId], base(businessId, "/directory-citations"));
+}
+
+// Non-owned domains AI cites about us, with the suggested action to win each.
+export function useSourcesToWin(businessId: number | null) {
+  return useApiQuery<SourcesToWin>(["sources-to-win", businessId], base(businessId, "/sources-to-win"));
+}
+
+// What materially changed in AI answers between the last two audits.
+export function useAnswerChanges(businessId: number | null) {
+  return useApiQuery<AnswerChanges>(["answer-changes", businessId], base(businessId, "/answer-changes"));
+}
+
+// Negative reviews awaiting a reply, with hours-waited vs. the SLA.
+export function useReviewSla(businessId: number | null) {
+  return useApiQuery<ReviewSla>(["review-sla", businessId], base(businessId, "/review-sla"));
+}
+
+// Send review-request emails to one or more recipients. Returns { sent } or a keyless
+// `skipped` shape with a preview when email isn't configured on the server.
+export function useSendReviewRequests(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (recipients: { email: string; first_name?: string }[]) =>
+      apiFetch<ReviewRequestSendResult>(`/businesses/${businessId}/review-requests/send`, {
+        method: "POST",
+        body: { recipients },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["review-sla", businessId] }),
+  });
+}
+
+// The data behind a public lead-magnet page (score + band + top gaps + teaser).
+export function usePublicSummary(businessId: number | null) {
+  return useApiQuery<PublicSummary>(["public-summary", businessId], base(businessId, "/public-summary"));
+}
+
+// Platform-wide provider quota usage (super-admin; absolute path, no businessId).
+export function usePlatformQuotaUsage(enabled: boolean) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["platform-quota-usage"],
+    queryFn: () => apiFetch<QuotaUsage>("/platform/quota-usage"),
+    enabled: !!user && enabled,
+  });
 }

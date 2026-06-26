@@ -2,12 +2,106 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import type { WorkOrder, ContentDraft, Asset } from "@/lib/types";
+import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent } from "@/lib/types";
+
+// "Topic authority" — the pillar/spoke clusters to own, with a needs-content badge + what to
+// write next. Helps the owner see which topics they cover vs. still need a piece for.
+function TopicAuthoritySection({ data }: { data: TopicalAuthority | undefined }) {
+  if (!data || data.clusters.length === 0) return null;
+  const clusters = [...data.clusters].sort((a, b) => a.priority - b.priority).slice(0, 8);
+  return (
+    <section>
+      <h3 className="mb-1 text-sm font-semibold text-slate-900">Topic authority</h3>
+      <p className="mb-2 text-xs text-slate-500">
+        {data.summary.topics} topic{data.summary.topics === 1 ? "" : "s"} from your keywords
+        {data.summary.uncovered > 0 ? ` · ${data.summary.uncovered} still need content` : " · all covered"}. Own a topic by
+        covering its pillar plus the supporting questions.
+      </p>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {clusters.map((c) => (
+          <Card key={c.topic}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-slate-900">{c.topic}</span>
+              {c.needs_content ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Needs content</span>
+              ) : (
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{c.owned_pieces} covered</span>
+              )}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-500">
+              Pillar: {c.pillar} · {c.keyword_count} keyword{c.keyword_count === 1 ? "" : "s"}
+              {c.total_search_volume != null ? ` · ~${c.total_search_volume.toLocaleString()} searches/mo` : ""}
+            </div>
+            {c.spokes.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {c.spokes.slice(0, 6).map((s) => (
+                  <span key={s} className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{s}</span>
+                ))}
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+      {data.next_to_write.length > 0 && (
+        <Card className="mt-3 bg-linear-to-br from-indigo-50/50 to-white" accent="info">
+          <div className="text-sm font-semibold text-slate-900">What to write next</div>
+          <ul className="mt-2 space-y-2 text-sm text-slate-700">
+            {data.next_to_write.slice(0, 3).map((n, i) => (
+              <li key={i} className="flex gap-2.5">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" aria-hidden />
+                <span>
+                  <span className="font-semibold text-slate-900">{n.topic}</span>
+                  <span className="text-slate-500"> — covers {n.covers_keywords} keyword{n.covers_keywords === 1 ? "" : "s"}. {n.why}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </section>
+  );
+}
+
+// "Keywords by intent" — a small breakdown of how many target keywords sit in each search
+// intent, and whether you've published anything for that intent yet.
+function KeywordIntentSection({ data }: { data: KeywordIntent | undefined }) {
+  if (!data || data.by_intent.length === 0) return null;
+  return (
+    <section>
+      <h3 className="mb-1 text-sm font-semibold text-slate-900">Keywords by intent</h3>
+      <p className="mb-2 text-xs text-slate-500">
+        What people are trying to do when they search these terms — {data.summary.uncovered > 0 ? `${data.summary.uncovered} intent${data.summary.uncovered === 1 ? "" : "s"} have no content yet.` : "all intents have content."}
+      </p>
+      <Card>
+        <ul className="divide-y divide-slate-100">
+          {data.by_intent.map((b) => (
+            <li key={b.intent} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+              <div className="min-w-0">
+                <span className="font-medium capitalize text-slate-800">{b.intent.replace(/_/g, " ")}</span>
+                {b.examples.length > 0 && (
+                  <span className="ml-2 text-xs text-slate-400">e.g. {b.examples.slice(0, 3).join(", ")}</span>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="text-xs text-slate-500">{b.keywords} keyword{b.keywords === 1 ? "" : "s"}</span>
+                {b.needs_content ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Needs content</span>
+                ) : (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{b.owned_pieces} covered</span>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </section>
+  );
+}
 
 function humanize(k: string): string {
   return k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -119,6 +213,8 @@ export default function BriefsPage() {
   const { data: workOrders, isLoading: lw } = useWorkOrders(businessId);
   const { data: drafts } = useContentDrafts(businessId);
   const { data: assets } = useAssets(businessId);
+  const { data: topical } = useTopicalAuthority(businessId);
+  const { data: keywordIntent } = useKeywordIntent(businessId);
 
   if (lb || lw || !workOrders) return <Spinner />;
 
@@ -151,7 +247,7 @@ export default function BriefsPage() {
         </Card>
       )}
 
-      {contentItems.length === 0 && recipes.length === 0 ? (
+      {contentItems.length === 0 && recipes.length === 0 && !topical?.clusters.length && !keywordIntent?.by_intent.length ? (
         <EmptyState
           title="Nothing to produce yet"
           why="Content to produce is built from the gaps an audit + plan find."
@@ -161,6 +257,8 @@ export default function BriefsPage() {
         />
       ) : (
         <div className="space-y-6">
+          <TopicAuthoritySection data={topical} />
+          <KeywordIntentSection data={keywordIntent} />
           {contentItems.length > 0 && (
             <section>
               <h3 className="mb-2 text-sm font-semibold text-slate-900">Content pieces ({contentItems.length})</h3>

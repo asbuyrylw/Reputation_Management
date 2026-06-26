@@ -3,14 +3,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { MetricCard, EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
 import { SearchPerformanceCard } from "@/components/SearchPerformanceCard";
-import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact } from "@/lib/types";
+import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact, ReviewSla } from "@/lib/types";
 
 function Stars({ rating }: { rating: number | null }) {
   if (rating == null) return <span className="text-slate-400">—</span>;
@@ -132,9 +132,75 @@ const NAP_LABELS: Record<string, string> = {
   areas_served: "Areas served",
 };
 
+// Multi-row email form that POSTs review-request emails. Handles the keyless `skipped` case
+// (email not configured) by showing the preview of what WOULD have been sent.
+function SendReviewRequestsForm({ businessId }: { businessId: number | null }) {
+  const send = useSendReviewRequests(businessId);
+  const [rows, setRows] = useState<{ email: string; first_name: string }[]>([{ email: "", first_name: "" }]);
+  const [result, setResult] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null);
+
+  const update = (i: number, patch: Partial<{ email: string; first_name: string }>) =>
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const recipients = rows.filter((r) => r.email.trim()).map((r) => ({ email: r.email.trim(), first_name: r.first_name.trim() || undefined }));
+
+  const submit = () => {
+    setResult(null);
+    setPreview(null);
+    send.mutate(recipients, {
+      onSuccess: (res) => {
+        if ("skipped" in res && res.skipped) {
+          setResult(`Email isn't set up on this server (${res.reason}). Here's what would have been sent:`);
+          setPreview(res.preview);
+        } else {
+          const failed = "failed" in res && res.failed ? ` · ${res.failed} failed` : "";
+          setResult(`Sent ${res.sent} review request${res.sent === 1 ? "" : "s"}${failed}.`);
+          setRows([{ email: "", first_name: "" }]);
+        }
+      },
+      onError: () => setResult("Couldn't send — please try again."),
+    });
+  };
+
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Send review requests</div>
+      <div className="space-y-1.5">
+        {rows.map((r, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-2">
+            <input type="email" value={r.email} onChange={(e) => update(i, { email: e.target.value })} placeholder="customer@example.com"
+              className="min-w-56 flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+            <input value={r.first_name} onChange={(e) => update(i, { first_name: e.target.value })} placeholder="First name (optional)"
+              className="w-40 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+            {rows.length > 1 && (
+              <button onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} className="text-xs text-slate-400 hover:text-slate-600">remove</button>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button onClick={() => setRows((rs) => [...rs, { email: "", first_name: "" }])}
+          className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">+ Add recipient</button>
+        <button onClick={submit} disabled={send.isPending || recipients.length === 0}
+          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
+          {send.isPending ? "Sending…" : `Send to ${recipients.length || 0}`}
+        </button>
+      </div>
+      {result && <p className="mt-2 text-xs text-slate-500">{result}</p>}
+      {preview && (
+        <div className="mt-2 rounded-md bg-slate-50 p-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-200">
+          <div className="font-semibold text-slate-700">Subject: {preview.subject}</div>
+          <p className="mt-1 whitespace-pre-wrap">{preview.body}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // "Get more reviews" — the write-review link + copy-paste SMS/email asks, plus the NAP block
 // we keep consistent across directory citations (missing fields flagged in amber to fill in).
-function ReviewRequestCard({ kit }: { kit: ReviewRequestKit | undefined }) {
+// Also surfaces negative reviews awaiting a reply (SLA) and a send-review-requests form.
+function ReviewRequestCard({ kit, businessId, canEdit, sla }: { kit: ReviewRequestKit | undefined; businessId: number | null; canEdit: boolean; sla: ReviewSla | undefined }) {
   if (!kit) return null;
   const { link, templates, nap } = kit;
   const napRows: { key: string; label: string; value: string | null }[] = [
@@ -156,6 +222,19 @@ function ReviewRequestCard({ kit }: { kit: ReviewRequestKit | undefined }) {
           </p>
         </div>
       </div>
+
+      {/* Negative reviews awaiting a reply (SLA) — red when any have breached the response window */}
+      {sla && sla.summary.awaiting > 0 && (
+        <div className={`mt-3 rounded-md px-2.5 py-1.5 text-xs ring-1 ring-inset ${sla.summary.sla_breached > 0 ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-amber-50 text-amber-700 ring-amber-200"}`}>
+          <span className="font-semibold">
+            {sla.summary.awaiting} negative review{sla.summary.awaiting === 1 ? "" : "s"} awaiting a reply
+          </span>
+          {sla.summary.sla_breached > 0
+            ? ` · ${sla.summary.sla_breached} past your ${sla.sla_hours}h response target — reply now.`
+            : ` · respond within ${sla.sla_hours}h.`}
+          <Link href="/approvals" className="ml-1 font-medium underline">Reply →</Link>
+        </div>
+      )}
 
       {/* write-review link (copyable) */}
       {link.write_review_url && (
@@ -210,6 +289,9 @@ function ReviewRequestCard({ kit }: { kit: ReviewRequestKit | undefined }) {
           </p>
         )}
       </div>
+
+      {/* Send review-request emails (canEdit-gated) */}
+      {canEdit && <SendReviewRequestsForm businessId={businessId} />}
     </Card>
   );
 }
@@ -263,6 +345,7 @@ export default function SeoOverviewPage() {
   const kws = useTargetKeywords(businessId);
   const revs = useReviews(businessId);
   const reviewKit = useReviewRequest(businessId);
+  const reviewSla = useReviewSla(businessId);
   const impact = useOurContentImpact(businessId);
 
   if (loading) return <Spinner />;
@@ -309,8 +392,8 @@ export default function SeoOverviewPage() {
         {/* Google reviews & rating (the local-reputation signal) */}
         <ReviewsCard businessId={businessId} canEdit={canEdit} data={revs.data} />
 
-        {/* Get more reviews — copy-paste ask + NAP consistency */}
-        <ReviewRequestCard kit={reviewKit.data} />
+        {/* Get more reviews — copy-paste ask + NAP consistency + SLA + send */}
+        <ReviewRequestCard kit={reviewKit.data} businessId={businessId} canEdit={canEdit} sla={reviewSla.data} />
 
         {/* Keywords to rank for (the SEO keyword-intelligence set) */}
         <KeywordsCard businessId={businessId} canEdit={canEdit} kws={kws.data} />

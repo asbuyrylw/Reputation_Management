@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useReports, useTriggerJob, useEmailReport, useReportView } from "@/lib/hooks";
+import { useReports, useTriggerJob, useEmailReport, useReportView, usePublicSummary } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
@@ -119,6 +119,48 @@ function ReportViewer({ businessId }: { businessId: number | null }) {
   );
 }
 
+// "Shareable public summary" — a preview of the data behind a public lead-magnet page
+// (score + band + top gaps + teaser). Honest about what it is: the public-facing teaser,
+// not the full internal report.
+function PublicSummaryCard({ businessId }: { businessId: number | null }) {
+  const { data } = usePublicSummary(businessId);
+  if (!data || !data.found) return null;
+  const bandTone = data.score == null ? "text-slate-700" : data.score >= 70 ? "text-emerald-700" : data.score >= 40 ? "text-amber-700" : "text-rose-600";
+  return (
+    <Card className="mb-4" accent="info">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Shareable public summary</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            The data behind your public lead-magnet page — what a prospect sees before they sign up. A teaser, not the full report.
+          </p>
+        </div>
+        {!data.has_audit && (
+          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">No audit yet</span>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-6">
+        <div>
+          <div className={`text-2xl font-bold ${bandTone}`}>{data.score ?? "—"}<span className="text-sm text-slate-400">/100</span></div>
+          <div className="text-[11px] text-slate-500">{data.band || "AI reputation"}</div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-slate-800">{data.business}{data.area ? ` · ${data.area}` : ""}</div>
+          {data.teaser && <p className="mt-0.5 text-xs text-slate-500">{data.teaser}</p>}
+        </div>
+      </div>
+      {data.top_gaps.length > 0 && (
+        <div className="mt-3 border-t border-slate-100 pt-2">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Top gaps shown publicly</div>
+          <ul className="list-disc space-y-0.5 pl-5 text-xs text-slate-600">
+            {data.top_gaps.slice(0, 4).map((g, i) => <li key={i}>{g}</li>)}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function ReportsPage() {
   const { businessId, canEdit } = useBusiness();
   const [generating, setGenerating] = useState(false);
@@ -174,6 +216,8 @@ export default function ReportsPage() {
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
       <ReportViewer businessId={businessId} />
+
+      <PublicSummaryCard businessId={businessId} />
 
       {canEdit && (
         <Card className="mb-4">
