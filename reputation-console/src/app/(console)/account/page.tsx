@@ -11,6 +11,10 @@ import {
   useSetBillingEnabled,
   useIntegrationSettings,
   useUpdateIntegrationSettings,
+  useBranding,
+  useSetBranding,
+  useShareLink,
+  useLeads,
 } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
 import { Card, PageHeader } from "@/components/ui";
@@ -188,6 +192,184 @@ function AutomationCard({ businessId, canEdit }: { businessId: number | null; ca
   );
 }
 
+// White-label & sharing: agency branding for the public lead-magnet page, a shareable
+// public audit link, and the emails captured from that page. Edits are canEdit-gated.
+function WhiteLabelCard({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data: branding } = useBranding(businessId);
+  const setBranding = useSetBranding(businessId);
+  const shareLink = useShareLink(businessId);
+  const { data: leadsData } = useLeads(businessId);
+
+  // local form state, seeded from the loaded branding (only while not yet dirtied)
+  const [brandName, setBrandName] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [accent, setAccent] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const bName = brandName ?? branding?.brand_name ?? "";
+  const bLogo = logoUrl ?? branding?.logo_url ?? "";
+  const bAccent = accent ?? branding?.accent ?? "#4f46e5";
+
+  const save = () => {
+    setSaved(false);
+    setBranding.mutate(
+      { brand_name: bName, logo_url: bLogo, accent: bAccent },
+      { onSuccess: () => setSaved(true) },
+    );
+  };
+
+  const link = shareLink.data?.url ?? null;
+  const copyLink = () => {
+    if (!link) return;
+    navigator.clipboard?.writeText(link).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => {},
+    );
+  };
+
+  const leads = leadsData?.leads ?? [];
+  const sortedLeads = [...leads].sort(
+    (a, b) => new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime(),
+  );
+
+  return (
+    <Card>
+      <h3 className="text-sm font-semibold text-slate-900">White-label &amp; sharing</h3>
+      <p className="mt-1 text-sm text-slate-600">
+        Brand the public audit page with your own name, logo, and color, then share a lead-magnet link that
+        captures emails from prospects who want their full reputation report.
+      </p>
+
+      {/* branding form */}
+      <div className="mt-4 space-y-3">
+        <div>
+          <label className="block text-xs font-medium text-slate-700" htmlFor="wl-name">Brand name</label>
+          <input
+            id="wl-name"
+            value={bName}
+            onChange={(e) => setBrandName(e.target.value)}
+            disabled={!canEdit}
+            placeholder="Your agency or business name"
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-700" htmlFor="wl-logo">Logo URL</label>
+          <input
+            id="wl-logo"
+            value={bLogo}
+            onChange={(e) => setLogoUrl(e.target.value)}
+            disabled={!canEdit}
+            placeholder="https://…/logo.png"
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-700" htmlFor="wl-accent">Accent color</label>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              id="wl-accent"
+              type="color"
+              value={/^#[0-9a-fA-F]{6}$/.test(bAccent) ? bAccent : "#4f46e5"}
+              onChange={(e) => setAccent(e.target.value)}
+              disabled={!canEdit}
+              className="h-8 w-10 cursor-pointer rounded border border-slate-300 disabled:cursor-not-allowed"
+            />
+            <input
+              value={bAccent}
+              onChange={(e) => setAccent(e.target.value)}
+              disabled={!canEdit}
+              placeholder="#4f46e5"
+              className="w-28 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+            />
+          </div>
+        </div>
+        {canEdit && (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={save}
+              disabled={setBranding.isPending}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {setBranding.isPending ? "Saving…" : "Save branding"}
+            </button>
+            {saved && !setBranding.isPending && <span className="text-xs text-emerald-600">Saved.</span>}
+            {setBranding.isError && <span className="text-xs text-rose-600">Couldn’t save — try again.</span>}
+          </div>
+        )}
+      </div>
+
+      {/* public share link */}
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <h4 className="text-sm font-semibold text-slate-900">Public audit link</h4>
+        <p className="mt-1 text-xs text-slate-500">
+          A shareable, branded lead-magnet page anyone can open (no login). It shows a teaser of this business’s
+          AI reputation and captures the prospect’s email in exchange for the full report.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => shareLink.mutate()}
+            disabled={shareLink.isPending || !businessId}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+          >
+            {shareLink.isPending ? "Generating…" : link ? "Regenerate link" : "Generate share link"}
+          </button>
+          {link && (
+            <>
+              <input
+                readOnly
+                value={link}
+                onFocus={(e) => e.currentTarget.select()}
+                className="min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600"
+              />
+              <button
+                onClick={copyLink}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
+              >
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </>
+          )}
+        </div>
+        {shareLink.isError && <p className="mt-2 text-xs text-rose-600">Couldn’t generate a link — try again.</p>}
+      </div>
+
+      {/* captured leads */}
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-slate-900">Captured leads</h4>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+            {sortedLeads.length}
+          </span>
+        </div>
+        {sortedLeads.length === 0 ? (
+          <p className="mt-2 text-xs text-slate-500">
+            No leads yet. Share your public audit link to start capturing emails.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-slate-100">
+            {sortedLeads.map((lead) => (
+              <li key={lead.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-slate-800">{lead.email}</span>
+                  {lead.name && <span className="block truncate text-xs text-slate-500">{lead.name}</span>}
+                </span>
+                <span className="shrink-0 text-xs text-slate-400">
+                  {new Date(lead.captured_at).toLocaleDateString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export default function AccountPage() {
   const router = useRouter();
   const { user } = useAuth();
@@ -230,6 +412,9 @@ export default function AccountPage() {
 
         {/* per-business automation / auto-post settings */}
         <AutomationCard businessId={businessId} canEdit={canEdit} />
+
+        {/* white-label branding + public lead-magnet link + captured leads */}
+        <WhiteLabelCard businessId={businessId} canEdit={canEdit} />
 
         {/* sessions */}
         <Card>

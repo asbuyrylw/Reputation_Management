@@ -86,6 +86,9 @@ import type {
   ReviewRequestSendResult,
   PublicSummary,
   QuotaUsage,
+  Branding,
+  ShareLink,
+  LeadsResponse,
 } from "./types";
 
 type Json = Record<string, unknown>;
@@ -1266,4 +1269,37 @@ export function usePlatformQuotaUsage(enabled: boolean) {
     queryFn: () => apiFetch<QuotaUsage>("/platform/quota-usage"),
     enabled: !!user && enabled,
   });
+}
+
+// =====================================================================================
+// White-label & sharing — agency branding, the public lead-magnet share link, and the
+// emails captured from that page. (The PUBLIC page itself does NOT use these hooks — it's
+// unauthenticated and fetches /api/public/audit/{token} with a raw fetch.)
+// =====================================================================================
+
+// Current white-label branding for the business (brand name / logo / accent hex).
+export function useBranding(businessId: number | null) {
+  return useApiQuery<Branding>(["branding", businessId], base(businessId, "/branding"));
+}
+
+// PATCH a partial branding update; invalidates branding so the form reflects the saved values.
+export function useSetBranding(businessId: number | null) {
+  return useApiMutation<Partial<Branding>>(
+    () => `/businesses/${businessId}/branding`,
+    (v) => v,
+    [["branding", businessId]],
+    "PATCH",
+  );
+}
+
+// Mint (or rotate to) a public share link for the lead-magnet page. POST returns { token, url }.
+export function useShareLink(businessId: number | null) {
+  return useMutation({
+    mutationFn: () => apiFetch<ShareLink>(`/businesses/${businessId}/share-link`, { method: "POST", body: {} }),
+  });
+}
+
+// Emails captured from the public lead-magnet page (newest-first ordering is up to the caller).
+export function useLeads(businessId: number | null) {
+  return useApiQuery<LeadsResponse>(["leads", businessId], base(businessId, "/leads"));
 }

@@ -1233,3 +1233,49 @@ export interface QuotaUsage {
   x: QuotaLine;
   gbp: QuotaLine;
 }
+
+// =====================================================================================
+// White-label & sharing — agency branding, shareable lead-magnet links, captured leads.
+// =====================================================================================
+
+// The agency/business branding applied to the public lead-magnet page. `accent` is a hex
+// color (e.g. "#4f46e5"); `logo_url` and `accent` may be null until the owner sets them.
+export interface Branding {
+  brand_name: string;
+  logo_url: string | null;
+  accent: string | null;
+}
+
+// A freshly minted public share link for the lead-magnet page (token + the full URL).
+export interface ShareLink {
+  token: string;
+  url: string;
+}
+
+// One email captured from the public lead-magnet page.
+export interface Lead {
+  id: number;
+  email: string;
+  name: string | null;
+  source: string | null;
+  captured_at: string;
+}
+
+export interface LeadsResponse {
+  leads: Lead[];
+}
+
+// The PUBLIC (unauthenticated) lead-magnet payload behind a share token. Mirrors the
+// authed PublicSummary but adds branding + a `found` flag (404 when the token is invalid).
+// The public page fetches this with a raw `fetch("/api/public/audit/{token}")` — no auth.
+export interface PublicAudit {
+  found: boolean;
+  business: string;
+  area: string | null;
+  score: number | null;
+  band: string;
+  top_gaps: string[];
+  teaser: string;
+  has_audit: boolean;
+  branding: Branding;
+}
