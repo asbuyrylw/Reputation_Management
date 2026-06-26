@@ -242,6 +242,43 @@ def _section_timeline(heading, body, business_id):
         body("A timeline projection is not available for this reporting period.", italic=True)
 
 
+def _section_search_performance(heading, body, bullet, business_id):
+    # ---- Real organic-search ROI (GSC clicks/impressions + GA behavior + our-content credit) ----
+    try:
+        from . import gsc_data as _g
+        latest = _g.latest(business_id)
+        if not latest.get("has_data"):
+            return  # nothing to show until Search Console is connected + collecting
+        heading("Organic Search Performance (Google Search Console)")
+        body(f"In the last 28 days you earned {latest.get('clicks', 0):,} clicks from "
+             f"{latest.get('impressions', 0):,} impressions "
+             f"(CTR {round((latest.get('ctr') or 0) * 100, 1)}%, avg position "
+             f"{round(latest.get('position') or 0, 1)}).")
+        roi = _g.roi_summary(business_id)
+        if roi.get("has_data"):
+            if roi.get("baseline_clicks") is not None:
+                body(f"Since we started, organic clicks moved from ~{roi['baseline_clicks']:,} to "
+                     f"~{roi['latest_clicks']:,} per 28-day window.")
+            if roi.get("our_content_clicks"):
+                body(f"Of that, ~{roi['our_content_clicks']:,} clicks came from the "
+                     f"{roi.get('our_content_pages', 0)} page(s) WE published — content we created "
+                     "now pulling its own search traffic.", italic=True)
+            if roi.get("equivalent_ads_value"):
+                body(f"That organic traffic is worth roughly ${roi['equivalent_ads_value']:,.0f}/mo "
+                     "in equivalent paid search — an estimate, and you're getting it for free.", italic=True)
+        # behavior layer (GA), if connected
+        try:
+            from . import ga_data as _ga
+            gl = _ga.latest(business_id)
+            if gl.get("has_data"):
+                body(f"Site behavior (Google Analytics): {gl.get('sessions', 0):,} sessions, "
+                     f"{gl.get('conversions', 0):,.0f} conversions in the last 28 days.")
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: search-performance section unavailable (%s)", e)
+
+
 def _section_acceleration(heading, body, business_id):
     # ---- Ways to accelerate (third-party / human levers) ----
     try:
@@ -553,6 +590,14 @@ def generate(business_id: int) -> str:
         wr.bold = True; wr.font.size = Pt(13); wr.font.color.rgb = RGBColor.from_string("B00020")
 
     heading("Executive Summary")
+    # White-label hook (Wave 5, item 21): brand the deliverable for agencies (per-business meta -> env).
+    try:
+        from . import public_report as _pr
+        _brand = _pr.branding(business_id).get("brand_name")
+        if _brand and _brand != "Reputation Console":
+            body(f"Prepared by {_brand}.", italic=True)
+    except Exception:  # noqa: BLE001
+        pass
     n_runs = len(series)
     if n_runs >= 2:
         first, last = series[0], series[-1]
@@ -683,6 +728,7 @@ def generate(business_id: int) -> str:
         if deltas:
             body(f"Metric changes over the same window: {deltas}.")
 
+    _section_search_performance(heading, body, bullet, business_id)
     _section_timeline(heading, body, business_id)
     _section_acceleration(heading, body, business_id)
     _section_share_of_voice(heading, body, business_id)

@@ -268,8 +268,41 @@ def _draft_pending(business_id: int, limit: int = 20) -> int:
             continue
         if ins:  # only count + redact when a NEW reply was actually queued (idempotent re-run)
             drafted += 1
+            # Negative-review fast lane (Wave 4, item 16): alert the owner immediately on a <=2-star
+            # review so they can respond fast (speed-to-respond protects the rating).
+            try:
+                if r.get("rating") is not None and float(r["rating"]) <= 2:
+                    from .notifications import notify
+                    notify(business_id, "negative_review",
+                           f"New {r['rating']:.0f}★ review needs a fast response",
+                           "A negative Google review just came in. A drafted reply is waiting in your "
+                           "approval queue — respond quickly to limit the impact.",
+                           severity="high", dedup_key=f"neg-review:{r['id']}")
+            except Exception:  # noqa: BLE001
+                pass
             _redact_author(business_id, r["id"], r.get("author"))
     return drafted
+
+
+def negative_pending(business_id: int, sla_hours: int = 24) -> dict:
+    """Negative reviews awaiting a posted reply + how long they've waited vs the SLA (item 16)."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT rv.id, rv.rating, rv.body, rv.discovered_at, rv.status, "
+            "EXTRACT(EPOCH FROM (now() - rv.discovered_at))/3600.0 AS hours "
+            "FROM reviews rv WHERE rv.business_id=%s AND rv.sentiment='negative' "
+            "AND rv.status NOT IN ('replied','gone','ignored') ORDER BY rv.discovered_at", (business_id,)).fetchall()
+    items = []
+    breached = 0
+    for r in rows:
+        hrs = float(r["hours"] or 0)
+        over = hrs > sla_hours
+        breached += 1 if over else 0
+        items.append({"review_id": r["id"], "rating": float(r["rating"]) if r["rating"] is not None else None,
+                      "hours_waiting": round(hrs, 1), "sla_breached": over,
+                      "snippet": (r.get("body") or "")[:120]})
+    return {"sla_hours": sla_hours, "pending": items,
+            "summary": {"awaiting": len(items), "sla_breached": breached}}
 
 
 def _gbp_connection(business_id: int) -> Optional[dict]:

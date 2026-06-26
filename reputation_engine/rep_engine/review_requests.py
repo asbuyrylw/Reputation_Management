@@ -64,6 +64,34 @@ def templates(business_id: int) -> dict:
     return {"sms": sms, "email_subject": email_subject, "email_body": email_body, "link": link}
 
 
+def send(business_id: int, recipients: list[dict]) -> dict:
+    """Actually send the review-request (Wave 4, item 15) by email via email_service. Each recipient
+    is {email, first_name?}. Keyless-safe: no-op (sent=0) when email isn't configured. SMS/GHL can
+    be added as a connection later. New-review impact is read from the gbp_snapshots count delta."""
+    try:
+        from . import email_service as _es
+    except ImportError:  # pragma: no cover
+        import email_service as _es  # type: ignore
+    tpl = templates(business_id)
+    if not _es.enabled():
+        return {"sent": 0, "skipped": True, "reason": "email not configured on this server",
+                "preview": {"subject": tpl["email_subject"], "body": tpl["email_body"]}}
+    sent = failed = 0
+    for r in recipients or []:
+        to = (r.get("email") or "").strip()
+        if not to:
+            continue
+        first = (r.get("first_name") or "there").strip()
+        body = tpl["email_body"].replace("{first_name}", first)
+        try:
+            ok = _es.send_email(to, tpl["email_subject"], body)
+            sent += 1 if ok else 0
+            failed += 0 if ok else 1
+        except Exception:  # noqa: BLE001
+            failed += 1
+    return {"sent": sent, "failed": failed}
+
+
 def nap(business_id: int) -> dict:
     """Canonical Name/Address/Phone block for citation consistency (NAP). Flags missing fields the
     owner should fill in, since NAP mismatches across directories suppress local rank."""

@@ -623,8 +623,18 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     if comp_pass is False:
         status = "needs_fix"
 
-    # quality_notes carries the rubric eval + the SEO keyword-coverage scorecard (CI-3 UI reads it).
+    # quality_notes carries the rubric eval + the SEO keyword-coverage scorecard (CI-3 UI reads it)
+    # + the Wave-2 draft-quality scorers (on-page SEO, citation-readiness, fact-check).
     quality_notes = {**(evaluation or {}), "keyword_coverage": coverage}
+    try:
+        from . import content_quality as _cq
+        _kw = list(coverage.get("covered", [])) + list(coverage.get("missing", []))
+        _site = grounding if isinstance(grounding, dict) else None
+        quality_notes.update(_cq.analyze_draft(
+            body, target_query=wo.get("target_query") or "", keywords=_kw,
+            site_summary=_site, with_fact_check=True))
+    except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
+        log.debug("draft quality analysis skipped: %s", e)
 
     _ensure_table()
     with db() as conn:

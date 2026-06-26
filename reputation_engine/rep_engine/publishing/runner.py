@@ -141,6 +141,18 @@ def _process(business_id: int, target: dict) -> str:
         _set_status(tid, business_id, "needs_reconnect", "connection missing/unhealthy")
         return "failed"
 
+    # Shared-platform quota guard (item 22): defer (don't fail) when the account-level provider cap
+    # is reached, so a busy day across all tenants can't blow the API limit mid-campaign.
+    try:
+        from .. import quota as _quota
+        if not _quota.channel_within_quota(target["channel"]):
+            _retry_later(tid, business_id, target.get("attempts") or 1,
+                         PublishResult(status="failed", error="platform daily quota reached -- deferred",
+                                       retryable=True, retry_after_s=3600))
+            return "failed"
+    except Exception:  # noqa: BLE001 -- quota accounting must never block a publish on its own error
+        pass
+
     conn_obj = _to_connection(creds, target["channel"])
     adapter = registry.adapter_for(target["channel"])
     if adapter is None:

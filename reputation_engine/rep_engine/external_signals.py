@@ -136,6 +136,32 @@ def normalized_for_gap(business_id: int, limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 
+def latest_backlinks(business_id: int) -> dict:
+    """Backlink-profile summary from the latest ingested 'backlinks' signal (Wave 3, item 14).
+    The ingestion path (store_raw + normalize) already feeds the gap model; this surfaces the
+    profile for the UI + lost-link comparison. Empty when none ingested yet."""
+    _ensure_table()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT source, normalized, created_at FROM external_signals "
+            "WHERE business_id=%s AND signal_type='backlinks' AND status='normalized' "
+            "AND normalized IS NOT NULL ORDER BY id DESC LIMIT 2", (business_id,)).fetchall()
+    if not rows:
+        return {"has_data": False}
+    cur = dict(rows[0])
+    norm = cur.get("normalized") or {}
+    # lost-link detection: domains present in the prior report but not the current one
+    lost = []
+    if len(rows) > 1:
+        prev = (rows[1].get("normalized") or {})
+        cur_domains = {str(d).lower() for d in (norm.get("referring_domains") or norm.get("domains") or [])}
+        prev_domains = {str(d).lower() for d in (prev.get("referring_domains") or prev.get("domains") or [])}
+        lost = sorted(prev_domains - cur_domains)[:20]
+    return {"has_data": True, "source": cur.get("source"),
+            "as_of": cur["created_at"].isoformat() if cur.get("created_at") else None,
+            "profile": norm, "lost_domains": lost}
+
+
 def list_signals(business_id: int) -> list:
     _ensure_table()
     with db() as conn:

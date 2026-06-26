@@ -162,6 +162,34 @@ def _citations_for_run(conn, run_id: int, biz: dict, persona: str = "", location
     return {"total_citations": total, "domains": out}
 
 
+def sources_to_win(business_id: int, limit: int = 12) -> dict:
+    """"Steal their citations" (Wave 3, item 13): the influential NON-owned domains AI engines cite
+    in answers about your space. Each is a source to earn a mention/listing on -- ranked by how
+    often AI quotes it. Turns the citation data into concrete outreach/content targets."""
+    with db() as conn:
+        run = conn.execute("SELECT MAX(run_id) r FROM citation_momentum WHERE business_id=%s",
+                           (business_id,)).fetchone()["r"]
+        if not run:
+            return {"run_id": None, "sources": []}
+        rows = conn.execute(
+            "SELECT domain, cite_count, share, classification FROM citation_momentum "
+            "WHERE business_id=%s AND run_id=%s AND classification IN ('neutral','contested') "
+            "ORDER BY cite_count DESC LIMIT %s", (business_id, run, limit)).fetchall()
+    sources = []
+    for r in rows:
+        contested = r["classification"] == "contested"
+        sources.append({
+            "domain": r["domain"], "cite_count": r["cite_count"],
+            "share": float(r["share"] or 0), "classification": r["classification"],
+            "action": ("Address the concern + earn a balanced mention here (AI cites this against you)."
+                       if contested else
+                       "Earn a mention/listing here — AI already trusts it but doesn't cite you yet."),
+            "capability": "press_outreach" if not contested else "press_outreach",
+        })
+    return {"run_id": run, "sources": sources,
+            "summary": {"total": len(sources), "contested": sum(1 for s in sources if s["classification"] == "contested")}}
+
+
 def analyze(business_id: int, quiet: bool = False) -> dict:
     """Compute share-of-voice for the latest run and persist citation_momentum rows."""
     _ensure()

@@ -1453,7 +1453,10 @@ GAP_SYSTEM = (
     "local_gbp_nap, reviews, ai_answer_defense, search_traffic_outcomes -- return "
     "{addressed: bool, note: string}; set addressed=true only if your plan above acts on that "
     "dimension, and when false give a one-line reason it is not needed THIS cycle. Never silently "
-    "skip a dimension). "
+    "skip a dimension), "
+    "audience_priorities (array of {audience, sees_you_worst (bool), top_recommendation, why} -- "
+    "if 'audience_lenses' is provided, identify which personas/locations rate the business worst "
+    "and tailor a top recommendation per audience; empty array if no lens data). "
     "If 'external_signals', 'local_rank_gaps', 'competitor_gaps', 'site_crawl_gaps', or "
     "'search_performance' are provided (FIRST-PARTY SERP/benchmark/crawl/Search-Console/Analytics "
     "reads), ground local_seo_gaps, competitor_defense, site_technical_gaps, missing_owned_content, "
@@ -1462,6 +1465,9 @@ GAP_SYSTEM = (
     "actions -- turn each into a specific local_seo_gap or content/optimization task to push it to "
     "page 1; high_impression_low_ctr queries call for title/meta-description optimization on the "
     "ranking page; our_content_pages with sessions but weak conversion call for content_optimization. "
+    "If 'audience_lenses' is provided (avg score + contested rate by persona/location), tailor "
+    "audience_priorities to the worst-served audiences and note in priority_order which audience "
+    "each top action most helps. "
     "Do NOT propose content whose topic is a CONTESTED term itself (e.g. a page 'about "
     "<scam/pyramid scheme/MLM>') -- a naive keyword page REINFORCES the negative association. "
     "Where a contested frame is the problem, the right asset is a LEGITIMACY / TRANSPARENCY / "
@@ -1649,6 +1655,17 @@ def build_gap_model(business_id: int) -> dict:
         # Real organic-search + behavior outcomes (GSC/GA) -- first-party, trusted, fail-safe.
         search_performance = _search_perf_for_gap(business_id)
 
+        # Per-audience lenses (item 5E): avg score + contested rate by persona/location, so the plan
+        # can be tailored to the audiences that see the business worst. First-party, fail-safe.
+        audience_lenses: dict = {}
+        try:
+            from . import lenses as _lz
+            al = _lz.lenses(business_id) or {}
+            audience_lenses = {"by_persona": (al.get("by_persona") or [])[:6],
+                               "by_location": (al.get("by_location") or [])[:6]}
+        except Exception as e:  # noqa: BLE001
+            log.warning("gap model: audience lenses unavailable (%s)", e)
+
         payload = json.dumps({
             "business": {k: b[k] for k in ("name", "domain", "services", "goal",
                                            "contested_terms", "geo")},
@@ -1658,6 +1675,7 @@ def build_gap_model(business_id: int) -> dict:
             "competitor_gaps": competitor_gaps,
             "site_crawl_gaps": site_crawl_gaps,
             "search_performance": search_performance,
+            "audience_lenses": audience_lenses,
         }, default=str)
         # Gap synthesis is a LARGE structured object over the whole answer set: use the mid
         # tier (Sonnet -- cheaper + no Opus-4.8 prose-before-JSON), a HIGH token cap so the

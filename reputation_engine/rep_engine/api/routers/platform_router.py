@@ -28,6 +28,16 @@ def get_platform_settings(_: dict = Depends(require_super_admin), conn=Depends(g
     return {"billing_enabled": flags.billing_enabled(conn)}
 
 
+@router.get("/quota-usage")
+def quota_usage(_: dict = Depends(require_super_admin)):
+    """Shared platform-app quota usage across all tenants (Wave 5, item 22; super-admin)."""
+    try:
+        from ... import quota as _quota
+    except ImportError:  # pragma: no cover
+        import quota as _quota  # type: ignore
+    return _quota.usage_report()
+
+
 class PlatformSettingsUpdate(BaseModel):
     billing_enabled: Optional[bool] = None
 

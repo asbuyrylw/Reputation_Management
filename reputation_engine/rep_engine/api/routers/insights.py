@@ -132,6 +132,124 @@ def our_content_impact(business_id: int = Depends(authorize_business), conn=Depe
                        "our_content_sessions": sum(a["ga_sessions"] for a in out_assets)}}
 
 
+@router.get("/keyword-intent")
+def keyword_intent(business_id: int = Depends(authorize_business)):
+    """Keywords mapped by search intent + which intents lack owned content (Wave 5, item 19)."""
+    try:
+        from ... import topical_authority as _ta
+    except ImportError:  # pragma: no cover
+        import topical_authority as _ta  # type: ignore
+    return _ta.by_intent(business_id)
+
+
+@router.get("/public-summary")
+def public_summary(business_id: int = Depends(authorize_business)):
+    """Sanitized lead-magnet teaser (score + band + top gaps) (Wave 5, item 20)."""
+    try:
+        from ... import public_report as _pr
+    except ImportError:  # pragma: no cover
+        import public_report as _pr  # type: ignore
+    return _pr.public_summary(business_id)
+
+
+@router.get("/topical-authority")
+def topical_authority(business_id: int = Depends(authorize_business)):
+    """Topic clusters (pillar/spokes) + coverage + what to write next (Wave 2)."""
+    try:
+        from ... import topical_authority as _ta
+    except ImportError:  # pragma: no cover
+        import topical_authority as _ta  # type: ignore
+    out = _ta.clusters(business_id)
+    out["next_to_write"] = _ta.next_to_write(business_id)
+    return out
+
+
+@router.get("/internal-links")
+def internal_links(business_id: int = Depends(authorize_business)):
+    """Under-linked pages + internal-link suggestions (Wave 2)."""
+    try:
+        from ... import internal_links as _il
+    except ImportError:  # pragma: no cover
+        import internal_links as _il  # type: ignore
+    return _il.analyze(business_id)
+
+
+@router.get("/directory-citations")
+def directory_citations(business_id: int = Depends(authorize_business)):
+    """Curated white-hat directory list pre-filled with the canonical NAP (Wave 3)."""
+    try:
+        from ... import directory_citations as _dc
+    except ImportError:  # pragma: no cover
+        import directory_citations as _dc  # type: ignore
+    return _dc.recommend(business_id)
+
+
+@router.get("/indexing-status")
+def indexing_status(business_id: int = Depends(authorize_business)):
+    """Which owned URLs Google has indexed + which need a manual 'Request indexing' (Wave 3)."""
+    try:
+        from ... import indexing as _ix
+    except ImportError:  # pragma: no cover
+        import indexing as _ix  # type: ignore
+    return _ix.check_index_status(business_id)
+
+
+@router.get("/answer-changes")
+def answer_changes(business_id: int = Depends(authorize_business)):
+    """Material changes in what AI says about you, run-over-run (Wave 4, item 17)."""
+    try:
+        from ... import answer_changes as _ac
+    except ImportError:  # pragma: no cover
+        import answer_changes as _ac  # type: ignore
+    return _ac.detect(business_id)
+
+
+@router.get("/review-sla")
+def review_sla(business_id: int = Depends(authorize_business)):
+    """Negative reviews awaiting a reply + SLA breach status (Wave 4, item 16)."""
+    try:
+        from ... import gbp_reviews as _gbp
+    except ImportError:  # pragma: no cover
+        import gbp_reviews as _gbp  # type: ignore
+    return _gbp.negative_pending(business_id)
+
+
+class ReviewRequestSend(BaseModel):
+    recipients: list[dict]
+
+
+@router.post("/review-requests/send")
+def review_requests_send(body: ReviewRequestSend,
+                         business_id: int = Depends(require_business_editor)):
+    """Send review-request emails to the given recipients (Wave 4, item 15). Keyless-safe."""
+    try:
+        from ... import review_requests as _rr
+    except ImportError:  # pragma: no cover
+        import review_requests as _rr  # type: ignore
+    return _rr.send(business_id, body.recipients)
+
+
+@router.get("/content-feed.xml")
+def content_feed(business_id: int = Depends(authorize_business)):
+    """RSS feed of owned published URLs (Wave 3 indexing — preview/host this for search discovery)."""
+    try:
+        from ... import indexing as _ix
+    except ImportError:  # pragma: no cover
+        import indexing as _ix  # type: ignore
+    from fastapi.responses import Response
+    return Response(content=_ix.rss(business_id), media_type="application/rss+xml")
+
+
+@router.get("/backlink-profile")
+def backlink_profile(business_id: int = Depends(authorize_business)):
+    """Backlink-profile summary + lost-link detection from the latest ingested report (Wave 3)."""
+    try:
+        from ... import external_signals as _es
+    except ImportError:  # pragma: no cover
+        import external_signals as _es  # type: ignore
+    return _es.latest_backlinks(business_id)
+
+
 @router.get("/review-request")
 def review_request(business_id: int = Depends(authorize_business)):
     """Review-capture kit: a ready 'write a review' link, SMS/email templates, and the canonical

@@ -208,6 +208,18 @@ _CAPABILITY_SEO = {
     "social_publishing": "Low", "media_list_building": "Low", "ai_visibility_tracking": "—",
 }
 
+# Effort weight per capability (1 = quick, 3 = heavy lift) for ROI ranking (item 5D). ROI =
+# impact x confidence / effort, so a high-impact, high-confidence, low-effort task ranks first.
+_EFFORT = {
+    "schema_markup": 1, "ai_visibility_tracking": 1, "social_publishing": 1, "gbp_optimization": 1,
+    "review_generation": 2, "content_writing": 2, "local_content_creation": 2, "media_list_building": 2,
+    "video_creation": 3, "press_outreach": 3, "link_building": 3,
+}
+_CONF_FACTOR = {"high": 1.0, "medium": 0.7, "low": 0.4}
+# Points-equivalent for a structural/SEO-only task that has no per-unit AI-score lever, so it can
+# still be ROI-ranked against scored tasks.
+_SEO_POINTS = {"High": 15.0, "Medium": 8.0, "Low": 3.0, "—": 0.0}
+
 
 def predict_impact(business_id: int, capability: str) -> dict:
     """Estimate one task's impact: predicted AI-score points (from learned-or-baseline lever
@@ -235,8 +247,14 @@ def predict_impact(business_id: int, capability: str) -> dict:
             gain = (_acc.LEVERS.get(lever, {}) or {}).get("weight", 0.0)
             basis, confidence = "industry baseline", "low"
         ai_points = round(gain * 100.0, 1)  # 0-1 alignment gain per unit -> 0-100 score points
-    return {"ai_points": ai_points, "ai_confidence": confidence,
-            "seo_impact": _CAPABILITY_SEO.get(capability, "—"), "basis": basis}
+    seo_impact = _CAPABILITY_SEO.get(capability, "—")
+    # ROI = expected impact x confidence / effort. Use the AI-score points when a lever exists,
+    # else the SEO points-equivalent, so structural tasks rank fairly against scored ones.
+    effort = _EFFORT.get(capability, 2)
+    impact_pts = ai_points if ai_points is not None else _SEO_POINTS.get(seo_impact, 0.0)
+    roi_score = round((impact_pts * _CONF_FACTOR.get(confidence, 0.5)) / max(1, effort), 2)
+    return {"ai_points": ai_points, "ai_confidence": confidence, "seo_impact": seo_impact,
+            "basis": basis, "effort": effort, "roi_score": roi_score}
 
 
 PHASES = [
@@ -387,6 +405,13 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
             w.predicted_ai_points = imp["ai_points"]
             w.predicted_seo_impact = imp["seo_impact"]
             w.predicted_basis = imp["basis"]
+            # ROI score in the persisted rationale (no new column) so the task board can rank by it.
+            w.rationale = {**(w.rationale or {}), "roi_score": imp["roi_score"], "effort": imp["effort"]}
+    # Item 5D: order the plan so the highest-ROI work leads WITHIN each phase (phases keep their
+    # week sequencing; within a phase, best return first). Stable sort preserves prior order on ties.
+    _phase_rank = {name: i for i, (name, _lo, _hi) in enumerate(PHASES)}
+    wos.sort(key=lambda w: (_phase_rank.get(w.phase, 99),
+                            -float((w.rationale or {}).get("roi_score") or 0)))
     phases = {}
     for name, lo, hi in PHASES:
         phases[name] = {

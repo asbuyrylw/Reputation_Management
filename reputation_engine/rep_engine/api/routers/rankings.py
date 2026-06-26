@@ -85,6 +85,12 @@ def momentum(business_id: int = Depends(authorize_business)):
     return _ca.momentum(business_id, quiet=True)
 
 
+@router.get("/sources-to-win")
+def sources_to_win(business_id: int = Depends(authorize_business)):
+    """"Steal their citations": influential non-owned domains AI cites, as outreach targets (Wave 3)."""
+    return _ca.sources_to_win(business_id)
+
+
 @router.get("/root-cause")
 def root_cause(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     row = conn.execute(

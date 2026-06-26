@@ -144,8 +144,13 @@ def _run_learn(business_id: int, args: dict) -> None:
 
 
 def _run_alert_check(business_id: int, args: dict) -> None:
-    """Raise proactive alerts (score drop, new incidents/negative mentions, drafts waiting)."""
+    """Raise proactive alerts (score drop, new incidents/negative mentions, drafts waiting,
+    and AI answer-change alerts)."""
     _imp("notifications").check_and_notify(business_id, quiet=True)
+    try:
+        _imp("answer_changes").check_and_alert(business_id)  # Wave 4, item 17
+    except Exception:  # noqa: BLE001 -- answer-change detection must not break the alert job
+        pass
 
 
 def _run_benchmark(business_id: int, args: dict):
@@ -222,6 +227,12 @@ def _run_ingest_ga(business_id: int, args: dict):
     return _imp("ga_data").ingest(business_id)
 
 
+def _run_index_own_content(business_id: int, args: dict):
+    """White-hat indexing: ping search engines about the owned-content feed + report GSC index
+    status. Keyless-safe (RSS/ping always work; index check no-ops without GSC)."""
+    return _imp("indexing").run(business_id)
+
+
 def _run_post_review_replies(business_id: int, args: dict):
     """Integrations: post every approved Google review reply (drain). Keyless-safe no-op without
     an allowlist-approved GBP connection. Returns {posted, skipped, failed}."""
@@ -295,6 +306,8 @@ JOB_DISPATCH = {
     # search analytics (Wave 1)
     "ingest_gsc": _run_ingest_gsc,
     "ingest_ga": _run_ingest_ga,
+    # white-hat own-content indexing (Wave 3)
+    "index_own_content": _run_index_own_content,
 }
 
 
@@ -343,6 +356,7 @@ _JOB_RATE_LIMITS = {
     "generate_visual": (30, 3600),
     "ingest_gsc": (6, 3600),
     "ingest_ga": (6, 3600),
+    "index_own_content": (4, 3600),
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),
 }
