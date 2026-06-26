@@ -104,12 +104,12 @@ export function GapsView({
       <Card>
         <div className="text-sm font-semibold text-slate-900">What the audit found</div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Chip n={weak.length} label="questions AI gets wrong" tone="bad" />
-          <Chip n={missing.length} label="pages to create" tone="neutral" />
-          <Chip n={thin.length} label="claims needing proof" tone="neutral" />
-          <Chip n={localSeo.length} label="local searches to win" tone="neutral" />
-          <Chip n={compDef.length} label="questions rivals win" tone="bad" />
-          <Chip n={siteTech.length} label="website fixes" tone="neutral" />
+          <Chip n={weak.length} label="questions AI gets wrong" tone="bad" targetId="gap-weak" />
+          <Chip n={missing.length} label="pages to create" tone="neutral" targetId="gap-missing" />
+          <Chip n={thin.length} label="claims needing proof" tone="neutral" targetId="gap-thin" />
+          {localSeo.length > 0 && <Chip n={localSeo.length} label="local searches to win" tone="neutral" targetId="gap-local" />}
+          {compDef.length > 0 && <Chip n={compDef.length} label="questions rivals win" tone="bad" targetId="gap-competitor" />}
+          {siteTech.length > 0 && <Chip n={siteTech.length} label="website fixes" tone="neutral" targetId="gap-site" />}
         </div>
         {summary && (
           <details className="mt-3">
@@ -132,6 +132,7 @@ export function GapsView({
       </Card>
 
       {/* questions AI fails */}
+      <div id="gap-weak" className="scroll-mt-24">
       <DataSection
         title="Questions where AI fails you"
         severity={weak.length > 5 ? "high" : weak.length > 0 ? "med" : "good"}
@@ -158,8 +159,10 @@ export function GapsView({
           ))}
         </ul>
       </DataSection>
+      </div>
 
       {/* pages to create */}
+      <div id="gap-missing" className="scroll-mt-24">
       <DataSection
         title="Pages to create"
         severity={missing.length > 0 ? "med" : "good"}
@@ -178,8 +181,10 @@ export function GapsView({
           ))}
         </ul>
       </DataSection>
+      </div>
 
       {/* claims needing proof */}
+      <div id="gap-thin" className="scroll-mt-24">
       <DataSection
         title="Claims AI won't trust yet"
         severity={thin.length > 0 ? "med" : "good"}
@@ -208,9 +213,11 @@ export function GapsView({
           })}
         </ul>
       </DataSection>
+      </div>
 
       {/* local searches not on page 1 (from live Google rankings) */}
       {localSeo.length > 0 && (
+        <div id="gap-local" className="scroll-mt-24">
         <DataSection
           title="Local searches to win"
           severity="med"
@@ -230,10 +237,12 @@ export function GapsView({
             ))}
           </ul>
         </DataSection>
+        </div>
       )}
 
       {/* questions where a competitor appears and you don't */}
       {compDef.length > 0 && (
+        <div id="gap-competitor" className="scroll-mt-24">
         <DataSection
           title="Questions your rivals win"
           severity={compDef.length > 3 ? "high" : "med"}
@@ -253,10 +262,12 @@ export function GapsView({
             ))}
           </ul>
         </DataSection>
+        </div>
       )}
 
       {/* on-site technical issues that limit AI extraction */}
       {siteTech.length > 0 && (
+        <div id="gap-site" className="scroll-mt-24">
         <DataSection
           title="Website fixes"
           severity="med"
@@ -275,6 +286,7 @@ export function GapsView({
             ))}
           </ul>
         </DataSection>
+        </div>
       )}
 
       {/* recommended social presence (NOT verified gaps) */}
@@ -376,11 +388,31 @@ export function GapsView({
   );
 }
 
-function Chip({ n, label, tone = "neutral" }: { n: number; label: string; tone?: "bad" | "neutral" | "good" }) {
+// UX-2: clicking a tally scrolls to its section below. scroll-mt on the anchor keeps the section
+// header clear of the sticky top bar.
+function scrollToSection(id: string) {
+  if (typeof document === "undefined") return;
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function Chip({ n, label, tone = "neutral", targetId }: { n: number; label: string; tone?: "bad" | "neutral" | "good"; targetId?: string }) {
   const c = tone === "bad" && n > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-slate-100 text-slate-700 border-slate-200";
+  const inner = <><span className="font-semibold">{n}</span> {label}</>;
+  // Only make it a jump-button when the section actually renders (n > 0 for the conditional ones;
+  // the always-rendered sections still jump even at 0 so the tally stays consistent).
+  if (targetId) {
+    return (
+      <button
+        type="button"
+        onClick={() => scrollToSection(targetId)}
+        className={`group rounded-lg border px-2.5 py-1 text-sm transition hover:ring-2 hover:ring-indigo-300 ${c}`}
+        title="Jump to this section"
+      >
+        {inner} <span aria-hidden className="text-slate-400 group-hover:text-indigo-500">↓</span>
+      </button>
+    );
+  }
   return (
-    <span className={`rounded-lg border px-2.5 py-1 text-sm ${c}`}>
-      <span className="font-semibold">{n}</span> {label}
-    </span>
+    <span className={`rounded-lg border px-2.5 py-1 text-sm ${c}`}>{inner}</span>
   );
 }

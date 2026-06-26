@@ -34,6 +34,12 @@ const CATS: { key: string; label: string; emoji: string }[] = [
   { key: "tracking", label: "Tracking", emoji: "📊" },
 ];
 
+// UX-3: clicking a category pill at the top scrolls to that category's section.
+function scrollToCat(key: string) {
+  if (typeof document === "undefined") return;
+  document.getElementById(`cat-${key}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function categoryKey(w: WorkOrder): string {
   const cap = (w.capability ?? "").toLowerCase();
   const gs = (w.gap_source ?? "").toLowerCase();
@@ -208,14 +214,23 @@ export default function NextStepsPage() {
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">{promotedCount} in tasks</span>
               )}
               {grouped.map((c) => (
-                <span key={c.key} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">{c.emoji} {c.items.length} {c.label.split(" ")[0].toLowerCase()}</span>
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => scrollToCat(c.key)}
+                  className="rounded-full bg-slate-100 px-2 py-0.5 text-xs transition hover:bg-indigo-100 hover:text-indigo-700"
+                  title={`Jump to ${c.label}`}
+                >
+                  {c.emoji} {c.items.length} {c.label.split(" ")[0].toLowerCase()} <span aria-hidden className="text-slate-400">↓</span>
+                </button>
               ))}
               <Link href="/content/work-orders" className="ml-auto text-sm font-medium text-indigo-600 hover:underline">Manage my tasks →</Link>
             </div>
           </Card>
 
           {grouped.map((c) => (
-            <Card key={c.key}>
+            <div key={c.key} id={`cat-${c.key}`} className="scroll-mt-24">
+            <Card>
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-slate-900">{c.emoji} {c.label} ({c.items.length})</h3>
                 {c.key === "outreach" && (
@@ -230,6 +245,7 @@ export default function NextStepsPage() {
               </ul>
               {c.items.length > 8 && <div className="mt-2 text-xs text-slate-400">+{c.items.length - 8} more on the task board</div>}
             </Card>
+            </div>
           ))}
 
           {/* ways to go faster — link each lever to outreach */}

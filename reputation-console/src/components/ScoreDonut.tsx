@@ -11,22 +11,27 @@ export function ScoreDonut({
   subtitle,
   data,
   centerLabel,
+  bare = false,
 }: {
   title: string;
   subtitle?: string;
   data: DonutSlice[];
   centerLabel?: string;
+  // bare: render without the Card wrapper + a slightly smaller donut, so it can sit INSIDE
+  // another block (e.g. nested in the AI-reputation-score block on the dashboard).
+  bare?: boolean;
 }) {
   const total = data.reduce((a, d) => a + d.value, 0);
-  return (
-    <Card>
+  const ringSize = bare ? "h-32 w-32" : "h-40 w-40";
+  const inner = (
+    <>
       <div className="text-sm font-medium text-slate-700">{title}</div>
       {subtitle && <div className="mt-0.5 text-xs text-slate-400">{subtitle}</div>}
       {total === 0 ? (
         <p className="mt-3 text-sm text-slate-400">No data yet.</p>
       ) : (
         <div className="mt-2 flex items-center gap-5">
-          <div className="relative h-40 w-40 shrink-0">
+          <div className={`relative ${ringSize} shrink-0`}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -64,6 +69,7 @@ export function ScoreDonut({
           </ul>
         </div>
       )}
-    </Card>
+    </>
   );
+  return bare ? <div>{inner}</div> : <Card>{inner}</Card>;
 }

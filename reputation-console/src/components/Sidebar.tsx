@@ -133,7 +133,11 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
   }));
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 w-64 shrink-0 transform overflow-y-auto border-r border-slate-200/70 bg-white p-4 backdrop-blur-xl transition-transform lg:static lg:z-auto lg:translate-x-0 lg:bg-white/80 ${
+      // UX-1: on desktop the nav is its OWN sticky, viewport-height scroll container (not
+      // `lg:static`, which scrolled with the page). Because the (console) layout persists across
+      // route changes, this nav node isn't remounted on navigation -> its scroll position is
+      // retained automatically, so clicking an item near the bottom no longer snaps the nav to top.
+      className={`fixed inset-y-0 left-0 z-40 w-64 shrink-0 transform overflow-y-auto border-r border-slate-200/70 bg-white p-4 backdrop-blur-xl transition-transform lg:sticky lg:top-0 lg:h-screen lg:z-auto lg:translate-x-0 lg:bg-white/80 ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
     >
