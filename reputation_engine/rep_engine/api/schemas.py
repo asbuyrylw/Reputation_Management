@@ -90,6 +90,7 @@ class CreateBusinessRequest(BaseModel):
     goal: Optional[str] = None
     contested_terms: Optional[str] = None
     geo: Optional[str] = None             # "Areas served" in the UI
+    owned_domains: Optional[list[str]] = None  # extra web properties the business owns (citation = owned)
     org_id: Optional[int] = None          # organization that owns this business
 
 
@@ -102,6 +103,7 @@ class UpdateBusinessRequest(BaseModel):
     contested_terms: Optional[str] = None
     geo: Optional[str] = None
     regulatory_profile: Optional[dict] = None   # {firm_type, disclosures[], crd, notes}
+    owned_domains: Optional[list[str]] = None   # extra web properties the business owns
 
 
 class IngestSignalRequest(BaseModel):

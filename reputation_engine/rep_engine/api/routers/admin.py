@@ -24,7 +24,9 @@ except ImportError:  # pragma: no cover
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo",
-                    "regulatory_profile")
+                    "regulatory_profile", "owned_domains")
+# JSONB business columns -- wrapped with psycopg Json so a dict/list adapts to jsonb.
+_BUSINESS_JSONB = ("regulatory_profile", "owned_domains")
 
 
 @router.get("/organizations")
@@ -129,11 +131,12 @@ def create_business(body: CreateBusinessRequest, _: dict = Depends(require_admin
     if body.org_id is not None and not conn.execute(
             "SELECT 1 FROM organizations WHERE id=%s", (body.org_id,)).fetchone():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    from psycopg.types.json import Json
     row = conn.execute(
-        "INSERT INTO businesses (name, domain, services, industry, goal, contested_terms, geo, org_id) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "INSERT INTO businesses (name, domain, services, industry, goal, contested_terms, geo, "
+        "owned_domains, org_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (body.name, body.domain, body.services, body.industry, body.goal,
-         body.contested_terms, body.geo, body.org_id),
+         body.contested_terms, body.geo, Json(body.owned_domains or []), body.org_id),
     ).fetchone()
     conn.commit()
     return dict(row)
@@ -149,7 +152,7 @@ def update_business(business_id: int, body: UpdateBusinessRequest, _: dict = Dep
     set_clause = ", ".join(f"{k}=%s" for k in fields)
     # JSONB columns must be wrapped so psycopg adapts a dict -> jsonb (not a bare Python dict).
     from psycopg.types.json import Json
-    params = [Json(v) if k == "regulatory_profile" else v for k, v in fields.items()] + [business_id]
+    params = [Json(v) if k in _BUSINESS_JSONB else v for k, v in fields.items()] + [business_id]
     row = conn.execute(
         f"UPDATE businesses SET {set_clause} WHERE id=%s RETURNING *", params  # nosec B608
     ).fetchone()

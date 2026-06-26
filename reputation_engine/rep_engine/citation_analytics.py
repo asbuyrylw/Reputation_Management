@@ -79,13 +79,76 @@ def _domain(src) -> str:
     return _strip_www(netloc.lower()) if netloc else ""
 
 
+# An owned host must be REGISTRABLE: a mistaken owned_domains entry like "com" or "co.uk" would
+# otherwise mark EVERY *.com citation (incl. complaint sites) as owned and poison share-of-voice.
+# Require at least one dot and reject known public suffixes.
+_PUBLIC_SUFFIXES = {
+    "com", "net", "org", "io", "co", "ai", "app", "dev", "info", "biz", "me", "us", "uk", "ca",
+    "au", "de", "fr", "es", "it", "nl", "eu", "gov", "edu", "mil", "tv", "xyz", "online", "site",
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "co.nz", "co.za", "com.br",
+}
+
+
+def _is_registrable_host(h: str) -> bool:
+    """True only for a plausibly-registrable host (has a dot, isn't a bare public suffix)."""
+    return bool(h) and "." in h and h not in _PUBLIC_SUFFIXES
+
+
+def _norm_host(s) -> str:
+    """Extract the bare host from a domain OR a full URL OR an email -> 'teamunstoppable.com'.
+    Handles scheme (https://), www, paths, ports, user@ prefixes, and a trailing root dot.
+    Non-string input (e.g. a malformed JSONB element) returns '' rather than raising."""
+    if not isinstance(s, str):
+        return ""
+    s = s.strip().lower()
+    if not s:
+        return ""
+    if "//" not in s:
+        s = "//" + s
+    netloc = urlparse(s).netloc or ""
+    host = netloc.split("@")[-1].split(":")[0]  # strip user@ and :port
+    return _strip_www(host).rstrip(".")  # rstrip: a rooted FQDN 'host.com.' must match 'host.com'
+
+
+def _owned_hosts(biz: dict) -> set:
+    """All registrable hosts the business owns: its main domain + any declared owned_domains
+    (other sites, the owners' personal site, alternate TLDs, blogs). Subdomains match by suffix.
+    Non-registrable entries (bare TLDs, blanks, malformed values) are dropped so they can't
+    over-match every cited domain."""
+    hosts = set()
+    main = _norm_host(biz.get("domain"))
+    if _is_registrable_host(main):
+        hosts.add(main)
+    extra = biz.get("owned_domains")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except (ValueError, TypeError):
+            extra = [extra]
+    if not isinstance(extra, (list, tuple, set)):
+        extra = [extra] if extra else []
+    for d in extra:
+        h = _norm_host(d)
+        if _is_registrable_host(h):
+            hosts.add(h)
+    return hosts
+
+
+def _is_owned_domain(domain: str, owned_hosts: set) -> bool:
+    """A cited domain is owned if it equals an owned host OR is a subdomain of one
+    (info.teamunstoppable.com is owned because teamunstoppable.com is)."""
+    d = _strip_www((domain or "").lower()).rstrip(".")
+    return any(d == h or d.endswith("." + h) for h in owned_hosts)
+
+
 def _classify(domain: str, biz: dict) -> str:
-    """owned | contested | neutral. Owned = the business's own domain; contested =
-    domain looks tied to a contested term; else neutral."""
+    """owned | contested | neutral. Owned = the business's own domain or any declared owned
+    property (incl. subdomains); contested = the SOURCE domain is a known complaint site or matches
+    a contested term; else neutral. (Note: 'contested' is about the source domain, not whether the
+    cited content is negative -- content negativity is tracked via answer sentiment, not here.)"""
     if not domain:
         return "unknown"
-    own = _strip_www((biz.get("domain") or "").lower())
-    if own and own in domain:
+    if _is_owned_domain(domain, _owned_hosts(biz)):
         return "owned"
     # Curated complaint-site markers stay broad (raw substring) -- a deliberate
     # heuristic (e.g. 'ripoff' must still catch 'ripoffreport.com').
@@ -126,8 +189,7 @@ def _source_type(domain: str, biz: dict) -> str:
     A cited domain's KIND, for source-mix analysis. Independent of owned/contested/neutral."""
     if not domain:
         return "other"
-    own = _strip_www((biz.get("domain") or "").lower())
-    if own and own in domain:
+    if _is_owned_domain(domain, _owned_hosts(biz)):
         return "own"
     d = domain.lower()
     for label, markers in _SOURCE_TYPE_TABLE:

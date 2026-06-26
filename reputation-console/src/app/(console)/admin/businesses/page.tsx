@@ -19,7 +19,7 @@ const FIELDS: [string, string][] = [
   ["geo", "Areas served"],
 ];
 const EMPTY: Record<string, string> = {
-  name: "", domain: "", industry: "", goal: "", contested_terms: "", geo: "", services: "",
+  name: "", domain: "", industry: "", goal: "", contested_terms: "", geo: "", services: "", owned_domains: "",
 };
 
 // plain-input fields shown in the inline editor (services + industry handled specially below)
@@ -56,14 +56,20 @@ export default function AdminBusinessesPage() {
       contested_terms: b.contested_terms ?? "",
       services: b.services ?? "",
       firm_type: b.regulatory_profile?.firm_type ?? "",
+      owned_domains: (b.owned_domains ?? []).join(", "),
     });
   };
   const saveEdit = () => {
     if (editingId == null) return;
-    const { firm_type, ...rest } = editForm;
+    const { firm_type, owned_domains, ...rest } = editForm;
     const existing = businesses.find((b) => b.id === editingId)?.regulatory_profile ?? {};
     const payload: Record<string, unknown> = { id: editingId, ...rest };
     if (firm_type !== undefined) payload.regulatory_profile = { ...existing, firm_type };
+    // owned_domains is a comma/tag string in the form but an array on the wire.
+    payload.owned_domains = (owned_domains ?? "")
+      .split(",")
+      .map((d) => d.trim())
+      .filter(Boolean);
     update.mutate(payload as { id: number } & Record<string, unknown>, { onSuccess: () => setEditingId(null) });
   };
   const confirmDelete = () => {
@@ -117,9 +123,28 @@ export default function AdminBusinessesPage() {
             placeholder="Type a service and press Enter"
           />
         </div>
+        <div className="mt-2">
+          <label className="text-xs font-medium text-slate-500">Owned web properties (counted as “owned” in AI citations)</label>
+          <TagInput
+            className="mt-1"
+            value={form.owned_domains}
+            onChange={(v) => setForm((f) => ({ ...f, owned_domains: v }))}
+            placeholder="e.g. teamunstoppable.net, chrisandelizabethkoob.com"
+          />
+          <span className="mt-1 block text-[11px] leading-snug text-slate-400">
+            The Domain above is already owned (and its subdomains). Add any <em>other</em> sites you control —
+            alternate domains, the owners’ personal site, owned blogs/microsites — so AI citations to them count
+            as owned, not neutral. Subdomains are matched automatically.
+          </span>
+        </div>
         <button
           disabled={create.isPending || !form.name}
-          onClick={() => create.mutate(form as { name: string }, { onSuccess: () => setForm(EMPTY) })}
+          onClick={() => {
+            // owned_domains is a comma/tag string in the form but an array on the wire (like saveEdit).
+            const owned_domains = (form.owned_domains ?? "").split(",").map((d) => d.trim()).filter(Boolean);
+            const payload = { ...form, owned_domains } as { name: string; owned_domains: string[] };
+            create.mutate(payload, { onSuccess: () => setForm(EMPTY) });
+          }}
           className="mt-3 rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
         >
           Create
@@ -162,6 +187,20 @@ export default function AdminBusinessesPage() {
                           onChange={(v) => setEditForm((f) => ({ ...f, services: v }))}
                           placeholder="Type a service and press Enter"
                         />
+                      </label>
+                      <label className="text-xs text-slate-500 sm:col-span-2">
+                        Owned web properties (counted as “owned” in AI citations)
+                        <TagInput
+                          className="mt-0.5"
+                          value={editForm.owned_domains ?? ""}
+                          onChange={(v) => setEditForm((f) => ({ ...f, owned_domains: v }))}
+                          placeholder="e.g. teamunstoppable.net, chrisandelizabethkoob.com"
+                        />
+                        <span className="mt-1 block text-[11px] leading-snug text-slate-400">
+                          The main Domain above is already owned (and its subdomains). Add any <em>other</em> sites you
+                          control — alternate domains, the owners’ personal site, owned blogs/microsites — so AI
+                          citations to them count as owned, not neutral. Subdomains are matched automatically.
+                        </span>
                       </label>
                       <label className="text-xs text-slate-500">
                         Firm type (drives compliance checks)

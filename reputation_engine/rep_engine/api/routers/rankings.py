@@ -43,8 +43,9 @@ def share_of_voice(business_id: int = Depends(authorize_business), conn=Depends(
     # source TYPE (review/social/news/...) is a pure function of the domain, so we type it at
     # read time -- no extra column. Roll it up across ALL of the run's domains (not just the
     # top 20) so the by-source-type mix is complete.
-    biz = conn.execute("SELECT domain FROM businesses WHERE id=%s", (business_id,)).fetchone()
-    bizd = {"domain": (biz or {}).get("domain") if biz else ""}
+    biz = conn.execute("SELECT domain, owned_domains FROM businesses WHERE id=%s", (business_id,)).fetchone()
+    bizd = {"domain": (biz or {}).get("domain") if biz else "",
+            "owned_domains": (biz or {}).get("owned_domains") if biz else []}
     all_domains = conn.execute(
         "SELECT domain, cite_count, share FROM citation_momentum "
         "WHERE business_id=%s AND run_id=%s", (business_id, run_id),
