@@ -52,6 +52,9 @@ import type {
   ComplianceSignoff,
   WorkOrder,
   ConnectionsResponse,
+  ZerniaSetup,
+  ZerniaConnectUrl,
+  ZerniaSyncResult,
   PublishChannel,
   PublishTarget,
   ReviewReply,
@@ -687,7 +690,7 @@ export function useGrantAccess() {
 }
 
 export function useCreateBusiness() {
-  return useApiMutation<{ name: string; domain?: string; goal?: string; contested_terms?: string; geo?: string; services?: string }>(
+  return useApiMutation<{ name: string; domain?: string; goal?: string; contested_terms?: string; geo?: string; services?: string; owned_domains?: string[] }>(
     () => "/admin/businesses",
     (v) => v,
     [["businesses"]],
@@ -836,6 +839,41 @@ export function useDisconnectConnection(businessId: number | null) {
       qc.invalidateQueries({ queryKey: ["connections", businessId] });
       qc.invalidateQueries({ queryKey: ["publish-channels", businessId] });
     },
+  });
+}
+
+// ---- Zernio (Zernia) social publishing --------------------------------------------------
+// The connect-your-accounts flow: set up a profile, authorize each platform in a Zernio OAuth
+// popup, then sync to pull the connected accounts back. Auth is a server-side account key.
+
+// Create (or reuse) the Zernio profile for this business. Invalidates connections so the
+// new zernia connection (with its meta.accounts) shows up.
+export function useZerniaSetup(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<ZerniaSetup>(`/businesses/${businessId}/connections/zernia/setup`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["connections", businessId] }),
+  });
+}
+
+// Get the Zernio OAuth URL for one platform. Does NOT navigate — the caller opens authUrl
+// in a new tab so the owner can authorize that account on the platform.
+export function useZerniaConnect(businessId: number | null) {
+  return useMutation({
+    mutationFn: (platform: string) =>
+      apiFetch<ZerniaConnectUrl>(`/businesses/${businessId}/connections/zernia/connect/${platform}`, { method: "GET" }),
+  });
+}
+
+// Pull the connected accounts back from Zernio (after the owner finishes authorizing in the
+// popup). Invalidates connections so the connected handles refresh on the card.
+export function useZerniaSync(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<ZerniaSyncResult>(`/businesses/${businessId}/connections/zernia/sync`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["connections", businessId] }),
   });
 }
 

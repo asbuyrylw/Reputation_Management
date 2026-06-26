@@ -155,6 +155,101 @@ def connect_direct(body: ConnectRequest, business_id: int = Depends(require_busi
     return {"ok": True, "connection_id": conn_id}
 
 
+# ---------------------------------------------------------------------------
+# Zernio social: profile + per-platform OAuth account linking (from Settings)
+# ---------------------------------------------------------------------------
+# Platforms offered as connect buttons in the UI (Zernio supports more; these map to our channels).
+ZERNIA_PLATFORMS = ["facebook", "instagram", "linkedin", "twitter", "pinterest", "tiktok", "youtube", "threads", "bluesky"]
+
+
+def _zernia():
+    try:
+        from ...connections.providers import zernia as z
+    except ImportError:  # pragma: no cover
+        from connections.providers import zernia as z  # type: ignore
+    return z
+
+
+def _zernia_conn(business_id: int):
+    """The business's Zernio connection (kind='zernia') as a credentials dict, or None."""
+    with _db() as c:
+        row = c.execute("SELECT id FROM platform_connections WHERE business_id=%s AND kind='zernia' "
+                        "AND status!='revoked' ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+    if not row:
+        return None
+    return _vault.credentials(row["id"], business_id)
+
+
+def _db():
+    try:
+        from ...db import db
+    except ImportError:  # pragma: no cover
+        from db import db  # type: ignore
+    return db()
+
+
+@router.post("/connections/zernia/setup")
+def zernia_setup(business_id: int = Depends(require_business_editor), user: dict = Depends(get_current_user)):
+    """Create (or reuse) the Zernio profile for this business + store the connection. Step 1 of the
+    'connect your social accounts' flow."""
+    z = _zernia()
+    if not z.configured():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Zernio isn't configured on this server (ZERNIA_API_KEY unset).")
+    existing = _zernia_conn(business_id)
+    if existing and (existing.get("meta") or {}).get("profile_id"):
+        pid = existing["meta"]["profile_id"]
+        return {"ok": True, "profile_id": pid, "accounts": (existing.get("meta") or {}).get("accounts") or {},
+                "platforms": ZERNIA_PLATFORMS}
+    # resolve a name
+    with _db() as c:
+        b = c.execute("SELECT name FROM businesses WHERE id=%s", (business_id,)).fetchone()
+    res = z.create_profile(name=(b or {}).get("name") or f"business-{business_id}",
+                           description="Reputation Console")
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, res.get("error") or "could not create Zernio profile")
+    pid = res["profile_id"]
+    _vault.upsert_connection(business_id, "zernia", token_type="zernia_profile", account_ref=str(pid),
+                             profile_ref=str(pid), meta={"profile_id": str(pid), "profile_name": res.get("name"),
+                                                         "accounts": {}}, label="Social (Zernio)",
+                             connected_by=user["id"], status="active")
+    return {"ok": True, "profile_id": pid, "accounts": {}, "platforms": ZERNIA_PLATFORMS}
+
+
+@router.get("/connections/zernia/connect/{platform}")
+def zernia_connect(platform: str, business_id: int = Depends(require_business_editor)):
+    """Get the Zernio OAuth URL to link one platform to this business's profile. The UI opens it;
+    after the owner authorizes, call /connections/zernia/sync to pull the connected account."""
+    if platform not in ZERNIA_PLATFORMS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported platform '{platform}'")
+    creds = _zernia_conn(business_id)
+    pid = (creds.get("meta") or {}).get("profile_id") if creds else None
+    if not pid:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Set up the Zernio profile first.")
+    out = _zernia().connect_url(platform, pid)
+    if not out.get("ok"):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, out.get("error") or "could not get connect URL")
+    return {"authUrl": out["authUrl"], "platform": platform}
+
+
+@router.post("/connections/zernia/sync")
+def zernia_sync(business_id: int = Depends(require_business_editor)):
+    """Pull the profile's connected accounts from Zernio + store the platform->accountId map so we
+    can post. Call this after the owner finishes the connect redirect(s)."""
+    creds = _zernia_conn(business_id)
+    pid = (creds.get("meta") or {}).get("profile_id") if creds else None
+    if not pid:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Set up the Zernio profile first.")
+    accounts = _zernia().list_accounts(pid)
+    acc_map = {a["platform"]: a["account_id"] for a in accounts if a.get("is_active", True)}
+    # find the connection id to update its meta
+    with _db() as c:
+        row = c.execute("SELECT id FROM platform_connections WHERE business_id=%s AND kind='zernia' "
+                        "AND status!='revoked' ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+    if row:
+        _vault.set_account_and_meta(row["id"], business_id, meta_updates={"accounts": acc_map})
+    return {"ok": True, "accounts": accounts, "connected_platforms": list(acc_map.keys())}
+
+
 @router.post("/connections/{conn_id}/test")
 def test_connection(conn_id: int, business_id: int = Depends(require_business_editor)):
     return _cstatus.test_connection(conn_id, business_id)

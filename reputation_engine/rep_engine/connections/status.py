@@ -35,6 +35,8 @@ def test_connection(conn_id: int, business_id: int) -> dict:
         return _probe_gsc(conn_id, business_id, creds)
     if kind == "google_analytics":
         return _probe_ga(conn_id, business_id, creds)
+    if kind == "zernia":
+        return _probe_zernia(conn_id, business_id, creds)
     # Non-probeable kinds (e.g. ayrshare profile-key): trust stored state, just touch it.
     vault.touch_used(conn_id)
     return {"ok": True, "status": creds.get("status") or "active", "detail": "no live probe for this provider"}
@@ -106,6 +108,22 @@ def _probe_ga(conn_id: int, business_id: int, creds: dict) -> dict:
         return {"ok": False, "status": "revoked", "detail": res.error}
     vault.mark_status(conn_id, "error", last_error=res.error, business_id=business_id)
     return {"ok": False, "status": "error", "detail": res.error}
+
+
+def _probe_zernia(conn_id: int, business_id: int, creds: dict) -> dict:
+    try:
+        from .providers import zernia as _z
+    except ImportError:  # pragma: no cover
+        from connections.providers import zernia as _z  # type: ignore
+    if not _z.configured():
+        vault.mark_status(conn_id, "error", last_error="ZERNIA_API_KEY not set", business_id=business_id)
+        return {"ok": False, "status": "error", "detail": "Zernio key not configured"}
+    if _z.verify():
+        vault.mark_status(conn_id, "active", business_id=business_id)
+        vault.touch_used(conn_id)
+        return {"ok": True, "status": "active"}
+    vault.mark_status(conn_id, "error", last_error="Zernio API key invalid or unreachable", business_id=business_id)
+    return {"ok": False, "status": "error"}
 
 
 def _probe_google(conn_id: int, business_id: int, creds: dict) -> dict:

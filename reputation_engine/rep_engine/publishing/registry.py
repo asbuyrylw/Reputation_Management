@@ -8,44 +8,53 @@ code path posts to them).
 
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
 
 try:
     from .wordpress import WordPressPublisher
     from .ayrshare import AyrsharePublisher
+    from .zernia import ZerniaPublisher
     from .google_business import GoogleBusinessPublisher
     from .base import Connection
 except ImportError:  # pragma: no cover
     from publishing.wordpress import WordPressPublisher  # type: ignore
     from publishing.ayrshare import AyrsharePublisher  # type: ignore
+    from publishing.zernia import ZerniaPublisher  # type: ignore
     from publishing.google_business import GoogleBusinessPublisher  # type: ignore
     from publishing.base import Connection  # type: ignore
 
 _WP = WordPressPublisher()
 _AYR = AyrsharePublisher()
+_ZER = ZerniaPublisher()
 _GBP = GoogleBusinessPublisher()
+
+# The active social provider (Zernio by default; set SOCIAL_PROVIDER=ayrshare to switch back).
+_SOCIAL_PROVIDER = (os.getenv("SOCIAL_PROVIDER") or "zernia").strip().lower()
+_SOC = _AYR if _SOCIAL_PROVIDER == "ayrshare" else _ZER
+_SOC_KIND = "ayrshare_profile" if _SOCIAL_PROVIDER == "ayrshare" else "zernia"
 
 # channel -> (adapter, network). network '_' means single-target (no per-network fan-out).
 # Reddit/Yelp are deliberately ABSENT (draft-suggestion / read-only only).
 _CHANNELS: dict[str, Tuple[object, str]] = {
     "wp_blog": (_WP, "_"),
     "gbp_post": (_GBP, "_"),
-    "social_fb_page": (_AYR, "facebook"),
-    "social_ig": (_AYR, "instagram"),
-    "social_li_org": (_AYR, "linkedin"),
-    "social_x": (_AYR, "twitter"),
-    "social_pinterest": (_AYR, "pinterest"),
+    "social_fb_page": (_SOC, "facebook"),
+    "social_ig": (_SOC, "instagram"),
+    "social_li_org": (_SOC, "linkedin"),
+    "social_x": (_SOC, "twitter"),
+    "social_pinterest": (_SOC, "pinterest"),
 }
 
 # Which platform_connections.kind serves a given channel (router validation + connection match).
 _CHANNEL_TO_KIND = {
     "wp_blog": "wordpress_org",
     "gbp_post": "google_business_profile",
-    "social_fb_page": "ayrshare_profile",
-    "social_ig": "ayrshare_profile",
-    "social_li_org": "ayrshare_profile",
-    "social_x": "ayrshare_profile",
-    "social_pinterest": "ayrshare_profile",
+    "social_fb_page": _SOC_KIND,
+    "social_ig": _SOC_KIND,
+    "social_li_org": _SOC_KIND,
+    "social_x": _SOC_KIND,
+    "social_pinterest": _SOC_KIND,
 }
 
 # Social channels carry text, not an article body -> the runner builds a 'social' payload.

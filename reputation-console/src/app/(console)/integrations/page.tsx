@@ -15,11 +15,14 @@ import {
   useSetGscProperty,
   useGaProperties,
   useSetGaProperty,
+  useZerniaSetup,
+  useZerniaConnect,
+  useZerniaSync,
 } from "@/lib/hooks";
 import { Card, PageHeader, Spinner, Pill } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import type { Connection } from "@/lib/types";
+import type { Connection, ZerniaAccount } from "@/lib/types";
 import type { Tone } from "@/lib/uiTokens";
 import { ApiError } from "@/lib/api";
 
@@ -473,6 +476,183 @@ function ProviderCard({
   );
 }
 
+// Human-friendly labels for the Zernio platform slugs (falls back to a capitalized slug).
+const ZERNIA_PLATFORM_LABELS: Record<string, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  twitter: "X (Twitter)",
+  pinterest: "Pinterest",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  threads: "Threads",
+  bluesky: "Bluesky",
+};
+const platformLabel = (slug: string) =>
+  ZERNIA_PLATFORM_LABELS[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+
+// Social media (Zernio) card: the connect-your-accounts flow. The owner sets up a profile,
+// then per-platform clicks "Connect" (opens a Zernio OAuth popup to authorize that account),
+// then "Sync" to pull the connected accounts back. Auth is a server-side account key — there's
+// nothing to paste — but we still gate the whole card on canEdit like the other providers.
+function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data } = useConnections(businessId);
+  const setup = useZerniaSetup(businessId);
+  const connect = useZerniaConnect(businessId);
+  const sync = useZerniaSync(businessId);
+  const [err, setErr] = useState<string | null>(null);
+  // Accounts confirmed by the latest in-session sync (merged with what's on the connection meta).
+  const [syncedAccounts, setSyncedAccounts] = useState<ZerniaAccount[] | null>(null);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+
+  const connection = data?.connections.find((c) => c.kind === "zernia");
+  // platforms come back from setup; once set up they're stored on the connection meta too.
+  const setupPlatforms = setup.data?.platforms ?? [];
+  const metaPlatforms = (connection?.meta?.platforms as string[] | undefined) ?? [];
+  const platforms = setupPlatforms.length ? setupPlatforms : metaPlatforms;
+
+  // platform -> handle/id for connected accounts: prefer the live sync, fall back to meta.accounts.
+  const metaAccounts = (connection?.meta?.accounts as Record<string, string> | undefined) ?? {};
+  const handleFor = (platform: string): string | null => {
+    const synced = syncedAccounts?.find((a) => a.platform === platform && a.is_active);
+    if (synced) return synced.username ? `@${synced.username}` : synced.display_name ?? "connected";
+    return metaAccounts[platform] ? "connected" : null;
+  };
+  const isConnected = (platform: string) => handleFor(platform) != null;
+  const connectedCount = platforms.filter(isConnected).length;
+
+  const isSetUp = !!connection || setup.isSuccess;
+
+  const runSetup = () => {
+    setErr(null);
+    setup.mutate(undefined, {
+      onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't set up social publishing."),
+    });
+  };
+
+  const openConnect = (platform: string) => {
+    setErr(null);
+    connect.mutate(platform, {
+      onSuccess: (res) => {
+        if (res.authUrl) {
+          const w = window.open(res.authUrl, "_blank");
+          if (!w) setErr("Your browser blocked the authorization popup — allow popups for this site and try again.");
+        }
+      },
+      onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start the connection."),
+    });
+  };
+
+  const runSync = () => {
+    setErr(null);
+    setSyncNote(null);
+    sync.mutate(undefined, {
+      onSuccess: (res) => {
+        setSyncedAccounts(res.accounts);
+        setSyncNote(
+          res.accounts.length
+            ? `Synced — ${res.connected_platforms.length} platform${res.connected_platforms.length === 1 ? "" : "s"} connected.`
+            : "Synced — no connected accounts found yet. Finish authorizing in the popup, then Sync again.",
+        );
+      },
+      onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't sync your accounts."),
+    });
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold tracking-tight text-slate-900">Social media (Zernio)</h3>
+            <Pill tone={isSetUp ? "good" : "neutral"}>{isSetUp ? "Set up" : "Not set up"}</Pill>
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+              Third-party — you authorize each network
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">
+            Connect the client&apos;s social accounts to publish approved posts.
+          </p>
+          {isSetUp && connectedCount > 0 && (
+            <p className="mt-1 text-xs text-slate-400">
+              {connectedCount} of {platforms.length} platform{platforms.length === 1 ? "" : "s"} connected
+            </p>
+          )}
+        </div>
+
+        {canEdit && !isSetUp && (
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={runSetup}
+              disabled={setup.isPending}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {setup.isPending ? "Setting up…" : "Set up social publishing"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Set up: per-platform connect grid + sync. */}
+      {canEdit && isSetUp && (
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <p className="text-xs text-slate-500">
+            Your Zernio profile is ready. Click <span className="font-medium">Connect</span> on each network to authorize
+            that account in a Zernio popup, then <span className="font-medium">Sync</span> to confirm.
+          </p>
+
+          {platforms.length === 0 ? (
+            <p className="mt-3 text-xs text-slate-400">No connectable platforms returned yet.</p>
+          ) : (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {platforms.map((platform) => {
+                const handle = handleFor(platform);
+                return (
+                  <div
+                    key={platform}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <span className="text-sm font-medium text-slate-700">{platformLabel(platform)}</span>
+                    {handle ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                        ✓ connected{handle !== "connected" ? ` as ${handle}` : ""}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => openConnect(platform)}
+                        disabled={connect.isPending && connect.variables === platform}
+                        className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        {connect.isPending && connect.variables === platform ? "Opening…" : "Connect"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick={runSync}
+              disabled={sync.isPending}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {sync.isPending ? "Syncing…" : "Sync connected accounts"}
+            </button>
+            <span className="text-xs text-slate-400">
+              After you finish connecting in the popup, click Sync to pull your accounts.
+            </span>
+          </div>
+          {syncNote && <p className="mt-2 text-xs text-slate-500">{syncNote}</p>}
+        </div>
+      )}
+
+      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+    </Card>
+  );
+}
+
 function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
   const { data, isLoading } = useConnections(businessId);
 
@@ -514,6 +694,8 @@ function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; ca
             vaultReady={data.vault_ready}
           />
         ))}
+        {/* Zernio social publishing — its own connect-your-accounts flow (no vault secret to paste). */}
+        <ZernioCard businessId={businessId} canEdit={canEdit} />
       </div>
     </div>
   );

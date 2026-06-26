@@ -112,6 +112,7 @@ export interface Business {
   services?: string | null; // comma-joined service keywords (edited as tags)
   industry?: string | null;
   regulatory_profile?: RegulatoryProfile | null;
+  owned_domains?: string[] | null; // extra web properties the business owns (cited -> classified "owned")
   created_at?: string;
   can_edit?: boolean; // may the current user take actions on this business?
 }
@@ -723,8 +724,46 @@ export interface Dashboard {
 
 // A stored credential/connection to an external surface we can publish to (or reply on).
 // `kind` is the provider; `status` is the live health of the credential.
-export type ConnectionKind = "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics";
+export type ConnectionKind = "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics" | "zernia";
 export type ConnectionStatus = "pending" | "active" | "error" | "revoked" | "expired" | "needs_reconnect";
+
+// =====================================================================================
+// Zernio (Zernia) social publishing — connect the client's social accounts so approved
+// posts can be published. The owner (1) sets up a profile container, (2) authorizes each
+// platform in a Zernio OAuth popup, (3) syncs to pull the connected accounts back. Auth is
+// a server-side account key, so there's nothing for the owner to paste.
+// =====================================================================================
+
+// Result of setting up (or reusing) the Zernio profile. `accounts` maps platform -> account
+// id for already-connected platforms; `platforms` is the list of connectable platform slugs.
+export interface ZerniaSetup {
+  ok: boolean;
+  profile_id: string;
+  accounts: Record<string, string>;
+  platforms: string[];
+}
+
+// The OAuth URL to open (in a new tab) so the owner can authorize one platform on Zernio.
+export interface ZerniaConnectUrl {
+  authUrl: string;
+  platform: string;
+}
+
+// One social account pulled back by a sync (after the owner authorizes it in the popup).
+export interface ZerniaAccount {
+  account_id: string;
+  platform: string;
+  username: string | null;
+  display_name: string | null;
+  is_active: boolean;
+}
+
+// Result of a sync — the confirmed connected accounts + the list of connected platform slugs.
+export interface ZerniaSyncResult {
+  ok: boolean;
+  accounts: ZerniaAccount[];
+  connected_platforms: string[];
+}
 
 export interface Connection {
   id: number;

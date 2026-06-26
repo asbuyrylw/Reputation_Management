@@ -36,6 +36,9 @@ log = logging.getLogger("publishing.runner")
 
 _MAX_ATTEMPTS = 5
 _BACKOFF_S = {1: 60, 2: 300, 3: 1800, 4: 7200}  # attempt# -> seconds until next try
+# Provider kinds whose auth lives in an account-level env key (not a per-connection token), so a
+# stored connection legitimately has no access_token and must not be force-revoked for lacking one.
+_KEYLESS_KINDS = {"zernia"}
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +139,12 @@ def _process(business_id: int, target: dict) -> str:
         return "skipped"
 
     creds = _vault.credentials(target["connection_id"], business_id)
-    if not creds or not creds.get("access_token"):
+    # Keyless social providers (Zernio) authenticate with an account-level env key, not a
+    # per-connection token -- their row legitimately stores no access_token (only a profile id +
+    # accounts map in meta). Requiring access_token here would force-revoke a perfectly healthy
+    # Zernia connection on the first drain, so skip the secret check for keyless kinds.
+    keyless = bool(creds) and creds.get("kind") in _KEYLESS_KINDS
+    if not creds or (not keyless and not creds.get("access_token")):
         _vault.revoke_on_runtime_401(target["connection_id"], business_id, "missing credential")
         _set_status(tid, business_id, "needs_reconnect", "connection missing/unhealthy")
         return "failed"
