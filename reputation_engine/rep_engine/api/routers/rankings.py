@@ -6,9 +6,13 @@ analyze, which WRITES). momentum() is a pure read called with quiet=True.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends
 
 from ..deps import authorize_business, get_conn
+
+log = logging.getLogger("rankings")
 
 try:
     from ... import citation_analytics as _ca
@@ -51,10 +55,19 @@ def share_of_voice(business_id: int = Depends(authorize_business), conn=Depends(
         b = by_source.setdefault(st, {"cites": 0, "share": 0.0})
         b["cites"] += int(r["cite_count"] or 0)
         b["share"] = round(b["share"] + float(r["share"] or 0), 4)
+    # Defensive clamp: share is a 0..1 fraction the UI renders as a %. The root-cause idempotency
+    # fix (uq_citation_momentum) keeps it correct, but never let a future data glitch surface a
+    # nonsensical >100% to a client again -- clamp to [0,1] and log if anything was out of range.
+    def _share(v) -> float:
+        s = float(v or 0)
+        if s > 1.0 or s < 0.0:
+            log.warning("share-of-voice out of range (%.4f) biz=%s run=%s -- clamped", s, business_id, run_id)
+        return max(0.0, min(1.0, s))
+
     return {
         "run_id": run_id,
         "by_classification": {
-            r["classification"]: {"cites": int(r["cites"] or 0), "share": float(r["share"] or 0)}
+            r["classification"]: {"cites": int(r["cites"] or 0), "share": _share(r["share"])}
             for r in by_class
         },
         "by_source_type": by_source,

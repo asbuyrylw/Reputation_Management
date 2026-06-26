@@ -70,6 +70,25 @@ def _ensure() -> None:
             draft TEXT, tone TEXT, compliance_pass BOOLEAN, compliance_flags JSONB DEFAULT '[]'::jsonb,
             status TEXT DEFAULT 'pending_review', reviewer TEXT, reviewed_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT now())""")
+        # Integrations Phase 4 parity: keep a fresh test DB column-identical to the 0051 migration
+        # so surface routing / auto-policy work without alembic. Safe values default everything off.
+        for ddl in (
+            "ALTER TABLE mentions ADD COLUMN IF NOT EXISTS surface TEXT DEFAULT 'third_party'",
+            "ALTER TABLE mentions ADD COLUMN IF NOT EXISTS target_connection_id BIGINT",
+            "ALTER TABLE mentions ADD COLUMN IF NOT EXISTS external_url TEXT",
+            "ALTER TABLE mentions ADD COLUMN IF NOT EXISTS author_pii_redacted BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE mentions ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT now()",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS surface TEXT DEFAULT 'third_party'",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS target_connection_id BIGINT",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS auto_policy TEXT DEFAULT 'manual'",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS external_url TEXT",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS external_post_id TEXT",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS posted_by TEXT",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS last_error TEXT",
+            "ALTER TABLE mention_replies ADD COLUMN IF NOT EXISTS job_id BIGINT",
+        ):
+            conn.execute(ddl)
         conn.commit()
 
 
@@ -501,17 +520,35 @@ def draft_replies(business_id: int, limit: int = 50, tone: str = "helpful, factu
         # reuse the content generator's LLM + compliance gate
         from . import content_generator as cg
 
+        # Surface routing (Integrations Phase 4): classify each mention as owned vs third_party and
+        # compute its auto_policy. third_party is ALWAYS manual; owned is auto only if every gate
+        # passes (kill switch + opt-in + compliance + guardrails). Default-safe if rp is unavailable.
+        try:
+            from . import response_policy as rp
+        except Exception:  # noqa: BLE001
+            rp = None
+
         for mt in mentions:
             draft = _draft_one(biz, dict(mt), tone, cg)
-            comp = cg._compliance(draft) if draft else {"pass": None, "flags": ["no draft produced"]}
+            # mention/review brand replies are reply-screened (FTC voice/solicitation/impersonation)
+            comp = cg._compliance(draft, is_reply=True) if draft else {"pass": None, "flags": ["no draft produced"]}
+            surface = "third_party"
+            auto_policy = "manual"
+            if rp is not None:
+                try:
+                    surface = rp.classify_surface(mt.get("source"), mt.get("source_url") or mt.get("external_url"), business_id)
+                    auto_policy = rp.route(surface, comp.get("pass"), mt.get("sentiment"), business_id, draft=draft or "")
+                except Exception:  # noqa: BLE001 -- routing must never break drafting
+                    surface, auto_policy = "third_party", "manual"
             conn.execute(
                 """INSERT INTO mention_replies (mention_id, business_id, draft, tone,
-                    compliance_pass, compliance_flags, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,'pending_review')""",
+                    compliance_pass, compliance_flags, status, surface, auto_policy)
+                   VALUES (%s,%s,%s,%s,%s,%s,'pending_review',%s,%s)""",
                 (mt["id"], business_id, draft, tone, comp.get("pass"),
-                 json.dumps(comp.get("flags", []))),
+                 json.dumps(comp.get("flags", [])), surface, auto_policy),
             )
-            conn.execute("UPDATE mentions SET status='drafted' WHERE id=%s", (mt["id"],))
+            conn.execute("UPDATE mentions SET status='drafted', surface=%s WHERE id=%s",
+                         (surface, mt["id"]))
             drafted += 1
         conn.commit()
     if not quiet:
@@ -576,24 +613,50 @@ def list_pending(business_id: int, quiet: bool = False) -> list[dict]:
     return out
 
 
-def approve(reply_id: int, reviewer: str) -> None:
+def approve(reply_id: int, reviewer: str, business_id: Optional[int] = None) -> bool:
+    """Approve a mention reply. Business-scoped (Integrations Phase 4 tenant isolation): when
+    business_id is given the WHERE clause is re-scoped so a cross-business reply_id can't be
+    actioned. For an OWNED surface the caller (router) enqueues post_mention_replies; third_party
+    is 'approved' = handled-offline (no post)."""
     _ensure()
+    scope = " AND business_id=%s" if business_id is not None else ""
+    params = (reviewer, reply_id) + ((business_id,) if business_id is not None else ())
     with db() as conn:
-        conn.execute("UPDATE mention_replies SET status='approved', reviewer=%s, reviewed_at=now() "
-                     "WHERE id=%s", (reviewer, reply_id))
-        conn.execute("UPDATE mentions SET status='actioned' WHERE id=("
-                     "SELECT mention_id FROM mention_replies WHERE id=%s)", (reply_id,))
+        row = conn.execute(
+            f"UPDATE mention_replies SET status='approved', reviewer=%s, reviewed_at=now() "
+            f"WHERE id=%s{scope} AND status='pending_review' RETURNING mention_id", params).fetchone()
+        if not row:
+            conn.commit()
+            return False
+        conn.execute("UPDATE mentions SET status='actioned' WHERE id=%s", (row["mention_id"],))
         conn.commit()
-    log.info("Reply %d approved by %s (ready to post manually).", reply_id, reviewer)
+    log.info("Reply %d approved by %s.", reply_id, reviewer)
+    return True
 
 
-def reject(reply_id: int, reviewer: str) -> None:
+def reject(reply_id: int, reviewer: str, business_id: Optional[int] = None) -> bool:
     _ensure()
+    scope = " AND business_id=%s" if business_id is not None else ""
+    params = (reviewer, reply_id) + ((business_id,) if business_id is not None else ())
     with db() as conn:
-        conn.execute("UPDATE mention_replies SET status='rejected', reviewer=%s, reviewed_at=now() "
-                     "WHERE id=%s", (reviewer, reply_id))
+        row = conn.execute(
+            f"UPDATE mention_replies SET status='rejected', reviewer=%s, reviewed_at=now() "
+            f"WHERE id=%s{scope} RETURNING id", params).fetchone()
         conn.commit()
     log.info("Reply %d rejected by %s.", reply_id, reviewer)
+    return bool(row)
+
+
+def post_approved(business_id: int) -> dict:
+    """Drain owned-surface approved mention replies. Owned-mention auto-posting requires a matching
+    social connection + the auto path; until the social reply API lands (Phase 5), this leaves
+    approved owned replies for manual posting. Keyless-safe no-op. third_party never enters here."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id FROM mention_replies WHERE business_id=%s AND status='approved' "
+            "AND surface='owned' AND auto_policy='auto_eligible'", (business_id,)).fetchall()
+    # No owned social reply transport yet -> report what's pending; nothing is posted.
+    return {"posted": 0, "pending_owned": len(rows)}
 
 
 def main() -> None:

@@ -378,7 +378,9 @@ def attribute(business_id: int) -> dict:
             results[metric] = d
             conn.execute(
                 """INSERT INTO attribution (business_id, from_run_id, to_run_id, metric, delta, assets_in_window)
-                   VALUES (%s,%s,%s,%s,%s,%s)""",
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (business_id, from_run_id, to_run_id, metric) DO UPDATE SET
+                     delta=EXCLUDED.delta, assets_in_window=EXCLUDED.assets_in_window""",
                 (business_id, from_run["id"], to_run["id"], metric, d, json.dumps(asset_list)),
             )
         conn.commit()

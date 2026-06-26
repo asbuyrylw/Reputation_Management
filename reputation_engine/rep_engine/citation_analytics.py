@@ -60,6 +60,10 @@ def _ensure() -> None:
             id BIGSERIAL PRIMARY KEY, business_id BIGINT, domain TEXT, run_id BIGINT,
             cite_count INT, share NUMERIC(6,4), classification TEXT,
             first_seen_run BIGINT, last_seen_run BIGINT, created_at TIMESTAMPTZ DEFAULT now())""")
+        # Idempotency guard (matches migration 0055): one row per (business, domain, run) so a
+        # re-run of citation_analyze upserts instead of duplicating + inflating share-of-voice.
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_citation_momentum "
+                     "ON citation_momentum(business_id, domain, run_id)")
         conn.commit()
 
 
@@ -190,7 +194,10 @@ def analyze(business_id: int, quiet: bool = False) -> dict:
             conn.execute(
                 """INSERT INTO citation_momentum
                    (business_id, domain, run_id, cite_count, share, classification, first_seen_run, last_seen_run)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (business_id, domain, run_id) DO UPDATE SET
+                     cite_count=EXCLUDED.cite_count, share=EXCLUDED.share,
+                     classification=EXCLUDED.classification, last_seen_run=EXCLUDED.last_seen_run""",
                 (business_id, d["domain"], rid, d["count"], d["share"], d["classification"], first_seen, rid),
             )
         conn.commit()

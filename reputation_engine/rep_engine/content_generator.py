@@ -415,9 +415,20 @@ def _deterministic_compliance(body: str) -> list[str]:
     return [msg for pat, msg in _COMPLIANCE_PATTERNS if pat.search(text)]
 
 
-def _compliance(body: str, system: Optional[str] = None) -> dict:
+def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = False) -> dict:
     # Deterministic, non-injectable screen first -- its verdict is authoritative.
     det_flags = _deterministic_compliance(body)
+    # Reply paths (review/mention brand replies) carry FTC/ToS risk the generic financial screen
+    # misses (it passes anything "non-financial"). Run the deterministic reply screen on every
+    # reply and use the reply-aware LLM prompt so a reply is never rubber-stamped as non-financial.
+    if is_reply:
+        try:
+            from . import reply_compliance as _rc
+        except ImportError:  # pragma: no cover -- loose-script fallback
+            import reply_compliance as _rc  # type: ignore
+        det_flags = det_flags + _rc.screen(body)
+        if system is None:
+            system = _rc.REPLY_COMPLIANCE_SYSTEM
     # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini). `system` is the
     # firm-type-adapted prompt (falls back to the generic financial screen).
     res = llm.orchestrator_json(system or COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
@@ -444,6 +455,19 @@ def _compliance(body: str, system: Optional[str] = None) -> dict:
         result["pass"] = False
         result["flags"] = list(result.get("flags", [])) + det_flags
     return result
+
+
+def draft_reply(system: str, payload: dict, *, max_tokens: int = 400,
+                fallback: Optional[str] = None) -> Optional[str]:
+    """Shared fenced-LLM drafter for brand replies (GBP reviews + owned mentions).
+
+    `payload` carries the reply context (the caller is responsible for `_fence_untrusted`-ing
+    any externally-sourced fields -- author/title/body -- before passing them in). Returns the
+    drafted reply text, or `fallback` if the model is unavailable/empty. The result is NOT
+    compliance-screened here; the caller runs `_compliance(draft, is_reply=True)`."""
+    txt = llm.orchestrator_text(system, json.dumps(payload), max_tokens=max_tokens, tier="mid")
+    txt = (txt or "").strip()
+    return txt or fallback
 
 
 # ----------------------------------------------------------------------------
@@ -739,12 +763,14 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None)
         # can paste the live URL later. No site/social integration yet -> the link is manual.
         body = (d.get("body") or "").strip()
         summary = (body[:280] + "…") if len(body) > 280 else body
+        # Copy the draft's compliance verdict onto the asset: the publish runner re-checks
+        # assets.compliance_pass IS TRUE before any auto-post (Integrations Phase 2).
         asset = conn.execute(
             """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta,
-                                   summary, published_status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending') RETURNING id""",
+                                   summary, published_status, compliance_pass)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s) RETURNING id""",
             (d["business_id"], d["work_order_id"], d["asset_type"], d["title"],
-             "own_site", json.dumps({"from_draft": draft_id}), summary),
+             "own_site", json.dumps({"from_draft": draft_id}), summary, d.get("compliance_pass")),
         ).fetchone()
         conn.execute(
             "UPDATE content_drafts SET status='approved', reviewer=%s, reviewed_at=now(), "

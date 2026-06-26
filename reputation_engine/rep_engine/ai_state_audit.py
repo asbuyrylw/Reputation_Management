@@ -1447,11 +1447,21 @@ GAP_SYSTEM = (
     "competitor appears but the business does not -- recommend content/corroboration to compete), "
     "site_technical_gaps (array of {issue, recommendation, why} for on-site problems: thin/"
     "missing pages, missing schema, weak entity coverage that limit AI extraction), "
-    "priority_order (array of action ids in recommended sequence). "
-    "If 'external_signals', 'local_rank_gaps', 'competitor_gaps', or 'site_crawl_gaps' are "
-    "provided (FIRST-PARTY SERP/benchmark/crawl reads), ground local_seo_gaps, "
-    "competitor_defense, site_technical_gaps, missing_owned_content, schema_gaps, and "
-    "priority_order in those real metrics. "
+    "priority_order (array of action ids in recommended sequence), "
+    "coverage (object: for EACH of these keys -- technical_seo, schema_structured_data, "
+    "image_quality_alt, content_depth_topical, internal_linking, backlinks_indexing, "
+    "local_gbp_nap, reviews, ai_answer_defense, search_traffic_outcomes -- return "
+    "{addressed: bool, note: string}; set addressed=true only if your plan above acts on that "
+    "dimension, and when false give a one-line reason it is not needed THIS cycle. Never silently "
+    "skip a dimension). "
+    "If 'external_signals', 'local_rank_gaps', 'competitor_gaps', 'site_crawl_gaps', or "
+    "'search_performance' are provided (FIRST-PARTY SERP/benchmark/crawl/Search-Console/Analytics "
+    "reads), ground local_seo_gaps, competitor_defense, site_technical_gaps, missing_owned_content, "
+    "schema_gaps, and priority_order in those real metrics. In particular, in 'search_performance': "
+    "striking_distance_queries (ranking ~5-15 with real impressions) are the HIGHEST-leverage SEO "
+    "actions -- turn each into a specific local_seo_gap or content/optimization task to push it to "
+    "page 1; high_impression_low_ctr queries call for title/meta-description optimization on the "
+    "ranking page; our_content_pages with sessions but weak conversion call for content_optimization. "
     "Do NOT propose content whose topic is a CONTESTED term itself (e.g. a page 'about "
     "<scam/pyramid scheme/MLM>') -- a naive keyword page REINFORCES the negative association. "
     "Where a contested frame is the problem, the right asset is a LEGITIMACY / TRANSPARENCY / "
@@ -1462,6 +1472,88 @@ GAP_SYSTEM = (
     "All actions must be honest reputation-building, not manipulation. JSON only."
     + UNTRUSTED_INSTRUCTION
 )
+
+# Completeness critic -- the adversarial self-check that makes the plan the BEST possible one, not
+# just a plausible one. It re-reads the draft plan against the coverage matrix + the real
+# first-party signals and returns an IMPROVED plan (fills under-addressed dimensions, grounds
+# vague actions in the actual metrics). Same output schema as GAP_SYSTEM.
+GAP_CRITIC_SYSTEM = (
+    "You are a senior SEO/reputation reviewer auditing a DRAFT plan for COMPLETENESS and GROUNDING. "
+    "Input: {draft_plan, first_party_signals, coverage_dimensions}. Critique the draft, then return "
+    "the SAME JSON schema as the draft plan, IMPROVED: (1) for every coverage dimension marked "
+    "addressed=false where the first_party_signals actually show a problem (e.g. striking_distance "
+    "queries exist but no local_seo_gap targets them; thin_pages exist but no site_technical_gap; "
+    "missing schema; low CTR with no title/meta task; page-1 gaps; missing reviews/NAP), ADD the "
+    "specific grounded action and flip the dimension to addressed=true; (2) make every action "
+    "reference the real metric it is grounded in; (3) re-rank priority_order by leverage (real "
+    "impressions/impact first). Keep the same honest crowding-out rules (no contested-keyword "
+    "pages; legitimacy/corroboration assets for contested frames). If the draft is already "
+    "complete and grounded, return it unchanged. STRICT JSON only."
+    + UNTRUSTED_INSTRUCTION
+)
+
+
+# Coverage matrix the gap model must explicitly evaluate every cycle -- so a dimension is never
+# silently skipped. Each is grounded in a real first-party signal where one exists.
+_COVERAGE_DIMENSIONS = [
+    "technical_seo", "schema_structured_data", "image_quality_alt", "content_depth_topical",
+    "internal_linking", "backlinks_indexing", "local_gbp_nap", "reviews",
+    "ai_answer_defense", "search_traffic_outcomes",
+]
+
+
+def _gap_critic_refine(draft: dict, first_party_signals: dict) -> dict:
+    """Run ONE completeness-critic + refine pass over the draft gap model. Fail-safe: a critic
+    failure (or any non-improvement) keeps the draft. Flag-gated via GAP_CRITIC_ENABLED (default on).
+    Cheap relative to the first pass -- it sees the draft + the compact first-party signals, not the
+    full fenced answer set."""
+    import os as _os
+    if _os.getenv("GAP_CRITIC_ENABLED", "1").strip().lower() not in ("1", "true", "yes", "on"):
+        return draft
+    try:
+        crit = orchestrator_json(
+            GAP_CRITIC_SYSTEM,
+            json.dumps({"draft_plan": draft, "first_party_signals": first_party_signals,
+                        "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str),
+            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=240)
+        if isinstance(crit, dict) and crit.get("summary"):
+            log.info("gap critic pass refined the plan")
+            return crit
+    except Exception as e:  # noqa: BLE001 -- a critic failure must never lose the draft
+        log.warning("gap critic pass failed (%s); keeping the first-pass model", e)
+    return draft
+
+
+def _search_perf_for_gap(business_id: int) -> dict:
+    """FIRST-PARTY search-traffic + behavior signals (GSC + GA) for the gap model. Fail-safe: a
+    missing/absent connection returns {} and never breaks the synthesis. This is what lets the gap
+    model reason from REAL outcomes (striking-distance queries, high-impression/low-CTR pages,
+    pages with traffic but no conversion) instead of AI answers + a shallow crawl alone."""
+    out: dict = {}
+    try:
+        from . import gsc_data as _g
+        latest = _g.latest(business_id)
+        if latest.get("has_data"):
+            out["gsc"] = {k: latest.get(k) for k in ("clicks", "impressions", "ctr", "position")}
+            out["striking_distance_queries"] = _g.opportunities(business_id, limit=10)
+            # high-impression, low-CTR queries -> title/meta optimization opportunities
+            tq = _g.top_queries(business_id, limit=25)
+            out["high_impression_low_ctr"] = [
+                {"query": q["query"], "impressions": q["impressions"], "ctr": q["ctr"],
+                 "position": q["position"]}
+                for q in tq if (q.get("impressions") or 0) >= 50 and (q.get("ctr") or 1) < 0.02][:8]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: GSC signals unavailable (%s)", e)
+    try:
+        from . import ga_data as _ga
+        gl = _ga.latest(business_id)
+        if gl.get("has_data"):
+            out["ga"] = {k: gl.get(k) for k in ("sessions", "users", "conversions", "engagement_rate")}
+            # our published pages with traffic (proof + where conversion is weak)
+            out["our_content_pages"] = _ga.top_pages(business_id, limit=10, ours_only=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: GA signals unavailable (%s)", e)
+    return out
 
 
 def build_gap_model(business_id: int) -> dict:
@@ -1554,6 +1646,9 @@ def build_gap_model(business_id: int) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("gap model: site-crawl gaps unavailable (%s)", e)
 
+        # Real organic-search + behavior outcomes (GSC/GA) -- first-party, trusted, fail-safe.
+        search_performance = _search_perf_for_gap(business_id)
+
         payload = json.dumps({
             "business": {k: b[k] for k in ("name", "domain", "services", "goal",
                                            "contested_terms", "geo")},
@@ -1562,6 +1657,7 @@ def build_gap_model(business_id: int) -> dict:
             "local_rank_gaps": local_rank_gaps,
             "competitor_gaps": competitor_gaps,
             "site_crawl_gaps": site_crawl_gaps,
+            "search_performance": search_performance,
         }, default=str)
         # Gap synthesis is a LARGE structured object over the whole answer set: use the mid
         # tier (Sonnet -- cheaper + no Opus-4.8 prose-before-JSON), a HIGH token cap so the
@@ -1586,6 +1682,13 @@ def build_gap_model(business_id: int) -> dict:
             raise RuntimeError(
                 "Gap model synthesis failed (empty/invalid LLM output); previous model preserved."
             )
+        # Completeness-critic + refine pass (fail-safe): catch under-addressed/ungrounded dimensions
+        # so the persisted plan is the best one, not just the first plausible one.
+        model = _gap_critic_refine(model, {
+            "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,
+            "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
+            "external_signal_types": [s.get("signal_type") for s in external_signals],
+        })
         conn.execute(
             "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
             (business_id, run["id"], json.dumps(model)),

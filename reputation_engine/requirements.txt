@@ -20,3 +20,5 @@ uvicorn[standard]>=0.29  # ASGI server (python -m uvicorn rep_engine.api.main:ap
 pyjwt>=2.8             # JWT auth tokens (HS256)
 stripe>=9.0            # Phase 2c billing (Checkout/Portal/webhooks); imported lazily,
                        # the app runs fine without it until STRIPE_SECRET_KEY is set
+cryptography>=42       # Integrations vault: Fernet at-rest encryption for OAuth tokens /
+                       # app-passwords (rep_engine.crypto). Only loaded when connections are used.

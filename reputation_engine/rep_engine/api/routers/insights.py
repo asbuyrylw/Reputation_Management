@@ -13,6 +13,137 @@ from ..deps import authorize_business, get_conn, require_business_editor
 router = APIRouter(prefix="/businesses/{business_id}", tags=["insights"])
 
 
+def _gsc():
+    try:
+        from ... import gsc_data as g
+    except ImportError:  # pragma: no cover
+        import gsc_data as g  # type: ignore
+    return g
+
+
+@router.get("/gsc-summary")
+def gsc_summary(business_id: int = Depends(authorize_business)):
+    return _gsc().latest(business_id)
+
+
+@router.get("/gsc-trend")
+def gsc_trend(days: Optional[int] = None, business_id: int = Depends(authorize_business)):
+    return _gsc().trend(business_id, days)
+
+
+@router.get("/gsc-queries")
+def gsc_queries(limit: int = 25, business_id: int = Depends(authorize_business)):
+    return _gsc().top_queries(business_id, limit)
+
+
+@router.get("/gsc-pages")
+def gsc_pages(limit: int = 25, ours_only: bool = False, business_id: int = Depends(authorize_business)):
+    return _gsc().top_pages(business_id, limit, ours_only)
+
+
+@router.get("/gsc-opportunities")
+def gsc_opportunities(business_id: int = Depends(authorize_business)):
+    return _gsc().opportunities(business_id)
+
+
+@router.get("/gsc-roi")
+def gsc_roi(business_id: int = Depends(authorize_business)):
+    return _gsc().roi_summary(business_id)
+
+
+def _ga():
+    try:
+        from ... import ga_data as g
+    except ImportError:  # pragma: no cover
+        import ga_data as g  # type: ignore
+    return g
+
+
+@router.get("/ga-summary")
+def ga_summary(business_id: int = Depends(authorize_business)):
+    return _ga().latest(business_id)
+
+
+@router.get("/ga-trend")
+def ga_trend(days: Optional[int] = None, business_id: int = Depends(authorize_business)):
+    return _ga().trend(business_id, days)
+
+
+@router.get("/ga-pages")
+def ga_pages(limit: int = 25, ours_only: bool = False, business_id: int = Depends(authorize_business)):
+    return _ga().top_pages(business_id, limit, ours_only)
+
+
+@router.get("/ga-channels")
+def ga_channels(business_id: int = Depends(authorize_business)):
+    return _ga().channels(business_id)
+
+
+@router.get("/our-content-impact")
+def our_content_impact(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Causal proof loop (Wave 1 item 3): for content WE published, did it start earning search
+    clicks (GSC) + sessions (GA), and is our domain now cited by AI? Joins assets -> latest-window
+    gsc_page_stats + ga_top_pages by asset_id, plus the owned citation share. Graceful when the
+    analytics tables are empty (collecting)."""
+    assets = conn.execute(
+        "SELECT id, title, published_url, published_at FROM assets "
+        "WHERE business_id=%s AND published_url IS NOT NULL AND published_status='live' "
+        "ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 50", (business_id,)).fetchall()
+
+    def _latest_map(table, metric):
+        try:
+            win = conn.execute(f"SELECT MAX(period_end) m FROM {table} WHERE business_id=%s",
+                               (business_id,)).fetchone()["m"]
+            if not win:
+                return {}
+            rows = conn.execute(
+                f"SELECT asset_id, {metric} v FROM {table} WHERE business_id=%s AND period_end=%s "
+                "AND asset_id IS NOT NULL", (business_id, win)).fetchall()
+            return {r["asset_id"]: r["v"] for r in rows}
+        except Exception:  # noqa: BLE001 -- table absent
+            return {}
+
+    gsc_clicks = _latest_map("gsc_page_stats", "clicks")
+    ga_sessions = _latest_map("ga_top_pages", "sessions")
+    # owned citation share from the latest citation_momentum run
+    owned_share = 0.0
+    try:
+        run = conn.execute("SELECT MAX(run_id) r FROM citation_momentum WHERE business_id=%s",
+                           (business_id,)).fetchone()["r"]
+        if run:
+            s = conn.execute("SELECT COALESCE(SUM(share),0) s FROM citation_momentum WHERE "
+                             "business_id=%s AND run_id=%s AND classification='owned'",
+                             (business_id, run)).fetchone()["s"]
+            owned_share = min(1.0, max(0.0, float(s or 0)))
+    except Exception:  # noqa: BLE001
+        pass
+
+    out_assets = []
+    for a in assets:
+        clk = int(gsc_clicks.get(a["id"]) or 0)
+        ses = int(ga_sessions.get(a["id"]) or 0)
+        out_assets.append({"asset_id": a["id"], "title": a["title"], "published_url": a["published_url"],
+                           "published_at": a["published_at"].isoformat() if a["published_at"] else None,
+                           "gsc_clicks": clk, "ga_sessions": ses, "has_traffic": (clk + ses) > 0})
+    with_traffic = sum(1 for a in out_assets if a["has_traffic"])
+    return {"assets": out_assets, "owned_citation_share": owned_share,
+            "totals": {"assets_published": len(out_assets), "assets_with_traffic": with_traffic,
+                       "our_content_clicks": sum(a["gsc_clicks"] for a in out_assets),
+                       "our_content_sessions": sum(a["ga_sessions"] for a in out_assets)}}
+
+
+@router.get("/review-request")
+def review_request(business_id: int = Depends(authorize_business)):
+    """Review-capture kit: a ready 'write a review' link, SMS/email templates, and the canonical
+    NAP block for citation consistency (LATER: review-request loop + GBP NAP)."""
+    try:
+        from ... import review_requests as _rr
+    except ImportError:  # pragma: no cover
+        import review_requests as _rr  # type: ignore
+    return {"link": _rr.review_link(business_id), "templates": _rr.templates(business_id),
+            "nap": _rr.nap(business_id)}
+
+
 class CompetitorCreate(BaseModel):
     name: str
     domain: Optional[str] = ""

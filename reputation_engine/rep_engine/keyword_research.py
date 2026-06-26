@@ -67,7 +67,84 @@ def _ensure() -> None:
             UNIQUE (business_id, keyword))""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_target_keywords_biz "
                      "ON target_keywords(business_id, priority DESC)")
+        # CI-5 volume columns (fresh-DB parity with migration 0054)
+        for ddl in (
+            "ALTER TABLE target_keywords ADD COLUMN IF NOT EXISTS search_volume INT",
+            "ALTER TABLE target_keywords ADD COLUMN IF NOT EXISTS keyword_difficulty INT",
+            "ALTER TABLE target_keywords ADD COLUMN IF NOT EXISTS cpc NUMERIC(8,2)",
+        ):
+            conn.execute(ddl)
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# CI-5: optional search-volume enrichment (dormant until a provider key is set)
+# ---------------------------------------------------------------------------
+def volume_configured() -> bool:
+    prov = (os.getenv("KEYWORD_VOLUME_PROVIDER") or "").strip().lower()
+    if prov == "dataforseo":
+        return bool(os.getenv("DATAFORSEO_LOGIN") and os.getenv("DATAFORSEO_PASSWORD"))
+    if prov == "keywords_everywhere":
+        return bool(os.getenv("KEYWORDS_EVERYWHERE_API_KEY"))
+    return False
+
+
+def _enrich_volume(keywords: list[str], location: str) -> dict:
+    """Return {keyword_lower: {search_volume, keyword_difficulty, cpc}} from the configured provider.
+    Dormant-safe: returns {} when no provider key is set or the call fails."""
+    if not volume_configured() or not keywords:
+        return {}
+    prov = (os.getenv("KEYWORD_VOLUME_PROVIDER") or "").strip().lower()
+    try:
+        if prov == "dataforseo":
+            return _dataforseo_volume(keywords, location)
+        if prov == "keywords_everywhere":
+            return _keywords_everywhere_volume(keywords)
+    except Exception as e:  # noqa: BLE001 -- enrichment is best-effort
+        log.debug("volume enrichment failed: %s", e)
+    return {}
+
+
+def _dataforseo_volume(keywords: list[str], location: str) -> dict:
+    import base64 as _b64
+    login = os.getenv("DATAFORSEO_LOGIN", "")
+    pw = os.getenv("DATAFORSEO_PASSWORD", "")
+    auth = _b64.b64encode(f"{login}:{pw}".encode()).decode("ascii")
+    body = [{"keywords": [k[:80] for k in keywords[:700]],
+             "location_name": location or "United States", "language_name": "English"}]
+    res = _http.request_json(
+        "POST", "https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live",
+        headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+        json=body, timeout=60, max_retries=2, guard_redirects=True)
+    out: dict = {}
+    if res.ok and isinstance(res.data, dict):
+        for task in res.data.get("tasks") or []:
+            for item in (task.get("result") or []):
+                kw = (item.get("keyword") or "").lower()
+                if kw:
+                    comp = item.get("competition_index")
+                    out[kw] = {"search_volume": item.get("search_volume"),
+                               "keyword_difficulty": int(comp) if isinstance(comp, (int, float)) else None,
+                               "cpc": item.get("cpc")}
+    return out
+
+
+def _keywords_everywhere_volume(keywords: list[str]) -> dict:
+    key = os.getenv("KEYWORDS_EVERYWHERE_API_KEY", "")
+    res = _http.request_json(
+        "POST", "https://api.keywordseverywhere.com/v1/get_keyword_data",
+        headers={"Authorization": f"Bearer {key}"},
+        data={"dataSource": "gkp", "country": "us", "currency": "usd",
+              "kw[]": [k[:80] for k in keywords[:100]]},
+        timeout=60, max_retries=2, guard_redirects=True)
+    out: dict = {}
+    if res.ok and isinstance(res.data, dict):
+        for item in res.data.get("data") or []:
+            kw = (item.get("keyword") or "").lower()
+            if kw:
+                out[kw] = {"search_volume": item.get("vol"), "keyword_difficulty": item.get("competition"),
+                           "cpc": (item.get("cpc") or {}).get("value")}
+    return out
 
 
 def _norm(s: str) -> str:
@@ -218,20 +295,28 @@ def research(business_id: int) -> dict:
     ranked = sorted(candidates.values(),
                     key=lambda x: _KIND_PRIORITY.get(x.get("kind", ""), 0), reverse=True)[:_MAX_STORED]
 
+    # CI-5: enrich with real search volume / difficulty when a provider key is set (dormant otherwise).
+    vol = _enrich_volume([it["keyword"] for it in ranked], location)
+
     with db() as conn:
         # refresh the set (a re-run reflects the latest crawl/competitors)
         conn.execute("DELETE FROM target_keywords WHERE business_id=%s", (business_id,))
         for it in ranked:
+            v = vol.get(it["keyword"].lower(), {})
             conn.execute(
-                "INSERT INTO target_keywords (business_id, keyword, kind, source, intent, priority, rationale) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (business_id, keyword) DO UPDATE SET "
-                "kind=EXCLUDED.kind, source=EXCLUDED.source, intent=EXCLUDED.intent, priority=EXCLUDED.priority",
+                "INSERT INTO target_keywords (business_id, keyword, kind, source, intent, priority, "
+                "rationale, search_volume, keyword_difficulty, cpc) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (business_id, keyword) DO UPDATE SET "
+                "kind=EXCLUDED.kind, source=EXCLUDED.source, intent=EXCLUDED.intent, "
+                "priority=EXCLUDED.priority, search_volume=EXCLUDED.search_volume, "
+                "keyword_difficulty=EXCLUDED.keyword_difficulty, cpc=EXCLUDED.cpc",
                 (business_id, it["keyword"][:200], it.get("kind"), it.get("source"),
-                 it.get("intent"), _KIND_PRIORITY.get(it.get("kind", ""), 50), it.get("rationale")),
+                 it.get("intent"), _KIND_PRIORITY.get(it.get("kind", ""), 50), it.get("rationale"),
+                 v.get("search_volume"), v.get("keyword_difficulty"), v.get("cpc")),
             )
         conn.commit()
     out = {"seeds": len(seeds), "serper_candidates": expanded_n, "stored": len(ranked),
-           "serper_used": bool(os.getenv("SERPER_API_KEY"))}
+           "serper_used": bool(os.getenv("SERPER_API_KEY")), "volume_enriched": len(vol)}
     log.info("keyword research biz %d: %s", business_id, out)
     return out
 
@@ -240,9 +325,16 @@ def latest(business_id: int) -> list[dict]:
     """The stored target keywords for a business, highest priority first (for the UI/report)."""
     with db() as conn:
         rows = conn.execute(
-            "SELECT keyword, kind, source, intent, priority, rationale FROM target_keywords "
+            "SELECT keyword, kind, source, intent, priority, rationale, search_volume, "
+            "keyword_difficulty, cpc FROM target_keywords "
             "WHERE business_id=%s ORDER BY priority DESC NULLS LAST, keyword", (business_id,)).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("cpc") is not None:
+            d["cpc"] = float(d["cpc"])
+        out.append(d)
+    return out
 
 
 def main() -> None:

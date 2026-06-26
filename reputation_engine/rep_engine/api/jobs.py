@@ -198,6 +198,64 @@ def _run_ingest_gbp_reviews(business_id: int, args: dict):
     return _imp("gbp_reviews").ingest(business_id)
 
 
+def _run_refresh_connection_token(business_id: int, args: dict):
+    """Integrations: refresh OAuth connection tokens expiring within 24h (re-encrypt). A hard
+    failure marks the connection revoked + alerts + strands dependent publish targets."""
+    return _imp("connections.vault").refresh_due(business_id)
+
+
+def _run_publish_sweep(business_id: int, args: dict):
+    """Integrations: publish every due owned-channel target for the business (network-grain drain).
+    Returns {published, scheduled, failed, skipped}."""
+    return _imp("publishing.runner").drain(business_id)
+
+
+def _run_ingest_gsc(business_id: int, args: dict):
+    """Search Console: ingest daily clicks/impressions/position + windowed top queries/pages.
+    Keyless-safe no-op without an active GSC connection + selected property."""
+    return _imp("gsc_data").ingest(business_id)
+
+
+def _run_ingest_ga(business_id: int, args: dict):
+    """Analytics (GA4): ingest daily sessions/users/conversions + windowed top pages + channel mix.
+    Keyless-safe no-op without an active GA connection + selected property."""
+    return _imp("ga_data").ingest(business_id)
+
+
+def _run_post_review_replies(business_id: int, args: dict):
+    """Integrations: post every approved Google review reply (drain). Keyless-safe no-op without
+    an allowlist-approved GBP connection. Returns {posted, skipped, failed}."""
+    return _imp("gbp_reviews").post_approved(business_id)
+
+
+def _run_gbp_reconcile(business_id: int, args: dict):
+    """Integrations: soft-delete stale reviews + redact replied-review author PII."""
+    return _imp("gbp_reviews").reconcile(business_id)
+
+
+def _run_post_mention_replies(business_id: int, args: dict):
+    """Integrations: post owned-surface approved mention replies (drain). Keyless-safe no-op until
+    the social reply transport lands. third_party never enters this path."""
+    return _imp("mention_monitor").post_approved(business_id)
+
+
+def _run_generate_visual(business_id: int, args: dict):
+    """CI-4: generate a human-gated visual (image | quote_card | video_brief). Dormant-safe -- image
+    gen returns {skipped} without a provider key; quote-cards always render locally."""
+    vc = _imp("visual_content")
+    kind = (args.get("kind") or "image").lower()
+    wo = args.get("work_order_id")
+    if kind == "quote_card":
+        return vc.generate_quote_card(business_id, args.get("text") or args.get("prompt") or "",
+                                      attribution=args.get("attribution"), work_order_id=wo)
+    if kind == "video_brief":
+        return vc.generate_video_brief(business_id, args.get("topic") or args.get("prompt") or "",
+                                       work_order_id=wo)
+    return vc.generate_image(business_id, args.get("prompt") or "", kind=kind,
+                             size=args.get("size") or "1024x1024", work_order_id=wo,
+                             draft_id=args.get("draft_id"))
+
+
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -226,6 +284,17 @@ JOB_DISPATCH = {
     "ingest_gbp_reviews": _run_ingest_gbp_reviews,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
+    # integrations drains (singleton per (business, job_type); each claims every due row)
+    "refresh_connection_token": _run_refresh_connection_token,
+    "publish_sweep": _run_publish_sweep,
+    "post_review_replies": _run_post_review_replies,
+    "gbp_reconcile": _run_gbp_reconcile,
+    "post_mention_replies": _run_post_mention_replies,
+    # visual content (CI-4)
+    "generate_visual": _run_generate_visual,
+    # search analytics (Wave 1)
+    "ingest_gsc": _run_ingest_gsc,
+    "ingest_ga": _run_ingest_ga,
 }
 
 
@@ -264,6 +333,16 @@ _JOB_RATE_LIMITS = {
     "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
     "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600),
     "refresh_failed": (6, 3600), "incident_scan": (10, 3600),
+    # integrations drains: these cap how fast the SWEEP re-triggers, NOT how many posts happen
+    # (per-post volume is enforced by integration_settings caps inside the runners).
+    "refresh_connection_token": (4, 3600),
+    "publish_sweep": (6, 3600),
+    "post_review_replies": (12, 3600),
+    "gbp_reconcile": (2, 3600),
+    "post_mention_replies": (12, 3600),
+    "generate_visual": (30, 3600),
+    "ingest_gsc": (6, 3600),
+    "ingest_ga": (6, 3600),
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),
 }

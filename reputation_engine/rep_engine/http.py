@@ -66,6 +66,7 @@ def _sleep_for(attempt: int, retry_after: Optional[str], base: float) -> float:
 
 def request_json(method: str, url: str, *, headers: dict | None = None,
                  json: dict | None = None, params: dict | None = None,
+                 data: dict | None = None,
                  timeout: int = DEFAULT_TIMEOUT, max_retries: int = DEFAULT_MAX_RETRIES,
                  base_delay: float = DEFAULT_BASE_DELAY,
                  parse_json: bool = True, guard_redirects: bool = False,
@@ -100,7 +101,7 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
         attempts_made = attempt + 1
         try:
             resp = requests.request(
-                method, url, headers=headers, json=json, params=params,
+                method, url, headers=headers, json=json, params=params, data=data,
                 timeout=eff_timeout, allow_redirects=follow,
             )
             if guard_redirects:

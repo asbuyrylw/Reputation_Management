@@ -160,3 +160,24 @@ A more autonomous research→outline→write→critique→revise loop with tools
 - One-click WordPress publish (Phase 1) / LinkedIn (deferred); inbound webhook for bidirectional GHL
 - Operator MRR/expansion/churn dashboard + trial convert-or-churn nudges
 - Judge-drift monitoring; awareness-vs-narrative driver labels; surface `entrench_drag`; impact ledger; coverage-breadth audit; content calendar grid; education tooltips; span-level compliance highlighting; grounding-aware score confidence; methodology/disclaimer appendix; sidebar collapse + breadcrumbs; dormant-account nudge
+
+---
+
+## LATER tier — implementation status (2026-06-25)
+
+The integrations program (Phases 0–5, migrations 0048→0052) and the highest-value, explicitly-requested LATER items are **built + verified**. The remaining LATER items are **deferred with rationale** (infrastructure-heavy or need a product decision) — documented here, not silently dropped.
+
+### Shipped (verified)
+- **CI-4 — Visual content** (`rep_engine/visual_content.py`, migration `0053_visual_assets`, `visuals_router`, `generate_visual` job). Provider + model chosen via env (`IMAGE_PROVIDER`/`IMAGE_MODEL`/`IMAGE_API_KEY`; `VIDEO_*` scaffold) — operator only adds a key. **Dormant-safe**: AI image gen returns `{skipped}` with no key; **quote-cards render locally (Pillow, no key)**; short-video = an LLM-scripted shootable **brief** until a generative-video key is set. **Compliance guard**: regulated firms forbid AI imagery depicting real/identifiable people (likeness/endorsement risk). Human-gated (generated → approved/rejected).
+- **CI-5 — Keyword search-volume enrichment** (`keyword_research._enrich_volume`, migration `0054_keyword_volume`). Optional **DataForSEO** or **Keywords Everywhere** provider adds real monthly volume / difficulty / CPC on top of the Serper grounding. Dormant until `KEYWORD_VOLUME_PROVIDER` + key set; columns stay NULL otherwise.
+- **Review-request loop + GBP NAP** (`rep_engine/review_requests.py`, `GET /businesses/{id}/review-request`). Ready "write a review" link built from the Google `cid` we already ingest (search fallback otherwise), SMS/email templates, and a canonical NAP block that flags missing fields for citation consistency. Keyless.
+
+### Deferred — with rationale (not built)
+- **CI-6 — pgvector RAG**: requires the `pgvector` Postgres extension + an embeddings pipeline + chunk store. Real infrastructure work; the current grounding (site-crawl + gap-model + keyword self-check multi-pass) already grounds generation well. Build when embeddings infra is provisioned.
+- **CI-7 — Agentic content (LangGraph-optional)**: a multi-agent author/critic loop. Large; the native multi-pass pipeline (outline → draft → keyword self-check → compliance) covers most of the value today. Revisit if quality plateaus.
+- **Cross-business cohort calibration (k-anonymity)**: needs a meaningful cohort of live businesses + a defensible statistical model; premature with one pilot. Build once there are enough tenants for k-anonymity to be honest.
+- **Per-answer hallucination / fact-claim verification**: a per-claim grounding check on generated content. Partially mitigated by the keyword self-check + compliance gate; a dedicated fact-check pass is a clean future enhancement.
+- **Data-retention purge + PII generalization**: `gbp_reconcile` already soft-deletes stale reviews + redacts replied-review author PII (the regulated path). A general mentions-retention sweep + a configurable retention window remain.
+- **Website pre-fill onboarding / lead magnet / per-asset attribution / org self-serve access mgmt / operator MRR dashboard**: each is a product feature needing UX + decisions (and MRR depends on billing, which is intentionally dormant). Tracked here; pick up per business priority.
+
+Invariants preserved across everything shipped: LLM/network spend stays in budget-gated jobs; human approval gates intact; new automation OFF by default; dormant-by-key features never break a keyless deploy.

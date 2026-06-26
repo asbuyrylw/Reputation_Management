@@ -20,10 +20,12 @@ from .settings import api_settings
 from . import auth
 from .routers import (
     admin,
+    approvals_router,
     audits,
     auth_router,
     billing_router,
     businesses,
+    connections_router,
     content,
     insights,
     integrations,
@@ -31,9 +33,12 @@ from .routers import (
     onboarding_router,
     platform_router,
     prompts_router,
+    publishing_router,
     rankings,
     reports_router,
+    reviews_router,
     sustain,
+    visuals_router,
 )
 
 log = logging.getLogger("rep_engine.api")
@@ -191,7 +196,14 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["meta"])
     def health():
-        return {"status": "ok"}
+        # Surface the connections-vault key state (non-fatal): the connect UI stays disabled
+        # until TOKEN_ENC_KEY is configured. Never raises and never exposes the key itself.
+        try:
+            from ..crypto import health as _crypto_health
+            conn_vault = _crypto_health()
+        except Exception:  # noqa: BLE001
+            conn_vault = {"ok": False, "degraded": True, "reason": "crypto unavailable"}
+        return {"status": "ok", "connections_vault": conn_vault}
 
     @app.get("/livez", tags=["meta"])
     def livez():
@@ -234,6 +246,12 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(integrations.router)
     app.include_router(platform_router.router)
+    app.include_router(connections_router.router)
+    app.include_router(connections_router.callback_router)  # unprefixed OAuth callback
+    app.include_router(publishing_router.router)
+    app.include_router(reviews_router.router)
+    app.include_router(approvals_router.router)
+    app.include_router(visuals_router.router)
     return app
 
 
