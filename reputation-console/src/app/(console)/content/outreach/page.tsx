@@ -7,6 +7,7 @@ import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTarget
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { NapBlock } from "@/components/NapBlock";
 import type { DiscoveryTarget, DirectoryCitations } from "@/lib/types";
 
 // How many items each long list shows before collapsing.
@@ -53,27 +54,12 @@ function Collapsible<T>({ items, limit = COLLAPSE_AFTER, render, noun = "more", 
   );
 }
 
-const NAP_DIR_LABELS: Record<string, string> = {
-  name: "Business name",
-  address: "Address",
-  phone: "Phone",
-  website: "Website",
-  areas_served: "Areas served",
-};
-
 // "Get listed (directories)" — the NAP block (consistent name/address/phone) plus a curated
 // list of high-authority directories to submit to. Consistent citations + listings on trusted
 // directories are a core local-SEO + AI-trust signal.
 function DirectoryCitationsSection({ data }: { data: DirectoryCitations | undefined }) {
   if (!data || data.directories.length === 0) return null;
   const { nap, directories, summary } = data;
-  const napRows: { key: string; label: string; value: string | null }[] = [
-    { key: "name", label: NAP_DIR_LABELS.name, value: nap.name },
-    { key: "address", label: NAP_DIR_LABELS.address, value: nap.address },
-    { key: "phone", label: NAP_DIR_LABELS.phone, value: nap.phone },
-    { key: "website", label: NAP_DIR_LABELS.website, value: nap.website },
-    { key: "areas_served", label: NAP_DIR_LABELS.areas_served, value: nap.areas_served },
-  ];
   return (
     <Card className="mb-4">
       <div className="flex items-start justify-between gap-3">
@@ -86,28 +72,8 @@ function DirectoryCitationsSection({ data }: { data: DirectoryCitations | undefi
         </div>
       </div>
 
-      {/* NAP block — keep this identical on every directory you submit to */}
-      <div className="mt-3 rounded-lg bg-slate-50 p-3">
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Use these exact details (NAP)</div>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
-          {napRows.map((r) => {
-            const missing = nap.missing_fields.includes(r.key);
-            return (
-              <div key={r.key} className="flex items-baseline justify-between gap-2 text-xs">
-                <dt className="text-slate-500">{r.label}</dt>
-                <dd className={`text-right font-medium ${missing ? "text-amber-600" : "text-slate-700"}`}>
-                  {r.value || (missing ? "Missing — add this" : "—")}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
-        {nap.missing_fields.length > 0 && (
-          <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
-            {nap.consistency_note || "Fill in the highlighted fields so your listing is consistent across every directory."}
-          </p>
-        )}
-      </div>
+      {/* NAP block — keep this identical on every directory you submit to (shared component) */}
+      <NapBlock nap={nap} className="mt-3" />
 
       {/* curated directory rows */}
       <ul className="mt-3 divide-y divide-slate-100">
@@ -329,6 +295,7 @@ export default function OutreachPage() {
           <button onClick={exportCsv} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">Export CSV</button>
         </div>
         <Card className="overflow-hidden p-0">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
@@ -405,6 +372,7 @@ export default function OutreachPage() {
               />
             </tbody>
           </table>
+          </div>
         </Card>
         </>
       )}

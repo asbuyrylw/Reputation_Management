@@ -100,6 +100,7 @@ import type {
   RoiForecast,
   LlmsTxt,
   SchemaVerify,
+  Location,
 } from "./types";
 
 type Json = Record<string, unknown>;
@@ -764,6 +765,50 @@ export function useUpdateBusiness() {
     mutationFn: ({ id, ...patch }: { id: number } & Record<string, unknown>) =>
       apiFetch(`/admin/businesses/${id}`, { method: "PATCH", body: patch }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["businesses"] }),
+  });
+}
+
+// ---- multi-location (admin only; under /admin/businesses/{businessId}/locations) ----
+// Each business can have several physical locations (storefronts/offices), one flagged primary.
+export interface LocationVars {
+  label?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  postal?: string;
+  phone?: string;
+  is_primary?: boolean;
+}
+export function useLocations(businessId: number | null) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["locations", businessId],
+    queryFn: () => apiFetch<Location[]>(`/admin/businesses/${businessId}/locations`),
+    enabled: !!user && !!businessId,
+  });
+}
+export function useAddLocation(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: LocationVars) =>
+      apiFetch<Location>(`/admin/businesses/${businessId}/locations`, { method: "POST", body: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["locations", businessId] }),
+  });
+}
+export function useUpdateLocation(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ locId, ...patch }: { locId: number } & LocationVars) =>
+      apiFetch<Location>(`/admin/businesses/${businessId}/locations/${locId}`, { method: "PATCH", body: patch }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["locations", businessId] }),
+  });
+}
+export function useDeleteLocation(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (locId: number) =>
+      apiFetch<{ deleted: boolean }>(`/admin/businesses/${businessId}/locations/${locId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["locations", businessId] }),
   });
 }
 

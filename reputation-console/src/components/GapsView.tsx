@@ -304,7 +304,7 @@ export function GapsView({
             </span>
             <span className="min-w-0 flex-1">
               These are best-practice suggestions, <span className="font-semibold">not confirmed gaps</span> — treat each as
-              “create or improve.” Use <span className="font-semibold">Check my profiles</span> to confirm which already exist.
+              “create or improve.” Use <span className="font-semibold">Audit socials</span> to confirm which already exist.
             </span>
             {verifyButton}
           </div>

@@ -3,8 +3,17 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useCreateBusiness, useUpdateBusiness, useDeleteBusiness } from "@/lib/hooks";
+import {
+  useCreateBusiness,
+  useUpdateBusiness,
+  useDeleteBusiness,
+  useLocations,
+  useAddLocation,
+  useUpdateLocation,
+  useDeleteLocation,
+} from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Button, Input } from "@/components/primitives";
 import { TagInput } from "@/components/TagInput";
 import type { Business } from "@/lib/types";
 
@@ -31,6 +40,105 @@ const EDIT_FIELDS: [keyof Business, string][] = [
   ["goal", "Goal"],
   ["contested_terms", "Contested terms"],
 ];
+
+// "Locations" sub-section of the business edit form (multi-location). Lists each storefront/
+// office with its NAP details, lets you add a row, flag one primary, and delete. The single
+// free-text "Areas served"/geo field on the business stays — this is the structured per-site list.
+function LocationsSection({ businessId }: { businessId: number }) {
+  const { data: locations, isLoading } = useLocations(businessId);
+  const add = useAddLocation(businessId);
+  const update = useUpdateLocation(businessId);
+  const del = useDeleteLocation(businessId);
+  const [form, setForm] = useState({ label: "", address: "", city: "", state: "", postal: "", phone: "" });
+
+  const rows = locations ?? [];
+  const submit = () => {
+    const v = {
+      label: form.label.trim() || undefined,
+      address: form.address.trim() || undefined,
+      city: form.city.trim() || undefined,
+      state: form.state.trim() || undefined,
+      postal: form.postal.trim() || undefined,
+      phone: form.phone.trim() || undefined,
+      // first location added becomes the primary by default
+      is_primary: rows.length === 0 ? true : undefined,
+    };
+    add.mutate(v, { onSuccess: () => setForm({ label: "", address: "", city: "", state: "", postal: "", phone: "" }) });
+  };
+  const canAdd = Object.values(form).some((s) => s.trim());
+
+  return (
+    <div className="sm:col-span-2">
+      <div className="text-xs font-medium text-slate-500">Locations (multi-location)</div>
+      <p className="mt-0.5 text-[11px] leading-snug text-slate-400">
+        Each physical storefront/office with its own address &amp; phone. Flag one as primary. The “Areas served” field
+        above still applies to the whole business.
+      </p>
+
+      {/* existing locations */}
+      <div className="mt-2 space-y-1.5">
+        {isLoading ? (
+          <p className="text-xs text-slate-400">Loading locations…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-xs text-slate-400">No locations yet — add one below.</p>
+        ) : (
+          rows.map((loc) => (
+            <div key={loc.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+              <div className="min-w-0 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium text-slate-800">{loc.label || loc.city || loc.address || "Location"}</span>
+                  {loc.is_primary && <Badge tone="indigo">Primary</Badge>}
+                </div>
+                <div className="text-slate-500">
+                  {[loc.city, loc.state].filter(Boolean).join(", ") || "—"}
+                  {loc.phone ? ` · ${loc.phone}` : ""}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {!loc.is_primary && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={update.isPending}
+                    onClick={() => update.mutate({ locId: loc.id, is_primary: true })}
+                  >
+                    Set primary
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="danger"
+                  loading={del.isPending}
+                  onClick={() => del.mutate(loc.id)}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* add a location */}
+      <div className="mt-2 grid grid-cols-1 gap-1.5 rounded-md bg-slate-50 p-2 sm:grid-cols-2">
+        <Input placeholder="Label (e.g. Downtown office)" value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} />
+        <Input placeholder="Phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+        <Input placeholder="Address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} className="sm:col-span-2" />
+        <Input placeholder="City" value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} />
+        <div className="grid grid-cols-2 gap-1.5">
+          <Input placeholder="State" value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} />
+          <Input placeholder="Postal" value={form.postal} onChange={(e) => setForm((f) => ({ ...f, postal: e.target.value }))} />
+        </div>
+        <div className="sm:col-span-2">
+          <Button size="sm" loading={add.isPending} disabled={!canAdd} onClick={submit}>
+            Add location
+          </Button>
+          {add.isError && <span className="ml-2 text-xs text-rose-600">Couldn’t add — try again.</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function AdminBusinessesPage() {
   const { businesses, loading } = useBusiness();
@@ -153,6 +261,7 @@ export default function AdminBusinessesPage() {
       </Card>
 
       <Card className="overflow-hidden p-0">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -217,6 +326,9 @@ export default function AdminBusinessesPage() {
                           <option value="other">Other</option>
                         </select>
                       </label>
+
+                      {/* Multi-location editor */}
+                      <LocationsSection businessId={b.id} />
                     </div>
                     <div className="mt-3 flex items-center gap-2">
                       <button
@@ -255,6 +367,7 @@ export default function AdminBusinessesPage() {
             )}
           </tbody>
         </table>
+        </div>
       </Card>
 
       {/* delete confirmation */}

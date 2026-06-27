@@ -1466,3 +1466,17 @@ export interface PublicAudit {
   has_audit: boolean;
   branding: Branding;
 }
+
+// A physical location for a multi-location business (admin-managed). Each row is one
+// storefront/office with its own NAP details; one row can be flagged the primary.
+export interface Location {
+  id: number;
+  label: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  postal: string | null;
+  phone: string | null;
+  is_primary: boolean;
+  created_at: string;
+}

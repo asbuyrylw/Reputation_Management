@@ -37,7 +37,7 @@ export default function GapsPage() {
           asOf={new Date(data.created_at).toLocaleDateString()}
           socialPresence={presence.data}
           verifyButton={
-            canEdit ? <RunJobButton businessId={businessId} jobType="social_verify" label="Check my profiles" variant="secondary" /> : null
+            canEdit ? <RunJobButton businessId={businessId} jobType="social_verify" label="Audit socials" variant="secondary" /> : null
           }
         />
       )}

@@ -11,6 +11,7 @@ import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
 import { SearchPerformanceCard } from "@/components/SearchPerformanceCard";
 import { AiCrawlerReadinessCard } from "@/components/AiCrawlerReadinessCard";
+import { NapBlock } from "@/components/NapBlock";
 import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact, ReviewSla } from "@/lib/types";
 
 function Stars({ rating }: { rating: number | null }) {
@@ -102,14 +103,6 @@ function KeywordsCard({ businessId, canEdit, kws }: { businessId: number | null;
   );
 }
 
-const NAP_LABELS: Record<string, string> = {
-  name: "Business name",
-  address: "Address",
-  phone: "Phone",
-  website: "Website",
-  areas_served: "Areas served",
-};
-
 // Multi-row email form that POSTs review-request emails. Handles the keyless `skipped` case
 // (email not configured) by showing the preview of what WOULD have been sent.
 function SendReviewRequestsForm({ businessId }: { businessId: number | null }) {
@@ -181,13 +174,6 @@ function SendReviewRequestsForm({ businessId }: { businessId: number | null }) {
 function ReviewRequestCard({ kit, businessId, canEdit, sla }: { kit: ReviewRequestKit | undefined; businessId: number | null; canEdit: boolean; sla: ReviewSla | undefined }) {
   if (!kit) return null;
   const { link, templates, nap } = kit;
-  const napRows: { key: string; label: string; value: string | null }[] = [
-    { key: "name", label: NAP_LABELS.name, value: nap.name },
-    { key: "address", label: NAP_LABELS.address, value: nap.address },
-    { key: "phone", label: NAP_LABELS.phone, value: nap.phone },
-    { key: "website", label: NAP_LABELS.website, value: nap.website },
-    { key: "areas_served", label: NAP_LABELS.areas_served, value: nap.areas_served },
-  ];
   const emailText = `Subject: ${templates.email_subject}\n\n${templates.email_body}`;
   return (
     <Card>
@@ -242,30 +228,9 @@ function ReviewRequestCard({ kit, businessId, canEdit, sla }: { kit: ReviewReque
         <CopyButton text={emailText} label="Copy email" />
       </div>
 
-      {/* NAP block — consistency across directory citations */}
+      {/* NAP block — consistency across directory citations (shared component) */}
       <div className="mt-4 border-t border-slate-100 pt-3">
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-          Business listing details (NAP)
-        </div>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
-          {napRows.map((r) => {
-            const missing = nap.missing_fields.includes(r.key);
-            return (
-              <div key={r.key} className="flex items-baseline justify-between gap-2 text-xs">
-                <dt className="text-slate-500">{r.label}</dt>
-                <dd className={`text-right font-medium ${missing ? "text-amber-600" : "text-slate-700"}`}>
-                  {r.value || (missing ? "Missing — add this" : "—")}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
-        {nap.missing_fields.length > 0 && (
-          <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
-            {nap.consistency_note ||
-              "Fill in the highlighted fields so your name, address & phone match exactly across every directory — inconsistent listings hurt local SEO."}
-          </p>
-        )}
+        <NapBlock nap={nap} className="bg-transparent p-0" />
       </div>
 
       {/* Send review-request emails (canEdit-gated) */}

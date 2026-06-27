@@ -5,8 +5,9 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
+import { useAuth } from "@/lib/auth";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { EmptyState, ToneBar } from "@/components/primitives";
+import { Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { VisualContentPanel } from "@/components/VisualContentPanel";
 import { SocialPresenceCard } from "@/components/SocialPresenceCard";
@@ -194,6 +195,10 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
   // back-datable for work done outside the system) before sending the status change.
   const [pendingDone, setPendingDone] = useState<string | null>(null); // the target status awaiting a date
   const [completedOn, setCompletedOn] = useState(todayISO());
+  // The common case is "I finished this today" — a one-click complete with today's date. The
+  // back-date input is an optional affordance, not a mandatory second step.
+  const [backdateOpen, setBackdateOpen] = useState(false);
+  const isDone = wo.status === "done" || wo.status === "verified";
   const onStatusChange = (next: string) => {
     if (next === "done" || next === "verified") {
       setCompletedOn(todayISO());
@@ -345,6 +350,52 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
         </div>
       )}
 
+      {/* One-click complete: mark done with today's date. Back-dating is optional (the small
+          "Done earlier?" toggle), so the common case is a single click. */}
+      {canEdit && !isDone && !pendingDone && (
+        <div className="mt-2">
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="flex-1"
+              onClick={() => { onStatus("done", todayISO()); setBackdateOpen(false); }}
+            >
+              ✓ Mark done
+            </Button>
+            <button
+              type="button"
+              onClick={() => setBackdateOpen((o) => !o)}
+              className="shrink-0 text-[11px] font-medium text-slate-500 hover:text-slate-700"
+            >
+              {backdateOpen ? "close" : "Done earlier?"}
+            </button>
+          </div>
+          {backdateOpen && (
+            <div className="mt-1.5 flex items-center gap-1.5 rounded-md bg-slate-50 p-2">
+              <label className="flex-1 text-[10px] text-slate-500">
+                Completed on
+                <input
+                  type="date"
+                  value={completedOn}
+                  max={todayISO()}
+                  onChange={(e) => setCompletedOn(e.target.value)}
+                  className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1 text-xs"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => { onStatus("done", completedOn || todayISO()); setBackdateOpen(false); }}
+                className="mt-3 shrink-0 rounded bg-emerald-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-800"
+              >
+                Save
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Full status control — for the other states (in progress / blocked / verified / skipped)
+          and to re-open an already-completed task. */}
       {canEdit && (
         <select
           value={wo.status}
@@ -528,7 +579,7 @@ function WorkCompletedSection({ businessId }: { businessId: number | null }) {
   );
 }
 
-type ViewMode = "status" | "area" | "assignee" | "due";
+type ViewMode = "status" | "mine" | "area" | "assignee" | "due";
 
 // Due-date buckets for the "by due date" view (computed against the local 'today').
 function dueBucket(target: string | null | undefined): { key: string; label: string; order: number } {
@@ -544,6 +595,7 @@ function dueBucket(target: string | null | undefined): { key: string; label: str
 
 export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
+  const { user } = useAuth();
   const { data, isLoading } = useWorkOrders(businessId);
   const { data: drafts } = useContentDrafts(businessId);
   const { data: assets } = useAssets(businessId);
@@ -626,8 +678,12 @@ export default function WorkOrdersPage() {
       }));
   })();
 
+  // "My tasks" — only the work orders assigned to the signed-in user (FK assignee_user_id).
+  const myTasks = user ? sortRows(visible.filter((w) => w.assignee_user_id === user.id)) : [];
+
   const TABS: { key: ViewMode; label: string }[] = [
     { key: "status", label: "By status" },
+    { key: "mine", label: "My tasks" },
     { key: "area", label: "By area" },
     { key: "assignee", label: "By assignee" },
     { key: "due", label: "By due date" },
@@ -711,6 +767,18 @@ export default function WorkOrdersPage() {
                 </div>
               ))}
             </div>
+          )}
+
+          {view === "mine" && (
+            myTasks.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{myTasks.map(renderCard)}</div>
+            ) : (
+              <EmptyState
+                title="Nothing assigned to you yet"
+                why="Tasks show up here once they're assigned to your account."
+                produces="Open a task and use “assign / dates” to make yourself the owner, or switch to “By assignee” to see who has what."
+              />
+            )
           )}
 
           {view === "area" && (

@@ -6,10 +6,11 @@
 //  2. llms.txt: the generated content shown in a <pre>, with copy-to-clipboard and a
 //     download-as-llms.txt button (so it can be dropped at the site root).
 
+import Link from "next/link";
 import { useLlmsTxt, useSchemaVerify } from "@/lib/hooks";
 import { downloadText } from "@/lib/download";
 import { Card } from "./ui";
-import { CopyButton } from "./primitives";
+import { Button, CopyButton } from "./primitives";
 
 export function AiCrawlerReadinessCard({ businessId }: { businessId: number | null }) {
   const { data: schema } = useSchemaVerify(businessId);
@@ -47,6 +48,10 @@ export function AiCrawlerReadinessCard({ businessId }: { businessId: number | nu
               </span>
             )}
           </div>
+          {/* plain-English framing — structured data is a dev task, not something the owner edits by hand */}
+          <p className="mt-1.5 text-xs text-slate-500">
+            Structured data is hidden code that helps AI read your site — usually a developer task.
+          </p>
           <div className="mt-2">
             <div className="text-xs text-slate-500">Deployed</div>
             <div className="mt-1 flex flex-wrap gap-1.5">
@@ -77,6 +82,15 @@ export function AiCrawlerReadinessCard({ businessId }: { businessId: number | nu
                   </span>
                 ))}
               </div>
+              {/* make it actionable: route the missing schema to the task board (a developer task) */}
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <Link href="/content/work-orders">
+                  <Button size="sm">Turn into a developer task</Button>
+                </Link>
+                <Link href="/next-steps" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+                  See it on Do this next →
+                </Link>
+              </div>
             </div>
           )}
         </div>
@@ -101,9 +115,16 @@ export function AiCrawlerReadinessCard({ businessId }: { businessId: number | nu
             </div>
           </div>
           {llms.note && <p className="mt-1.5 text-xs text-slate-500">{llms.note}</p>}
-          <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700 ring-1 ring-inset ring-slate-200">
-            {llms.content}
-          </pre>
+          {/* keep the raw file behind a disclosure so it isn't a wall of text by default */}
+          <details className="mt-2 group">
+            <summary className="cursor-pointer list-none text-xs font-medium text-slate-500 hover:text-slate-800">
+              <span className="group-open:hidden">▸ Show the generated file</span>
+              <span className="hidden group-open:inline">▾ Hide the generated file</span>
+            </summary>
+            <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700 ring-1 ring-inset ring-slate-200">
+              {llms.content}
+            </pre>
+          </details>
         </div>
       )}
     </Card>
