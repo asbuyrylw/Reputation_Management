@@ -151,6 +151,8 @@ export interface WorkOrder {
   promoted_at?: string | null;
   progress_notes?: ProgressNote[] | null;
   assignee_user_id?: number | null;
+  area?: string | null; // website | blog | outreach | social | local | reviews | tracking | content | other
+  platform?: string | null; // linkedin | facebook | instagram | x | youtube | tiktok | pinterest | reddit | gbp
 }
 
 export interface TeamMember {
@@ -271,6 +273,24 @@ export interface ProductionBrief {
   amplification_playbook?: AmplificationPlaybook | null;
   why_helps_ai_rep?: string | null;
   why_helps_seo?: string | null;
+}
+
+// Per-platform social-presence audit. `source` says how the profile was found:
+// "website"=confirmed-owned (linked from the site), "serper"=Google Business Profile,
+// "search"=inferred from a web search, "none"=not found. `completeness` is 0..1.
+export interface SocialAudit {
+  platform: string;
+  exists: boolean;
+  profile_url: string | null;
+  source: string | null; // "website" | "search" | "serper" | "none"
+  confidence: string | null;
+  completeness: number | null; // 0..1
+  audit: {
+    findings?: string[];
+    recommendations?: string[];
+    signals?: Record<string, unknown>;
+  } | null;
+  last_checked_at: string | null;
 }
 
 export interface DiscoveryTarget {

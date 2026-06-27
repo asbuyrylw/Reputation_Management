@@ -157,6 +157,8 @@ class WorkOrder:
     predicted_ai_points: Optional[float] = None      # estimated AI-score points this task adds
     predicted_seo_impact: str = ""                   # qualitative SEO impact: High|Medium|Low
     predicted_basis: str = ""                        # "measured from your results" | "industry baseline"
+    area: str = ""                                   # website|blog|outreach|social|local|reviews|tracking
+    platform: str = ""                               # for social/local tasks: linkedin|facebook|gbp|...
 
 
 # Plain-English "how this helps" by capability, so EVERY task shows its why (C10).
@@ -220,6 +222,18 @@ _CONF_FACTOR = {"high": 1.0, "medium": 0.7, "low": 0.4}
 # still be ROI-ranked against scored tasks.
 _SEO_POINTS = {"High": 15.0, "Medium": 8.0, "Low": 3.0, "—": 0.0}
 
+# The AREA a task belongs to, so the plan groups by website / blog / outreach / social / local /
+# reviews instead of a flat capability list. surface_actions override this per platform.
+_CAPABILITY_AREA = {
+    "content_writing": "content", "video_creation": "content",
+    "schema_markup": "website", "link_building": "website",
+    "press_outreach": "outreach", "media_list_building": "outreach",
+    "social_publishing": "social",
+    "review_generation": "reviews",
+    "local_content_creation": "local", "gbp_optimization": "local",
+    "ai_visibility_tracking": "tracking",
+}
+
 
 def predict_impact(business_id: int, capability: str) -> dict:
     """Estimate one task's impact: predicted AI-score points (from learned-or-baseline lever
@@ -276,7 +290,8 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
 
-    def add(title, capability, instruction, week, deps=None, *, gap_source="", why="", source="audited gap"):
+    def add(title, capability, instruction, week, deps=None, *, gap_source="", why="",
+            source="audited gap", area=None, platform=""):
         nonlocal n
         n += 1
         tool = best_tool(capability)
@@ -291,6 +306,8 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
             rationale={"gap_source": gap_source, "why": why, "source": source},
             why_helps_ai_rep=_WHY_AI.get(capability, ""),
             why_helps_seo=_WHY_SEO.get(capability, ""),
+            area=area or _CAPABILITY_AREA.get(capability, "other"),
+            platform=platform,
         ))
 
     # --- Phase 0: fast wins (reviews, tracking baseline, one explainer) ---
@@ -300,7 +317,8 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         "Build a GHL automation texting/emailing happy clients a direct Google review link "
         "post-positive-interaction. Seed reviews mentioning service + locale.", 0)
     add("Claim/optimize Google Business Profile", "social_publishing",
-        "Verify GBP; complete categories, services, photos, NAP consistency; enable reviews.", 1)
+        "Verify GBP; complete categories, services, photos, NAP consistency; enable reviews.", 1,
+        area="local", platform="gbp")
 
     # --- Phase 1: owned content for each missing topic + schema ---
     for i, item in enumerate(gap.get("missing_owned_content", []) or []):
@@ -333,20 +351,27 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         "each episode yields an indexed third-party positive page.", 7)
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
+    # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks
+    # down by platform (linkedin / facebook / ... ) and local (GBP), not a single social bucket.
     surfaces = gap.get("surface_actions", {}) or {}
-    surface_week = {"google_business": 1, "linkedin": 5, "facebook": 5, "x": 6, "reddit": 8}
+    surface_week = {"google_business": 1, "gbp": 1, "linkedin": 5, "facebook": 5, "instagram": 6,
+                    "x": 6, "youtube": 7, "tiktok": 8, "pinterest": 9, "threads": 8, "reddit": 8}
+    # google_business is the local Google profile, not a social feed -> area=local
+    _SURFACE_AREA = {"google_business": "local", "gbp": "local"}
+    _SURFACE_PLATFORM = {"google_business": "gbp"}
     for surface, actions in surfaces.items():
         for act in (actions or []):
             wk = surface_week.get(surface, 6)
-            cap = "social_publishing"
+            platform = _SURFACE_PLATFORM.get(surface, surface)
+            area = _SURFACE_AREA.get(surface, "social")
             note = ""
             if surface == "reddit":
                 note = (" NOTE: Reddit must be genuine, human, value-add participation only "
                         "-- never automated reputation posting (ban risk + policy violation).")
-            add(f"Improve {surface.replace('_', ' ').title()} presence", cap,
+            add(f"Improve {surface.replace('_', ' ').title()} presence", "social_publishing",
                 f"{act}{note}", wk,
                 gap_source=f"recommended social presence ({surface})", why="",
-                source="recommendation")
+                source="recommendation", area=area, platform=platform)
 
     # --- Local-SEO gaps -> tasks (from first-party SERP reads, via the gap model) ---
     for i, g in enumerate(gap.get("local_seo_gaps", []) or []):

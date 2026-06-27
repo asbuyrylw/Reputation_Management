@@ -133,15 +133,17 @@ def sync_plan(business_id: int) -> dict:
                    (business_id, plan_id, wo_code, title, capability, execution,
                     recommended_tool, instruction, phase, target_date, status,
                     rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision,
-                    start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, task_key)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, task_key,
+                    area, platform)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (business_id, plan_row["id"], w.get("wo_id"), w.get("title"), w.get("capability"),
                  w.get("execution"), w.get("recommended_tool"), w.get("instruction"),
                  w.get("phase"), date.fromisoformat(td) if td else None,
                  json.dumps(rationale), rationale.get("gap_source"),
                  w.get("why_helps_ai_rep"), w.get("why_helps_seo"), revision,
                  date.fromisoformat(sd) if sd else None, w.get("predicted_ai_points"),
-                 w.get("predicted_seo_impact"), w.get("predicted_basis"), key),
+                 w.get("predicted_seo_impact"), w.get("predicted_basis"), key,
+                 w.get("area") or None, w.get("platform") or None),
             )
             created += 1
 

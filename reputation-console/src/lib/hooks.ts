@@ -53,6 +53,7 @@ import type {
   ActionTaken,
   TaskImpact,
   WorkOrder,
+  SocialAudit,
   ConnectionsResponse,
   ZerniaSetup,
   ZerniaConnectUrl,
@@ -155,6 +156,27 @@ export function useSocialPresence(businessId: number | null) {
     ["social-presence", businessId],
     businessId ? `/businesses/${businessId}/social-presence` : null,
   );
+}
+
+// Per-platform social-presence audit (does each profile exist, how complete, what to do next).
+export function useSocialAudit(businessId: number | null) {
+  return useApiQuery<SocialAudit[]>(["social-audit", businessId], businessId ? `/businesses/${businessId}/social-audit` : null);
+}
+
+// Re-run the social audit (job_type "audit_socials"). The server cascades a gaps + plan refresh,
+// so on success we invalidate the social audit AND the work-orders/gaps/dashboard caches.
+export function useAuditSocials(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/businesses/${businessId}/jobs/audit_socials`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["social-audit", businessId] });
+      qc.invalidateQueries({ queryKey: ["work-orders", businessId] });
+      qc.invalidateQueries({ queryKey: ["gap-model", businessId] });
+      qc.invalidateQueries({ queryKey: ["dashboard", businessId] });
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+    },
+  });
 }
 
 // ---- content / work ----

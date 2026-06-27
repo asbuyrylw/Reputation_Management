@@ -78,7 +78,8 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "SELECT id, wo_code, title, capability, execution, phase, status, assignee, "
         "target_date, instruction, recommended_tool, result_notes, created_at, "
         "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision, "
-        "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, "
+        "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, area, platform, "
+        "completed_at, "
         "COALESCE(superseded, false) AS superseded, "
         "COALESCE(planned, false) AS planned, promoted_at, assignee_user_id, "
         "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes "
@@ -202,6 +203,23 @@ def actions_taken(business_id: int = Depends(authorize_business), conn=Depends(g
         "WHERE business_id=%s ORDER BY completed_on DESC, id DESC", (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.get("/social-audit")
+def social_audit(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Per-platform owned-social posture: discovered profiles (website-confirmed vs inferred vs the
+    Google Business Profile), completeness, and concrete improvement recommendations (Phase B)."""
+    rows = conn.execute(
+        'SELECT platform, "exists" AS exists, profile_url, source, confidence, completeness, audit, '
+        "last_checked_at FROM social_presence WHERE business_id=%s ORDER BY "
+        '("exists") DESC, platform', (business_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["completeness"] = float(d["completeness"]) if d["completeness"] is not None else None
+        out.append(d)
+    return out
 
 
 @router.get("/task-impact")

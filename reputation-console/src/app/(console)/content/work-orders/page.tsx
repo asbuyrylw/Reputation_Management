@@ -9,6 +9,7 @@ import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { VisualContentPanel } from "@/components/VisualContentPanel";
+import { SocialPresenceCard } from "@/components/SocialPresenceCard";
 import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, TaskImpact } from "@/lib/types";
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
@@ -55,6 +56,38 @@ const CAPABILITY: Record<string, string> = {
 };
 const capLabel = (c?: string | null) =>
   c ? CAPABILITY[c] ?? c.replace(/_/g, " ").replace(/\b\w/g, (x) => x.toUpperCase()) : "Task";
+
+// Plain labels + display order for the "by area" grouping. null/empty area -> "other".
+const AREA_LABEL: Record<string, string> = {
+  website: "Website",
+  content: "Content",
+  blog: "Blog",
+  outreach: "Outreach",
+  social: "Social",
+  local: "Local",
+  reviews: "Reviews",
+  tracking: "Tracking",
+  other: "Other",
+};
+const AREA_ORDER = ["website", "content", "blog", "outreach", "social", "local", "reviews", "tracking", "other"];
+const areaKey = (a?: string | null) => {
+  const k = (a || "").trim().toLowerCase();
+  return k && AREA_LABEL[k] ? k : "other";
+};
+// Platforms get a small chip in the social/local groups so the owner sees which network each task targets.
+const PLATFORM_LABEL: Record<string, string> = {
+  linkedin: "LinkedIn",
+  facebook: "Facebook",
+  instagram: "Instagram",
+  x: "X",
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  pinterest: "Pinterest",
+  reddit: "Reddit",
+  gbp: "GBP",
+};
+const platformLabel = (p?: string | null) =>
+  p ? PLATFORM_LABEL[p] ?? p.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : null;
 
 // high-level tool TYPE + concrete examples, by capability
 const TOOL_GUIDE: Record<string, { type: string; examples: string[] }> = {
@@ -181,6 +214,10 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
       <div className="flex items-start justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">{capLabel(wo.capability)}</span>
+          {/* platform chip — shown for social/local tasks so the owner sees the target network */}
+          {(areaKey(wo.area) === "social" || areaKey(wo.area) === "local") && platformLabel(wo.platform) && (
+            <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-medium text-sky-700">{platformLabel(wo.platform)}</span>
+          )}
           {wo.added_in_revision != null && wo.added_in_revision > 1 && (
             <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[11px] font-semibold text-indigo-700">Revision {wo.added_in_revision} · new</span>
           )}
@@ -491,7 +528,7 @@ function WorkCompletedSection({ businessId }: { businessId: number | null }) {
   );
 }
 
-type ViewMode = "status" | "assignee" | "due";
+type ViewMode = "status" | "area" | "assignee" | "due";
 
 // Due-date buckets for the "by due date" view (computed against the local 'today').
 function dueBucket(target: string | null | undefined): { key: string; label: string; order: number } {
@@ -549,6 +586,20 @@ export default function WorkOrdersPage() {
     />
   );
 
+  // Grouping for the "by area" view. Each area is a labeled, collapsible section (default open).
+  const areaGroups = (() => {
+    const map = new Map<string, WorkOrder[]>();
+    for (const w of visible) {
+      const k = areaKey(w.area);
+      (map.get(k) ?? map.set(k, []).get(k)!).push(w);
+    }
+    return AREA_ORDER.filter((k) => map.has(k)).map((k) => ({
+      key: k,
+      label: AREA_LABEL[k],
+      items: sortRows(map.get(k)!),
+    }));
+  })();
+
   // Grouping for the assignee / due views.
   const assigneeGroups = (() => {
     const map = new Map<string, WorkOrder[]>();
@@ -577,6 +628,7 @@ export default function WorkOrdersPage() {
 
   const TABS: { key: ViewMode; label: string }[] = [
     { key: "status", label: "By status" },
+    { key: "area", label: "By area" },
     { key: "assignee", label: "By assignee" },
     { key: "due", label: "By due date" },
   ];
@@ -636,6 +688,14 @@ export default function WorkOrdersPage() {
             <ToneBar pct={donePct} tone="good" />
           </Card>
 
+          {/* Social presence — always visible except in the "by area" view, where it lives inside
+              the Social group to avoid showing twice. */}
+          {view !== "area" && (
+            <div className="mb-4">
+              <SocialPresenceCard businessId={businessId} canEdit={canEdit} />
+            </div>
+          )}
+
           {view === "status" && (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {visibleColumns.map((s) => (
@@ -649,6 +709,31 @@ export default function WorkOrdersPage() {
                     {byStatus(s).length === 0 && <p className="text-xs text-slate-300">—</p>}
                   </div>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {view === "area" && (
+            <div className="space-y-4">
+              {areaGroups.map((g) => (
+                <details key={g.key} open className="group rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.12)] ring-1 ring-slate-900/[0.06]">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3">
+                    <span className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      <span className="text-slate-400 transition-transform group-open:rotate-90" aria-hidden>▸</span>
+                      {g.label}
+                    </span>
+                    <span className="text-xs text-slate-400">{g.items.length}</span>
+                  </summary>
+                  <div className="border-t border-slate-100 px-4 py-3">
+                    {/* Surface the social-presence card at the top of the Social area group. */}
+                    {g.key === "social" && (
+                      <div className="mb-3">
+                        <SocialPresenceCard businessId={businessId} canEdit={canEdit} />
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
+                  </div>
+                </details>
               ))}
             </div>
           )}

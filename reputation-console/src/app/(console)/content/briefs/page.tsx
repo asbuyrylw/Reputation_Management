@@ -159,6 +159,35 @@ function humanize(k: string): string {
   return k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Pretty platform names for the per-platform recipe headings.
+const PLATFORM_LABEL: Record<string, string> = {
+  linkedin: "LinkedIn",
+  facebook: "Facebook",
+  instagram: "Instagram",
+  x: "X",
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  pinterest: "Pinterest",
+  reddit: "Reddit",
+  gbp: "Google Business Profile",
+};
+const platformLabel = (p: string) => PLATFORM_LABEL[p.toLowerCase()] ?? humanize(p);
+
+// Group recipes by platform, falling back to the channel when platform is null. Returns the
+// groups ordered by size (largest first) so the busiest platforms lead.
+function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: string; items: ProductionBrief[] }[] {
+  const map = new Map<string, { label: string; items: ProductionBrief[] }>();
+  for (const b of recipes) {
+    const raw = (b.platform || b.channel || "other").trim();
+    const key = raw.toLowerCase();
+    if (!map.has(key)) map.set(key, { label: b.platform ? platformLabel(raw) : humanize(raw), items: [] });
+    map.get(key)!.items.push(b);
+  }
+  return Array.from(map.entries())
+    .map(([key, g]) => ({ key, ...g }))
+    .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
+}
+
 // The content the gap analysis says to produce (these are work-orders), vs. the off-platform
 // video/social recipes (production_briefs). video_creation appears here but is produced from a recipe.
 const CONTENT_CAPS = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation", "video_creation"]);
@@ -259,6 +288,43 @@ function Recipe({ brief }: { brief: Record<string, unknown> }) {
   );
 }
 
+// One recipe card — the brief header, the recipe, the amplification playbook, and the
+// "mark produced" control. Extracted so the recipes list can group cards by platform.
+function RecipeCard({ brief: b, businessId, canEdit }: { brief: ProductionBrief; businessId: number | null; canEdit: boolean }) {
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded bg-slate-900 px-1.5 py-0.5 text-xs font-medium text-white">{b.channel}</span>
+        {b.platform && <span className="text-xs text-slate-500">{b.platform}</span>}
+      </div>
+      <div className="mt-1 text-sm font-semibold text-slate-900">{b.title}</div>
+      {b.target_query && (
+        <div className="mt-0.5 text-xs text-slate-500">Answers the question: “{b.target_query}”</div>
+      )}
+      <div className="mt-3 border-t border-slate-100 pt-3">
+        <Recipe brief={b.brief} />
+      </div>
+      {b.amplification_playbook && (
+        <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-indigo-500">How to share it (don’t just post once)</div>
+          {b.amplification_playbook.post_to && b.amplification_playbook.post_to.length > 0 && (
+            <div className="mt-1 text-sm text-slate-700"><span className="font-medium">Post to:</span> {b.amplification_playbook.post_to.join(", ")}</div>
+          )}
+          {b.amplification_playbook.cross_share && b.amplification_playbook.cross_share.length > 0 && (
+            <div className="text-sm text-slate-700"><span className="font-medium">Then share on:</span> {b.amplification_playbook.cross_share.join(", ")}</div>
+          )}
+          {b.amplification_playbook.sequence && <div className="mt-1 text-xs text-slate-600">{b.amplification_playbook.sequence}</div>}
+          <div className="mt-2 space-y-0.5 text-xs">
+            {b.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {b.why_helps_ai_rep}</div>}
+            {b.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {b.why_helps_seo}</div>}
+          </div>
+        </div>
+      )}
+      {canEdit && <MarkProducedControl brief={b} businessId={businessId} />}
+    </Card>
+  );
+}
+
 export default function BriefsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data: briefs, isLoading: lb } = useProductionBriefs(businessId);
@@ -340,39 +406,20 @@ export default function BriefsPage() {
                   Export all (CSV)
                 </button>
               </div>
-              <p className="mb-2 text-xs text-slate-500">Off-platform pieces to film/post — what to make and the question it answers when someone asks AI about you.</p>
-              <div className="space-y-3">
-                {recipes.map((b) => (
-                  <Card key={b.id}>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded bg-slate-900 px-1.5 py-0.5 text-xs font-medium text-white">{b.channel}</span>
-                      {b.platform && <span className="text-xs text-slate-500">{b.platform}</span>}
+              <p className="mb-2 text-xs text-slate-500">Off-platform pieces to film/post — what to make and the question it answers when someone asks AI about you. Grouped by platform.</p>
+              <div className="space-y-5">
+                {groupByPlatform(recipes).map((g) => (
+                  <div key={g.key}>
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-slate-700">{g.label}</span>
+                      <span className="text-xs text-slate-400">{g.items.length}</span>
                     </div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900">{b.title}</div>
-                    {b.target_query && (
-                      <div className="mt-0.5 text-xs text-slate-500">Answers the question: “{b.target_query}”</div>
-                    )}
-                    <div className="mt-3 border-t border-slate-100 pt-3">
-                      <Recipe brief={b.brief} />
+                    <div className="space-y-3">
+                      {g.items.map((b) => (
+                        <RecipeCard key={b.id} brief={b} businessId={businessId} canEdit={canEdit} />
+                      ))}
                     </div>
-                    {b.amplification_playbook && (
-                      <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-indigo-500">How to share it (don’t just post once)</div>
-                        {b.amplification_playbook.post_to && b.amplification_playbook.post_to.length > 0 && (
-                          <div className="mt-1 text-sm text-slate-700"><span className="font-medium">Post to:</span> {b.amplification_playbook.post_to.join(", ")}</div>
-                        )}
-                        {b.amplification_playbook.cross_share && b.amplification_playbook.cross_share.length > 0 && (
-                          <div className="text-sm text-slate-700"><span className="font-medium">Then share on:</span> {b.amplification_playbook.cross_share.join(", ")}</div>
-                        )}
-                        {b.amplification_playbook.sequence && <div className="mt-1 text-xs text-slate-600">{b.amplification_playbook.sequence}</div>}
-                        <div className="mt-2 space-y-0.5 text-xs">
-                          {b.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {b.why_helps_ai_rep}</div>}
-                          {b.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {b.why_helps_seo}</div>}
-                        </div>
-                      </div>
-                    )}
-                    {canEdit && <MarkProducedControl brief={b} businessId={businessId} />}
-                  </Card>
+                  </div>
                 ))}
               </div>
             </section>

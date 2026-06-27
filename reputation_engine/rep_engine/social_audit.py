@@ -167,6 +167,49 @@ def _search_profile(name: str, platform: str, domains: list, name_tokens: list, 
     return None
 
 
+def _is_profile_url(url: str, domains: list, name_tokens: list) -> str | None:
+    """Return the cleaned profile URL if `url` is a plausible OWNED profile on one of `domains`
+    (not a post/video/group, and the handle contains a business-name token), else None."""
+    low = url.lower()
+    if not any(d in low for d in domains):
+        return None
+    if any(s in low for s in _NON_PROFILE) or any(s in low for s in _CONTENT_PATHS):
+        return None
+    handle = _handle_segment(url)
+    if not handle or handle in ("home", "feed", "search", "explore", "p"):
+        return None
+    if name_tokens and not any(t in handle for t in name_tokens):
+        return None
+    return url.split("?")[0]
+
+
+def _harvest_audit_citations(business_id: int, name_tokens: list) -> dict:
+    """Mine the latest completed audit run's cited sources for the business's OWN social profiles.
+    The answer engines often surface a profile our website-harvest + search missed, so this catches
+    real profiles (e.g. facebook.com/TheTeamUnstoppable) and avoids false 'create a profile you
+    already have' tasks. Same profile/content/handle filtering; best (cleanest) URL per platform."""
+    with db() as conn:
+        run = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                           "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+        if not run:
+            return {}
+        rows = conn.execute("SELECT cited_sources FROM answers WHERE run_id=%s "
+                            "AND cited_sources IS NOT NULL", (run["id"],)).fetchall()
+    best: dict = {}
+    for row in rows:
+        for c in (row["cited_sources"] or []):
+            url = (c.get("url") if isinstance(c, dict) else str(c)) or ""
+            for platform, domains in _PLATFORM_DOMAINS.items():
+                clean = _is_profile_url(url, domains, name_tokens)
+                if not clean:
+                    continue
+                # prefer the cleanest profile root (shortest path) per platform
+                cur = best.get(platform)
+                if cur is None or len(urlparse(clean).path) < len(urlparse(cur).path):
+                    best[platform] = clean
+    return best
+
+
 def _gbp_signal(name: str, geo: str) -> dict | None:
     """Google Business Profile via Serper places -> rich completeness signals, or None if unavailable."""
     data = _gbp._serper("places", {"q": f"{name} {geo}".strip(), "gl": "us"})
@@ -196,11 +239,16 @@ def discover(business_id: int) -> dict:
     name_tokens = [t for t in re.findall(r"[a-z0-9]+", (name or "").lower()) if len(t) > 2]
     need = max(1, len(name_tokens) // 2) if name_tokens else 0
 
-    harvested = _harvest_site_links(domain)
+    harvested = _harvest_site_links(domain)          # owned link from the site = strongest
+    cited = _harvest_audit_citations(business_id, name_tokens)  # engine-cited = also strong
     out: dict = {}
     for platform, domains in _PLATFORM_DOMAINS.items():
         if platform in harvested:
             out[platform] = {"exists": True, "url": harvested[platform], "source": "website",
+                             "confidence": "verified", "signals": {}}
+            continue
+        if platform in cited:
+            out[platform] = {"exists": True, "url": cited[platform], "source": "citation",
                              "confidence": "verified", "signals": {}}
             continue
         url = None
@@ -272,7 +320,9 @@ def _assess(business: dict, discovered: dict) -> dict:
             plats[platform] = {"present": present, "completeness": 0.4 if present else 0.0,
                                "findings": [f"source={d.get('source')}, confidence={d.get('confidence')}"],
                                "recommendations": [rec.strip()]}
-        res = {"platforms": plats, "summary": "Heuristic social posture (no LLM key configured)."}
+        res = {"platforms": plats,
+               "summary": "Heuristic social posture (LLM assessment unavailable -- no key configured "
+                          "or the monthly budget was reached; discovery is unaffected)."}
     return res
 
 
@@ -288,7 +338,20 @@ def run(business_id: int, quiet: bool = False) -> dict:
     assessment = _assess(dict(b), discovered)
     plats = assessment.get("platforms") or {}
     with db() as conn:
+        # No-downgrade guard: a transient discovery miss (Serper hiccup, search returned nothing)
+        # must NOT flip a previously-found profile to "not found" -- that would wrongly tell the
+        # owner to CREATE a profile they already have. Keep the last good finding when this pass
+        # found nothing for a platform.
+        prior = {r["platform"]: dict(r) for r in conn.execute(
+            'SELECT platform, "exists" AS exists, profile_url, source, confidence FROM '
+            "social_presence WHERE business_id=%s", (business_id,)).fetchall()}
         for platform, d in discovered.items():
+            if not d.get("exists") and d.get("source") == "none":
+                p = prior.get(platform)
+                if p and p.get("exists"):
+                    d = {**d, "exists": True, "url": p.get("profile_url"),
+                         "source": p.get("source"), "confidence": p.get("confidence")}
+                    discovered[platform] = d
             a = plats.get(platform) or {}
             comp = a.get("completeness")
             audit = {"findings": a.get("findings") or [], "recommendations": a.get("recommendations") or [],
