@@ -13,6 +13,7 @@ from ..schemas import (
     CreateOrganizationRequest,
     CreateUserRequest,
     GrantAccessRequest,
+    LocationRequest,
     UpdateBusinessRequest,
 )
 
@@ -160,3 +161,71 @@ def update_business(business_id: int, body: UpdateBusinessRequest, _: dict = Dep
         raise HTTPException(status.HTTP_404_NOT_FOUND, "business not found")
     conn.commit()
     return dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Locations (lightweight multi-location -- deferred #5a). Additive: `geo` still works.
+# ---------------------------------------------------------------------------
+_LOC_FIELDS = ("label", "address", "city", "state", "postal", "phone", "is_primary")
+
+
+@router.get("/businesses/{business_id}/locations")
+def list_locations(business_id: int, _: dict = Depends(require_admin), conn=Depends(get_conn)):
+    rows = conn.execute(
+        "SELECT id, label, address, city, state, postal, phone, is_primary, created_at "
+        "FROM locations WHERE business_id=%s ORDER BY is_primary DESC, id", (business_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _clear_primary(conn, business_id: int, keep_id: int | None = None) -> None:
+    conn.execute("UPDATE locations SET is_primary=FALSE WHERE business_id=%s AND is_primary "
+                 "AND (%s IS NULL OR id<>%s)", (business_id, keep_id, keep_id))
+
+
+@router.post("/businesses/{business_id}/locations", status_code=status.HTTP_201_CREATED)
+def add_location(business_id: int, body: LocationRequest, _: dict = Depends(require_admin),
+                 conn=Depends(get_conn)):
+    if not conn.execute("SELECT 1 FROM businesses WHERE id=%s", (business_id,)).fetchone():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "business not found")
+    if body.is_primary:
+        _clear_primary(conn, business_id)
+    row = conn.execute(
+        "INSERT INTO locations (business_id, label, address, city, state, postal, phone, is_primary) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (business_id, body.label, body.address, body.city, body.state, body.postal,
+         body.phone, body.is_primary),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+@router.patch("/businesses/{business_id}/locations/{loc_id}")
+def update_location(business_id: int, loc_id: int, body: LocationRequest,
+                    _: dict = Depends(require_admin), conn=Depends(get_conn)):
+    fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in _LOC_FIELDS}
+    if not fields:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no fields to update")
+    if fields.get("is_primary"):
+        _clear_primary(conn, business_id, keep_id=loc_id)
+    set_clause = ", ".join(f"{k}=%s" for k in fields)
+    params = list(fields.values()) + [loc_id, business_id]
+    row = conn.execute(
+        f"UPDATE locations SET {set_clause} WHERE id=%s AND business_id=%s RETURNING *",  # nosec B608
+        params,
+    ).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "location not found")
+    conn.commit()
+    return dict(row)
+
+
+@router.delete("/businesses/{business_id}/locations/{loc_id}")
+def delete_location(business_id: int, loc_id: int, _: dict = Depends(require_admin),
+                    conn=Depends(get_conn)):
+    row = conn.execute("DELETE FROM locations WHERE id=%s AND business_id=%s RETURNING id",
+                       (loc_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "location not found")
+    conn.commit()
+    return {"deleted": loc_id}

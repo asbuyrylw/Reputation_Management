@@ -107,6 +107,16 @@ class UpdateBusinessRequest(BaseModel):
     owned_domains: Optional[list[str]] = None   # extra web properties the business owns
 
 
+class LocationRequest(BaseModel):
+    label: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal: Optional[str] = None
+    phone: Optional[str] = None
+    is_primary: bool = False
+
+
 class IngestSignalRequest(BaseModel):
     source: str               # tool name, e.g. "siteguru"
     signal_type: str          # technical_seo|keywords|serp_rank|backlinks|brand|visitors|other

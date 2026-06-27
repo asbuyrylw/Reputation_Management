@@ -55,7 +55,13 @@ def get_business(business_id: int = Depends(authorize_business), conn=Depends(ge
     row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found")
-    return dict(row)
+    out = dict(row)
+    # Structured locations (lightweight multi-location, #5a). Additive to `geo`.
+    out["locations"] = [dict(r) for r in conn.execute(
+        "SELECT id, label, address, city, state, postal, phone, is_primary "
+        "FROM locations WHERE business_id=%s ORDER BY is_primary DESC, id", (business_id,),
+    ).fetchall()]
+    return out
 
 
 @router.get("/{business_id}/export")
