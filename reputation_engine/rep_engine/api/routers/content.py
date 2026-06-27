@@ -643,6 +643,7 @@ def edit_work_order(
     wo_id: int,
     body: WorkOrderEdit,
     business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
     conn=Depends(get_conn),
 ):
     """Assign a task to someone and set its start / due dates (so the owner sees who's
@@ -667,12 +668,29 @@ def edit_work_order(
     set_clause = ", ".join(f"{k}=%s" for k in fields) + ", updated_at=now()"  # keys are fixed literals
     params = list(fields.values()) + [wo_id, business_id]
     row = conn.execute(
-        f"UPDATE work_orders SET {set_clause} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
+        f"UPDATE work_orders SET {set_clause} WHERE id=%s AND business_id=%s RETURNING id, title",  # nosec B608
         params,
     ).fetchone()
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
     conn.commit()
+    # Alert the assignee they were given a task (skip self-assignment). User-targeted + emailed when
+    # SMTP is configured; deduped per (task, user) so re-saving doesn't re-notify.
+    assignee_uid = fields.get("assignee_user_id")
+    if assignee_uid and assignee_uid != user.get("id"):
+        try:
+            from ... import notifications as _notify
+        except ImportError:  # pragma: no cover
+            import notifications as _notify  # type: ignore
+        try:
+            _notify.notify_user(
+                business_id, assignee_uid, "task_assigned",
+                f"You were assigned: {row['title'] or 'a task'}",
+                f"{_actor(user)} assigned you this task"
+                + (f", due {fields['target_date']}" if fields.get("target_date") else "") + ".",
+                severity="info", dedup_key=f"assigned_wo_{wo_id}_u{assignee_uid}")
+        except Exception as e:  # noqa: BLE001 -- assignment must succeed even if alerting fails
+            pass
     return {"id": wo_id, **fields}
 
 

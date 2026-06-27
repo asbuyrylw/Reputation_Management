@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..deps import authorize_business, get_conn, require_business_editor
+from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
 from ..schemas import ResumeRequest
 
 
@@ -98,10 +98,13 @@ def incidents(business_id: int = Depends(authorize_business), conn=Depends(get_c
 
 
 @router.get("/notifications")
-def list_notifications(business_id: int = Depends(authorize_business), unread_only: bool = False):
+def list_notifications(business_id: int = Depends(authorize_business), unread_only: bool = False,
+                       user: dict = Depends(get_current_user)):
+    # Each user sees business-wide notifications PLUS the ones addressed to them (task assignments).
     from ... import notifications as _n
-    return {"items": _n.list_notifications(business_id, unread_only=unread_only),
-            "unread": _n.unread_count(business_id)}
+    uid = user.get("id")
+    return {"items": _n.list_notifications(business_id, unread_only=unread_only, for_user_id=uid),
+            "unread": _n.unread_count(business_id, for_user_id=uid)}
 
 
 @router.post("/notifications/{notification_id}/read")

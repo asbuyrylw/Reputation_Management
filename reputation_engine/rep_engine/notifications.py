@@ -44,18 +44,26 @@ def _recipients(conn, business_id: int) -> list[str]:
 
 
 def notify(business_id: int, kind: str, title: str, body: str = "", severity: str = "info",
-           dedup_key: Optional[str] = None, email: bool = True) -> Optional[int]:
+           dedup_key: Optional[str] = None, email: bool = True,
+           user_id: Optional[int] = None) -> Optional[int]:
     """Record a notification (deduped on dedup_key) and best-effort email recipients.
-    Returns the new id, or None if it was a duplicate."""
+    Returns the new id, or None if it was a duplicate. When user_id is set the notification targets
+    that ONE user (and only they are emailed); NULL user_id is business-wide."""
     with db() as conn:
         row = conn.execute(
-            "INSERT INTO notifications (business_id, kind, title, body, severity, dedup_key) "
-            "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (business_id, dedup_key) DO NOTHING RETURNING id",
-            (business_id, kind, title, body, severity, dedup_key),
+            "INSERT INTO notifications (business_id, kind, title, body, severity, dedup_key, user_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (business_id, dedup_key) DO NOTHING RETURNING id",
+            (business_id, kind, title, body, severity, dedup_key, user_id),
         ).fetchone()
         if not row:
             return None
-        recips = _recipients(conn, business_id) if email else []
+        if not email:
+            recips = []
+        elif user_id is not None:
+            u = conn.execute("SELECT email FROM users WHERE id=%s AND is_active", (user_id,)).fetchone()
+            recips = [u["email"]] if u and u["email"] else []
+        else:
+            recips = _recipients(conn, business_id)
         conn.commit()
     if recips:
         try:
@@ -245,19 +253,40 @@ def check_and_notify(business_id: int, quiet: bool = True) -> dict:
     return created
 
 
-def list_notifications(business_id: int, unread_only: bool = False, limit: int = 50) -> list[dict]:
-    where = "business_id=%s" + (" AND NOT read" if unread_only else "")
+def notify_user(business_id: int, user_id: int, kind: str, title: str, body: str = "",
+                severity: str = "info", dedup_key: Optional[str] = None, email: bool = True) -> Optional[int]:
+    """Notify ONE user (e.g. the assignee of a task). Thin wrapper over notify()."""
+    return notify(business_id, kind, title, body, severity=severity, dedup_key=dedup_key,
+                  email=email, user_id=user_id)
+
+
+def list_notifications(business_id: int, unread_only: bool = False, limit: int = 50,
+                       for_user_id: Optional[int] = None) -> list[dict]:
+    # A user sees business-wide notifications (user_id IS NULL) PLUS the ones addressed to them.
+    where = "business_id=%s"
+    params: list = [business_id]
+    if for_user_id is not None:
+        where += " AND (user_id IS NULL OR user_id=%s)"
+        params.append(for_user_id)
+    if unread_only:
+        where += " AND NOT read"
+    params.append(limit)
     with db() as conn:
         rows = conn.execute(
-            f"SELECT id, kind, title, body, severity, read, created_at FROM notifications "  # nosec B608
-            f"WHERE {where} ORDER BY id DESC LIMIT %s", (business_id, limit)).fetchall()
+            f"SELECT id, kind, title, body, severity, read, created_at, user_id FROM notifications "  # nosec B608
+            f"WHERE {where} ORDER BY id DESC LIMIT %s", tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 
-def unread_count(business_id: int) -> int:
+def unread_count(business_id: int, for_user_id: Optional[int] = None) -> int:
+    where = "business_id=%s AND NOT read"
+    params: list = [business_id]
+    if for_user_id is not None:
+        where += " AND (user_id IS NULL OR user_id=%s)"
+        params.append(for_user_id)
     with db() as conn:
-        return conn.execute("SELECT COUNT(*) c FROM notifications WHERE business_id=%s AND NOT read",
-                            (business_id,)).fetchone()["c"]
+        return conn.execute(f"SELECT COUNT(*) c FROM notifications WHERE {where}",  # nosec B608
+                            tuple(params)).fetchone()["c"]
 
 
 def mark_read(business_id: int, notification_id: int) -> bool:

@@ -65,31 +65,48 @@ def templates(business_id: int) -> dict:
 
 
 def send(business_id: int, recipients: list[dict]) -> dict:
-    """Actually send the review-request (Wave 4, item 15) by email via email_service. Each recipient
-    is {email, first_name?}. Keyless-safe: no-op (sent=0) when email isn't configured. SMS/GHL can
-    be added as a connection later. New-review impact is read from the gbp_snapshots count delta."""
+    """Send review-requests (Wave 4, item 15) over BOTH channels, each dormant-safe:
+      - email via email_service (SMTP), and
+      - SMS / GoHighLevel via the webhook bus -- each recipient is emitted as a 'review_request'
+        event carrying email + phone + the SMS template + link, so a GHL/Zapier workflow can text it.
+    Each recipient is {email?, phone?, first_name?}. If NEITHER channel is configured it returns a
+    preview (skipped=True) rather than failing. New-review impact is read from the gbp_snapshots
+    count delta."""
     try:
         from . import email_service as _es
     except ImportError:  # pragma: no cover
         import email_service as _es  # type: ignore
+    try:
+        from . import webhooks as _wh
+    except ImportError:  # pragma: no cover
+        import webhooks as _wh  # type: ignore
     tpl = templates(business_id)
-    if not _es.enabled():
-        return {"sent": 0, "skipped": True, "reason": "email not configured on this server",
-                "preview": {"subject": tpl["email_subject"], "body": tpl["email_body"]}}
-    sent = failed = 0
+    email_on, ghl_on = _es.enabled(), _wh.enabled()
+    if not email_on and not ghl_on:
+        return {"sent": 0, "skipped": True,
+                "reason": "no review-request channel configured (set SMTP_* for email or WEBHOOK_URL "
+                          "for SMS/GoHighLevel)",
+                "preview": {"subject": tpl["email_subject"], "body": tpl["email_body"], "sms": tpl["sms"]}}
+    sent = failed = ghl = 0
     for r in recipients or []:
-        to = (r.get("email") or "").strip()
-        if not to:
-            continue
         first = (r.get("first_name") or "there").strip()
-        body = tpl["email_body"].replace("{first_name}", first)
-        try:
-            ok = _es.send_email(to, tpl["email_subject"], body)
-            sent += 1 if ok else 0
-            failed += 0 if ok else 1
-        except Exception:  # noqa: BLE001
-            failed += 1
-    return {"sent": sent, "failed": failed}
+        to = (r.get("email") or "").strip()
+        if email_on and to:
+            try:
+                ok = _es.send_email(to, tpl["email_subject"], tpl["email_body"].replace("{first_name}", first))
+                sent += 1 if ok else 0
+                failed += 0 if ok else 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+        if ghl_on and (r.get("phone") or to):
+            try:  # hand off to GHL/Zapier for the SMS (or its own email workflow)
+                _wh.emit(business_id, "review_request", {
+                    "email": to, "phone": (r.get("phone") or "").strip(), "first_name": first,
+                    "sms": tpl["sms"].replace("{first_name}", first), "link": tpl["link"]})
+                ghl += 1
+            except Exception:  # noqa: BLE001
+                pass
+    return {"sent": sent, "failed": failed, "ghl_fanout": ghl}
 
 
 def nap(business_id: int) -> dict:
