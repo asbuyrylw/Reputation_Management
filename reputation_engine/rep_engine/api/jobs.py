@@ -34,6 +34,11 @@ def _run_audit(business_id: int, args: dict) -> None:
         _imp("run_metrics").persist_latest(business_id)
     except Exception as e:  # noqa: BLE001 -- rollup is best-effort
         log.debug("run_metrics persist skipped: %s", e)
+    # Persist the headline Narrative Crowding-Out Score (durable per-run rollup).
+    try:
+        _imp("narrative_score").compute(business_id)
+    except Exception as e:  # noqa: BLE001 -- rollup is best-effort
+        log.debug("narrative_score persist skipped: %s", e)
 
 
 def _run_cycle(business_id: int, args: dict) -> None:

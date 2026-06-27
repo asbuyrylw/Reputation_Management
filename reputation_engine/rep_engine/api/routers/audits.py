@@ -23,6 +23,44 @@ except ImportError:  # pragma: no cover
 router = APIRouter(prefix="/businesses/{business_id}", tags=["audits"])
 
 
+@router.get("/narrative-score")
+def narrative_score(business_id: int = Depends(authorize_business)):
+    """The Narrative Crowding-Out Score (0-100: how much the DESIRED narrative dominates AI answers
+    vs the CONTESTED one) + its trend over runs. The one-number headline a client renews for."""
+    try:
+        from ... import narrative_score as _ns
+    except ImportError:  # pragma: no cover
+        import narrative_score as _ns  # type: ignore
+    out = _ns.trend(business_id)
+    try:
+        out["latest_detail"] = _ns.compute(business_id, persist=False)  # incl. by_engine breakdown
+    except Exception:
+        out["latest_detail"] = None
+    return out
+
+
+@router.get("/impact-report")
+def impact_report(business_id: int = Depends(authorize_business)):
+    """'Prove it worked': actions completed between the two latest audits joined to the before/after
+    movement in the Narrative Score, owned-citation share, and goal-alignment (Rec #1b)."""
+    try:
+        from ... import impact_report as _ir
+    except ImportError:  # pragma: no cover
+        import impact_report as _ir  # type: ignore
+    return _ir.build(business_id)
+
+
+@router.get("/roi-forecast")
+def roi_forecast(business_id: int = Depends(authorize_business)):
+    """Predicted score lift from finishing the open plan, using this client's learned effectiveness
+    first, then the anonymized cross-client prior, then an industry baseline (Rec #1c)."""
+    try:
+        from ... import roi_predictor as _rp
+    except ImportError:  # pragma: no cover
+        import roi_predictor as _rp  # type: ignore
+    return _rp.predict_plan(business_id)
+
+
 @router.get("/per-engine")
 def per_engine_latest(business_id: int = Depends(authorize_business)):
     """Per-engine KPI breakdown for the latest completed run: what EACH AI engine says,

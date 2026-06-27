@@ -107,4 +107,13 @@ def get_dashboard(
         data["challenge"] = _challenge.challenge_profile(business_id, quiet=True)
     except Exception:  # never let the diagnostic break the dashboard
         data["challenge"] = None
+    # Headline Narrative Crowding-Out Score + trend (Rec #1a) -- the one-number story.
+    try:
+        from ... import narrative_score as _ns
+    except ImportError:  # pragma: no cover
+        import narrative_score as _ns  # type: ignore
+    try:
+        data["narrative"] = _ns.trend(business_id)
+    except Exception:
+        data["narrative"] = None
     return data
