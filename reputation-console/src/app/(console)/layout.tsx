@@ -8,6 +8,7 @@ import { FilterProvider } from "@/lib/filters";
 import { Sidebar } from "@/components/Sidebar";
 import { BusinessSwitcher } from "@/components/BusinessSwitcher";
 import { FilterBar } from "@/components/FilterBar";
+import { NotificationBell } from "@/components/NotificationBell";
 import { Spinner } from "@/components/ui";
 
 export default function ConsoleLayout({ children }: { children: React.ReactNode }) {
@@ -48,6 +49,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
                 <FilterBar />
               </div>
               <div className="flex items-center gap-4 text-sm">
+                <NotificationBell />
                 <span className="text-slate-500">
                   {user.email}
                   {user.role === "admin" && (

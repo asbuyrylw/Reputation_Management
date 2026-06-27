@@ -9,6 +9,17 @@ export async function downloadCsv(path: string, filename: string): Promise<void>
   const res = await fetch(`${apiBase()}${path}`, { credentials: "include" });
   if (!res.ok) throw new ApiError(res.status, res.statusText);
   const blob = await res.blob();
+  triggerDownload(blob, filename);
+}
+
+// Download an in-memory string as a file (e.g. a generated llms.txt we already hold). No
+// network call — the content is already on the client — so this works offline and needs no auth.
+export function downloadText(content: string, filename: string, mime = "text/plain"): void {
+  triggerDownload(new Blob([content], { type: mime }), filename);
+}
+
+// Shared blob -> browser-download trigger via a temporary <a download>.
+function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

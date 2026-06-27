@@ -95,6 +95,11 @@ import type {
   Branding,
   ShareLink,
   LeadsResponse,
+  NarrativeScore,
+  ImpactReport,
+  RoiForecast,
+  LlmsTxt,
+  SchemaVerify,
 } from "./types";
 
 type Json = Record<string, unknown>;
@@ -1394,4 +1399,35 @@ export function useShareLink(businessId: number | null) {
 // Emails captured from the public lead-magnet page (newest-first ordering is up to the caller).
 export function useLeads(businessId: number | null) {
   return useApiQuery<LeadsResponse>(["leads", businessId], base(businessId, "/leads"));
+}
+
+// =====================================================================================
+// Headline metric + proof — narrative crowding-out score, proof-of-impact report, and the
+// ROI forecast. The dashboard bundle already embeds `narrative`, but the dedicated trend
+// hook is here for any page that wants the standalone series.
+// =====================================================================================
+
+// Narrative crowding-out score (0-100) — desired vs contested narrative dominance + trend.
+export function useNarrativeScore(businessId: number | null) {
+  return useApiQuery<NarrativeScore>(["narrative-score", businessId], base(businessId, "/narrative-score"));
+}
+
+// Before/after proof across the most recent action window (ready=false until enough history).
+export function useImpactReport(businessId: number | null) {
+  return useApiQuery<ImpactReport>(["impact-report", businessId], base(businessId, "/impact-report"));
+}
+
+// Predicted AI-score points still on the table if the remaining plan is finished.
+export function useRoiForecast(businessId: number | null) {
+  return useApiQuery<RoiForecast>(["roi-forecast", businessId], base(businessId, "/roi-forecast"));
+}
+
+// =====================================================================================
+// AI-crawler readiness (SEO) — generated llms.txt + schema.org coverage verification.
+// =====================================================================================
+export function useLlmsTxt(businessId: number | null) {
+  return useApiQuery<LlmsTxt>(["llms-txt", businessId], base(businessId, "/llms-txt"));
+}
+export function useSchemaVerify(businessId: number | null) {
+  return useApiQuery<SchemaVerify>(["schema-verify", businessId], base(businessId, "/schema-verify"));
 }

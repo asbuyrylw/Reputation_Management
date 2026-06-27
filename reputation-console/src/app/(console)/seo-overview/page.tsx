@@ -10,6 +10,7 @@ import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
 import { SearchPerformanceCard } from "@/components/SearchPerformanceCard";
+import { AiCrawlerReadinessCard } from "@/components/AiCrawlerReadinessCard";
 import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact, ReviewSla } from "@/lib/types";
 
 function Stars({ rating }: { rating: number | null }) {
@@ -385,6 +386,9 @@ export default function SeoOverviewPage() {
 
         {/* Real Google search traffic (clicks/impressions/CTR/position) — the measured proof */}
         <SearchPerformanceCard businessId={businessId} />
+
+        {/* AI-crawler readiness — schema.org coverage + the generated llms.txt for AI crawlers */}
+        <AiCrawlerReadinessCard businessId={businessId} />
 
         {/* One-line content-impact proof (deep view lives on /search-performance) */}
         <OurContentImpactLine impact={impact.data} />

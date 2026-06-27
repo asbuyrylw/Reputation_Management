@@ -709,10 +709,104 @@ export interface Notification {
   severity: string;
   read: boolean;
   created_at: string | null;
+  user_id?: number | null; // scoped to the current user server-side (e.g. task-assignment alerts)
 }
 export interface NotificationsResponse {
   items: Notification[];
   unread: number;
+}
+
+// =====================================================================================
+// Narrative crowding-out score — the headline metric. How much the DESIRED narrative
+// dominates AI answers vs the CONTESTED one (0-100). `latest`/`series` are the trend
+// shape; `latest_detail` adds the neutral split + a per-engine breakdown.
+// =====================================================================================
+export interface NarrativePoint {
+  run_id: number;
+  date: string;
+  score: number; // 0-100 narrative dominance
+  desired_pct: number; // share of answers carrying the desired narrative
+  contested_pct: number; // share carrying the contested narrative
+}
+export interface NarrativeEngineDetail {
+  score: number;
+  desired: number;
+  contested: number;
+  neutral: number;
+}
+export interface NarrativeDetail {
+  score: number;
+  desired_pct: number;
+  contested_pct: number;
+  neutral_pct: number;
+  by_engine: Record<string, NarrativeEngineDetail>;
+}
+export interface NarrativeScore {
+  latest: NarrativePoint | null;
+  delta: number | null; // change vs the prior audit (in score points)
+  series: NarrativePoint[];
+  latest_detail: NarrativeDetail | null;
+}
+
+// =====================================================================================
+// Proof of impact + ROI forecast — the "did the work pay off?" surfaces. The impact
+// report compares before/after across the most recent action window (ready=false when
+// there isn't enough history yet). The ROI forecast predicts the AI-score points still
+// on the table if the remaining plan is finished.
+// =====================================================================================
+export interface ImpactMetricDelta {
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+}
+export interface ImpactReport {
+  ready: boolean;
+  reason?: string; // why it's not ready yet (shown when ready=false)
+  window?: { from_date: string; to_date: string };
+  actions?: { total: number; by_area: Record<string, number> };
+  metrics?: {
+    narrative_score: ImpactMetricDelta;
+    owned_citation_share_pct: ImpactMetricDelta;
+    contested_pct: ImpactMetricDelta;
+    avg_goal_alignment: ImpactMetricDelta;
+  };
+  summary?: string;
+}
+
+export interface RoiCapabilityRow {
+  capability: string;
+  open_tasks: number;
+  gain_per_task: number;
+  predicted_points: number;
+  basis: string;
+  confidence: string;
+}
+export interface RoiForecast {
+  predicted_points: number; // total AI-score points if the whole plan is finished
+  open_tasks: number;
+  by_capability: RoiCapabilityRow[];
+  confidence: string;
+  horizon_weeks: number | null;
+  note: string;
+}
+
+// =====================================================================================
+// AI-crawler readiness — llms.txt content + schema.org coverage verification. The
+// llms.txt block is copy/downloadable; schema-verify lists deployed vs recommended-missing.
+// =====================================================================================
+export interface LlmsTxt {
+  content: string;
+  page_count: number;
+  note: string;
+}
+export interface SchemaVerify {
+  checked_pages: number;
+  deployed_schema: string[];
+  recommended_missing: string[];
+  // per-page schema detail; the server shape may vary, so keep it loose (only the
+  // aggregate deployed/recommended_missing chips + verdict are rendered).
+  per_page: Record<string, unknown>[];
+  verdict: string;
 }
 
 export interface Schedule {
@@ -768,6 +862,7 @@ export interface Dashboard {
   month_cost?: number; // present for admins only
   attribution: { metric: string; delta: number; assets_in_window: unknown }[];
   challenge?: Challenge | null; // primary-challenge profile (awareness gap vs negatives)
+  narrative?: NarrativeScore | null; // headline narrative crowding-out score + trend
 }
 
 // =====================================================================================

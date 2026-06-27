@@ -10,6 +10,8 @@ import {
 import { ReputationHero } from "@/components/ReputationHero";
 import { ScoreTrend } from "@/components/ScoreTrend";
 import { VerdictBanner } from "@/components/VerdictBanner";
+import { NarrativeScoreCard } from "@/components/NarrativeScoreCard";
+import { ResultsProofCard } from "@/components/ResultsProofCard";
 import { WorstAnswers } from "@/components/WorstAnswers";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
 import OnboardingCard from "@/components/OnboardingCard";
@@ -431,6 +433,9 @@ export default function DashboardPage() {
           {/* live monitor — incidents + mentions at a glance */}
           <LiveMonitorStrip businessId={businessId} />
 
+          {/* HEADLINE — narrative crowding-out score (the 0-100 dominance metric) */}
+          <NarrativeScoreCard narrative={data.narrative} />
+
           {/* A — North Star goal */}
           {goalText && (
             <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
@@ -468,6 +473,9 @@ export default function DashboardPage() {
 
           {/* D — action plan & progress (merged) */}
           <ActionPlanProgress woCounts={data.wo_counts} assetsN={data.assets_n} series={s} />
+
+          {/* D2 — results / proof: before-after impact + ROI forecast */}
+          <ResultsProofCard businessId={businessId} />
 
           {/* E — do this next (+approvals) beside biggest gaps */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
