@@ -30,7 +30,8 @@ log = logging.getLogger("rep_engine.scheduler")
 
 # Sensible default cadences (hours) for a managed account, used when seeding/UX defaults.
 DEFAULT_CADENCES = {
-    "cycle": 720,          # full monthly cycle ~ every 30 days
+    "cycle": 720,          # full monthly cycle ~ every 30 days (the expensive full audit)
+    "light_sweep": 168,    # weekly cheap refresh (socials + citations + mentions + alerts; #3d)
     "mentions_scan": 24,   # daily mention sweep
     "incident_scan": 24,   # daily incident triage
     "citation_analyze": 168,  # weekly

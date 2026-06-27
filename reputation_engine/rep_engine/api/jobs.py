@@ -66,6 +66,21 @@ def _run_citation_analyze(business_id: int, args: dict) -> None:
     c.analyze(business_id, quiet=True)
 
 
+def _run_light_sweep(business_id: int, args: dict) -> None:
+    """Tiered cadence (#3d): a CHEAP weekly refresh -- re-check owned socials, recompute citation
+    share, scan mentions, and run answer-change + incident alerts -- WITHOUT the expensive full
+    AI-answer audit battery. Pair a weekly light_sweep with a monthly full `cycle` so monitoring
+    stays fresh at a fraction of the cost. Each step is best-effort so one failure can't abort it."""
+    for jt in ("audit_socials", "citation_analyze", "mentions_scan", "incident_scan", "alert_check"):
+        fn = JOB_DISPATCH.get(jt)
+        if not fn:
+            continue
+        try:
+            fn(business_id, {})
+        except Exception as e:  # noqa: BLE001 -- a light-sweep step must not abort the sweep
+            log.warning("light_sweep step %s failed: %s", jt, e)
+
+
 def _run_normalize_signals(business_id: int, args: dict) -> None:
     try:
         from .. import external_signals as es
@@ -297,6 +312,7 @@ JOB_DISPATCH = {
     "mentions_scan": _run_mentions_scan,
     "incident_scan": _run_incident_scan,
     "citation_analyze": _run_citation_analyze,
+    "light_sweep": _run_light_sweep,
     "learn": _run_learn,
     "alert_check": _run_alert_check,
     "benchmark": _run_benchmark,
@@ -358,7 +374,7 @@ _JOB_RATE_LIMITS = {
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
     "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
     "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600),
-    "refresh_failed": (6, 3600), "incident_scan": (10, 3600),
+    "refresh_failed": (6, 3600), "incident_scan": (10, 3600), "light_sweep": (4, 3600),
     # integrations drains: these cap how fast the SWEEP re-triggers, NOT how many posts happen
     # (per-post volume is enforced by integration_settings caps inside the runners).
     "refresh_connection_token": (4, 3600),

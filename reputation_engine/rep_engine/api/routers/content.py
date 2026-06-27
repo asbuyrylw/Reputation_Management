@@ -514,7 +514,17 @@ def approve_draft(
         _cg.approve(draft_id, _actor(user), override_reason=body.override_reason)
     except ValueError as e:  # compliance gate / not-approvable -> 422, not a 500
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
-    return {"ok": True, "draft_id": draft_id, "status": "approved"}
+    # Close the publish loop (#2c): approving an asset enqueues a publish sweep so it flows to the
+    # owner's connected channels automatically. Fully gated -- the sweep is a keyless no-op without
+    # a connection, and AUTOPOST_GLOBAL_ENABLED still governs whether anything actually posts -- so
+    # this never publishes anything the owner hasn't enabled.
+    queued = None
+    try:
+        if "publish_sweep" in _jobs.JOB_DISPATCH and _jobs.rate_ok(business_id, "publish_sweep"):
+            queued, _active = _jobs.enqueue(business_id, "publish_sweep", requested_by=user["id"])
+    except Exception:  # noqa: BLE001 -- approval must succeed even if the sweep can't be queued
+        queued = None
+    return {"ok": True, "draft_id": draft_id, "status": "approved", "publish_job": queued}
 
 
 @router.get("/compliance-ledger")
