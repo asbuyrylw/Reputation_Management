@@ -21,6 +21,28 @@ def _gsc():
     return g
 
 
+@router.get("/llms-txt")
+def llms_txt(business_id: int = Depends(authorize_business)):
+    """Generate an llms.txt for the client's site (AEO/GEO lever -- tells AI crawlers what the site
+    is + its most citable pages). Returns {content, page_count}. Place it at /llms.txt."""
+    try:
+        from ... import llms_txt as _lt
+    except ImportError:  # pragma: no cover
+        import llms_txt as _lt  # type: ignore
+    return _lt.generate(business_id)
+
+
+@router.get("/schema-verify")
+def schema_verify(business_id: int = Depends(authorize_business)):
+    """Fetch the live key pages and confirm which recommended JSON-LD schema is actually deployed
+    vs still missing -- so 'add schema' tasks can be verified done."""
+    try:
+        from ... import schema_verify as _sv
+    except ImportError:  # pragma: no cover
+        import schema_verify as _sv  # type: ignore
+    return _sv.check(business_id)
+
+
 @router.get("/gsc-summary")
 def gsc_summary(business_id: int = Depends(authorize_business)):
     return _gsc().latest(business_id)
