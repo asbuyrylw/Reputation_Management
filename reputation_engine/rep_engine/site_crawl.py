@@ -489,6 +489,22 @@ def summarize(results: list[PageAudit], lh: dict) -> dict:
             for term in (pa.semantic.get("entity_coverage", {}) or {}).get("missing", []) or []:
                 missing_counter[term] = missing_counter.get(term, 0) + 1
     top_missing = sorted(missing_counter, key=missing_counter.get, reverse=True)[:10]
+    # Aggregate the per-page GEO signals (front-loading, question coverage, freshness, title
+    # alignment) so the gap model can ACT on them -- not just the single avg readiness number.
+    # These are the signals 2026 GEO research links to being CITED by answer engines.
+    def _avg(vals):
+        v = [x for x in vals if isinstance(x, (int, float))]
+        return round(sum(v) / len(v), 3) if v else None
+    sems = [pa.semantic for pa in results if isinstance(pa.semantic, dict) and pa.semantic]
+    geo_signals = {
+        "avg_front_loading": _avg([s.get("front_loading") for s in sems]),
+        "avg_title_alignment": _avg([s.get("title_alignment") for s in sems]),
+        "avg_question_coverage": _avg([(s.get("question_coverage") or {}).get("rate") for s in sems]),
+        "pages_with_freshness_date": sum(1 for s in sems if (s.get("freshness") or {}).get("has_date")),
+        "pages_scored": len(sems),
+        "low_readiness_pages": sum(1 for s in sems
+                                   if (s.get("citation_readiness_score") or 100) < 60),
+    }
     return {
         "pages_crawled": total,
         "lighthouse": lh,
@@ -499,6 +515,7 @@ def summarize(results: list[PageAudit], lh: dict) -> dict:
         "issue_counts": issue_counts,
         "rendered_via_firecrawl": rendered_count,
         "avg_semantic_readiness": avg_semantic,
+        "geo_signals": geo_signals,
         "top_missing_entities": top_missing,
         "pages": [pa.__dict__ for pa in results],
     }

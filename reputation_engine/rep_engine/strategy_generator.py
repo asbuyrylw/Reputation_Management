@@ -217,6 +217,15 @@ _EFFORT = {
     "review_generation": 2, "content_writing": 2, "local_content_creation": 2, "media_list_building": 2,
     "video_creation": 3, "press_outreach": 3, "link_building": 3,
 }
+# AEO/GEO content checklist appended to every content-creation task so the writer (human or LLM)
+# produces content engines actually CITE, not just SEO filler.
+_AEO_CHECKLIST = (
+    " AEO/GEO checklist: lead with a 40-60 word direct answer to the target question (front-load); "
+    "add an FAQ/Q&A block with FAQPage schema; include one quotable stat or definitive sentence per "
+    "section; name the business + city + service explicitly; add a visible last-updated date; match "
+    "the page title to the literal user question; add internal links to related owned pages."
+)
+
 _CONF_FACTOR = {"high": 1.0, "medium": 0.7, "low": 0.4}
 # Points-equivalent for a structural/SEO-only task that has no per-unit AI-score lever, so it can
 # still be ROI-ranked against scored tasks.
@@ -328,7 +337,7 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         cap = "video_creation" if "video" in atype.lower() else "content_writing"
         add(f"Create owned asset: {topic}", cap,
             f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
-            f"fact-check trust-sensitive claims; publish on the business domain.", 3,
+            f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
             gap_source="audited gap: missing owned content", why=why)
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",

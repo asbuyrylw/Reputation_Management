@@ -1473,6 +1473,21 @@ GAP_SYSTEM = (
     "If 'audience_lenses' is provided (avg score + contested rate by persona/location), tailor "
     "audience_priorities to the worst-served audiences and note in priority_order which audience "
     "each top action most helps. "
+    "ANSWER-ENGINE / GENERATIVE-ENGINE OPTIMIZATION (AEO/GEO) -- apply these current best practices "
+    "when shaping missing_owned_content, site_technical_gaps, schema_gaps, and surface_actions so the "
+    "content is actually CITED by AI answer engines (ChatGPT, Perplexity, Gemini, Google AI Overview): "
+    "(1) ANSWER-FIRST structure -- lead each page with a crisp 40-60 word direct answer to its target "
+    "question (front-loading: ~44% of AI citations come from the first ~30% of a page), then expand; "
+    "(2) FAQ / Q&A blocks with FAQPage + (where relevant) HowMuch/HowTo schema -- engines extract Q&A "
+    "pairs verbatim; (3) a QUOTABLE statistic or definitive sentence per section (engines quote crisp, "
+    "attributable claims); (4) ENTITY clarity -- name the business, location, and services explicitly "
+    "and consistently (helps disambiguation + knowledge-graph); (5) FRESHNESS -- a visible last-updated "
+    "date (citations ~2x more likely when content is <3 months old); (6) comparison / 'best X in <city>' "
+    "/ listicle formats engines favor for recommendation queries; (7) match page TITLE to the literal "
+    "user question. When 'site_crawl_gaps.geo_signals' is provided, ground these: low avg_front_loading "
+    "-> add answer-first intros; low avg_question_coverage -> add FAQ blocks for the unanswered "
+    "questions; few pages_with_freshness_date -> add visible update dates; low avg_title_alignment -> "
+    "retitle pages to the target question; low_readiness_pages -> prioritize those for optimization. "
     "Do NOT propose content whose topic is a CONTESTED term itself (e.g. a page 'about "
     "<scam/pyramid scheme/MLM>') -- a naive keyword page REINFORCES the negative association. "
     "Where a contested frame is the problem, the right asset is a LEGITIMACY / TRANSPARENCY / "
@@ -1653,6 +1668,10 @@ def build_gap_model(business_id: int) -> dict:
                     "thin_pages": (s.get("thin_pages") or [])[:8],
                     "schema_gaps": s.get("schema_gaps") or [],
                     "missing_entities": (s.get("top_missing_entities") or [])[:8],
+                    "avg_semantic_readiness": s.get("avg_semantic_readiness"),
+                    # GEO signals (front-loading, question coverage, freshness, title alignment) so
+                    # the model can prescribe the specific AEO fix, not just "improve content".
+                    "geo_signals": s.get("geo_signals") or {},
                 }
         except Exception as e:  # noqa: BLE001
             log.warning("gap model: site-crawl gaps unavailable (%s)", e)

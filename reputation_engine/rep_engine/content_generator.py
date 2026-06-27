@@ -54,6 +54,9 @@ log = logging.getLogger("content_generator")
 
 
 QUALITY_THRESHOLD = float(os.getenv("CONTENT_QUALITY_THRESHOLD", "0.75"))   # PH 2
+# Minimum citation-readiness (0-100, "will an AI quote this?") for a draft to pass as ready rather
+# than going back for a fix. Was advisory-only; now an enforced gate (Phase D).
+CITATION_READY_MIN = float(os.getenv("CONTENT_CITATION_READY_MIN", "55"))
 MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "2"))                # PH 3
 
 # Capabilities that this module knows how to generate (others stay manual).
@@ -100,15 +103,25 @@ def _already_covered(business_id: int, topic: str) -> bool:
 # Generation
 # ----------------------------------------------------------------------------
 GEN_SYSTEM = (
-    "You are an expert content writer AND SEO strategist for a reputation program that "
-    "publishes ACCURATE, helpful, well-structured content so it becomes what AI assistants "
-    "and Google surface about a business. GROUND every claim in the REAL facts provided (the "
-    "business's crawled website + profile); prefer those facts over placeholders. Only use a "
-    "clearly-labeled [INSERT: ...] placeholder for a specific fact that is genuinely NOT "
-    "provided. Naturally weave in the target search keywords where they fit (never keyword-"
-    "stuff). Directly address the gap / narrative the content is meant to fix. Never fabricate "
-    "facts, credentials, reviews, or statistics. Write in a warm, trustworthy, plain tone. "
-    "Output ONLY the asset content -- no preamble."
+    "You are an expert content writer AND answer-engine-optimization (AEO/GEO) + SEO strategist for "
+    "a reputation program that publishes ACCURATE, helpful, well-structured content so it becomes "
+    "what AI assistants (ChatGPT, Perplexity, Gemini, Google AI Overview) and Google surface about a "
+    "business. GROUND every claim in the REAL facts provided (the business's crawled website + "
+    "profile); prefer those facts over placeholders. Only use a clearly-labeled [INSERT: ...] "
+    "placeholder for a specific fact that is genuinely NOT provided. "
+    "STRUCTURE FOR AI CITATION (this is what gets the content quoted by answer engines): "
+    "(1) open with a crisp 40-60 word DIRECT ANSWER to the core question (front-load the key fact -- "
+    "most AI citations come from the top of the page); (2) use clear H2/H3 headings phrased as the "
+    "questions a reader would ask; (3) include a short FAQ / Q&A section near the end; (4) give one "
+    "quotable, attributable statistic or definitive sentence per section; (5) name the business + "
+    "city + service explicitly and consistently (entity clarity); (6) where an image strengthens the "
+    "page, insert a markdown image with DESCRIPTIVE alt text as ![alt describing the image](IMAGE: "
+    "short generation prompt) so a hero/explainer image + alt text can be produced; (7) add a visible "
+    "'Last updated: [INSERT: month year]' line for freshness. "
+    "Naturally weave in the target search keywords where they fit (never keyword-stuff). Directly "
+    "address the gap / narrative the content is meant to fix. Never fabricate facts, credentials, "
+    "reviews, or statistics. Write in a warm, trustworthy, plain tone. Output ONLY the asset "
+    "content -- no preamble."
 )
 
 
@@ -635,6 +648,19 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
             site_summary=_site, with_fact_check=True))
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
         log.debug("draft quality analysis skipped: %s", e)
+
+    # Enforce the citation-readiness gate (these scorers used to be advisory only): a draft that
+    # scores low on "will an AI quote this?" should go back for a fix, not slip through as ready --
+    # this is the on-page lever that most affects whether answer engines cite the content.
+    if status == "pending_review":
+        cr = quality_notes.get("citation_ready")
+        cr_score = cr.get("score") if isinstance(cr, dict) else None
+        if isinstance(cr_score, (int, float)) and cr_score < CITATION_READY_MIN:
+            status = "needs_fix"
+            tips = "; ".join(t.get("fix", "") for t in (cr.get("tips") or [])[:3] if isinstance(t, dict))
+            comp_flags = list(comp_flags) + [
+                f"citation-readiness {cr_score:.0f}/100 below {CITATION_READY_MIN:.0f}"
+                + (f" -- {tips}" if tips else "")]
 
     _ensure_table()
     with db() as conn:
