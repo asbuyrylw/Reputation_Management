@@ -36,7 +36,8 @@ except ImportError:  # pragma: no cover -- loose-script fallback
 SETUP_PIPELINE: list[str] = [
     "audit",             # AI-state audit -> scored answers (everything downstream needs this)
     "site_crawl",        # technical / on-page SEO crawl
-    "gap_model",         # the gap analysis (needs the audit)
+    "audit_socials",     # discover + audit the business's OWN social profiles (grounds social tasks)
+    "gap_model",         # the gap analysis (needs the audit + uses social_presence)
     "keyword_research",  # SEO target keywords (LLM seed + Serper grounding) for content + plan
     "plan",              # strategy -> improvement tasks (needs the gap model)
     "sync_plan",         # materialize the plan into trackable work orders
@@ -54,15 +55,15 @@ SETUP_PIPELINE: list[str] = [
 
 # Onboarding pipeline prerequisites (the full board enqueued together).
 SETUP_PREREQS: dict[str, list[str]] = {
-    "gap_model": ["audit"],
+    "gap_model": ["audit", "audit_socials"],   # gap reflects the AI-answer audit AND the social audit
     "keyword_research": ["site_crawl", "gap_model"],
     "plan": ["gap_model"],
     "sync_plan": ["plan"],
     "citation_analyze": ["audit"],
     "production_briefs": ["plan"],
     # the client report runs after everything that feeds it
-    "report": ["audit", "site_crawl", "gap_model", "keyword_research", "plan", "sync_plan",
-               "citation_analyze", "benchmark", "local_rank", "ingest_gbp_reviews",
+    "report": ["audit", "site_crawl", "audit_socials", "gap_model", "keyword_research", "plan",
+               "sync_plan", "citation_analyze", "benchmark", "local_rank", "ingest_gbp_reviews",
                "suggest_prompts", "mentions_scan", "discovery", "production_briefs"],
 }
 
@@ -73,6 +74,9 @@ SETUP_PREREQS: dict[str, list[str]] = {
 # click; the depends_on chain + dedup keep it safe and ordered.
 TRIGGER_DOWNSTREAM: dict[str, list[str]] = {
     "audit": ["gap_model", "citation_analyze"],
+    # Re-run JUST the social audit -> re-ground the gap model + plan from the fresh social info
+    # (cheap: no AI-answer battery). This is the "audit socials and update gaps+plan" path.
+    "audit_socials": ["gap_model"],
     "gap_model": ["plan", "keyword_research"],
     "plan": ["sync_plan"],
     "sync_plan": ["production_briefs"],

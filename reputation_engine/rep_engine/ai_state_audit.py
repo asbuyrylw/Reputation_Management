@@ -1437,10 +1437,15 @@ GAP_SYSTEM = (
     "missing_owned_content (array of {topic, asset_type, why}), "
     "thin_corroboration (array of {claim, where_to_get_it}), "
     "schema_gaps (array of strings), "
-    "surface_actions (object with keys google_business, reddit, linkedin, facebook, x, "
-    "each an array of SPECIFIC, ETHICAL, accurate actions to add positive/correct presence -- "
-    "these are RECOMMENDED actions, not confirmations that a profile is missing; phrase each as "
-    "'Create/Improve ...' and state your assumption), "
+    "surface_actions (object with keys google_business, reddit, linkedin, facebook, instagram, x, "
+    "youtube, each an array of SPECIFIC, ETHICAL, accurate actions to add positive/correct presence. "
+    "GROUND these in 'social_presence' when provided (per-platform discovery+audit): if a platform "
+    "shows exists=true (especially source='website' = confirmed owned, or source='serper' = the "
+    "Google Business Profile), phrase the action as 'Improve ...' with the SPECIFIC fix from its "
+    "recommendation/completeness/signals -- do NOT tell them to create a profile they already have. "
+    "Only when exists=false should you say 'Create ...' (and only if it fits this business), stating "
+    "why. Use the per-platform 'recommendation' and GBP rating/review signals to make each action "
+    "concrete), "
     "local_seo_gaps (array of {query, current_rank, recommendation, why} for category-local "
     "searches where the business is NOT on page 1 -- recommend local content / GBP / citations), "
     "competitor_defense (array of {query, competitor, recommendation, why} for questions where a "
@@ -1666,6 +1671,16 @@ def build_gap_model(business_id: int) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("gap model: audience lenses unavailable (%s)", e)
 
+        # Own-social posture (Phase B): discovered + audited profiles per platform, so social
+        # surface_actions are GROUNDED ('improve your existing LinkedIn: <fix>') rather than blind
+        # ('create a LinkedIn'). First-party, fail-safe -- empty if never audited.
+        social_presence: dict = {}
+        try:
+            from . import social_audit as _sa
+            social_presence = _sa.latest_summary(business_id) or {}
+        except Exception as e:  # noqa: BLE001
+            log.warning("gap model: social presence unavailable (%s)", e)
+
         payload = json.dumps({
             "business": {k: b[k] for k in ("name", "domain", "services", "goal",
                                            "contested_terms", "geo")},
@@ -1676,6 +1691,7 @@ def build_gap_model(business_id: int) -> dict:
             "site_crawl_gaps": site_crawl_gaps,
             "search_performance": search_performance,
             "audience_lenses": audience_lenses,
+            "social_presence": social_presence,
         }, default=str)
         # Gap synthesis is a LARGE structured object over the whole answer set: use the mid
         # tier (Sonnet -- cheaper + no Opus-4.8 prose-before-JSON), a HIGH token cap so the
@@ -1705,6 +1721,7 @@ def build_gap_model(business_id: int) -> dict:
         model = _gap_critic_refine(model, {
             "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,
             "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
+            "social_presence": social_presence,
             "external_signal_types": [s.get("signal_type") for s in external_signals],
         })
         conn.execute(

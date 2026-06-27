@@ -89,6 +89,13 @@ def _run_gap_model(business_id: int, args: dict) -> None:
     _imp("ai_state_audit").build_gap_model(business_id)
 
 
+def _run_audit_socials(business_id: int, args: dict) -> None:
+    """Phase B: discover + audit the business's OWN social profiles (website-link harvest + search +
+    GBP), per platform. Standalone-runnable; the job cascade re-grounds the gap model + plan from
+    just this fresh social info (cheap -- no AI-answer battery)."""
+    _imp("social_audit").run(business_id, quiet=True)
+
+
 def _run_plan(business_id: int, args: dict) -> None:
     _imp("strategy_generator").plan_cmd(business_id, args.get("start"))
 
@@ -271,6 +278,7 @@ JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
     "site_crawl": _run_site_crawl,
+    "audit_socials": _run_audit_socials,
     "gap_model": _run_gap_model,
     "plan": _run_plan,
     "sync_plan": _run_sync_plan,
