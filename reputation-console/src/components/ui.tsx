@@ -1,6 +1,121 @@
-import { ReactNode } from "react";
+import { ButtonHTMLAttributes, forwardRef, InputHTMLAttributes, ReactNode } from "react";
 import Link from "next/link";
 import { Tone, toneAccentBar, toneBar, toneChip, toneDot, toneText } from "@/lib/uiTokens";
+
+// ---------------------------------------------------------------------------
+// Shared form/control primitives — Button / Input / Badge / Skeleton. These
+// consolidate the dozens of ad-hoc inline button/input/chip styles scattered
+// across pages into one place so every surface looks the same. Adopt them on
+// new/touched surfaces; existing pages migrate opportunistically.
+// ---------------------------------------------------------------------------
+
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonSize = "sm" | "md";
+
+const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
+  primary: "bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:ring-indigo-500 disabled:hover:bg-indigo-600",
+  secondary:
+    "bg-white text-slate-800 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 focus-visible:ring-indigo-500",
+  ghost: "bg-transparent text-slate-700 hover:bg-slate-100 focus-visible:ring-indigo-500",
+  danger: "bg-rose-600 text-white hover:bg-rose-700 focus-visible:ring-rose-500 disabled:hover:bg-rose-600",
+};
+const BUTTON_SIZES: Record<ButtonSize, string> = {
+  sm: "px-2.5 py-1 text-xs",
+  md: "px-3.5 py-2 text-sm",
+};
+
+export function Button({
+  variant = "primary",
+  size = "md",
+  loading = false,
+  disabled,
+  className = "",
+  children,
+  type = "button",
+  ...rest
+}: {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  loading?: boolean;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type={type}
+      disabled={disabled || loading}
+      className={`relative inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
+      {...rest}
+    >
+      {loading && (
+        <span
+          aria-hidden
+          className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+        />
+      )}
+      {/* keep the label (and width) stable while loading */}
+      <span className={loading ? "opacity-90" : ""}>{children}</span>
+    </button>
+  );
+}
+
+// Text input matching the polished onboarding `inputCls`: rounded-lg, slate-300
+// border, px-3 py-2, indigo focus ring. Forwards ref + all native input props.
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function Input({ className = "", ...rest }, ref) {
+    return (
+      <input
+        ref={ref}
+        className={`w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 placeholder:text-slate-400 ${className}`}
+        {...rest}
+      />
+    );
+  },
+);
+
+// Small pill. `tone` maps to a fixed bg/text/ring combo so chips stop drifting.
+export type BadgeTone = "emerald" | "amber" | "rose" | "slate" | "indigo";
+const BADGE_TONES: Record<BadgeTone, string> = {
+  emerald: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  amber: "bg-amber-50 text-amber-700 ring-amber-200",
+  rose: "bg-rose-50 text-rose-700 ring-rose-200",
+  slate: "bg-slate-100 text-slate-600 ring-slate-200",
+  indigo: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+};
+export function Badge({
+  tone = "slate",
+  children,
+  className = "",
+}: {
+  tone?: BadgeTone;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${BADGE_TONES[tone]} ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+// animate-pulse placeholder block. Compose for richer loading layouts.
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} aria-hidden />;
+}
+
+// A Card-shaped loading placeholder: header line + a few body lines.
+export function CardSkeleton({ lines = 3, className = "" }: { lines?: number; className?: string }) {
+  return (
+    <Card className={className}>
+      <Skeleton className="h-5 w-1/3" />
+      <div className="mt-4 space-y-2.5">
+        {Array.from({ length: lines }).map((_, i) => (
+          <Skeleton key={i} className={`h-3.5 ${i === lines - 1 ? "w-2/3" : "w-full"}`} />
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Card — the surface everything sits on. Soft ring + shadow + generous radius so it

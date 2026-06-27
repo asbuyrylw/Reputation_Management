@@ -4,6 +4,19 @@ import { ReactNode, useState } from "react";
 import Link from "next/link";
 import { Card } from "./ui";
 import { Term } from "./Term";
+
+// Re-export the shared control primitives so pages can import controls + layout
+// primitives from one place (`@/components/primitives`).
+export {
+  Button,
+  Input,
+  Badge,
+  Skeleton,
+  CardSkeleton,
+  type ButtonVariant,
+  type ButtonSize,
+  type BadgeTone,
+} from "./ui";
 import {
   Tone,
   Severity,
@@ -227,5 +240,29 @@ export function SeverityChip({ severity, children }: { severity: Severity; child
     <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${severityChip[severity]}`}>
       {children}
     </span>
+  );
+}
+
+// Copy-to-clipboard button with transient "Copied ✓" feedback. The single shared
+// definition — previously duplicated in seo-overview/page.tsx and AiCrawlerReadinessCard.
+export function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+    >
+      {copied ? "Copied ✓" : label}
+    </button>
   );
 }

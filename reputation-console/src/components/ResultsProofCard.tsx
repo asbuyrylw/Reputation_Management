@@ -6,9 +6,14 @@
 //  2. ROI forecast: "+X AI-score points if you finish the plan", confidence, horizon, and
 //     the top capabilities still on the table.
 
+import Link from "next/link";
 import { useImpactReport, useRoiForecast } from "@/lib/hooks";
 import type { ImpactMetricDelta, ImpactReport, RoiForecast } from "@/lib/types";
-import { Card } from "./ui";
+import { Card, CardSkeleton } from "./ui";
+
+// The task board doesn't yet read an area filter from the query string, so every
+// ROI row links to the board itself (where the work for that area lives).
+const WORK_ORDERS_HREF = "/content/work-orders";
 
 // One metric's before -> after with a tone-colored delta. `goodDirection` flips the tone
 // for metrics where lower is better (contested%).
@@ -119,6 +124,10 @@ function RoiPanel({ forecast }: { forecast: RoiForecast | undefined }) {
         </span>
         <span className="text-sm text-slate-600">AI-score points if you finish the plan</span>
       </div>
+      {/* always-visible gloss defining the unit */}
+      <p className="mt-1 text-xs text-slate-400">
+        AI-score points = movement on your 0–100 reputation score.
+      </p>
       <p className="mt-1 text-xs text-slate-500">
         {forecast.open_tasks} open task{forecast.open_tasks === 1 ? "" : "s"} · confidence:{" "}
         <span className="font-medium text-slate-600">{forecast.confidence}</span>
@@ -138,8 +147,10 @@ function RoiPanel({ forecast }: { forecast: RoiForecast | undefined }) {
           <tbody>
             {top.map((r) => (
               <tr key={r.capability} className="border-t border-slate-100">
-                <td className="py-1.5 pr-3 text-sm text-slate-700" title={r.basis || undefined}>
-                  {capLabel(r.capability)}
+                <td className="py-1.5 pr-3 text-sm" title={r.basis || undefined}>
+                  <Link href={WORK_ORDERS_HREF} className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline">
+                    {capLabel(r.capability)} →
+                  </Link>
                 </td>
                 <td className="py-1.5 px-2 text-right text-sm tabular-nums text-slate-500">{r.open_tasks}</td>
                 <td className="py-1.5 px-2 text-right text-sm font-semibold tabular-nums text-indigo-600">
@@ -156,11 +167,35 @@ function RoiPanel({ forecast }: { forecast: RoiForecast | undefined }) {
 }
 
 export function ResultsProofCard({ businessId }: { businessId: number | null }) {
-  const { data: report } = useImpactReport(businessId);
-  const { data: forecast } = useRoiForecast(businessId);
+  const { data: report, isLoading: reportLoading, error: reportError } = useImpactReport(businessId);
+  const { data: forecast, isLoading: forecastLoading, error: forecastError } = useRoiForecast(businessId);
 
-  // Hide entirely until at least one of the two has loaded.
-  if (!report && !forecast) return null;
+  // Loading skeleton while either query is still in flight (and nothing has arrived).
+  if ((reportLoading || forecastLoading) && !report && !forecast) {
+    return <CardSkeleton lines={4} />;
+  }
+
+  // Graceful error line instead of silently rendering nothing.
+  if (reportError && forecastError && !report && !forecast) {
+    return (
+      <Card accent="good">
+        <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; proof</h3>
+        <p className="mt-2 text-sm text-slate-500">We couldn&apos;t load your results just now. Refresh in a moment.</p>
+      </Card>
+    );
+  }
+
+  // Pre-first-audit / no-data-yet placeholder — never render nothing.
+  if (!report && !forecast) {
+    return (
+      <Card accent="good">
+        <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; proof</h3>
+        <p className="mt-2 text-sm text-slate-500">
+          Your before/after impact and ROI forecast appear here once an audit has run and work is logged.
+        </p>
+      </Card>
+    );
+  }
 
   return (
     <Card accent="good">

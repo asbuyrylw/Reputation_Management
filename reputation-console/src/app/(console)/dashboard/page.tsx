@@ -18,7 +18,7 @@ import OnboardingCard from "@/components/OnboardingCard";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import VisibilityTrendChart from "@/components/VisibilityTrendChart";
 import { Card, PageHeader, SectionCard, Spinner } from "@/components/ui";
-import { EmptyState, ToneLegend } from "@/components/primitives";
+import { EmptyState, ToneLegend, DataSection } from "@/components/primitives";
 import { repScore } from "@/lib/repScore";
 import type { SeriesPoint, WorkOrder, Business } from "@/lib/types";
 
@@ -433,10 +433,17 @@ export default function DashboardPage() {
           {/* live monitor — incidents + mentions at a glance */}
           <LiveMonitorStrip businessId={businessId} />
 
-          {/* HEADLINE — narrative crowding-out score (the 0-100 dominance metric) */}
-          <NarrativeScoreCard narrative={data.narrative} />
+          {/* ============================================================== */}
+          {/* THE HEADLINE — one number first, plain-English verdict beneath. */}
+          {/* ============================================================== */}
+          <div className="space-y-3">
+            {/* HEADLINE — narrative crowding-out score (the single hero 0-100 metric) */}
+            <NarrativeScoreCard narrative={data.narrative} loading={isLoading} error={!!error} />
+            {/* plain-English verdict, fused directly beneath the headline */}
+            <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} />
+          </div>
 
-          {/* A — North Star goal */}
+          {/* North Star goal — the one-liner framing for the headline */}
           {goalText && (
             <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -454,23 +461,7 @@ export default function DashboardPage() {
             </Card>
           )}
 
-          {/* B — plain-English verdict */}
-          <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} />
-
-          {/* C — consolidated AI reputation score (drivers + sentiment donut nested in) */}
-          <div>
-            <ReputationHero
-              goalAlignment={latest.goal_alignment}
-              contestedRate={latest.contested_rate}
-              ownedRate={latest.owned_rate}
-              groundedRate={groundedRate}
-              coverage={perEngine?.coverage ?? null}
-              sentiment={sentimentData}
-              asOf={latest.date}
-            />
-            <div className="mt-1 flex justify-end px-1"><ToneLegend /></div>
-          </div>
-
+          {/* ACTION PLAN — the highest-leverage hero surfaces, above the fold */}
           {/* D — action plan & progress (merged) */}
           <ActionPlanProgress woCounts={data.wo_counts} assetsN={data.assets_n} series={s} />
 
@@ -483,43 +474,82 @@ export default function DashboardPage() {
             <BiggestGaps gap={data.gap} />
           </div>
 
+          {/* ============================================================== */}
+          {/* THE DETAILS — secondary surfaces, collapsed by default.         */}
+          {/* ============================================================== */}
+
+          {/* Score breakdown — how AI sees you (the rep-score ring + drivers, demoted below the headline) */}
+          <DataSection
+            title="Score breakdown — how AI sees you"
+            headline="The 0–100 reputation score behind the headline, with its drivers (contested / owned / grounded) and answer-sentiment."
+            defaultOpen={false}
+            detailsLabel="Show the score breakdown"
+          >
+            <div>
+              <ReputationHero
+                goalAlignment={latest.goal_alignment}
+                contestedRate={latest.contested_rate}
+                ownedRate={latest.owned_rate}
+                groundedRate={groundedRate}
+                coverage={perEngine?.coverage ?? null}
+                sentiment={sentimentData}
+                asOf={latest.date}
+              />
+              <div className="mt-1 flex justify-end px-1"><ToneLegend /></div>
+            </div>
+          </DataSection>
+
           {/* F — search performance: local + organic together */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <LocalSearchCard businessId={businessId} />
-            <OrganicSearchCard businessId={businessId} />
-          </div>
+          <DataSection title="Search performance" headline="Your traditional Google visibility — local rankings and organic search clicks." detailsLabel="Show search performance">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <LocalSearchCard businessId={businessId} />
+              <OrganicSearchCard businessId={businessId} />
+            </div>
+          </DataSection>
 
           {/* G — trajectory: projection + score-over-time + visibility */}
-          <ProjectionStrip timeline={timeline as Json | undefined} />
-          <Card>
-            <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
-            <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
-          </Card>
-          <VisibilityTrendChart businessId={businessId} />
+          <DataSection title="Score trajectory & projection" headline="Where your score is heading, when it should improve, and how it's moved over time." detailsLabel="Show trajectory & projection">
+            <div className="space-y-6">
+              <ProjectionStrip timeline={timeline as Json | undefined} />
+              <Card>
+                <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
+                <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
+              </Card>
+              <VisibilityTrendChart businessId={businessId} />
+            </div>
+          </DataSection>
 
           {/* H — what AI is saying now + per-engine (per-engine behind see-more) */}
-          <Card accent="bad">
-            <h3 className="text-base font-semibold tracking-tight text-slate-900">Worst things AI is saying right now</h3>
-            <div className="mt-3"><WorstAnswers answers={answers} runId={latestRunId} limit={3} /></div>
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Each AI assistant&apos;s score</div>
-              <SeeMore label="See every engine">
-                <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
-              </SeeMore>
-            </div>
-          </Card>
+          <DataSection title="Worst answers & per-engine scores" severity="med" headline="The worst things AI is saying about you right now, plus each assistant's score." detailsLabel="Show worst answers">
+            <Card accent="bad">
+              <h3 className="text-base font-semibold tracking-tight text-slate-900">Worst things AI is saying right now</h3>
+              <div className="mt-3"><WorstAnswers answers={answers} runId={latestRunId} limit={3} /></div>
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Each AI assistant&apos;s score</div>
+                <SeeMore label="See every engine">
+                  <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
+                </SeeMore>
+              </div>
+            </Card>
+          </DataSection>
 
-          {/* I — this month's work (value narrative, moved to the bottom) */}
-          <ThisMonthPanel businessId={businessId} />
+          {/* I — this month's work (value narrative) */}
+          <DataSection title="This month's work" headline="What your reputation team has produced this month." detailsLabel="Show this month's work">
+            <ThisMonthPanel businessId={businessId} />
+          </DataSection>
 
           {/* J — housekeeping: profile setup + the AI deep-dive link */}
-          <ProfileTrackingCard biz={businesses.find((b) => b.id === businessId)} />
-          <Card className="bg-slate-50/60">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm text-slate-600">Want the why — your primary challenge and how each AI assistant differs?</p>
-              <Link href="/ai-overview" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">AI overview →</Link>
+          <DataSection title="Setup & housekeeping" headline="What we're tracking for you, and the deeper AI breakdown." detailsLabel="Show setup & housekeeping">
+            <div className="space-y-6">
+              <ProfileTrackingCard biz={businesses.find((b) => b.id === businessId)} />
+              <Card className="bg-slate-50/60">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm text-slate-600">Want the why — your primary challenge and how each AI assistant differs?</p>
+                  <Link href="/ai-overview" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">AI overview →</Link>
+                </div>
+              </Card>
             </div>
-          </Card>
+          </DataSection>
         </div>
       )}
     </div>

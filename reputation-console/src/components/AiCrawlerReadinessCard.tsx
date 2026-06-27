@@ -6,32 +6,10 @@
 //  2. llms.txt: the generated content shown in a <pre>, with copy-to-clipboard and a
 //     download-as-llms.txt button (so it can be dropped at the site root).
 
-import { useState } from "react";
 import { useLlmsTxt, useSchemaVerify } from "@/lib/hooks";
 import { downloadText } from "@/lib/download";
 import { Card } from "./ui";
-
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  };
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-    >
-      {copied ? "Copied ✓" : label}
-    </button>
-  );
-}
+import { CopyButton } from "./primitives";
 
 export function AiCrawlerReadinessCard({ businessId }: { businessId: number | null }) {
   const { data: schema } = useSchemaVerify(businessId);

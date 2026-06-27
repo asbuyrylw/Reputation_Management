@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { MetricCard, EmptyState } from "@/components/primitives";
+import { MetricCard, EmptyState, CopyButton } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
@@ -99,29 +99,6 @@ function KeywordsCard({ businessId, canEdit, kws }: { businessId: number | null;
         </div>
       )}
     </Card>
-  );
-}
-
-// A small copy-to-clipboard button with transient "Copied ✓" feedback.
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  };
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-    >
-      {copied ? "Copied ✓" : label}
-    </button>
   );
 }
 

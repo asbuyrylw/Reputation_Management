@@ -54,7 +54,8 @@ function ScoreRing({ score, stroke }: { score: number | null; stroke: string }) 
 }
 
 // Compact driver tile — a smaller version of StatTile that lives INSIDE the score block.
-function MiniDriver({ label, value, tone, bar, hint }: { label: string; value: string; tone: Tone; bar: number | null; hint: string }) {
+// `gloss` is an always-visible one-line plain-language definition (not tooltip-only).
+function MiniDriver({ label, value, tone, bar, hint, gloss }: { label: string; value: string; tone: Tone; bar: number | null; hint: string; gloss: string }) {
   return (
     <div className="rounded-xl border border-slate-100 bg-white/70 p-3" title={hint}>
       <div className="flex items-center gap-1.5">
@@ -67,6 +68,7 @@ function MiniDriver({ label, value, tone, bar, hint }: { label: string; value: s
           <div className={`h-full rounded-full ${toneBar[tone]}`} style={{ width: `${Math.max(0, Math.min(100, bar))}%` }} />
         </div>
       )}
+      <p className="mt-2 text-xs leading-snug text-slate-400">{gloss}</p>
     </div>
   );
 }
@@ -143,9 +145,9 @@ export function ReputationHero({
 
       {/* the three drivers as small tiles inside the block */}
       <div className="mt-5 grid grid-cols-3 gap-3">
-        <MiniDriver label="Contested" value={pct(contestedRate)} tone={contestedTone} bar={pctNum(contestedRate)} hint="Share of sources arguing against you. Lower is better." />
-        <MiniDriver label="Owned sources" value={pct(ownedRate)} tone={ownedTone} bar={pctNum(ownedRate)} hint="Citations from channels you control. Higher is better." />
-        <MiniDriver label="Grounded" value={pct(groundedRate)} tone="info" bar={pctNum(groundedRate)} hint="Answers backed by real citations, not guesses." />
+        <MiniDriver label="Contested" value={pct(contestedRate)} tone={contestedTone} bar={pctNum(contestedRate)} hint="Share of sources arguing against you. Lower is better." gloss="Share of sources arguing against you — lower is better." />
+        <MiniDriver label="Owned sources" value={pct(ownedRate)} tone={ownedTone} bar={pctNum(ownedRate)} hint="Citations from channels you control. Higher is better." gloss="Citations from channels you control — higher is better." />
+        <MiniDriver label="Grounded" value={pct(groundedRate)} tone="info" bar={pctNum(groundedRate)} hint="Answers backed by real citations, not guesses." gloss="Answers backed by real citations, not guesses." />
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-3 text-[11px] text-slate-400">
