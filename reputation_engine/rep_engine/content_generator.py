@@ -95,7 +95,8 @@ def _ensure_table() -> None:
 # ----------------------------------------------------------------------------
 def _already_covered(business_id: int, topic: str) -> bool:
     """Placeholder for the pgvector semantic-dedup check. Returns False (always
-    generate) until pgvector memory is wired in. PH 4."""
+    generate) until pgvector memory is wired in -- a future enhancement (the
+    pgvector extension may not be installed). PH 4."""
     return False
 
 
@@ -130,8 +131,8 @@ def _grounding_context(business_id: int) -> dict:
     right language instead of generic filler:
       - site_facts: what the business's own website actually says (latest crawl summary),
       - gap_focus:  what AI currently gets wrong / the narrative this content must close,
-      - keywords:   the SEO keywords this piece should rank for (populated by the keyword-
-                    intelligence layer; a safe no-op until that table exists).
+      - keywords:   the SEO keywords this piece should rank for (the real target_keywords set
+                    populated by the keyword-intelligence layer / `keyword_research` job).
     Everything is best-effort: missing data degrades to an empty section, never an error."""
     site_facts = gap_focus = ""
     keywords: list = []
@@ -151,14 +152,17 @@ def _grounding_context(business_id: int) -> dict:
                 gap_focus = json.dumps(m, default=str)[:2800]
     except Exception as e:  # noqa: BLE001 -- grounding is best-effort; never block generation
         log.debug("site/gap grounding unavailable: %s", e)
-    # Keyword layer reads in their own connection so a missing table can't poison the reads above.
+    # Real target_keywords read (populated by the keyword_research job). Its own connection so a
+    # missing table / empty set can't poison the site+gap reads above. Top ~15 by priority so the
+    # generator weaves in the highest-value REAL terms, not generic filler.
     try:
         with db() as conn:
             rows = conn.execute(
-                "SELECT keyword, kind FROM target_keywords WHERE business_id=%s "
-                "ORDER BY priority DESC NULLS LAST LIMIT 25", (business_id,)).fetchall()
-            keywords = [{"keyword": r["keyword"], "kind": r.get("kind")} for r in rows]
-    except Exception:  # noqa: BLE001 -- target_keywords doesn't exist yet (keyword layer is upcoming)
+                "SELECT keyword, kind, intent, priority FROM target_keywords WHERE business_id=%s "
+                "ORDER BY priority DESC NULLS LAST, keyword LIMIT 15", (business_id,)).fetchall()
+            keywords = [{"keyword": r["keyword"], "kind": r.get("kind"),
+                         "intent": r.get("intent"), "priority": r.get("priority")} for r in rows]
+    except Exception:  # noqa: BLE001 -- best-effort: missing table or empty result degrades to no keywords
         keywords = []
     return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords}
 

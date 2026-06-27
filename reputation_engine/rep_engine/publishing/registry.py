@@ -29,7 +29,9 @@ _AYR = AyrsharePublisher()
 _ZER = ZerniaPublisher()
 _GBP = GoogleBusinessPublisher()
 
-# The active social provider (Zernio by default; set SOCIAL_PROVIDER=ayrshare to switch back).
+# The active social provider. Zernio is the supported DEFAULT for every social channel;
+# Ayrshare is the fallback ALTERNATIVE -- set SOCIAL_PROVIDER=ayrshare to use it instead.
+# Exactly one provider is active per deployment.
 _SOCIAL_PROVIDER = (os.getenv("SOCIAL_PROVIDER") or "zernia").strip().lower()
 _SOC = _AYR if _SOCIAL_PROVIDER == "ayrshare" else _ZER
 _SOC_KIND = "ayrshare_profile" if _SOCIAL_PROVIDER == "ayrshare" else "zernia"

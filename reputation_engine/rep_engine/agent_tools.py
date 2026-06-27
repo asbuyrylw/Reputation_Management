@@ -27,12 +27,14 @@ try:
     from . import http as _http
     from . import netguard as _netguard
     from . import semantic_depth as _sd
+    from . import serper as _sc
 except ImportError:  # pragma: no cover -- allows running as a loose script
     import ai_state_audit as _audit  # type: ignore
     import cost as _cost  # type: ignore
     import http as _http  # type: ignore
     import netguard as _netguard  # type: ignore
     import semantic_depth as _sd  # type: ignore
+    import serper as _sc  # type: ignore
 
 log = logging.getLogger("agent_tools")
 
@@ -113,15 +115,15 @@ def web_search(query: str, *, limit: int = 15) -> list:
 
 
 def _serper_news(query: str, key: str, limit: int) -> list:
-    res = _http.request_json("POST", "https://google.serper.dev/news",
-                             headers={"X-API-KEY": key, "Content-Type": "application/json"},
-                             json={"q": query, "num": min(limit, 20)},
-                             timeout=20, deadline=30.0)
-    if res.failed or not isinstance(res.data, dict):
+    # Route through the shared TTL cache (collapses the duplicate paid Serper calls the
+    # discovery/audit paths make for overlapping queries). `key` is unused now -- cached_post
+    # reads SERPER_API_KEY itself and returns None when it's unset.
+    data = _sc.cached_post("news", {"q": query, "num": min(limit, 20)})
+    if not isinstance(data, dict):
         return []
     return [{"title": it.get("title", ""), "url": it.get("link", ""),
              "outlet": it.get("source", ""), "snippet": it.get("snippet", "")}
-            for it in (res.data.get("news") or [])[:limit] if isinstance(it, dict)]
+            for it in (data.get("news") or [])[:limit] if isinstance(it, dict)]
 
 
 def _rss_news(query: str, limit: int) -> list:

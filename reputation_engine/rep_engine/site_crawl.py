@@ -64,6 +64,13 @@ except ImportError:  # pragma: no cover
     _HTMLParser = None
     _HAS_PARSER = False
 
+# Optional Trafilatura: when installed, gives much cleaner main-text (strips nav/boilerplate)
+# than our parser/regex extraction. Purely additive -- if absent, extraction is unchanged.
+try:
+    import trafilatura  # type: ignore
+except ImportError:  # pragma: no cover
+    trafilatura = None
+
 # Optional richer SEO analysis via pyseoanalyzer's Page parser, run on HTML we
 # fetch ourselves (with our resilient http layer) -- NOT its fragile networking.
 try:
@@ -199,11 +206,29 @@ def _schema_types(html: str) -> list[str]:
     return types
 
 
+def _main_text(html: str) -> Optional[str]:
+    """Optional cleaner main-content text via Trafilatura (strips nav/boilerplate/footers).
+    Returns None when trafilatura isn't installed or finds no extractable main content, so the
+    caller falls back to the existing extraction unchanged."""
+    if trafilatura is None:
+        return None
+    try:
+        txt = trafilatura.extract(html)
+    except Exception as e:  # noqa: BLE001 -- optional dependency must never break extraction
+        log.debug("trafilatura extract failed: %s", e)
+        return None
+    txt = (txt or "").strip()
+    return txt or None
+
+
 def _extract(html: str) -> dict:
     """Extract page fields. Uses selectolax (robust HTML parsing) when available,
     falling back to regex. Robust parsing matters because real-world markup breaks
     naive regex, and JS-heavy pages need accurate text counts to avoid false
-    'thin_content' flags."""
+    'thin_content' flags. When Trafilatura is installed, its cleaner main-text replaces
+    the boilerplate-laden body text (and word count); otherwise behavior is unchanged."""
+    # Optional Trafilatura main-content text -- None when unavailable/empty (fall back below).
+    main = _main_text(html)
     if _HAS_PARSER:
         try:
             tree = _HTMLParser(html)
@@ -221,6 +246,9 @@ def _extract(html: str) -> dict:
                 tag.decompose()
             body = tree.body
             text = body.text(separator=" ", strip=True) if body else tree.text(separator=" ", strip=True)
+            # Prefer Trafilatura's cleaner main-text for word count + the semantic scorer when present.
+            if main is not None:
+                text = main
             words = len(text.split())
             hrefs = [a.attributes.get("href", "") for a in tree.css("a[href]")]
             return {"title": title, "meta": meta, "h1_count": len(h1s),
@@ -231,13 +259,15 @@ def _extract(html: str) -> dict:
     # regex fallback
     no_tags = re.sub(r"<[^>]+>", " ", re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html,
                                               flags=re.DOTALL | re.IGNORECASE))
+    # Prefer Trafilatura's cleaner main-text for word count + the semantic scorer when present.
+    text = main if main is not None else " ".join(no_tags.split())
     return {
         "title": _find(r"<title[^>]*>(.*?)</title>", html),
         "meta": _find(r'<meta[^>]*name=["\']description["\'][^>]*content=["\'](.*?)["\']', html),
         "h1_count": len(re.findall(r"<h1[\s>]", html, re.IGNORECASE)),
         "canonical": bool(re.search(r'<link[^>]*rel=["\']canonical["\']', html, re.IGNORECASE)),
-        "words": _text_words(html),
-        "text": " ".join(no_tags.split()),
+        "words": len(text.split()) if main is not None else _text_words(html),
+        "text": text,
         "hrefs": re.findall(r'href=["\'](.*?)["\']', html, re.IGNORECASE),
         "schema": _schema_types(html),
     }

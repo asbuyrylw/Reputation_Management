@@ -44,11 +44,13 @@ from urllib.parse import urlparse
 try:
     from .db import db
     from . import http as _http
+    from . import serper as _sc
     from .textutils import strip_www as _strip_www
     from . import ai_state_audit as _audit
 except ImportError:  # pragma: no cover -- loose-script fallback
     from db import db  # type: ignore
     import http as _http  # type: ignore
+    import serper as _sc  # type: ignore
     from textutils import strip_www as _strip_www  # type: ignore
     import ai_state_audit as _audit  # type: ignore
 
@@ -102,14 +104,12 @@ def _serper_local(query: str, location: str, num: int = ORGANIC_SCAN) -> Optiona
     body = {"q": query, "num": num, "gl": "us"}
     if location:
         body["location"] = location
-    res = _http.request_json(
-        "POST", f"{SERPER_BASE}/search",
-        headers={"X-API-KEY": key, "Content-Type": "application/json"},
-        json=body, timeout=20, max_retries=2,
-    )
-    if res.failed or not isinstance(res.data, dict):
+    # Route through the shared TTL cache (collapses the duplicate paid calls the audit,
+    # competitor benchmark, and this tracker all make for the same category-local queries).
+    data = _sc.cached_post("search", body)
+    if not isinstance(data, dict):
         return None
-    return res.data
+    return data
 
 
 # Generic category/firm words that are NOT distinctive enough to match a party by title.
