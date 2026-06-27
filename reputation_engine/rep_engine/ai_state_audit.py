@@ -866,6 +866,27 @@ def _engine_base(name: str) -> str:
 # ----------------------------------------------------------------------------
 # Orchestrator LLM (scoring + gap analysis), provider-agnostic
 # ----------------------------------------------------------------------------
+# Anthropic prompt caching: mark a large, STATIC system prompt cacheable so it bills at ~0.1x on
+# repeat calls. The per-answer SCORING_SYSTEM and GAP_SYSTEM are re-sent hundreds of times per
+# audit; caching the shared prefix is the single biggest cost lever. Below the model's ~1024-token
+# minimum caching is a no-op, so only large prompts are marked. Cache_control on a string is invalid,
+# so we send the structured block form.
+_CACHE_MIN_CHARS = 3000  # ~>1024 tokens; safely above the cache minimum for the big shared prompts
+
+
+def _anthropic_system(system: str):
+    """The `system` field for an Anthropic request, marking a large static prompt cacheable."""
+    if system and len(system) >= _CACHE_MIN_CHARS:
+        return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    return system
+
+
+def _anthropic_headers() -> dict:
+    # prompt-caching beta header is harmless where caching is GA; required on older api versions.
+    return {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31", "content-type": "application/json"}
+
+
 def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
                       tier: str = "full") -> str:
     """Free-text completion from the configured orchestrator LLM (no JSON
@@ -896,10 +917,9 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
         return ""
     res = _llm_http(
         "POST", f"{ANTHROPIC_BASE}/v1/messages",
-        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"},
+        headers=_anthropic_headers(),
         json={"model": anthropic_model, "max_tokens": max_tokens,
-              "system": system, "messages": [{"role": "user", "content": user}]},
+              "system": _anthropic_system(system), "messages": [{"role": "user", "content": user}]},
         timeout=120,
     )
     if res.failed:
@@ -953,8 +973,9 @@ def _anthropic_complete(system: str, user: str, tier: str = "full", max_tokens: 
     # returns HTTP 400 on Opus/Sonnet 4.x, which silently made every full-tier JSON call
     # (e.g. build_gap_model) return {}.
     body = {"model": model, "max_tokens": max_tokens,
-            "system": system + " Respond with a single minified JSON object and nothing"
-                               " else -- no prose, no markdown, no code fences.",
+            "system": _anthropic_system(
+                system + " Respond with a single minified JSON object and nothing"
+                         " else -- no prose, no markdown, no code fences."),
             "messages": [{"role": "user", "content": user}]}
     # temperature=0 makes scoring/eval reproducible -- but Opus 4.7+/Fable 5 REMOVED
     # sampling params (sending temperature 400s). Only set it where supported, which
@@ -963,8 +984,7 @@ def _anthropic_complete(system: str, user: str, tier: str = "full", max_tokens: 
         body["temperature"] = 0
     res = _llm_http(
         "POST", f"{ANTHROPIC_BASE}/v1/messages",
-        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"},
+        headers=_anthropic_headers(),
         json=body,
         timeout=timeout,
     )

@@ -155,17 +155,13 @@ def _norm(s: str) -> str:
 # Serper grounding (real Google data)
 # ---------------------------------------------------------------------------
 def _serper(endpoint: str, body: dict) -> Optional[dict]:
-    key = os.getenv("SERPER_API_KEY", "")
-    if not key:
-        return None
-    res = _http.request_json(
-        "POST", f"{SERPER_BASE}/{endpoint}",
-        headers={"X-API-KEY": key, "Content-Type": "application/json"},
-        json=body, timeout=20, max_retries=2,
-    )
-    if res.failed or not isinstance(res.data, dict):
-        return None
-    return res.data
+    # Shared TTL cache (Phase E): keyword research reuses autocomplete/PAA/related queries that the
+    # audit + local-rank also issue -- cache collapses the duplicate paid calls.
+    try:
+        from . import serper as _sc
+    except ImportError:  # pragma: no cover
+        import serper as _sc  # type: ignore
+    return _sc.cached_post(endpoint, body)
 
 
 def _expand_with_serper(seed: str, location: str) -> list[dict]:

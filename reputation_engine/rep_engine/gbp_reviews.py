@@ -38,15 +38,14 @@ SERPER_BASE = os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
 
 
 def _serper(endpoint: str, body: dict) -> Optional[dict]:
-    key = os.getenv("SERPER_API_KEY", "")
-    if not key:
-        return None
-    res = _http.request_json("POST", f"{SERPER_BASE}/{endpoint}",
-                             headers={"X-API-KEY": key, "Content-Type": "application/json"},
-                             json=body, timeout=20, max_retries=2)
-    if res.failed or not isinstance(res.data, dict):
-        return None
-    return res.data
+    # Routed through the shared TTL cache (Phase E): GBP ingest + the social audit issue the same
+    # places query, so this collapses duplicate paid calls. Falls back to a live call on any cache
+    # error inside cached_post.
+    try:
+        from . import serper as _sc
+    except ImportError:  # pragma: no cover
+        import serper as _sc  # type: ignore
+    return _sc.cached_post(endpoint, body)
 
 
 def _sentiment(rating: Optional[float]) -> Optional[str]:
