@@ -21,6 +21,7 @@ class StatusRequest(BaseModel):
     status: str
     assignee: Optional[str] = None
     notes: Optional[str] = None
+    completed_on: Optional[str] = None  # YYYY-MM-DD real completion date (may be back-dated)
 
 
 class ResumeRequest(BaseModel):

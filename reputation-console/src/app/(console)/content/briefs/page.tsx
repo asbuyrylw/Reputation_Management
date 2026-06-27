@@ -1,13 +1,65 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus } from "@/lib/hooks";
+import { downloadCsv } from "@/lib/download";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent } from "@/lib/types";
+import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent, ProductionBrief } from "@/lib/types";
+
+// Today as a YYYY-MM-DD string in the local timezone (default for "produced on").
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// "Mark produced" control on a recipe card: reveals a date field (default today, back-datable)
+// + Confirm. On success the brief leaves the to-produce list (the list only returns to_produce).
+function MarkProducedControl({ brief, businessId }: { brief: ProductionBrief; businessId: number | null }) {
+  const setStatus = useSetBriefStatus(businessId);
+  const [open, setOpen] = useState(false);
+  const [producedOn, setProducedOn] = useState(todayISO());
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      {!open ? (
+        <button
+          onClick={() => { setProducedOn(todayISO()); setOpen(true); }}
+          className="rounded-md bg-emerald-700 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
+        >
+          ✓ Mark produced
+        </button>
+      ) : (
+        <div className="space-y-1.5 rounded-md bg-emerald-50 p-2 ring-1 ring-inset ring-emerald-200">
+          <label className="block text-[11px] font-medium text-emerald-800">
+            Produced on
+            <input
+              type="date"
+              value={producedOn}
+              max={todayISO()}
+              onChange={(e) => setProducedOn(e.target.value)}
+              className="mt-0.5 w-full rounded border border-emerald-300 px-1.5 py-1 text-xs"
+            />
+          </label>
+          <p className="text-[10px] text-emerald-700">Defaults to today — change it if it was made earlier.</p>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => setStatus.mutate({ briefId: brief.id, status: "produced", produced_on: producedOn || todayISO() })}
+              disabled={setStatus.isPending}
+              className="rounded bg-emerald-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+            >
+              {setStatus.isPending ? "Saving…" : "Confirm produced"}
+            </button>
+            <button onClick={() => setOpen(false)} className="text-[11px] text-slate-500 hover:text-slate-700">Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // "Topic authority" — the pillar/spoke clusters to own, with a needs-content badge + what to
 // write next. Helps the owner see which topics they cover vs. still need a piece for.
@@ -279,7 +331,15 @@ export default function BriefsPage() {
 
           {recipes.length > 0 && (
             <section>
-              <h3 className="mb-2 text-sm font-semibold text-slate-900">Video &amp; social recipes ({recipes.length})</h3>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900">Video &amp; social recipes ({recipes.length})</h3>
+                <button
+                  onClick={() => businessId && downloadCsv(`/businesses/${businessId}/production-briefs/export`, "production_briefs.csv")}
+                  className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                >
+                  Export all (CSV)
+                </button>
+              </div>
               <p className="mb-2 text-xs text-slate-500">Off-platform pieces to film/post — what to make and the question it answers when someone asks AI about you.</p>
               <div className="space-y-3">
                 {recipes.map((b) => (
@@ -311,6 +371,7 @@ export default function BriefsPage() {
                         </div>
                       </div>
                     )}
+                    {canEdit && <MarkProducedControl brief={b} businessId={businessId} />}
                   </Card>
                 ))}
               </div>

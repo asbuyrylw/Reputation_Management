@@ -50,6 +50,8 @@ import type {
   TeamMember,
   AssetPlacement,
   ComplianceSignoff,
+  ActionTaken,
+  TaskImpact,
   WorkOrder,
   ConnectionsResponse,
   ZerniaSetup,
@@ -173,6 +175,17 @@ export function useProductionBriefs(businessId: number | null) {
   return useApiQuery<ProductionBrief[]>(["production-briefs", businessId], businessId ? `/businesses/${businessId}/production-briefs` : null);
 }
 
+// Mark a production brief produced / change its status. `produced_on` (YYYY-MM-DD, default
+// today, back-datable) is recorded + logged when status is "produced". Marking produced drops
+// the brief off the to-produce list (it only returns status='to_produce'), which is expected.
+export function useSetBriefStatus(businessId: number | null) {
+  return useApiMutation<{ briefId: number; status: "produced" | "in_production" | "to_produce" | "superseded"; produced_on?: string }>(
+    ({ briefId }) => `/businesses/${businessId}/production-briefs/${briefId}/status`,
+    ({ status, produced_on }) => ({ status, produced_on: produced_on ?? null }),
+    [["production-briefs", businessId], ["actions-taken", businessId], ["task-impact", businessId]],
+  );
+}
+
 export function useDiscoveryTargets(businessId: number | null) {
   return useApiQuery<DiscoveryTarget[]>(["discovery-targets", businessId], businessId ? `/businesses/${businessId}/discovery-targets` : null);
 }
@@ -270,10 +283,17 @@ export function useAddWorkOrder(businessId: number | null) {
   );
 }
 export function useSetWorkOrderStatus(businessId: number | null) {
-  return useApiMutation<{ woId: number; status: string; assignee?: string; notes?: string }>(
+  return useApiMutation<{ woId: number; status: string; assignee?: string; notes?: string; completed_on?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/status`,
-    ({ status, assignee, notes }) => ({ status, assignee: assignee ?? null, notes: notes ?? null }),
-    [["work-orders", businessId], ["dashboard", businessId]],
+    ({ status, assignee, notes, completed_on }) => ({
+      status,
+      assignee: assignee ?? null,
+      notes: notes ?? null,
+      // Only send a completion date when one was chosen; the backend defaults to today and
+      // only applies it for done/verified, so omitting it is safe.
+      completed_on: completed_on ?? null,
+    }),
+    [["work-orders", businessId], ["dashboard", businessId], ["actions-taken", businessId], ["task-impact", businessId]],
   );
 }
 
@@ -320,6 +340,18 @@ export function useAddWorkOrderNote(businessId: number | null) {
     ({ text }) => ({ text }),
     [["work-orders", businessId]],
   );
+}
+
+// The log of completed actions (work orders marked done/verified + briefs marked produced),
+// newest-first per the server. Feeds the "Work completed" readout.
+export function useActionsTaken(businessId: number | null) {
+  return useApiQuery<ActionTaken[]>(["actions-taken", businessId], base(businessId, "/actions-taken"));
+}
+
+// "What moved the needle" — correlation across audit windows between logged actions of each
+// capability and the score change. Already sorted best-first by the server.
+export function useTaskImpact(businessId: number | null) {
+  return useApiQuery<TaskImpact>(["task-impact", businessId], base(businessId, "/task-impact"));
 }
 
 // ---- rankings / timeline / sustain ----

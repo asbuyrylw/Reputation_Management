@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBusiness } from "@/lib/business";
 import { useDiscoveryTargets, useTriggerJob, useAddDiscoveryTarget, useSetTargetStatus, useUpdateTargetContact, usePushTarget, useDraftPitch, useDirectoryCitations } from "@/lib/hooks";
@@ -8,6 +8,50 @@ import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { DiscoveryTarget, DirectoryCitations } from "@/lib/types";
+
+// How many items each long list shows before collapsing.
+const COLLAPSE_AFTER = 5;
+
+// Renders only the first `limit` of `items` by default, with a "See more / See less" toggle.
+// Keeps long lists/tables short by default without changing how each row is rendered. The
+// toggle is wrapped in `toggleAs` (default <div>) so it stays valid HTML inside a <ul>/<table>
+// — e.g. pass "li" inside a <ul> or "tr" (with a render that returns a <td colSpan>) elsewhere.
+function Collapsible<T>({ items, limit = COLLAPSE_AFTER, render, noun = "more", toggleAs = "div", toggleClassName = "", colSpan }: {
+  items: T[];
+  limit?: number;
+  render: (item: T, index: number) => ReactNode;
+  noun?: string;
+  toggleAs?: "div" | "li" | "tr";
+  toggleClassName?: string;
+  colSpan?: number; // required when toggleAs="tr" so the toggle row spans the table
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hidden = items.length - limit;
+  const shown = expanded ? items : items.slice(0, limit);
+  const button = (
+    <button
+      type="button"
+      onClick={() => setExpanded((e) => !e)}
+      className="text-xs font-medium text-indigo-600 hover:underline"
+    >
+      {expanded ? "See less" : `See more (${hidden} ${noun})`}
+    </button>
+  );
+  return (
+    <>
+      {shown.map((item, i) => render(item, i))}
+      {hidden > 0 && (
+        toggleAs === "tr" ? (
+          <tr className={toggleClassName}><td colSpan={colSpan} className="px-3 py-2">{button}</td></tr>
+        ) : toggleAs === "li" ? (
+          <li className={toggleClassName}>{button}</li>
+        ) : (
+          <div className={toggleClassName}>{button}</div>
+        )
+      )}
+    </>
+  );
+}
 
 const NAP_DIR_LABELS: Record<string, string> = {
   name: "Business name",
@@ -67,22 +111,28 @@ function DirectoryCitationsSection({ data }: { data: DirectoryCitations | undefi
 
       {/* curated directory rows */}
       <ul className="mt-3 divide-y divide-slate-100">
-        {directories.map((d) => (
-          <li key={d.key} className="flex flex-wrap items-center justify-between gap-2 py-2">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-slate-800">{d.name}</span>
-                {d.financial && <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">Financial</span>}
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] capitalize text-slate-500">{d.category.replace(/_/g, " ")}</span>
+        <Collapsible
+          items={directories}
+          noun="directories"
+          toggleAs="li"
+          toggleClassName="py-2"
+          render={(d) => (
+            <li key={d.key} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-slate-800">{d.name}</span>
+                  {d.financial && <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">Financial</span>}
+                  <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] capitalize text-slate-500">{d.category.replace(/_/g, " ")}</span>
+                </div>
+                <div className="text-[11px] text-slate-400">{d.authority} authority</div>
               </div>
-              <div className="text-[11px] text-slate-400">{d.authority} authority</div>
-            </div>
-            <a href={d.submit_url} target="_blank" rel="noreferrer"
-              className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-slate-50">
-              Open submission ↗
-            </a>
-          </li>
-        ))}
+              <a href={d.submit_url} target="_blank" rel="noreferrer"
+                className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-slate-50">
+                Open submission ↗
+              </a>
+            </li>
+          )}
+        />
       </ul>
       {data.note && <p className="mt-2 text-[11px] text-slate-400">{data.note}</p>}
     </Card>
@@ -292,7 +342,12 @@ export default function OutreachPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {data.map((t) => (
+              <Collapsible
+                items={data}
+                noun="targets"
+                toggleAs="tr"
+                colSpan={canEdit ? 7 : 6}
+                render={(t) => (
                 <tr key={t.id} className="align-top hover:bg-slate-50">
                   <td className="px-3 py-2">
                     {t.url ? (
@@ -346,7 +401,8 @@ export default function OutreachPage() {
                     </td>
                   )}
                 </tr>
-              ))}
+                )}
+              />
             </tbody>
           </table>
         </Card>

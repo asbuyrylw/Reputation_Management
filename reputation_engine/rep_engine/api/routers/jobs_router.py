@@ -36,6 +36,32 @@ class ScheduleUpsert(BaseModel):
     enabled: bool = True
 
 
+@router.post("/businesses/{business_id}/jobs/run-everything")
+def run_everything(
+    business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
+    conn=Depends(get_conn),
+):
+    """Enqueue the ENTIRE pipeline at once — audit, site crawl, gap analysis, plan, sync,
+    AI citations, competitor benchmark, local rankings, prompts, mentions, discovery, content
+    briefs, and the report — in dependency order. The expensive, one-button refresh.
+
+    Billing-gated on the audit (the metered driver) and rate-limited to once per day so a
+    stray click can't run up ~$8-12 of LLM/search spend repeatedly.
+
+    NOTE: this literal route MUST be declared before the `/jobs/{job_type}` param route below,
+    or Starlette matches `{job_type}="run-everything"` first and 400s with 'unknown job_type'."""
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "audit")
+    if not ok:
+        raise HTTPException(code, reason)
+    if not _jobs.rate_ok(business_id, "run_everything"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "“Run everything” can only be started once a day — it runs the full "
+                            "pipeline. Trigger individual jobs if you need a one-off refresh.")
+    jobs_enqueued = _job_deps.enqueue_pipeline(business_id, requested_by=user["id"])
+    return JSONResponse(status_code=202, content={"status": "queued", "jobs": jobs_enqueued})
+
+
 @router.post("/businesses/{business_id}/jobs/{job_type}")
 def trigger_job(
     job_type: str,
@@ -72,29 +98,6 @@ def trigger_job(
         status_code=202,
         content={"job_id": job_id, "job_type": job_type, "status": "queued", "chained": chained},
     )
-
-
-@router.post("/businesses/{business_id}/jobs/run-everything")
-def run_everything(
-    business_id: int = Depends(require_business_editor),
-    user: dict = Depends(get_current_user),
-    conn=Depends(get_conn),
-):
-    """Enqueue the ENTIRE pipeline at once — audit, site crawl, gap analysis, plan, sync,
-    AI citations, competitor benchmark, local rankings, prompts, mentions, discovery, content
-    briefs, and the report — in dependency order. The expensive, one-button refresh.
-
-    Billing-gated on the audit (the metered driver) and rate-limited to once per day so a
-    stray click can't run up ~$8-12 of LLM/search spend repeatedly."""
-    ok, reason, code = _billing.check_can_trigger(conn, business_id, "audit")
-    if not ok:
-        raise HTTPException(code, reason)
-    if not _jobs.rate_ok(business_id, "run_everything"):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
-                            "“Run everything” can only be started once a day — it runs the full "
-                            "pipeline. Trigger individual jobs if you need a one-off refresh.")
-    jobs_enqueued = _job_deps.enqueue_pipeline(business_id, requested_by=user["id"])
-    return JSONResponse(status_code=202, content={"status": "queued", "jobs": jobs_enqueued})
 
 
 @router.get("/businesses/{business_id}/jobs")

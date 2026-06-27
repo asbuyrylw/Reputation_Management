@@ -182,6 +182,65 @@ def learn(business_id: int, quiet: bool = False) -> dict:
     return out
 
 
+def task_impact(business_id: int) -> dict:
+    """Correlate COMPLETED TASK TYPES (from actions_taken) to score movement audit-over-audit --
+    'which tasks moved the needle most'. For every consecutive completed-audit pair it computes the
+    monthly goal_alignment gain, finds the actions logged in that window (by completed_on), and
+    attributes the window's positive gain across the task capabilities that were done, accumulating
+    a per-capability gain-per-action signal. Read-only (no persisted tables). Correlation, not proof.
+
+    Returns {windows, task_types: [{capability, actions, windows, gain_per_action, total_gain,
+    confidence}], unattributed_windows}. unattributed = score moved but no logged actions that window
+    (so the movement can't be credited to any task type)."""
+    with db() as conn:
+        runs = conn.execute(
+            "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "ORDER BY id ASC", (business_id,),
+        ).fetchall()
+        if len(runs) < 2:
+            return {"windows": 0, "task_types": [], "unattributed_windows": 0,
+                    "note": "Need >=2 completed audits to correlate task impact."}
+        cap_gain: defaultdict = defaultdict(float)
+        cap_actions: defaultdict = defaultdict(int)
+        cap_windows: defaultdict = defaultdict(int)
+        n_windows = 0
+        unattributed = 0
+        for prev, cur in zip(runs, runs[1:]):
+            g0, g1 = _ga(conn, prev["id"]), _ga(conn, cur["id"])
+            if g0 is None or g1 is None or not prev["finished_at"] or not cur["finished_at"]:
+                continue
+            n_windows += 1
+            days = max((cur["finished_at"] - prev["finished_at"]).days, 1)
+            monthly_gain = (g1 - g0) / days * 30.0
+            acts = conn.execute(
+                "SELECT COALESCE(NULLIF(capability,''),'(unspecified)') cap, COUNT(*) n "
+                "FROM actions_taken WHERE business_id=%s AND completed_on >= %s::date "
+                "AND completed_on < %s::date GROUP BY cap",
+                (business_id, prev["finished_at"], cur["finished_at"]),
+            ).fetchall()
+            total = sum(a["n"] for a in acts)
+            if total == 0:
+                if monthly_gain != 0:
+                    unattributed += 1
+                continue
+            attributable = max(monthly_gain, MIN_GAIN_FLOOR)
+            for a in acts:
+                share = a["n"] / total
+                cap_gain[a["cap"]] += attributable * share
+                cap_actions[a["cap"]] += a["n"]
+                cap_windows[a["cap"]] += 1
+        task_types = []
+        for cap, n in cap_actions.items():
+            gpa = (cap_gain[cap] / n) if n else 0.0
+            task_types.append({
+                "capability": cap, "actions": n, "windows": cap_windows[cap],
+                "gain_per_action": round(gpa, 5), "total_gain": round(cap_gain[cap], 5),
+                "confidence": _confidence(cap_windows[cap]),
+            })
+        task_types.sort(key=lambda t: t["gain_per_action"], reverse=True)
+    return {"windows": n_windows, "task_types": task_types, "unattributed_windows": unattributed}
+
+
 # ----------------------------------------------------------------------------
 # Read helpers used by the estimator / advisor (with safe fallbacks)
 # ----------------------------------------------------------------------------

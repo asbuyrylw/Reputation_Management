@@ -200,10 +200,46 @@ def create_work_order(business_id: int, title: str, *, instruction: str | None =
 # ----------------------------------------------------------------------------
 # set-status: lifecycle transitions with timestamps
 # ----------------------------------------------------------------------------
-def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None) -> None:
+_DONE_STATES = ("done", "verified")
+
+
+def log_action(conn, *, business_id: int, capability: str | None, title: str | None,
+               completed_on: date, work_order_id: int | None = None,
+               production_brief_id: int | None = None, source: str = "work_order",
+               area: str | None = None, platform: str | None = None,
+               logged_by: str | None = None, notes: str | None = None) -> None:
+    """Upsert a row into the actions_taken log -- the task-type-aware unit the feedback loop
+    correlates to audit-over-audit needle movement. Idempotent per work_order/brief (re-marking
+    done just updates the date), so completing a task ALWAYS leaves a durable, dated trace even when
+    the actual work was done outside the platform. Uses the caller's connection (no commit here)."""
+    key_col = "work_order_id" if work_order_id is not None else (
+        "production_brief_id" if production_brief_id is not None else None)
+    cols = ("business_id, work_order_id, production_brief_id, source, capability, area, platform, "
+            "title, completed_on, logged_by, notes")
+    vals = (business_id, work_order_id, production_brief_id, source, capability, area, platform,
+            title, completed_on, logged_by, notes)
+    if key_col:  # upsert on the work_order/brief unique index
+        conn.execute(
+            f"INSERT INTO actions_taken ({cols}) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            f"ON CONFLICT ({key_col}) DO UPDATE SET completed_on=EXCLUDED.completed_on, "
+            f"capability=EXCLUDED.capability, area=EXCLUDED.area, platform=EXCLUDED.platform, "
+            f"title=EXCLUDED.title, source=EXCLUDED.source, notes=EXCLUDED.notes, logged_at=now()",
+            vals)
+    else:  # manual one-off action (no FK) -- plain insert
+        conn.execute(f"INSERT INTO actions_taken ({cols}) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", vals)
+
+
+def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None,
+               completed_on: date | str | None = None, actor: str | None = None) -> None:
+    """Set a work order's status. When it moves to done/verified, stamp completion and log an
+    actions_taken row (the impact-learning unit). `completed_on` is the REAL completion date -- it
+    may be BACK-DATED for work done outside the system; defaults to today. Reverting away from a
+    done state removes the logged action so the impact correlation stays honest."""
     if status not in VALID_STATUS:
         raise SystemExit(f"status must be one of {sorted(VALID_STATUS)}")
     now = datetime.now()
+    cdate = _coerce_date(completed_on) or date.today()
+    completed_ts = datetime(cdate.year, cdate.month, cdate.day)  # back-dated completion timestamp
     sets = ["status=%s", "updated_at=now()"]
     params: list = [status]
     if assignee:
@@ -213,14 +249,25 @@ def set_status(wo_id: int, status: str, assignee: str | None, notes: str | None)
     if status == "in_progress":
         sets.append("started_at=COALESCE(started_at, %s)"); params.append(now)
     if status == "done":
-        sets.append("completed_at=%s"); params.append(now)
+        sets.append("completed_at=%s"); params.append(completed_ts)
     if status == "verified":
-        sets.append("verified_at=%s"); params.append(now)
+        sets.append("verified_at=%s"); params.append(completed_ts)
+        sets.append("completed_at=COALESCE(completed_at, %s)"); params.append(completed_ts)
     params.append(wo_id)
     with db() as conn:
         # B608 false positive: every element of `sets` is a literal "col=%s" fragment
         # built above (no user input in the SQL text); all values are bound parameters.
         conn.execute(f"UPDATE work_orders SET {', '.join(sets)} WHERE id=%s", tuple(params))  # nosec B608
+        if status in _DONE_STATES:
+            wo = conn.execute("SELECT business_id, capability, title FROM work_orders WHERE id=%s",
+                              (wo_id,)).fetchone()
+            if wo and wo["business_id"]:
+                log_action(conn, business_id=wo["business_id"], capability=wo["capability"],
+                           title=wo["title"], completed_on=cdate, work_order_id=wo_id,
+                           source="work_order", logged_by=actor, notes=notes)
+        else:
+            # reverted from done -> drop the logged action so it no longer counts toward impact
+            conn.execute("DELETE FROM actions_taken WHERE work_order_id=%s", (wo_id,))
         conn.commit()
     log.info("WO %d -> %s", wo_id, status)
 

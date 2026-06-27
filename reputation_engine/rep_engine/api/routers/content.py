@@ -8,11 +8,13 @@ business_id matches the path (the engine functions don't check tenancy).
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from .. import jobs as _jobs
@@ -143,6 +145,74 @@ def production_briefs(business_id: int = Depends(authorize_business), conn=Depen
         (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _csv_response(rows: list[dict], columns: list[str], filename: str) -> Response:
+    """Render rows to a CSV download (only the given columns, in order)."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(columns)
+    for r in rows:
+        w.writerow(["" if r.get(c) is None else str(r.get(c)) for c in columns])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/production-briefs/export")
+def export_production_briefs(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Export every content-to-produce brief as CSV so the work can be handed to someone to do
+    outside the platform. Includes the why-it-helps rationale + the structured brief as text."""
+    rows = conn.execute(
+        "SELECT id, channel, platform, title, target_query, status, why_helps_ai_rep, why_helps_seo, "
+        "amplification_playbook, brief, created_at "
+        "FROM production_briefs WHERE business_id=%s AND status IN ('to_produce','in_production') "
+        "ORDER BY channel, id", (business_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        b = d.get("brief")
+        d["brief"] = (b if isinstance(b, str) else __import__("json").dumps(b)) if b else ""
+        out.append(d)
+    cols = ["id", "channel", "platform", "title", "target_query", "status",
+            "why_helps_ai_rep", "why_helps_seo", "amplification_playbook", "brief", "created_at"]
+    return _csv_response(out, cols, "content-to-produce.csv")
+
+
+@router.get("/work-orders/export")
+def export_work_orders(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Export the task board (work orders) as CSV for tracking / handoff outside the platform."""
+    rows = conn.execute(
+        "SELECT id, wo_code, title, capability, phase, status, assignee, target_date, "
+        "completed_at, instruction, recommended_tool FROM work_orders "
+        "WHERE business_id=%s ORDER BY status, phase, id", (business_id,),
+    ).fetchall()
+    cols = ["id", "wo_code", "title", "capability", "phase", "status", "assignee", "target_date",
+            "completed_at", "recommended_tool", "instruction"]
+    return _csv_response([dict(r) for r in rows], cols, "tasks.csv")
+
+
+@router.get("/actions-taken")
+def actions_taken(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """The log of work actually completed (tasks + content), with real dates -- the 'what we did
+    between audits' record that the impact loop correlates to score movement."""
+    rows = conn.execute(
+        "SELECT id, source, capability, area, platform, title, completed_on, logged_at, logged_by, "
+        "work_order_id, production_brief_id, notes FROM actions_taken "
+        "WHERE business_id=%s ORDER BY completed_on DESC, id DESC", (business_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.get("/task-impact")
+def task_impact(business_id: int = Depends(authorize_business)):
+    """'Which task types moved the needle most' -- correlates completed actions (between audits) to
+    the goal-alignment score change. Correlation, not proof; confidence rises with more audits."""
+    try:
+        from ... import feedback_loop as _fb
+    except ImportError:  # pragma: no cover
+        import feedback_loop as _fb  # type: ignore
+    return _fb.task_impact(business_id)
 
 
 @router.get("/discovery-targets")
@@ -464,6 +534,7 @@ def set_work_order_status(
     wo_id: int,
     body: StatusRequest,
     business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
     conn=Depends(get_conn),
 ):
     if body.status not in _tracking.VALID_STATUS:
@@ -471,11 +542,67 @@ def set_work_order_status(
             status.HTTP_400_BAD_REQUEST,
             f"status must be one of {sorted(_tracking.VALID_STATUS)}",
         )
+    if body.completed_on:
+        try:
+            date.fromisoformat(body.completed_on)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "completed_on must be YYYY-MM-DD")
     row = conn.execute("SELECT business_id FROM work_orders WHERE id=%s", (wo_id,)).fetchone()
     if not row or row["business_id"] != business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work order not found")
-    _tracking.set_status(wo_id, body.status, body.assignee, body.notes)
-    return {"ok": True, "wo_id": wo_id, "status": body.status}
+    # completed_on lets an operator mark a task done on its REAL date even if the work happened
+    # outside the platform; set_status logs it to actions_taken for the impact-learning loop.
+    _tracking.set_status(wo_id, body.status, body.assignee, body.notes,
+                         completed_on=body.completed_on, actor=_actor(user))
+    return {"ok": True, "wo_id": wo_id, "status": body.status, "completed_on": body.completed_on}
+
+
+class BriefStatusRequest(BaseModel):
+    status: str = "produced"            # to_produce | in_production | produced | superseded
+    produced_on: Optional[str] = None   # YYYY-MM-DD (may be back-dated); defaults to today on 'produced'
+
+
+_BRIEF_STATUS = {"to_produce", "in_production", "produced", "superseded"}
+
+
+@router.post("/production-briefs/{brief_id}/status")
+def set_production_brief_status(
+    brief_id: int,
+    body: BriefStatusRequest,
+    business_id: int = Depends(require_business_editor),
+    user: dict = Depends(get_current_user),
+    conn=Depends(get_conn),
+):
+    """Mark a content-to-produce brief in_production / produced (with a real, back-datable date) /
+    superseded. Marking it 'produced' logs an action so completing it counts toward impact even
+    when the content was made outside the platform."""
+    if body.status not in _BRIEF_STATUS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"status must be one of {sorted(_BRIEF_STATUS)}")
+    pon = None
+    if body.produced_on:
+        try:
+            pon = date.fromisoformat(body.produced_on)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "produced_on must be YYYY-MM-DD")
+    brief = conn.execute(
+        "SELECT business_id, channel, platform, title FROM production_briefs WHERE id=%s", (brief_id,),
+    ).fetchone()
+    if not brief or brief["business_id"] != business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Brief not found")
+    if body.status == "produced":
+        pon = pon or date.today()
+        conn.execute("UPDATE production_briefs SET status='produced', produced_on=%s WHERE id=%s",
+                     (pon, brief_id))
+        _tracking.log_action(conn, business_id=business_id, capability="content_production",
+                             title=brief["title"], completed_on=pon, production_brief_id=brief_id,
+                             source="brief", area="social" if brief["channel"] == "social" else brief["channel"],
+                             platform=brief["platform"], logged_by=_actor(user))
+    else:
+        conn.execute("UPDATE production_briefs SET status=%s WHERE id=%s", (body.status, brief_id))
+        if body.status in ("to_produce", "in_production"):  # reverted -> drop any logged action
+            conn.execute("DELETE FROM actions_taken WHERE production_brief_id=%s", (brief_id,))
+    conn.commit()
+    return {"ok": True, "brief_id": brief_id, "status": body.status, "produced_on": str(pon) if pon else None}
 
 
 def _resolve_assignee(conn, assignee_user_id: Optional[int]) -> Optional[str]:

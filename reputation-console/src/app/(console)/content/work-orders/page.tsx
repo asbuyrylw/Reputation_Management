@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact } from "@/lib/hooks";
+import { downloadCsv } from "@/lib/download";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { VisualContentPanel } from "@/components/VisualContentPanel";
-import type { WorkOrder, ProgressNote, ContentDraft, Asset } from "@/lib/types";
+import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, TaskImpact } from "@/lib/types";
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
 // task -> draft -> published asset).
@@ -69,6 +70,12 @@ const TOOL_GUIDE: Record<string, { type: string; examples: string[] }> = {
   ai_visibility_tracking: { type: "AI-visibility tracking", examples: ["this console's audits"] },
   video_creation: { type: "Video creation", examples: ["Descript", "CapCut", "Synthesia"] },
 };
+
+// Today as a YYYY-MM-DD string in the local timezone (default for the completion date).
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // YYYY-MM-DD -> MM-DD-YYYY
 function fmtDate(d?: string | null): string {
@@ -138,7 +145,7 @@ function NotesSection({ wo, businessId, canEdit }: { wo: WorkOrder; businessId: 
   );
 }
 
-function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string) => void; draft?: ContentDraft; asset?: Asset }) {
+function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string, completedOn?: string) => void; draft?: ContentDraft; asset?: Asset }) {
   const tool = TOOL_GUIDE[wo.capability ?? ""];
   const bullets = bulletize(wo.instruction || "");
   const gen = useGenerateDraftForWo(businessId);
@@ -150,6 +157,18 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
   const [assigneeUserId, setAssigneeUserId] = useState(wo.assignee_user_id ? String(wo.assignee_user_id) : "");
   const [startDate, setStartDate] = useState(wo.start_date ?? "");
   const [dueDate, setDueDate] = useState(wo.target_date ?? "");
+  // When the owner moves a task to done/verified, capture the completion date (default today,
+  // back-datable for work done outside the system) before sending the status change.
+  const [pendingDone, setPendingDone] = useState<string | null>(null); // the target status awaiting a date
+  const [completedOn, setCompletedOn] = useState(todayISO());
+  const onStatusChange = (next: string) => {
+    if (next === "done" || next === "verified") {
+      setCompletedOn(todayISO());
+      setPendingDone(next);
+    } else {
+      onStatus(next);
+    }
+  };
   // Offer "Generate draft" on AI-draftable content tasks that aren't finished yet.
   const canDraft =
     canEdit &&
@@ -292,13 +311,39 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
       {canEdit && (
         <select
           value={wo.status}
-          onChange={(e) => onStatus(e.target.value)}
+          onChange={(e) => onStatusChange(e.target.value)}
           className="mt-2 w-full rounded border border-slate-200 px-2 py-1 text-xs"
         >
           {COLUMNS.map((s) => (
             <option key={s} value={s}>{LABEL[s]}</option>
           ))}
         </select>
+      )}
+
+      {/* completion date — shown when moving to done/verified; defaults to today, back-datable */}
+      {canEdit && pendingDone && (
+        <div className="mt-2 space-y-1.5 rounded-md bg-emerald-50 p-2 ring-1 ring-inset ring-emerald-200">
+          <label className="block text-[11px] font-medium text-emerald-800">
+            Mark “{LABEL[pendingDone]}” — completed on
+            <input
+              type="date"
+              value={completedOn}
+              max={todayISO()}
+              onChange={(e) => setCompletedOn(e.target.value)}
+              className="mt-0.5 w-full rounded border border-emerald-300 px-1.5 py-1 text-xs"
+            />
+          </label>
+          <p className="text-[10px] text-emerald-700">Defaults to today — change it if the work was done earlier.</p>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => { onStatus(pendingDone, completedOn || todayISO()); setPendingDone(null); }}
+              className="rounded bg-emerald-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-800"
+            >
+              Confirm
+            </button>
+            <button onClick={() => setPendingDone(null)} className="text-[11px] text-slate-500 hover:text-slate-700">Cancel</button>
+          </div>
+        </div>
       )}
     </Card>
   );
@@ -342,6 +387,107 @@ function AddTask({ businessId }: { businessId: number | null }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// "Work completed / what moved the needle" — a log of completed actions plus a correlational
+// ranking of which task TYPES tend to coincide with score gains across audit windows. This is
+// directional correlation (not causal proof), surfaced below the task board.
+function WorkCompletedSection({ businessId }: { businessId: number | null }) {
+  const { data: actions } = useActionsTaken(businessId);
+  const { data: impact } = useTaskImpact(businessId);
+
+  const actionRows: ActionTaken[] = actions ?? [];
+  const taskTypes = impact?.task_types ?? [];
+  const windows = impact?.windows ?? 0;
+  const unattributed = impact?.unattributed_windows ?? 0;
+  const notEnough = windows < 2 || taskTypes.length === 0;
+
+  // Nothing logged yet AND no impact signal -> a single friendly empty state.
+  if (actionRows.length === 0 && notEnough) {
+    return (
+      <section className="mt-8">
+        <h3 className="mb-2 text-sm font-semibold text-slate-900">Work completed / what moved the needle</h3>
+        <Card>
+          <p className="text-sm text-slate-600">Mark tasks complete and run another audit to see which task types move your score.</p>
+        </Card>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-8">
+      <h3 className="mb-2 text-sm font-semibold text-slate-900">Work completed / what moved the needle</h3>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* (1) Actions taken — the completed-work log */}
+        <Card padded={false}>
+          <div className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-700">
+            Actions taken ({actionRows.length})
+          </div>
+          {actionRows.length === 0 ? (
+            <p className="px-4 py-3 text-xs text-slate-400">No completed actions logged yet.</p>
+          ) : (
+            <div className="max-h-80 overflow-y-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">What</th>
+                    <th className="px-3 py-2">Area</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Done</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {actionRows.map((a) => (
+                    <tr key={`${a.source}-${a.id}`} className="align-top">
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-slate-800">{a.title || capLabel(a.capability)}</div>
+                        <div className="text-[10px] text-slate-400">{a.source === "production_brief" ? "Brief produced" : capLabel(a.capability)}</div>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{[a.area, a.platform].filter(Boolean).join(" · ") || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap text-slate-600">{fmtDate(a.completed_on) || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        {/* (2) Task-impact ranking — which task types correlate with score gains */}
+        <Card padded={false}>
+          <div className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-700">
+            What moved the needle
+          </div>
+          {notEnough ? (
+            <p className="px-4 py-3 text-xs text-slate-500">
+              Mark tasks complete and run another audit to see which task types move your score.
+            </p>
+          ) : (
+            <>
+              <ul className="divide-y divide-slate-100">
+                {taskTypes.map((t) => (
+                  <li key={t.capability} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-800">{capLabel(t.capability)}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {t.actions} action{t.actions === 1 ? "" : "s"} · {t.confidence} confidence
+                      </div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.gain_per_action >= 0 ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                      {t.gain_per_action >= 0 ? "+" : ""}{t.gain_per_action.toFixed(1)} pts / action
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
+                Correlation across {windows} audit window{windows === 1 ? "" : "s"}, not proof of cause.
+                {unattributed > 0 && ` ${unattributed} audit window${unattributed === 1 ? "" : "s"} moved with no logged actions.`}
+              </p>
+            </>
+          )}
+        </Card>
+      </div>
+    </section>
   );
 }
 
@@ -397,7 +543,7 @@ export default function WorkOrdersPage() {
       wo={w}
       businessId={businessId}
       canEdit={canEdit}
-      onStatus={(st) => setStatus.mutate({ woId: w.id, status: st })}
+      onStatus={(st, completedOn) => setStatus.mutate({ woId: w.id, status: st, completed_on: completedOn })}
       draft={draftByWo.get(w.id)}
       asset={assetByWo.get(w.id)}
     />
@@ -478,6 +624,12 @@ export default function WorkOrdersPage() {
                     Show archived ({archivedCount})
                   </label>
                 )}
+                <button
+                  onClick={() => businessId && downloadCsv(`/businesses/${businessId}/work-orders/export`, "work_orders.csv")}
+                  className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                >
+                  Export CSV
+                </button>
                 <span className="text-slate-500">{done} of {total} done · {inProgress} in progress</span>
               </div>
             </div>
@@ -530,6 +682,9 @@ export default function WorkOrdersPage() {
           )}
         </>
       )}
+
+      {/* Work completed + which task types correlate with score gains (below the board) */}
+      <WorkCompletedSection businessId={businessId} />
     </div>
   );
 }

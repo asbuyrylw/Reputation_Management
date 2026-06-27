@@ -159,6 +159,39 @@ export interface TeamMember {
   email: string;
 }
 
+// One logged completed action (from a work order marked done/verified or a brief marked
+// produced). Powers the "Work completed" readout — what was actually done, and when.
+export interface ActionTaken {
+  id: number;
+  source: string; // 'work_order' | 'production_brief' (kept loose — server may add sources)
+  capability: string | null;
+  area: string | null;
+  platform: string | null;
+  title: string | null;
+  completed_on: string | null; // YYYY-MM-DD
+  logged_at: string | null;
+  logged_by: string | null;
+  work_order_id: number | null;
+  production_brief_id: number | null;
+  notes: string | null;
+}
+
+// "What moved the needle" — correlation across audit windows between logged actions of a
+// given capability and the score change in that window. NOT causal proof; a directional read.
+export interface TaskImpactType {
+  capability: string;
+  actions: number;
+  windows: number;
+  gain_per_action: number;
+  total_gain: number;
+  confidence: string; // e.g. 'low' | 'medium' | 'high'
+}
+export interface TaskImpact {
+  windows: number; // total audit windows analyzed
+  unattributed_windows: number; // windows that moved with no logged actions
+  task_types: TaskImpactType[]; // already sorted best-first by the server
+}
+
 export interface ComplianceSignoff {
   id: number;
   draft_id: number | null;
