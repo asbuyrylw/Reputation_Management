@@ -258,6 +258,14 @@ def _finalize(tid: int, business_id: int, status: str, *, external_url=None, ext
                 "UPDATE assets SET published_url=%s, published_status='live', published_at=now() "
                 "WHERE id=%s AND business_id=%s", (external_url, asset_id, business_id))
         conn.commit()
+    # Instant re-crawl (IndexNow): ping search engines the moment an owned URL goes live, so the
+    # fix is seen in minutes. Dormant-safe (no-op without INDEXNOW_KEY); never blocks publishing.
+    if status == "live" and external_url:
+        try:
+            from .. import indexnow as _idx
+            _idx.submit_url(external_url)
+        except Exception as e:  # noqa: BLE001
+            log.debug("IndexNow ping skipped: %s", e)
 
 
 def _retry_later(tid: int, business_id: int, attempt_no: int, result: PublishResult) -> None:

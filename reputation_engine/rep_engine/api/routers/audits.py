@@ -50,6 +50,17 @@ def impact_report(business_id: int = Depends(authorize_business)):
     return _ir.build(business_id)
 
 
+@router.get("/roadmap")
+def roadmap(business_id: int = Depends(authorize_business)):
+    """The impact-ranked roadmap: every open task ordered by predicted impact / effort, with the
+    learned/cross-client basis -- the 'do these in this order' list that powers the to-do hub."""
+    try:
+        from ... import roi_predictor as _rp
+    except ImportError:  # pragma: no cover
+        import roi_predictor as _rp  # type: ignore
+    return _rp.roadmap(business_id)
+
+
 @router.get("/roi-forecast")
 def roi_forecast(business_id: int = Depends(authorize_business)):
     """Predicted score lift from finishing the open plan, using this client's learned effectiveness

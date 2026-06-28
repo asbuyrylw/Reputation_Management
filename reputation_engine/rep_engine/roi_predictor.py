@@ -44,6 +44,56 @@ _STATIC_GAIN = {
     "ai_visibility_tracking": 0.0,
 }
 _CONF_RANK = {"high": 3, "medium": 2, "low": 1, None: 0}
+# Effort weight per capability (1 = quick win, 3 = heavy lift) for impact/effort ranking.
+_EFFORT = {
+    "schema_markup": 1, "ai_visibility_tracking": 1, "social_publishing": 1, "gbp_optimization": 1,
+    "review_generation": 2, "content_writing": 2, "local_content_creation": 2, "media_list_building": 2,
+    "video_creation": 3, "press_outreach": 3, "link_building": 3,
+}
+
+
+def _gain_for(cap, own, priors):
+    """Best available gain-per-unit for a capability: this client -> cross-client -> static."""
+    from .feedback_loop import TYPE_TO_LEVER as _T2L
+    lever = _T2L.get(cap, "third_party_articles")
+    if lever in own:
+        return own[lever], "this client", "medium"
+    if lever in priors:
+        return priors[lever]["gain_per_unit"], "cross-client", priors[lever]["confidence"]
+    return _STATIC_GAIN.get(cap, 1.0), "industry baseline", "low"
+
+
+def roadmap(business_id: int, limit: int = 40) -> dict:
+    """The impact-ranked roadmap (adopted from SnowSEO): every OPEN task ranked by predicted
+    impact / effort -- a prioritized 'do these in this order' list, not a flat board. Uses this
+    client's learned effectiveness first, then the cross-client prior, then an industry baseline."""
+    own = learned_lever_weights(business_id)
+    priors = cross_client_priors()
+    with db() as conn:
+        wos = conn.execute(
+            "SELECT id, wo_code, title, capability, area, platform, status, "
+            "predicted_ai_points, predicted_seo_impact, why_helps_ai_rep "
+            "FROM work_orders WHERE business_id=%s AND status IN ('pending','in_progress') "
+            "AND NOT COALESCE(superseded,false)", (business_id,),
+        ).fetchall()
+    items = []
+    for w in wos:
+        cap = w["capability"] or ""
+        gain, basis, conf = _gain_for(cap, own, priors)
+        # prefer the planner's own per-task points estimate when it's richer than our lever gain
+        pap = float(w["predicted_ai_points"]) if w["predicted_ai_points"] is not None else None
+        expected = round(max(gain, pap or 0), 2)
+        effort = _EFFORT.get(cap, 2)
+        items.append({
+            "wo_id": w["id"], "wo_code": w["wo_code"], "title": w["title"], "capability": cap,
+            "area": w["area"], "platform": w["platform"], "status": w["status"],
+            "expected_points": expected, "effort": effort,
+            "impact_score": round(expected / effort, 3),
+            "basis": basis, "confidence": conf, "why": w["why_helps_ai_rep"],
+            "seo_impact": w["predicted_seo_impact"],
+        })
+    items.sort(key=lambda x: x["impact_score"], reverse=True)
+    return {"count": len(wos), "items": items[:limit]}
 
 
 def cross_client_priors() -> dict:
