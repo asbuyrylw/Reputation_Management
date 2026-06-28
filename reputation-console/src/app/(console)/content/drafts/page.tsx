@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts } from "@/lib/hooks";
+import { useContentDrafts, useContentOptimizationStatus } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 
@@ -11,6 +12,7 @@ type Tab = "ready" | "fixes" | "all";
 export default function DraftsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useContentDrafts(businessId);
+  const { data: optStatus } = useContentOptimizationStatus(businessId);
   const [tab, setTab] = useState<Tab>("ready");
 
   if (isLoading || !data) return <Spinner />;
@@ -48,6 +50,15 @@ export default function DraftsPage() {
             ? "These passed the writing-quality bar but were flagged on a compliance check — usually a missing disclosure (e.g. broker-dealer / licensing). Edit the draft to resolve the flag, which re-screens it, then approve."
             : "“Ready to review” passed our quality + compliance checks and just needs your sign-off. Approving publishes it and advances its task."}
         </p>
+        {/* Subtle dormant-feature hint: only when content-optimization is wired in the app but
+            not yet configured for this business — drafts will then carry a SERP-coverage score. */}
+        {optStatus && !optStatus.configured && (
+          <p className="mt-2 text-[11px] text-slate-400">
+            Content optimization:{" "}
+            <Link href="/integrations" className="font-medium text-indigo-600 hover:underline">connect NeuronWriter</Link>{" "}
+            to score each draft on SERP content coverage.
+          </p>
+        )}
       </Card>
 
       {shown.length === 0 ? (

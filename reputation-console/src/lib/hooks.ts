@@ -26,6 +26,7 @@ import type {
   VisibilityTrend,
   Competitor,
   ContentDraft,
+  ContentOptimizationStatus,
   Dashboard,
   DiscoveryTarget,
   ExternalSignal,
@@ -204,6 +205,16 @@ export function useTeam(businessId: number | null) {
 
 export function useContentDrafts(businessId: number | null) {
   return useApiQuery<ContentDraft[]>(["content-drafts", businessId], businessId ? `/businesses/${businessId}/content-drafts` : null);
+}
+
+// Is NeuronWriter content-optimization wired up for this business? `configured` means a key
+// is set; `live` means it's currently reachable. When not configured the SERP-score gauge stays
+// dormant (renders nothing), so the drafts UI can decide whether to surface a connect hint.
+export function useContentOptimizationStatus(businessId: number | null) {
+  return useApiQuery<ContentOptimizationStatus>(
+    ["content-optimization-status", businessId],
+    businessId ? `/businesses/${businessId}/content-optimization-status` : null,
+  );
 }
 
 export function useProductionBriefs(businessId: number | null) {

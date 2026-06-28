@@ -269,8 +269,27 @@ export interface ContentDraft {
         on_page?: DraftOnPage;
         citation_ready?: DraftCitationReady;
         fact_check?: DraftFactCheck;
+        neuron?: DraftNeuron;
       } & Record<string, unknown>)
     | null;
+}
+
+// NeuronWriter SERP content-optimization score for a draft — how well its term coverage
+// matches what's already ranking for `query`. `target` is the recommended score to beat
+// (null when NeuronWriter didn't supply one).
+export interface DraftNeuron {
+  content_score: number; // 0..100
+  query: string;
+  target: number | null;
+}
+
+// Whether the NeuronWriter content-optimization provider is wired up for a business.
+// `configured` = a key is set; `live` = currently reachable. The SERP-score gauge is dormant
+// (renders nothing) when not configured.
+export interface ContentOptimizationStatus {
+  configured: boolean;
+  live: boolean;
+  provider: string; // "neuronwriter"
 }
 
 export interface KeywordCoverage {

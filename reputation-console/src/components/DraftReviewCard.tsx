@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Card } from "./ui";
+import { Card, Badge } from "./ui";
 import { useApproveDraft, useEditDraft, useRejectDraft } from "@/lib/hooks";
-import type { ContentDraft } from "@/lib/types";
+import type { BadgeTone } from "./ui";
+import type { ContentDraft, DraftNeuron } from "@/lib/types";
 
 const STATUS_WORDS: Record<string, string> = {
   pending_review: "Waiting for you",
@@ -24,6 +25,24 @@ function quality(s: number | null): { label: string; cls: string } | null {
   if (s >= 0.8) return { label: `Strong ${v}/100`, cls: "text-emerald-700" };
   if (s >= 0.6) return { label: `OK ${v}/100`, cls: "text-amber-700" };
   return { label: `Weak ${v}/100`, cls: "text-rose-600" };
+}
+
+// The NeuronWriter SERP content-optimization score. Green when it clears the target (or 80 when
+// no target was supplied), amber from 60, rose below — so a glance tells you if the draft covers
+// the terms already ranking for its query.
+function NeuronGauge({ neuron }: { neuron: DraftNeuron }) {
+  const score = Math.round(neuron.content_score);
+  const bar = Math.max(0, Math.min(100, score));
+  const goal = neuron.target != null ? Math.round(neuron.target) : 80;
+  const tone: BadgeTone = score >= goal ? "emerald" : score >= 60 ? "amber" : "rose";
+  return (
+    <span title="NeuronWriter — how well this draft covers the terms already ranking for its query">
+      <Badge tone={tone}>
+        SERP coverage (NeuronWriter): {score}/100
+        {neuron.target != null && <span className="opacity-70"> · target {Math.round(neuron.target)}</span>}
+      </Badge>
+    </span>
+  );
 }
 
 export function DraftReviewCard({
@@ -61,6 +80,8 @@ export function DraftReviewCard({
   const onPage = draft.quality_notes?.on_page;
   const citationReady = draft.quality_notes?.citation_ready;
   const factCheck = draft.quality_notes?.fact_check;
+  // NeuronWriter SERP content score — only present when content-optimization is configured.
+  const neuron = draft.quality_notes?.neuron;
   const scoreTone = (s: number) => (s >= 80 ? "text-emerald-700" : s >= 60 ? "text-amber-700" : "text-rose-600");
   // "Why this helps" — derived from the question it targets + the work-order instruction.
   const whyHelps = draft.target_query
@@ -77,6 +98,7 @@ export function DraftReviewCard({
           {STATUS_WORDS[draft.status] ?? draft.status.replace(/_/g, " ")}
         </span>
         {q && <span className={`text-xs font-medium ${q.cls}`}>Quality: {q.label}</span>}
+        {neuron && <NeuronGauge neuron={neuron} />}
         {draft.compliance_pass === true && (
           <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">checks passed ✓</span>
         )}

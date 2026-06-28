@@ -36,6 +36,9 @@ const NAV: NavGroup[] = [
       // Moved from Search & SEO: this page benchmarks AI-answer share-of-voice (you vs.
       // rivals in what AI says), not Google rank, so it belongs with the AI surfaces.
       { href: "/competitors", label: "You vs. competitors in AI answers", opLabel: "Competitors (AI)" },
+      // Unified social home: per-platform presence/completeness + the social tasks. Sits with
+      // the AI surfaces because social profiles are part of what AI reads about you.
+      { href: "/social", label: "Social presence", opLabel: "Social" },
     ],
   },
   {

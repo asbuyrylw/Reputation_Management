@@ -36,19 +36,6 @@ function splitNumbered(text: string): { lead: string; items: string[] } {
   return { lead, items };
 }
 
-// A surface-action line: bold a short "label:" prefix; otherwise show plain.
-function ActionItem({ text }: { text: string }) {
-  const i = text.indexOf(": ");
-  if (i > 0 && i <= 48) {
-    return (
-      <li>
-        <span className="font-semibold text-slate-800">{text.slice(0, i)}:</span> {text.slice(i + 2)}
-      </li>
-    );
-  }
-  return <li>{text}</li>;
-}
-
 const PLATFORM_LABEL: Record<string, string> = {
   x: "X/Twitter",
   google_business: "Google Business",
@@ -71,17 +58,13 @@ function readinessTone(n: number): string {
   return "text-rose-700";
 }
 
-type Presence = Record<string, { exists: boolean | null; profile_url: string | null; confidence: string | null }>;
-
 export function GapsView({
   model,
   asOf,
-  socialPresence,
   verifyButton,
 }: {
   model: Json;
   asOf?: string;
-  socialPresence?: Presence;
   verifyButton?: ReactNode;
 }) {
   const summary = (model.summary as string) || "";
@@ -289,50 +272,29 @@ export function GapsView({
         </div>
       )}
 
-      {/* recommended social presence (NOT verified gaps) */}
+      {/* recommended social presence — now a compact pointer; the Social page is the source of
+          truth for per-platform presence, completeness, recommendations, and the social tasks. */}
       {surfaceEntries.length > 0 && (
-        <DataSection
-          title="Recommended social presence"
-          severity="low"
-          headline="Best-practice actions to build accurate presence on the platforms AI reads — grouped by platform."
-          highlights={[{ label: "Platforms", value: String(surfaceEntries.length) }]}
-          detailsLabel="See the recommendations by platform"
-        >
-          <div className="mb-3 flex flex-wrap items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            <span className="mt-0.5 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-              Recommendation
-            </span>
-            <span className="min-w-0 flex-1">
-              These are best-practice suggestions, <span className="font-semibold">not confirmed gaps</span> — treat each as
-              “create or improve.” Use <span className="font-semibold">Audit socials</span> to confirm which already exist.
-            </span>
+        <Card>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-slate-900">Social presence</div>
+              <p className="mt-0.5 text-sm text-slate-600">
+                Best-practice actions across{" "}
+                <span className="font-semibold">{surfaceEntries.length}</span>{" "}
+                platform{surfaceEntries.length === 1 ? "" : "s"} ({surfaceEntries.map(([p]) => PLATFORM_LABEL[p] ?? p.replace(/_/g, " ")).join(", ")}).
+                See which profiles exist, how complete they are, and what to improve — plus your social tasks — on the Social page.
+              </p>
+            </div>
             {verifyButton}
           </div>
-          <div className="space-y-4">
-            {surfaceEntries.map(([platform, actions]) => {
-              const p = socialPresence?.[platform];
-              return (
-                <div key={platform}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-slate-900">{PLATFORM_LABEL[platform] ?? platform.replace(/_/g, " ")}</span>
-                    {p?.exists === true && p.profile_url && (
-                      <a href={p.profile_url} target="_blank" rel="noreferrer" className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700 hover:underline">
-                        profile found — improve it ↗
-                      </a>
-                    )}
-                    {p?.exists === false && (
-                      <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">no profile found — create one</span>
-                    )}
-                    {p && <span className="text-[10px] text-slate-400">({p.confidence} check)</span>}
-                  </div>
-                  <ul className="mt-1 list-disc space-y-1 pl-6 text-sm text-slate-600">
-                    {arr<string>(actions).map((a, i) => <ActionItem key={i} text={a} />)}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        </DataSection>
+          <Link
+            href="/social"
+            className="mt-3 inline-block rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+          >
+            Manage your social presence on the Social page →
+          </Link>
+        </Card>
       )}
 
       {/* schema / structured data */}

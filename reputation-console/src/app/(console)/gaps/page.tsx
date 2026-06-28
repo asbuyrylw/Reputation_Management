@@ -1,7 +1,7 @@
 "use client";
 
 import { useBusiness } from "@/lib/business";
-import { useGapModel, useSocialPresence } from "@/lib/hooks";
+import { useGapModel } from "@/lib/hooks";
 import { PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { GapsView } from "@/components/GapsView";
@@ -11,7 +11,6 @@ import { RunJobButton } from "@/components/RunJobButton";
 export default function GapsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useGapModel(businessId);
-  const presence = useSocialPresence(businessId);
 
   if (isLoading) return <Spinner />;
 
@@ -35,7 +34,6 @@ export default function GapsPage() {
         <GapsView
           model={data.model}
           asOf={new Date(data.created_at).toLocaleDateString()}
-          socialPresence={presence.data}
           verifyButton={
             canEdit ? <RunJobButton businessId={businessId} jobType="social_verify" label="Audit socials" variant="secondary" /> : null
           }
