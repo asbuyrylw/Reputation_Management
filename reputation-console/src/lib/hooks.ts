@@ -53,6 +53,7 @@ import type {
   ActionTaken,
   TaskImpact,
   WorkOrder,
+  Roadmap,
   SocialAudit,
   ConnectionsResponse,
   ZerniaSetup,
@@ -188,6 +189,12 @@ export function useAuditSocials(businessId: number | null) {
 // ---- content / work ----
 export function useWorkOrders(businessId: number | null) {
   return useApiQuery<WorkOrder[]>(["work-orders", businessId], businessId ? `/businesses/${businessId}/work-orders` : null);
+}
+
+// The impact-ranked open tasks (expected_points / effort), already sorted best-first by the
+// server. Powers the unified to-do hub's "Today's focus" card + "By priority" board view.
+export function useRoadmap(businessId: number | null) {
+  return useApiQuery<Roadmap>(["roadmap", businessId], businessId ? `/businesses/${businessId}/roadmap` : null);
 }
 
 // Team roster — people who can be assigned tasks on this business (FK-backed assignee dropdown).

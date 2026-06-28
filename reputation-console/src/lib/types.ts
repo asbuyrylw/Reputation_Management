@@ -161,6 +161,32 @@ export interface TeamMember {
   email: string;
 }
 
+// =====================================================================================
+// Roadmap — the impact-ranked open tasks that power the unified to-do hub's "Today's
+// focus" + "By priority" view. The server returns items already sorted best-first by
+// impact_score (= expected_points / effort), so the UI can render them in order.
+// =====================================================================================
+export interface RoadmapItem {
+  wo_id: number;
+  wo_code: string | null;
+  title: string;
+  capability: string | null;
+  area: string | null;
+  platform: string | null;
+  status: string;
+  expected_points: number; // predicted AI-score points this task earns
+  effort: number; // relative effort (1 = quick win)
+  impact_score: number; // expected_points / effort — the ranking key
+  basis: string; // "this client" | "cross-client" | "industry baseline"
+  confidence: string;
+  why: string | null;
+  seo_impact: string | null;
+}
+export interface Roadmap {
+  count: number;
+  items: RoadmapItem[];
+}
+
 // One logged completed action (from a work order marked done/verified or a brief marked
 // produced). Powers the "Work completed" readout — what was actually done, and when.
 export interface ActionTaken {

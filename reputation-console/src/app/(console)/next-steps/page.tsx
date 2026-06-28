@@ -52,7 +52,7 @@ function categoryKey(w: WorkOrder): string {
   return "content";
 }
 
-function TaskRow({ w, canEdit, onPromote }: { w: WorkOrder; canEdit: boolean; onPromote: (w: WorkOrder) => void }) {
+function TaskRow({ w, canEdit, onPromote, onDismiss }: { w: WorkOrder; canEdit: boolean; onPromote: (w: WorkOrder) => void; onDismiss: (w: WorkOrder) => void }) {
   const why = w.why_helps_ai_rep || w.why_helps_seo;
   const isRec = w.rationale?.source === "recommendation";
   return (
@@ -73,23 +73,35 @@ function TaskRow({ w, canEdit, onPromote }: { w: WorkOrder; canEdit: boolean; on
         </div>
       )}
       {why && <div className="mt-0.5 text-xs text-slate-500">💡 {why}</div>}
-      {/* promote / stage indicator — the bridge to the managed Improvement-tasks board */}
-      <div className="mt-1.5">
+      {/* Triage: save (promote onto the board) or dismiss. The vidIQ "swipe-to-save/dismiss"
+          idea, rendered as two fast buttons. */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
         {w.planned ? (
           <Link
             href="/content/work-orders"
             className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
-            title="This recommendation is being managed on the Improvement-tasks board"
+            title="This recommendation is being managed on your task board"
           >
             ✓ In tasks · {STAGE[w.status] ?? humanize(w.status)}
           </Link>
         ) : canEdit ? (
-          <button
-            onClick={() => onPromote(w)}
-            className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
-          >
-            + Add to my tasks
-          </button>
+          <>
+            <button
+              onClick={() => onPromote(w)}
+              className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+            >
+              + Add to tasks
+            </button>
+            {/* Dismiss is session-local UI only — there is no dismiss endpoint yet, so it just
+                hides the recommendation until the page is reloaded. */}
+            <button
+              onClick={() => onDismiss(w)}
+              className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              title="Hide this for now (returns on reload)"
+            >
+              Dismiss
+            </button>
+          </>
         ) : null}
       </div>
     </li>
@@ -181,11 +193,16 @@ export default function NextStepsPage() {
   const { data: workOrders, isLoading } = useWorkOrders(businessId);
   const { data: acc } = useAcceleration(businessId);
   const [promoting, setPromoting] = useState<WorkOrder | null>(null);
+  // Session-local dismiss set. There's no dismiss endpoint yet, so dismissing only hides the
+  // recommendation for this session (it returns on reload). Keyed by work-order id.
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
 
   if (isLoading) return <Spinner />;
 
-  // Recommendations feed: open tasks that haven't been archived (superseded).
-  const open = (workOrders ?? []).filter((w) => w.status !== "done" && w.status !== "verified" && !w.superseded);
+  // Recommendations feed: open tasks that haven't been archived (superseded) or session-dismissed.
+  const open = (workOrders ?? []).filter(
+    (w) => w.status !== "done" && w.status !== "verified" && !w.superseded && !dismissed.has(w.id),
+  );
   const levers = ((acc as Json | undefined)?.levers_ranked_by_impact as Lever[] | undefined) ?? [];
   const grouped = CATS.map((c) => ({ ...c, items: open.filter((w) => categoryKey(w) === c.key) })).filter((c) => c.items.length > 0);
   const promotedCount = open.filter((w) => w.planned).length;
@@ -195,8 +212,19 @@ export default function NextStepsPage() {
     <div>
       <PageHeader
         title="Do this next"
-        subtitle="Recommendations to improve your AI reputation and local ranking, grouped by type. Add the ones you'll work on to your Improvement tasks to assign, schedule, and track them."
+        subtitle="Recommendations to improve your AI reputation and local ranking, grouped by type."
       />
+      {/* Intake banner — this page is the inbox; the task board is the canonical hub. */}
+      <Card className="mb-4 border-l-4 border-indigo-400 bg-indigo-50/40">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-slate-700">
+            <span className="font-semibold text-slate-900">Recommendations</span> — add the ones you’ll do to your task board.
+          </p>
+          <Link href="/content/work-orders" className="text-sm font-semibold text-indigo-600 hover:underline">
+            View your task board →
+          </Link>
+        </div>
+      </Card>
       {nothing ? (
         <EmptyState
           title="Nothing to do yet"
@@ -241,7 +269,15 @@ export default function NextStepsPage() {
                 )}
               </div>
               <ul className="mt-3 space-y-2">
-                {c.items.slice(0, 8).map((w) => <TaskRow key={w.id} w={w} canEdit={canEdit} onPromote={setPromoting} />)}
+                {c.items.slice(0, 8).map((w) => (
+                  <TaskRow
+                    key={w.id}
+                    w={w}
+                    canEdit={canEdit}
+                    onPromote={setPromoting}
+                    onDismiss={(d) => setDismissed((prev) => new Set(prev).add(d.id))}
+                  />
+                ))}
               </ul>
               {c.items.length > 8 && <div className="mt-2 text-xs text-slate-400">+{c.items.length - 8} more on the task board</div>}
             </Card>

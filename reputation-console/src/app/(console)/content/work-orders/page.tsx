@@ -3,15 +3,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { useAuth } from "@/lib/auth";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { Button, EmptyState, ToneBar } from "@/components/primitives";
+import { Badge, Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { VisualContentPanel } from "@/components/VisualContentPanel";
-import { SocialPresenceCard } from "@/components/SocialPresenceCard";
-import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, TaskImpact } from "@/lib/types";
+import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, TaskImpact, RoadmapItem } from "@/lib/types";
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
 // task -> draft -> published asset).
@@ -579,7 +578,7 @@ function WorkCompletedSection({ businessId }: { businessId: number | null }) {
   );
 }
 
-type ViewMode = "status" | "mine" | "area" | "assignee" | "due";
+type ViewMode = "status" | "priority" | "mine" | "area" | "assignee" | "due";
 
 // Due-date buckets for the "by due date" view (computed against the local 'today').
 function dueBucket(target: string | null | undefined): { key: string; label: string; order: number } {
@@ -593,16 +592,79 @@ function dueBucket(target: string | null | undefined): { key: string; label: str
   return { key: "later", label: "Later", order: 3 };
 }
 
+// -----------------------------------------------------------------------------
+// Roadmap (impact-ranked) helpers — the "what should I do today?" layer.
+// impact_score = expected_points / effort; effort 1 = a quick win.
+// -----------------------------------------------------------------------------
+
+// Plain caption for the ranking basis ("based on what's worked for you" etc).
+const BASIS_CAPTION: Record<string, string> = {
+  "this client": "based on what's worked for you",
+  "cross-client": "across clients",
+  "industry baseline": "industry baseline",
+};
+const basisCaption = (b?: string | null) => (b ? BASIS_CAPTION[b] ?? b : "");
+
+// Short "High impact · quick win" style label derived from impact_score + effort.
+function impactLabel(item: RoadmapItem): string {
+  const tier = item.impact_score >= 6 ? "High impact" : item.impact_score >= 3 ? "Solid impact" : "Steady impact";
+  return item.effort <= 1 ? `${tier} · quick win` : tier;
+}
+
+// One "Today's focus" item: title + area/platform badge + impact + basis + one-click act.
+function FocusItem({
+  item,
+  canEdit,
+  onDone,
+  onOpen,
+}: {
+  item: RoadmapItem;
+  canEdit: boolean;
+  onDone: () => void;
+  onOpen: () => void;
+}) {
+  const platform = platformLabel(item.platform);
+  const areaLbl = AREA_LABEL[areaKey(item.area)];
+  return (
+    <div className="rounded-xl bg-white/70 p-3 ring-1 ring-inset ring-indigo-100">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge tone="indigo">{areaLbl}</Badge>
+        {platform && <Badge tone="slate">{platform}</Badge>}
+        <span className="text-[11px] font-semibold text-indigo-700">{impactLabel(item)}</span>
+      </div>
+      <div className="mt-1.5 text-sm font-bold text-slate-900">{item.title}</div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+        {item.expected_points > 0 && <span className="font-medium text-emerald-700">≈ +{item.expected_points} AI pts</span>}
+        {basisCaption(item.basis) && <span className="text-slate-400">{basisCaption(item.basis)}</span>}
+      </div>
+      {item.why && <div className="mt-1 text-xs text-slate-600">{item.why}</div>}
+      <div className="mt-2 flex items-center gap-2">
+        {canEdit && (
+          <Button size="sm" onClick={onDone}>
+            ✓ Mark done
+          </Button>
+        )}
+        <a href="#board" onClick={onOpen} className="text-xs font-medium text-indigo-600 hover:underline">
+          Open task →
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
   const { user } = useAuth();
   const { data, isLoading } = useWorkOrders(businessId);
   const { data: drafts } = useContentDrafts(businessId);
   const { data: assets } = useAssets(businessId);
+  const { data: roadmap } = useRoadmap(businessId);
   const setStatus = useSetWorkOrderStatus(businessId);
   const [sortRoi, setSortRoi] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [view, setView] = useState<ViewMode>("status");
+  // Fast = just "Today's focus" (3 tasks); Deep = the full board + why/impact detail.
+  const [mode, setMode] = useState<"fast" | "deep">("deep");
 
   if (isLoading || !data) return <Spinner />;
 
@@ -681,8 +743,20 @@ export default function WorkOrdersPage() {
   // "My tasks" — only the work orders assigned to the signed-in user (FK assignee_user_id).
   const myTasks = user ? sortRows(visible.filter((w) => w.assignee_user_id === user.id)) : [];
 
+  // Roadmap = impact-ranked open tasks (server-sorted best-first by impact_score). The top 3
+  // power "Today's focus"; the full list drives the "By priority" board view. We pair each
+  // roadmap item back to its WorkOrder (by wo_id) so the board can reuse WorkOrderCard.
+  const woById = new Map<number, WorkOrder>(visible.map((w) => [w.id, w]));
+  const roadmapItems = roadmap?.items ?? [];
+  const focusItems = roadmapItems.slice(0, 3);
+  // Open tasks in roadmap impact order — the WorkOrders that still have a card to render.
+  const priorityPairs = roadmapItems
+    .map((item) => ({ item, wo: woById.get(item.wo_id) }))
+    .filter((p): p is { item: RoadmapItem; wo: WorkOrder } => !!p.wo);
+
   const TABS: { key: ViewMode; label: string }[] = [
     { key: "status", label: "By status" },
+    { key: "priority", label: "By priority" },
     { key: "mine", label: "My tasks" },
     { key: "area", label: "By area" },
     { key: "assignee", label: "By assignee" },
@@ -692,11 +766,50 @@ export default function WorkOrdersPage() {
   return (
     <div>
       <PageHeader
-        title="Improvement tasks"
-        subtitle="The recommendations you've taken on — assigned, scheduled, and tracked. Add more from “Do this next.”"
+        title="Your task board"
+        subtitle="The one place for what to do — your tasks, ranked by impact, assigned, scheduled, and tracked. Add more from “Do this next.”"
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
-      {canEdit && <AddTask businessId={businessId} />}
+
+      {/* Today's focus — the top 3 impact-ranked tasks ("what should I do today?"). Shown in
+          both Fast and Deep mode; it's the heart of the hub. */}
+      {focusItems.length > 0 && (
+        <Card accent="info" className="mb-4 bg-indigo-50/40">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold tracking-tight text-slate-900">Today’s focus</h2>
+              <p className="text-xs text-slate-500">Your highest-impact tasks right now — start here.</p>
+            </div>
+            {/* Fast / Deep — Fast shows only this card; Deep adds the full board + detail. */}
+            <div className="inline-flex rounded-md border border-indigo-200 bg-white p-0.5">
+              {(["fast", "deep"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium capitalize ${mode === m ? "bg-indigo-600 text-white" : "text-indigo-700 hover:bg-indigo-50"}`}
+                  title={m === "fast" ? "Just today’s 3 tasks" : "Today’s focus + the full board"}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+            {focusItems.map((item) => (
+              <FocusItem
+                key={item.wo_id}
+                item={item}
+                canEdit={canEdit}
+                onDone={() => setStatus.mutate({ woId: item.wo_id, status: "done", completed_on: todayISO() })}
+                // "Open task" drops into Deep mode (the full board) and scrolls to it.
+                onOpen={() => setMode("deep")}
+              />
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {canEdit && mode === "deep" && <AddTask businessId={businessId} />}
       {total === 0 ? (
         <EmptyState
           title="No tasks yet"
@@ -705,8 +818,17 @@ export default function WorkOrdersPage() {
           timing="You can also add an ad-hoc task above."
           cta={{ label: "Go to Do this next", href: "/next-steps" }}
         />
+      ) : mode === "fast" ? (
+        // Fast mode = clean, just the focus card above + a way into the full board.
+        <Card className="text-sm text-slate-600">
+          Showing your top {focusItems.length} {focusItems.length === 1 ? "task" : "tasks"}.{" "}
+          <button onClick={() => setMode("deep")} className="font-medium text-indigo-600 hover:underline">
+            Switch to Deep
+          </button>{" "}
+          to see the full board ({total} tasks) with the why and impact behind each one.
+        </Card>
       ) : (
-        <>
+        <div id="board">
           {/* progress roll-up + view switcher */}
           <Card className="mb-4">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -744,14 +866,6 @@ export default function WorkOrdersPage() {
             <ToneBar pct={donePct} tone="good" />
           </Card>
 
-          {/* Social presence — always visible except in the "by area" view, where it lives inside
-              the Social group to avoid showing twice. */}
-          {view !== "area" && (
-            <div className="mb-4">
-              <SocialPresenceCard businessId={businessId} canEdit={canEdit} />
-            </div>
-          )}
-
           {view === "status" && (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {visibleColumns.map((s) => (
@@ -767,6 +881,40 @@ export default function WorkOrdersPage() {
                 </div>
               ))}
             </div>
+          )}
+
+          {/* By priority — ALL open tasks in roadmap impact order. Each row prefixes the
+              WorkOrderCard with the impact math (impact_score / expected_points / effort /
+              basis / why) so the ranking is transparent. */}
+          {view === "priority" && (
+            priorityPairs.length > 0 ? (
+              <div className="space-y-3">
+                {priorityPairs.map(({ item, wo }, i) => (
+                  <div key={item.wo_id} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                    <Card className="bg-indigo-50/30">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white">{i + 1}</span>
+                        <span className="text-sm font-semibold text-slate-900">{impactLabel(item)}</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <Badge tone="indigo">Impact {item.impact_score.toFixed(1)}</Badge>
+                        {item.expected_points > 0 && <Badge tone="emerald">≈ +{item.expected_points} pts</Badge>}
+                        <Badge tone="slate">Effort {item.effort}</Badge>
+                      </div>
+                      <div className="mt-1.5 text-[11px] text-slate-500">{basisCaption(item.basis)}</div>
+                      {item.why && <div className="mt-1.5 text-xs text-slate-600">{item.why}</div>}
+                    </Card>
+                    {renderCard(wo)}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="No ranked tasks yet"
+                why="The priority view ranks your open tasks by predicted impact (points ÷ effort)."
+                produces="Run an audit so the engine can score each task, then they’ll appear here best-first."
+              />
+            )
           )}
 
           {view === "mine" && (
@@ -793,12 +941,6 @@ export default function WorkOrdersPage() {
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </summary>
                   <div className="border-t border-slate-100 px-4 py-3">
-                    {/* Surface the social-presence card at the top of the Social area group. */}
-                    {g.key === "social" && (
-                      <div className="mb-3">
-                        <SocialPresenceCard businessId={businessId} canEdit={canEdit} />
-                      </div>
-                    )}
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
                   </div>
                 </details>
@@ -833,7 +975,7 @@ export default function WorkOrdersPage() {
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* Work completed + which task types correlate with score gains (below the board) */}
