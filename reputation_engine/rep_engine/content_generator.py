@@ -290,6 +290,12 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         f"Instruction: {instr}" if instr else "",
         kw_line + f"Target question this should answer when someone asks AI: "
         f"{wo.get('target_query','(general trust/visibility)')}",
+        # SERP+NLP coverage terms from the content-optimization layer (NeuronWriter), so the draft
+        # covers what the top-ranking pages cover. Present only when the integration is configured.
+        ("SERP COVERAGE TERMS (cover these naturally, like the top-ranking pages do; headings first): "
+         + (grounding.get("neuron", {}).get("terms_h2") or grounding.get("neuron", {}).get("terms_basic") or ""))
+        if isinstance(grounding.get("neuron"), dict) and (grounding["neuron"].get("terms_h2")
+                                                          or grounding["neuron"].get("terms_basic")) else "",
         "",
         ("FOLLOW THIS OUTLINE (it maps the keywords + gap to sections):\n" + outline) if outline else "",
         ("MATCH THIS BRAND VOICE (a sample of their approved writing — tone/cadence only, do not "
@@ -557,6 +563,21 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         return None
 
     grounding = _grounding_context(business_id)
+    # Content-optimization layer (NeuronWriter): pull the SERP+NLP term/entity recommendations for
+    # the target keyword and ground the writer in them so the draft covers what the ranking pages
+    # cover. Dormant-safe -- a no-op with no NEURONWRITER_API_KEY. The analysis takes ~60s; this is
+    # a background job so that's fine. The returned query id lets us score the draft below.
+    neuron = {}
+    try:
+        from . import neuronwriter as _nw
+        target_kw = wo.get("target_query") or wo.get("title") or ""
+        if _nw.configured() and target_kw:
+            brief = _nw.analyze(target_kw)
+            if not brief.get("skipped"):
+                neuron = brief
+                grounding["neuron"] = brief
+    except Exception as e:  # noqa: BLE001 -- optimization is best-effort, never blocks generation
+        log.debug("neuronwriter brief skipped: %s", e)
     voice = _brand_voice(business_id)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
     comp_system = _compliance_system(reg)
@@ -652,6 +673,19 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
             site_summary=_site, with_fact_check=True))
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
         log.debug("draft quality analysis skipped: %s", e)
+
+    # NeuronWriter draft content-score (the SERP-coverage gauge), stored alongside our own scores so
+    # the editor can show both. Free (/evaluate-content). Dormant-safe -- skipped without a key/query.
+    try:
+        nq = (neuron or {}).get("query")
+        if nq:
+            from . import neuronwriter as _nw
+            sc = _nw.score(nq, body, title=topic)
+            if sc.get("content_score") is not None:
+                quality_notes["neuron"] = {"content_score": sc["content_score"], "query": nq,
+                                           "target": neuron.get("content_score_target")}
+    except Exception as e:  # noqa: BLE001
+        log.debug("neuronwriter score skipped: %s", e)
 
     # Enforce the citation-readiness gate (these scorers used to be advisory only): a draft that
     # scores low on "will an AI quote this?" should go back for a fix, not slip through as ready --

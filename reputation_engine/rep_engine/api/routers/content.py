@@ -205,6 +205,18 @@ def actions_taken(business_id: int = Depends(authorize_business), conn=Depends(g
     return [dict(r) for r in rows]
 
 
+@router.get("/content-optimization-status")
+def content_optimization_status(business_id: int = Depends(authorize_business)):
+    """Whether the NeuronWriter content-optimization layer is configured + live. The editor uses
+    this to show the SERP content-score gauge; the per-draft score lives in draft.quality_notes.neuron."""
+    try:
+        from ... import neuronwriter as _nw
+    except ImportError:  # pragma: no cover
+        import neuronwriter as _nw  # type: ignore
+    return {"configured": _nw.configured(), "live": _nw.verify() if _nw.configured() else False,
+            "provider": "neuronwriter"}
+
+
 @router.get("/social-audit")
 def social_audit(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """Per-platform owned-social posture: discovered profiles (website-confirmed vs inferred vs the
