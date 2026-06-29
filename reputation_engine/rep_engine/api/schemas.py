@@ -105,6 +105,7 @@ class UpdateBusinessRequest(BaseModel):
     geo: Optional[str] = None
     regulatory_profile: Optional[dict] = None   # {firm_type, disclosures[], crd, notes}
     owned_domains: Optional[list[str]] = None   # extra web properties the business owns
+    neuronwriter_project: Optional[str] = None  # NeuronWriter project id this business analyzes under
 
 
 class LocationRequest(BaseModel):

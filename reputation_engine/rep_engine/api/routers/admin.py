@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo",
-                    "regulatory_profile", "owned_domains")
+                    "regulatory_profile", "owned_domains", "neuronwriter_project")
 # JSONB business columns -- wrapped with psycopg Json so a dict/list adapts to jsonb.
 _BUSINESS_JSONB = ("regulatory_profile", "owned_domains")
 

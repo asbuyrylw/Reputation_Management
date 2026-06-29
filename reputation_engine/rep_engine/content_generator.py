@@ -569,10 +569,12 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     # a background job so that's fine. The returned query id lets us score the draft below.
     neuron = {}
     try:
-        from . import neuronwriter as _nw
+        from . import neuron_enrich as _ne
         target_kw = wo.get("target_query") or wo.get("title") or ""
-        if _nw.configured() and target_kw:
-            brief = _nw.analyze(target_kw)
+        if target_kw:
+            # Shared, budget-aware cache: reuses the enrichment analysis for this keyword if one
+            # exists (no extra credit), else runs one within the monthly budget. Dormant-safe.
+            brief = _ne.brief_for(business_id, target_kw)
             if not brief.get("skipped"):
                 neuron = brief
                 grounding["neuron"] = brief

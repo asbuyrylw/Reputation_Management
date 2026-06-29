@@ -109,6 +109,12 @@ def _run_gap_model(business_id: int, args: dict) -> None:
     _imp("ai_state_audit").build_gap_model(business_id)
 
 
+def _run_neuron_enrich(business_id: int, args: dict) -> None:
+    """Plan enrichment: run NeuronWriter SERP analyses for priority keywords (budget-guarded) and
+    feed the terms/questions into the content briefs. Dormant-safe (no key -> no-op)."""
+    _imp("neuron_enrich").enrich(business_id, max_keywords=int(args.get("max_keywords", 6)))
+
+
 def _run_audit_socials(business_id: int, args: dict) -> None:
     """Phase B: discover + audit the business's OWN social profiles (website-link harvest + search +
     GBP), per platform. Standalone-runnable; the job cascade re-grounds the gap model + plan from
@@ -321,6 +327,7 @@ JOB_DISPATCH = {
     "suggest_prompts": _run_suggest_prompts,
     "suggest_keywords": _run_suggest_keywords,
     "keyword_research": _run_keyword_research,
+    "neuron_enrich": _run_neuron_enrich,
     "ingest_gbp_reviews": _run_ingest_gbp_reviews,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
@@ -373,7 +380,7 @@ _JOB_RATE_LIMITS = {
     "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
     "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
-    "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600),
+    "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600), "neuron_enrich": (4, 3600),
     "refresh_failed": (6, 3600), "incident_scan": (10, 3600), "light_sweep": (4, 3600),
     # integrations drains: these cap how fast the SWEEP re-triggers, NOT how many posts happen
     # (per-post volume is enforced by integration_settings caps inside the runners).

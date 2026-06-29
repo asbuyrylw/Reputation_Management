@@ -205,6 +205,22 @@ def actions_taken(business_id: int = Depends(authorize_business), conn=Depends(g
     return [dict(r) for r in rows]
 
 
+@router.get("/neuron-enrichment")
+def neuron_enrichment(business_id: int = Depends(authorize_business)):
+    """The NeuronWriter SERP enrichment per keyword (must-cover terms, PAA/questions, competitor
+    scores) that grounds the content plan + briefs. Empty until the enrichment job has run."""
+    try:
+        from ... import neuron_enrich as _ne
+    except ImportError:  # pragma: no cover
+        import neuron_enrich as _ne  # type: ignore
+    try:
+        return _ne.latest(business_id)
+    except Exception:  # noqa: BLE001 -- a degraded cache row must not 500 the console; show empty
+        import logging
+        logging.getLogger("api.content").exception("neuron-enrichment read failed (business %s)", business_id)
+        return []
+
+
 @router.get("/content-optimization-status")
 def content_optimization_status(business_id: int = Depends(authorize_business)):
     """Whether the NeuronWriter content-optimization layer is configured + live. The editor uses
