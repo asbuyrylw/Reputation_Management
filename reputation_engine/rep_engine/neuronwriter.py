@@ -115,9 +115,16 @@ def analyze(keyword: str, *, project: str | None = None, engine: str = "google.c
         if status == "ready":
             terms = data.get("terms") or {}
             txt = data.get("terms_txt") or {}
+            comps = data.get("competitors") or []
+            # A meaningful target so the gauge reads "43 of ~74": prefer the API's metric, else the
+            # best competitor's content score (beating the top-ranked page is the real bar).
+            target = (data.get("metrics") or {}).get("target_content_score")
+            if target is None:
+                cs = [c.get("content_score") for c in comps if isinstance(c.get("content_score"), (int, float))]
+                target = max(cs) if cs else None
             return {
                 "query": qid, "keyword": keyword,
-                "content_score_target": (data.get("metrics") or {}).get("target_content_score"),
+                "content_score_target": target,
                 "terms_basic": txt.get("content_basic"),
                 "terms_extended": txt.get("content_extended"),
                 "terms_title": txt.get("title"), "terms_h1": txt.get("h1"), "terms_h2": txt.get("h2"),
