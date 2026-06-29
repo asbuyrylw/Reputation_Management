@@ -35,7 +35,7 @@ _BASE = "https://app.neuronwriter.com/neuron-api/0.5/writer"
 
 
 def _key() -> str:
-    return (os.getenv("NEURONWRITER_API_KEY") or "").strip()
+    return (os.getenv("NEURONWRITER_API_KEY") or os.getenv("NEURON_API_KEY") or "").strip()
 
 
 def configured() -> bool:
@@ -55,7 +55,8 @@ def _post(method: str, body: dict, *, timeout: int = 30) -> dict | None:
         headers={"X-API-KEY": _key(), "Content-Type": "application/json"},
         json=body, timeout=timeout, max_retries=2, guard_redirects=True,
     )
-    if res.failed or not isinstance(res.data, dict):
+    # list-projects / list-queries return a JSON ARRAY; the rest return an OBJECT -- accept both.
+    if res.failed or not isinstance(res.data, (dict, list)):
         if res.failed:
             log.warning("neuronwriter %s failed: %s", method, res.error)
         return None
