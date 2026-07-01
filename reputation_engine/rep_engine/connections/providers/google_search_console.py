@@ -23,9 +23,13 @@ AUTH_HOST = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GSC_BASE = "https://searchconsole.googleapis.com/webmasters/v3"
-# webmasters.readonly = read search analytics + list sites; siteverification enables the
-# assisted-verification onboarding flow (drop it if verification stays fully manual).
-SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly",
+SITEVERIFY_BASE = "https://www.googleapis.com/siteVerification/v1"
+# `webmasters` (read-write, a SUPERSET of webmasters.readonly) is requested so the guided-
+# verification flow can REGISTER a freshly-verified property via sites.add -- the only write we
+# ever perform. `siteverification` mints + checks the ownership token. All reads (search analytics,
+# list sites) work unchanged under the broader scope. Existing readonly connections keep working
+# for reads; they only need a reconnect if the owner wants the in-app "verify a new site" assist.
+SCOPES = ["https://www.googleapis.com/auth/webmasters",
           "https://www.googleapis.com/auth/siteverification"]
 
 
@@ -149,3 +153,62 @@ def query_search_analytics(access_token: str, prop: str, *, start_date: str, end
     if res.failed or not isinstance(res.data, dict):
         return {"ok": False, "status": res.status, "error": res.error, "rows": []}
     return {"ok": True, "rows": res.data.get("rows") or []}
+
+
+# ---------------------------------------------------------------------------
+# Site Verification API + sites.add -- the guided-verification onboarding assist
+# ---------------------------------------------------------------------------
+# Our two offered methods -> (Site Verification site type, verificationMethod).
+_VERIFY_METHODS = {
+    "META": ("SITE", "META"),            # URL-prefix property (a <meta> tag in <head>)
+    "DNS_TXT": ("INET_DOMAIN", "DNS_TXT"),  # domain property (a DNS TXT record)
+}
+
+
+def get_verification_token(access_token: str, identifier: str, *, method: str) -> dict:
+    """Site Verification API getToken. `identifier` is the URL (https://example.com/) for META or
+    the bare domain (example.com) for DNS_TXT. Returns {ok, method, token} where `token` is the
+    exact <meta> tag / DNS TXT value the owner places, or {ok:False, error}."""
+    spec = _VERIFY_METHODS.get(method)
+    if not spec:
+        return {"ok": False, "error": f"unsupported method '{method}'"}
+    site_type, vmethod = spec
+    res = _http.request_json(
+        "POST", f"{SITEVERIFY_BASE}/token",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"site": {"type": site_type, "identifier": identifier}, "verificationMethod": vmethod},
+        timeout=20, max_retries=2, guard_redirects=True)
+    if res.failed or not isinstance(res.data, dict):
+        return {"ok": False, "status": res.status, "error": res.error or "could not get a verification token"}
+    return {"ok": True, "method": res.data.get("method") or vmethod, "token": res.data.get("token") or ""}
+
+
+def verify_site(access_token: str, identifier: str, *, method: str) -> dict:
+    """Site Verification API webResource.insert -- confirms the token is live on the site/DNS.
+    Returns {ok, verified} or {ok:False, status, error} (token not in place yet)."""
+    spec = _VERIFY_METHODS.get(method)
+    if not spec:
+        return {"ok": False, "error": f"unsupported method '{method}'"}
+    site_type, vmethod = spec
+    res = _http.request_json(
+        "POST", f"{SITEVERIFY_BASE}/webResource?verificationMethod={vmethod}",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"site": {"type": site_type, "identifier": identifier}},
+        timeout=30, max_retries=1, guard_redirects=True)
+    if res.failed or not isinstance(res.data, dict):
+        return {"ok": False, "verified": False, "status": res.status,
+                "error": res.error or "the verification token wasn't found yet"}
+    return {"ok": True, "verified": True, "id": res.data.get("id")}
+
+
+def add_site(access_token: str, prop: str) -> dict:
+    """Search Console sites.add (PUT /sites/{property}) -- registers the verified property in the
+    owner's Search Console account so it becomes selectable. Requires the read-write `webmasters`
+    scope; returns {ok} or {ok:False, status, error} (best-effort -- ownership is already proven)."""
+    res = _http.request_json(
+        "PUT", f"{GSC_BASE}/sites/{quote(prop, safe='')}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20, max_retries=2, guard_redirects=True, parse_json=False)
+    if res.failed:
+        return {"ok": False, "status": res.status, "error": res.error or "could not register the property"}
+    return {"ok": True}

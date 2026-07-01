@@ -21,11 +21,13 @@ try:
     from ...connections import vault as _vault, oauth as _oauth, status as _cstatus
     from ...connections.providers import wordpress as _wp
     from ... import notifications as _notify
+    from ... import site_verification as _siteverify
 except ImportError:  # pragma: no cover
     import scheduler as _scheduler  # type: ignore
     from connections import vault as _vault, oauth as _oauth, status as _cstatus  # type: ignore
     from connections.providers import wordpress as _wp  # type: ignore
     import notifications as _notify  # type: ignore
+    import site_verification as _siteverify  # type: ignore
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["connections"])
 callback_router = APIRouter(tags=["connections"])
@@ -346,6 +348,46 @@ def set_gsc_property(conn_id: int, body: GscPropertyRequest,
     except Exception:  # noqa: BLE001
         pass
     return {"ok": True, "property": body.property}
+
+
+# ---------------------------------------------------------------------------
+# Guided verification: for a site the owner hasn't verified in Search Console yet. start() mints
+# a token to place (meta tag / DNS TXT); complete() verifies ownership + registers the property,
+# then selects it + kicks the first ingest so data starts flowing immediately.
+# ---------------------------------------------------------------------------
+class GscVerifyRequest(BaseModel):
+    site_url: str
+    method: str = "META"  # META (URL-prefix) | DNS_TXT (domain)
+
+
+@router.post("/connections/{conn_id}/gsc/verify/start")
+def gsc_verify_start(conn_id: int, body: GscVerifyRequest,
+                     business_id: int = Depends(require_business_editor)):
+    out = _siteverify.start(business_id, conn_id, body.site_url, body.method)
+    if not out.get("ok"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, out.get("error") or "could not start verification")
+    return out
+
+
+@router.post("/connections/{conn_id}/gsc/verify/complete")
+def gsc_verify_complete(conn_id: int, body: GscVerifyRequest,
+                        business_id: int = Depends(require_business_editor),
+                        user: dict = Depends(get_current_user)):
+    out = _siteverify.complete(business_id, conn_id, body.site_url, body.method)
+    if not out.get("ok"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, out.get("error") or "verification failed")
+    # Verified AND registered -> select it + schedule + first ingest (same as set_gsc_property).
+    if out.get("verified") and out.get("added") and out.get("property"):
+        _vault.set_account_and_meta(conn_id, business_id, account_ref=out["property"],
+                                    meta_updates={"gsc_property": out["property"]})
+        try:
+            _scheduler.upsert_schedule(business_id, "ingest_gsc", 24)
+            from .. import jobs as _jobs
+            _jobs.enqueue(business_id, "ingest_gsc", requested_by=user["id"])
+            out["ingest_started"] = True
+        except Exception:  # noqa: BLE001
+            out["ingest_started"] = False
+    return out
 
 
 @router.get("/connections/{conn_id}/ga/properties")
