@@ -311,19 +311,16 @@ export default function RankingsPage() {
             </Card>
           )}
 
-          {/* Sources to win — top non-owned domains AI cites, with the action to get onto each */}
+          {/* Sources to win — top non-owned domains AI cites; a drill-down (collapsed by default) */}
           {sourcesToWin.data && sourcesToWin.data.sources.length > 0 && (
-            <Card>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-semibold tracking-tight text-slate-900">Sources to win</h3>
-                  <p className="mt-0.5 text-sm text-slate-500">
-                    These sites AI already trusts and quotes about your category — getting cited or listed on them is the
-                    fastest way to be quoted more. {sourcesToWin.data.summary.contested > 0 ? `${sourcesToWin.data.summary.contested} are working against you.` : ""}
-                  </p>
-                </div>
-              </div>
-              <ul className="mt-3 space-y-2">
+            <DataSection
+              title="Sources to win"
+              severity="low"
+              headline={`Sites AI already trusts and quotes about your category — getting cited or listed on them is the fastest way to be quoted more.${sourcesToWin.data.summary.contested > 0 ? ` ${sourcesToWin.data.summary.contested} are working against you.` : ""}`}
+              highlights={[{ label: "Targets", value: String(sourcesToWin.data.sources.length) }]}
+              detailsLabel="See sources to win"
+            >
+              <ul className="space-y-2">
                 {sourcesToWin.data.sources.slice(0, 8).map((srcRow) => {
                   const t: Tone = srcRow.classification === "contested" ? "bad" : srcRow.classification === "owned" ? "good" : "neutral";
                   return (
@@ -344,7 +341,7 @@ export default function RankingsPage() {
               <Link href="/content/outreach" className="mt-3 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">
                 Work these in outreach →
               </Link>
-            </Card>
+            </DataSection>
           )}
 
           {/* all cited sources */}
