@@ -106,3 +106,54 @@ JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=change-me docker compose 
 - **Hardening remaining** (Phase 3 in `PRODUCTION_READINESS.md`): ship the rate-limit via
   a shared store for multi-process deployments; add the `__Host-` cookie prefix; stuck-job
   reaper + worker resilience; error tracking + metrics/alerting; backups/PITR.
+
+---
+
+## Always-on cloud deploy — Render (backend) + Vercel (frontend)
+
+Backend → **Render** (from `render.yaml`, built on `reputation_engine/Dockerfile`): web +
+worker + managed Postgres. Frontend → **Vercel** (`reputation-console/`), proxying `/api` to the
+Render backend. Both must be live for anyone to log in.
+
+**0. Push the branch** (Render pulls from GitHub):
+```
+git push -u origin feature/premium-ui-redesign
+```
+
+**1. Render Blueprint.** Render → **New → Blueprint** → connect `asbuyrylw/Reputation_Management`
+→ pick the branch → **Apply**. It provisions `reputation-db`, `reputation-api` (web),
+`reputation-worker` from `render.yaml`.
+
+**2. Secrets** (env group `reputation-secrets`, the `sync:false` keys — see the env details in
+the sections above; `reputation_engine/.env.example` is the full catalog):
+- `TOKEN_ENC_KEY` — **your exact local value** if you migrate connected accounts in step 3
+  (else stored OAuth tokens won't decrypt; a new value = reviewers just reconnect).
+- `ANTHROPIC_API_KEY` (required) + at least one answer engine
+  (`OPENAI_API_KEY`/`PERPLEXITY_API_KEY`/`GEMINI_API_KEY`/`SERPER_API_KEY`).
+- `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` — your login.
+- `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` — only if reviewers connect GSC/GA/GBP.
+- `PUBLIC_APP_ORIGIN`, `APP_BASE_URL`, `API_CORS_ORIGINS` — set to the Vercel URL in step 5.
+
+**3. Real data → cloud** (so reviewers see the pilot, not an empty app). Fresh DB = schema only.
+Copy your local Postgres (`:15432`) up (keep `TOKEN_ENC_KEY` identical):
+```
+pg_dump "postgresql://postgres:<pw>@localhost:15432/reputation" -Fc -f rep.dump
+pg_restore --clean --if-exists --no-owner -d "<RENDER_EXTERNAL_DATABASE_URL>" rep.dump
+```
+*(Alternative: `python -m rep_engine.provision_pilot --owner-email ... --owner-name "..."` seeds a
+fresh Team Unstoppable business, then run an audit — spends LLM budget.)*
+
+**4. Frontend on Vercel — I do this.** When `reputation-api` is live
+(e.g. `https://reputation-api.onrender.com`), give me that URL and I deploy `reputation-console/`
+with `NEXT_PUBLIC_API_BASE_URL=/api` and `API_PROXY_TARGET=<render api url>`. The same-origin
+`/api` proxy → httpOnly session cookie + CSRF work with no CORS.
+
+**5. Close the loop.** Set `PUBLIC_APP_ORIGIN` / `APP_BASE_URL` / `API_CORS_ORIGINS` on Render to
+the Vercel URL → redeploy `reputation-api`. If using Google connections, add
+`https://<app>.vercel.app/api/connections/{google_business_profile|google_search_console|google_analytics}/callback`
+to the Google OAuth consent screen. Log in (`ADMIN_SEED_EMAIL` / `logan@nexgenixai.com`) → invite
+reviewers from **Admin → Users**.
+
+**Before sharing:** it's real client data (auth-gated — invite only trusted people) and real spend
+(audits/content burn Anthropic/OpenAI/Serper budget); keep `AUTOPOST_GLOBAL_ENABLED=false`.
+Always-on needs paid Render plans (free web sleeps, free DB expires).
