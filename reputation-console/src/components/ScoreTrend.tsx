@@ -7,7 +7,7 @@
 import type { SeriesPoint } from "@/lib/types";
 import { repScore } from "@/lib/repScore";
 
-export function ScoreTrend({ series, goal }: { series: SeriesPoint[]; goal?: number | null }) {
+export function ScoreTrend({ series, goal, projected }: { series: SeriesPoint[]; goal?: number | null; projected?: number | null }) {
   const pts = series
     .map((s) => ({ date: s.date, score: repScore(s.goal_alignment) }))
     .filter((p): p is { date: string; score: number } => p.score != null);
@@ -21,7 +21,11 @@ export function ScoreTrend({ series, goal }: { series: SeriesPoint[]; goal?: num
   }
 
   const W = 640, H = 200, P = 30;
-  const xs = pts.map((_, i) => P + (i * (W - 2 * P)) / (pts.length - 1));
+  // When a projection is supplied, reserve room on the right for the dashed "expected path" to it.
+  const hasProj = projected != null && Number.isFinite(projected);
+  const rightPad = hasProj ? 96 : 0;
+  const lastX = W - P - rightPad;
+  const xs = pts.map((_, i) => P + (i * (lastX - P)) / (pts.length - 1));
   const y = (v: number) => H - P - (v / 100) * (H - 2 * P);
   const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${xs[i].toFixed(1)} ${y(p.score).toFixed(1)}`).join(" ");
   const last = pts[pts.length - 1];
@@ -50,6 +54,15 @@ export function ScoreTrend({ series, goal }: { series: SeriesPoint[]; goal?: num
         <text x={xs[xs.length - 1]} y={y(last.score) - 8} textAnchor="end" className="fill-slate-900 text-xs font-semibold">
           {last.score}
         </text>
+        {/* expected path: dashed projection from the latest actual point toward the target */}
+        {hasProj && (
+          <>
+            <line x1={xs[xs.length - 1]} y1={y(last.score)} x2={W - P} y2={y(projected!)} stroke="#6366f1" strokeWidth={2} strokeDasharray="5 4" opacity={0.85} />
+            <circle cx={W - P} cy={y(projected!)} r={3.5} fill="none" stroke="#6366f1" strokeWidth={2} />
+            <text x={W - P} y={y(projected!) - 8} textAnchor="end" className="fill-indigo-600 text-xs font-semibold">~{Math.round(projected!)}</text>
+            <text x={W - P} y={H - 8} textAnchor="end" className="fill-indigo-400 text-[10px]">expected</text>
+          </>
+        )}
       </svg>
       <div className="mt-1 flex justify-between text-xs text-slate-400">
         <span>{first.date}</span>

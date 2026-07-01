@@ -113,34 +113,36 @@ const CAP_LABELS: Record<string, string> = {
 };
 const capLabel = (c: string) => CAP_LABELS[c] ?? c.charAt(0).toUpperCase() + c.slice(1).replace(/_/g, " ");
 
-function RoiPanel({ forecast }: { forecast: RoiForecast | undefined }) {
+function RoiPanel({ forecast, currentScore }: { forecast: RoiForecast | undefined; currentScore?: number | null }) {
   if (!forecast) return null;
   const top = [...forecast.by_capability].sort((a, b) => b.predicted_points - a.predicted_points).slice(0, 5);
+  // Projected score is bounded — you can't gain past 100. The backend caps predicted_points at the
+  // remaining headroom; we clamp here too so the headline figure is always sane (never "+114").
+  const cur = currentScore ?? null;
+  const rawGain = Math.max(0, Math.round(forecast.predicted_points));
+  const gain = cur != null ? Math.min(rawGain, Math.max(0, 100 - cur)) : rawGain;
+  const projected = cur != null ? Math.min(100, cur + gain) : null;
   return (
-    <div>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-3xl font-bold leading-none text-indigo-600">
-          +{Math.round(forecast.predicted_points)}
-        </span>
-        <span className="text-sm text-slate-600">AI-score points if you finish the plan</span>
-      </div>
-      {/* always-visible gloss defining the unit */}
-      <p className="mt-1 text-xs text-slate-400">
-        AI-score points = movement on your 0–100 reputation score.
+    <div className="flex h-full flex-col">
+      <p className="text-sm leading-relaxed text-slate-600">
+        If you finish the open plan, we project your AI Reputation Score
+        {cur != null ? (
+          <> moves from <span className="font-semibold text-slate-900">{cur}</span> to about <span className="font-semibold text-indigo-600">{projected}/100</span></>
+        ) : (
+          <> rises by about <span className="font-semibold text-indigo-600">{gain} points</span></>
+        )}
+        {forecast.horizon_weeks != null ? <> over ~{forecast.horizon_weeks} weeks</> : null}.
       </p>
       <p className="mt-1 text-xs text-slate-500">
         {forecast.open_tasks} open task{forecast.open_tasks === 1 ? "" : "s"} · confidence:{" "}
-        <span className="font-medium text-slate-600">{forecast.confidence}</span>
-        {forecast.horizon_weeks != null ? ` · ~${forecast.horizon_weeks} weeks` : ""}
+        <span className="font-medium text-slate-600">{forecast.confidence}</span> · a learned estimate, not a guarantee.
       </p>
-      {forecast.note && <p className="mt-1 text-xs text-slate-400">{forecast.note}</p>}
       {top.length > 0 && (
         <table className="mt-3 w-full">
           <thead>
             <tr className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               <th className="pb-1 text-left font-semibold">Area</th>
-              <th className="pb-1 px-2 text-right font-semibold">Open</th>
-              <th className="pb-1 px-2 text-right font-semibold">Points</th>
+              <th className="pb-1 px-2 text-right font-semibold">Open tasks</th>
               <th className="pb-1 pl-2 text-right font-semibold">Confidence</th>
             </tr>
           </thead>
@@ -153,20 +155,24 @@ function RoiPanel({ forecast }: { forecast: RoiForecast | undefined }) {
                   </Link>
                 </td>
                 <td className="py-1.5 px-2 text-right text-sm tabular-nums text-slate-500">{r.open_tasks}</td>
-                <td className="py-1.5 px-2 text-right text-sm font-semibold tabular-nums text-indigo-600">
-                  +{Math.round(r.predicted_points)}
-                </td>
                 <td className="py-1.5 pl-2 text-right text-xs text-slate-500">{r.confidence}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+      {/* the highlighted projected figure, moved to the bottom of the column */}
+      <div className="mt-auto pt-4">
+        <div className="flex items-baseline gap-2 rounded-xl bg-indigo-50/70 px-4 py-3 ring-1 ring-inset ring-indigo-100">
+          <span className="text-3xl font-bold leading-none text-indigo-600">{projected != null ? projected : `+${gain}`}</span>
+          <span className="text-sm text-slate-600">{projected != null ? "projected score / 100 if you finish the plan" : "projected points if you finish the plan"}</span>
+        </div>
+      </div>
     </div>
   );
 }
 
-export function ResultsProofCard({ businessId }: { businessId: number | null }) {
+export function ResultsProofCard({ businessId, currentScore }: { businessId: number | null; currentScore?: number | null }) {
   const { data: report, isLoading: reportLoading, error: reportError } = useImpactReport(businessId);
   const { data: forecast, isLoading: forecastLoading, error: forecastError } = useRoiForecast(businessId);
 
@@ -179,7 +185,7 @@ export function ResultsProofCard({ businessId }: { businessId: number | null }) 
   if (reportError && forecastError && !report && !forecast) {
     return (
       <Card accent="good">
-        <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; proof</h3>
+        <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; Proof</h3>
         <p className="mt-2 text-sm text-slate-500">We couldn&apos;t load your results just now. Refresh in a moment.</p>
       </Card>
     );
@@ -189,7 +195,7 @@ export function ResultsProofCard({ businessId }: { businessId: number | null }) 
   if (!report && !forecast) {
     return (
       <Card accent="good">
-        <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; proof</h3>
+        <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; Proof</h3>
         <p className="mt-2 text-sm text-slate-500">
           Your before/after impact and ROI forecast appear here once an audit has run and work is logged.
         </p>
@@ -199,18 +205,18 @@ export function ResultsProofCard({ businessId }: { businessId: number | null }) 
 
   return (
     <Card accent="good">
-      <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; proof</h3>
+      <h3 className="text-base font-semibold tracking-tight text-slate-900">Results &amp; Proof</h3>
       <p className="mt-0.5 text-xs text-slate-500">
         What the work has done so far — and what completing the plan is forecast to add.
       </p>
-      <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Proof of impact</div>
+      <div className="mt-4 grid grid-cols-1 items-stretch gap-5 lg:grid-cols-2">
+        <div className="flex flex-col">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Proof of Impact</div>
           <ImpactPanel report={report} />
         </div>
-        <div className="lg:border-l lg:border-slate-100 lg:pl-5">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">ROI forecast</div>
-          <RoiPanel forecast={forecast} />
+        <div className="flex flex-col lg:border-l lg:border-slate-100 lg:pl-5">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">ROI Forecast</div>
+          <RoiPanel forecast={forecast} currentScore={currentScore} />
         </div>
       </div>
     </Card>

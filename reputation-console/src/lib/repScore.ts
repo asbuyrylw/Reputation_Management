@@ -29,3 +29,29 @@ const TONE_CLASSES: Record<RepTone, string> = {
 export function repClasses(score: number | null | undefined): string {
   return TONE_CLASSES[repBand(score).tone];
 }
+
+// Canonical dashboard score selector — computed ONCE from the run series and consumed by every
+// dashboard card so the headline score + its deltas can never drift between surfaces. `score` is
+// the single 0–100 AI Reputation Score (repScore of the latest goal_alignment); `deltaVsLast`
+// compares the latest two audits; `deltaSinceStart` compares the latest to the first.
+export interface DashboardScore {
+  score: number | null;
+  band: { label: string; tone: RepTone };
+  deltaVsLast: number | null;
+  deltaSinceStart: number | null;
+}
+
+export function dashboardScore(series: { goal_alignment: number | null }[] | null | undefined): DashboardScore {
+  const s = series ?? [];
+  const at = (i: number) => (i >= 0 && i < s.length ? repScore(s[i]?.goal_alignment ?? null) : null);
+  const lastIdx = s.length - 1;
+  const score = at(lastIdx);
+  const prev = at(lastIdx - 1);
+  const first = at(0);
+  return {
+    score,
+    band: repBand(score),
+    deltaVsLast: score != null && prev != null ? score - prev : null,
+    deltaSinceStart: score != null && first != null && s.length >= 2 ? score - first : null,
+  };
+}

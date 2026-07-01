@@ -29,7 +29,9 @@ const BAND_RING: Record<RepTone, string> = {
   emerald: "ring-emerald-200/70",
 };
 
-const pctOf = (v: number) => `${Math.round(v * 100)}%`;
+// desired_pct / contested_pct arrive already on a 0–100 scale from narrative_score.py — do NOT
+// multiply by 100 again (that produced the "1600% / 5080%" double-scaling bug).
+const pctOf = (v: number) => `${Math.round(v)}%`;
 
 export function NarrativeScoreCard({
   narrative,
@@ -73,8 +75,8 @@ export function NarrativeScoreCard({
   const desired = latest.desired_pct ?? 0;
   const contested = latest.contested_pct ?? 0;
   // The split bar is desired-vs-contested; remaining width is neutral.
-  const desiredW = Math.max(0, Math.min(100, Math.round(desired * 100)));
-  const contestedW = Math.max(0, Math.min(100 - desiredW, Math.round(contested * 100)));
+  const desiredW = Math.max(0, Math.min(100, Math.round(desired)));
+  const contestedW = Math.max(0, Math.min(100 - desiredW, Math.round(contested)));
   const neutralW = Math.max(0, 100 - desiredW - contestedW);
 
   const series = (narrative?.series ?? []).map((p) => p.score).filter((v): v is number => v != null);

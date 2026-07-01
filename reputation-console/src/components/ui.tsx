@@ -244,10 +244,18 @@ export function SectionCard({
   );
 }
 
-export function Pill({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
+// Canonical status chip — ONE geometry + the semantic Tone system for every small pill. Prefer
+// this in new code. Badge (fixed color names) and SeverityChip (high/med/low scale) remain for
+// their existing call sites but share this exact geometry so chips read consistently app-wide.
+export function Chip({ tone = "neutral", children, className = "" }: { tone?: Tone; children: ReactNode; className?: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${toneChip[tone]}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${toneChip[tone]} ${className}`}>
       {children}
     </span>
   );
+}
+
+// Pill is retained as an alias of the canonical Chip so existing imports keep working.
+export function Pill({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
+  return <Chip tone={tone}>{children}</Chip>;
 }

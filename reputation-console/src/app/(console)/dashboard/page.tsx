@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
+import { useAuth } from "@/lib/auth";
+import { OperatorHome } from "@/components/OperatorHome";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
   useLocalRankings, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
@@ -10,7 +12,6 @@ import {
 import { ReputationHero } from "@/components/ReputationHero";
 import { ScoreTrend } from "@/components/ScoreTrend";
 import { VerdictBanner } from "@/components/VerdictBanner";
-import { NarrativeScoreCard } from "@/components/NarrativeScoreCard";
 import { ResultsProofCard } from "@/components/ResultsProofCard";
 import { WorstAnswers } from "@/components/WorstAnswers";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
@@ -19,7 +20,7 @@ import { JobProgressBanner } from "@/components/JobProgressBanner";
 import VisibilityTrendChart from "@/components/VisibilityTrendChart";
 import { Card, PageHeader, SectionCard, Spinner } from "@/components/ui";
 import { EmptyState, ToneLegend, DataSection } from "@/components/primitives";
-import { repScore } from "@/lib/repScore";
+import { repScore, dashboardScore } from "@/lib/repScore";
 import type { SeriesPoint, WorkOrder, Business } from "@/lib/types";
 
 type Json = Record<string, unknown>;
@@ -188,13 +189,12 @@ function BiggestGaps({ gap }: { gap: Json | undefined }) {
 
 // --- Action plan & progress — merges the plan progress bar, the tasks-done/score-change strip,
 // and the old "improvement tasks" block into ONE surface, with "Manage tasks" promoted up here. ---
-function ActionPlanProgress({ woCounts, assetsN, series }: { woCounts: Record<string, number>; assetsN: number; series: SeriesPoint[] }) {
+function ActionPlanProgress({ woCounts, assetsN, delta }: { woCounts: Record<string, number>; assetsN: number; delta: number | null }) {
   const total = Object.values(woCounts).reduce((a, b) => a + b, 0);
   const done = (woCounts.done ?? 0) + (woCounts.verified ?? 0);
   const inProg = (woCounts.in_progress ?? 0) + (woCounts.in_review ?? 0) + (woCounts.review ?? 0);
   const open = Math.max(0, total - done - inProg);
   const woPct = total ? Math.round((done / total) * 100) : 0;
-  const delta = series.length >= 2 ? repScore(series[series.length - 1]?.goal_alignment ?? null)! - repScore(series[0]?.goal_alignment ?? null)! : null;
   return (
     <Card accent="good">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -215,7 +215,7 @@ function ActionPlanProgress({ woCounts, assetsN, series }: { woCounts: Record<st
         {delta != null && (
           <div>
             <div className={`text-2xl font-bold leading-none ${delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{delta >= 0 ? "+" : ""}{delta}</div>
-            <div className="text-xs text-slate-500">score since first audit</div>
+            <div className="text-xs text-slate-500">score since you started</div>
           </div>
         )}
         <div>
@@ -359,6 +359,8 @@ function ProjectionStrip({ timeline }: { timeline: Json | undefined }) {
 
 export default function DashboardPage() {
   const { businessId, businesses, loading: bizLoading } = useBusiness();
+  const { user } = useAuth();
+  const [ownerView, setOwnerView] = useState(false);
   const { data, isLoading, error } = useDashboard(businessId);
   const latestRunId = data?.series?.length ? data.series[data.series.length - 1].run_id : null;
   const { data: perEngine } = usePerEngine(businessId, latestRunId);
@@ -380,12 +382,19 @@ export default function DashboardPage() {
       </Card>
     );
   }
+  // Operators (staff) land on their work queue, not the owner's outcomes dashboard.
+  const isOperator = user?.role === "admin";
+  if (isOperator && !ownerView) {
+    return <OperatorHome businessId={businessId} onViewOwner={() => setOwnerView(true)} />;
+  }
+
   if (isLoading || !data) return <Spinner />;
   if (error) return <p className="text-sm text-rose-600">Could not load the dashboard.</p>;
 
   const s = data.series;
   const latest: SeriesPoint | undefined = s[s.length - 1];
-  const score = repScore(latest?.goal_alignment ?? null);
+  const { score, deltaVsLast, deltaSinceStart } = dashboardScore(s);
+  const goalScore = repScore((timeline as Json | undefined)?.dominance_target as number);
   const goalText = (businesses.find((b) => b.id === businessId)?.goal || "").trim();
 
   const engVals = perEngine ? Object.values(perEngine.engines) : [];
@@ -403,6 +412,14 @@ export default function DashboardPage() {
 
   return (
     <div>
+      {isOperator && (
+        <button
+          onClick={() => setOwnerView(false)}
+          className="mb-3 text-sm font-medium text-indigo-600 hover:text-indigo-700"
+        >
+          ← Back to your work queue
+        </button>
+      )}
       <PageHeader
         eyebrow="Overview"
         title={`Dashboard — ${data.business.name}`}
@@ -434,92 +451,65 @@ export default function DashboardPage() {
           <LiveMonitorStrip businessId={businessId} />
 
           {/* ============================================================== */}
-          {/* THE HEADLINE — one number first, plain-English verdict beneath. */}
+          {/* 1) HERO — your goal, the ONE reputation score, the verdict.     */}
           {/* ============================================================== */}
           <div className="space-y-3">
-            {/* HEADLINE — narrative crowding-out score (the single hero 0-100 metric) */}
-            <NarrativeScoreCard narrative={data.narrative} loading={isLoading} error={!!error} />
-            {/* plain-English verdict, fused directly beneath the headline */}
-            <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} />
+            {goalText && (
+              <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Your goal</div>
+                <p className="mt-0.5 text-base font-semibold tracking-tight text-slate-900">{goalText}</p>
+                <p className="mt-0.5 text-xs text-slate-500">Your AI Reputation Score below is how close AI is to saying this about you today.</p>
+              </Card>
+            )}
+            <ReputationHero
+              goalAlignment={latest.goal_alignment}
+              contestedRate={latest.contested_rate}
+              ownedRate={latest.owned_rate}
+              groundedRate={groundedRate}
+              coverage={perEngine?.coverage ?? null}
+              sentiment={sentimentData}
+              asOf={latest.date}
+              delta={deltaVsLast}
+            />
+            {/* plain-English verdict, as a small bullet beneath the score */}
+            <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} compact />
+            <div className="flex justify-end px-1"><ToneLegend /></div>
           </div>
 
-          {/* North Star goal — the one-liner framing for the headline */}
-          {goalText && (
-            <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Your goal</div>
-                  <p className="mt-0.5 text-base font-semibold tracking-tight text-slate-900">{goalText}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">Your score is how close AI is to saying this about you today.</p>
-                </div>
-                {score != null && (
-                  <div className="flex shrink-0 items-baseline gap-1 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-900/5">
-                    <span className="text-2xl font-bold text-slate-900">{score}</span><span className="text-xs font-medium text-slate-400">/100 today</span>
-                  </div>
-                )}
-              </div>
+          {/* 2) Search performance — surfaced (local + organic) */}
+          <section>
+            <h2 className="mb-3 text-sm font-semibold tracking-tight text-slate-900">
+              Search performance <span className="font-normal text-slate-400">— your Google visibility</span>
+            </h2>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <LocalSearchCard businessId={businessId} />
+              <OrganicSearchCard businessId={businessId} />
+            </div>
+          </section>
+
+          {/* 3) Trajectory & projection — surfaced (projection + score-over-time + visibility) */}
+          <section className="space-y-6">
+            <h2 className="text-sm font-semibold tracking-tight text-slate-900">
+              Where your score is heading <span className="font-normal text-slate-400">— projection &amp; trend over time</span>
+            </h2>
+            <ProjectionStrip timeline={timeline as Json | undefined} />
+            <Card>
+              <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
+              <ScoreTrend series={s} goal={goalScore} projected={goalScore} />
             </Card>
-          )}
+            <VisibilityTrendChart businessId={businessId} />
+          </section>
 
-          {/* ACTION PLAN — the highest-leverage hero surfaces, above the fold */}
-          {/* D — action plan & progress (merged) */}
-          <ActionPlanProgress woCounts={data.wo_counts} assetsN={data.assets_n} series={s} />
+          {/* 4) Results & Proof — moved below the trajectory */}
+          <ResultsProofCard businessId={businessId} currentScore={score} />
 
-          {/* D2 — results / proof: before-after impact + ROI forecast */}
-          <ResultsProofCard businessId={businessId} />
-
-          {/* E — do this next (+approvals) beside biggest gaps */}
+          {/* 5) Do this next, beside biggest gaps */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <DoThisNext workOrders={workOrders} businessId={businessId} />
             <BiggestGaps gap={data.gap} />
           </div>
 
-          {/* ============================================================== */}
-          {/* THE DETAILS — secondary surfaces, collapsed by default.         */}
-          {/* ============================================================== */}
-
-          {/* Score breakdown — how AI sees you (the rep-score ring + drivers, demoted below the headline) */}
-          <DataSection
-            title="Score breakdown — how AI sees you"
-            headline="The 0–100 reputation score behind the headline, with its drivers (contested / owned / grounded) and answer-sentiment."
-            defaultOpen={false}
-            detailsLabel="Show the score breakdown"
-          >
-            <div>
-              <ReputationHero
-                goalAlignment={latest.goal_alignment}
-                contestedRate={latest.contested_rate}
-                ownedRate={latest.owned_rate}
-                groundedRate={groundedRate}
-                coverage={perEngine?.coverage ?? null}
-                sentiment={sentimentData}
-                asOf={latest.date}
-              />
-              <div className="mt-1 flex justify-end px-1"><ToneLegend /></div>
-            </div>
-          </DataSection>
-
-          {/* F — search performance: local + organic together */}
-          <DataSection title="Search performance" headline="Your traditional Google visibility — local rankings and organic search clicks." detailsLabel="Show search performance">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <LocalSearchCard businessId={businessId} />
-              <OrganicSearchCard businessId={businessId} />
-            </div>
-          </DataSection>
-
-          {/* G — trajectory: projection + score-over-time + visibility */}
-          <DataSection title="Score trajectory & projection" headline="Where your score is heading, when it should improve, and how it's moved over time." detailsLabel="Show trajectory & projection">
-            <div className="space-y-6">
-              <ProjectionStrip timeline={timeline as Json | undefined} />
-              <Card>
-                <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
-                <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
-              </Card>
-              <VisibilityTrendChart businessId={businessId} />
-            </div>
-          </DataSection>
-
-          {/* H — what AI is saying now + per-engine (per-engine behind see-more) */}
+          {/* 6) Worst answers & per-engine — drill-down detail (collapsed) */}
           <DataSection title="Worst answers & per-engine scores" severity="med" headline="The worst things AI is saying about you right now, plus each assistant's score." detailsLabel="Show worst answers">
             <Card accent="bad">
               <h3 className="text-base font-semibold tracking-tight text-slate-900">Worst things AI is saying right now</h3>
@@ -533,12 +523,14 @@ export default function DashboardPage() {
             </Card>
           </DataSection>
 
-          {/* I — this month's work (value narrative) */}
-          <DataSection title="This month's work" headline="What your reputation team has produced this month." detailsLabel="Show this month's work">
+          {/* 7) Your progress — action plan + this month's work, combined, at the bottom */}
+          <section className="space-y-4">
+            <h2 className="text-sm font-semibold tracking-tight text-slate-900">Your progress</h2>
+            <ActionPlanProgress woCounts={data.wo_counts} assetsN={data.assets_n} delta={deltaSinceStart} />
             <ThisMonthPanel businessId={businessId} />
-          </DataSection>
+          </section>
 
-          {/* J — housekeeping: profile setup + the AI deep-dive link */}
+          {/* 8) Setup & housekeeping — collapsed at the very bottom */}
           <DataSection title="Setup & housekeeping" headline="What we're tracking for you, and the deeper AI breakdown." detailsLabel="Show setup & housekeeping">
             <div className="space-y-6">
               <ProfileTrackingCard biz={businesses.find((b) => b.id === businessId)} />

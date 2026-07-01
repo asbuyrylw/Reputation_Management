@@ -7,10 +7,12 @@ import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { PerEngineTrend } from "@/components/PerEngineTrend";
 import { ScoreTrend } from "@/components/ScoreTrend";
+import { VerdictBanner } from "@/components/VerdictBanner";
+import { StatusHeader, FlowStep, NextActions } from "@/components/flow";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { EmptyState } from "@/components/primitives";
-import { repScore } from "@/lib/repScore";
+import { EmptyState, DataSection } from "@/components/primitives";
+import { repScore, dashboardScore } from "@/lib/repScore";
 
 type Json = Record<string, unknown>;
 
@@ -55,13 +57,17 @@ export default function AiOverviewPage() {
 
   const s = data.series;
   const latest = s[s.length - 1];
+  const { score, deltaVsLast } = dashboardScore(s);
+  const goalScore = repScore((timeline as Json | undefined)?.dominance_target as number);
+  const weak = ((data.gap as unknown as { weak_queries?: { prompt?: string; problem?: string }[] } | undefined)?.weak_queries) ?? [];
+  const gapItems = weak.slice(0, 3).map((w) => ({ title: `“${w.prompt ?? "Untitled gap"}”`, note: w.problem ?? null, href: "/gaps" }));
 
   return (
     <div>
       <PageHeader
         eyebrow="AI Visibility"
         title="AI overview"
-        subtitle="The why behind your AI reputation score — your primary challenge, how each assistant differs, and the trend over time. (The headline score and worst answers are on your Dashboard.)"
+        subtitle="Where your AI reputation stands, what's driving it, what we'll do about it, and how we'll know it's working."
       />
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
@@ -75,9 +81,35 @@ export default function AiOverviewPage() {
         />
       ) : (
         <div className="space-y-6">
-          {/* Why you're scored this way */}
-          <PrimaryChallengeCard challenge={data.challenge} />
+          {/* Status — where you stand */}
+          <StatusHeader
+            label="AI reputation score"
+            score={score}
+            delta={deltaVsLast}
+            read={<VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} compact />}
+            action={{ label: "See worst answers", href: "/audits" }}
+          />
 
+          {/* What it means */}
+          <FlowStep label="What it means" hint="Why AI portrays you this way right now.">
+            <PrimaryChallengeCard challenge={data.challenge} />
+          </FlowStep>
+
+          {/* What we'll do */}
+          <FlowStep label="What we'll do" hint="The highest-impact moves to raise this score." action={{ label: "Full plan", href: "/next-steps" }}>
+            <NextActions items={gapItems} />
+          </FlowStep>
+
+          {/* How we'll know it's working */}
+          <FlowStep label="How we'll know it's working" hint="Your AI reputation score over time, heading toward your goal." action={{ label: "Timeline", href: "/timeline" }}>
+            <Card>
+              <ScoreTrend series={s} goal={goalScore} projected={goalScore} />
+            </Card>
+          </FlowStep>
+
+          {/* Supporting detail — collapsed by default; the deep dives live in the AI hub tabs. */}
+          <DataSection title="More detail — engines, changes & audiences" headline="Per-engine breakdown, what changed since the last audit, where engines disagree, and how different audiences see you." detailsLabel="Show detail">
+            <div className="space-y-6">
           {/* What changed in AI answers since the previous audit */}
           {answerChanges?.summary?.compared && (
             <Card>
@@ -127,12 +159,6 @@ export default function AiOverviewPage() {
 
           {/* How each assistant differs */}
           {perEngine && Object.keys(perEngine.engines).length > 0 && <PerEnginePanel data={perEngine} />}
-
-          {/* AI reputation trend over time */}
-          <Card>
-            <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your AI reputation score over time (0–100)</div>
-            <ScoreTrend series={s} goal={repScore((timeline as Json | undefined)?.dominance_target as number)} />
-          </Card>
 
           {/* Per-engine trend — which AI assistant is rising or drifting */}
           <Card>
@@ -186,6 +212,9 @@ export default function AiOverviewPage() {
               </div>
             </Card>
           )}
+
+            </div>
+          </DataSection>
 
           <div>
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Go deeper</div>

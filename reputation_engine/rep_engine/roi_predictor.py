@@ -131,6 +131,10 @@ def predict_plan(business_id: int) -> dict:
             "AND status IN ('pending','in_progress') AND NOT COALESCE(superseded,false) "
             "GROUP BY capability", (business_id,),
         ).fetchall()
+        cur_row = conn.execute(
+            "SELECT goal_alignment FROM run_metrics WHERE business_id=%s "
+            "ORDER BY run_id DESC LIMIT 1", (business_id,),
+        ).fetchone()
     total = 0.0
     by_cap = []
     basis_counts = {"this client": 0, "cross-client": 0, "industry baseline": 0}
@@ -158,14 +162,29 @@ def predict_plan(business_id: int) -> dict:
     horizon_weeks = None
     if total > 0 and bl_gain and bl_gain > 0:
         horizon_weeks = max(2, round((total / 100.0) / bl_gain * 4.3))  # points->fraction->months->weeks
+    # You can't gain past 100: cap the predicted lift at the remaining headroom and scale the
+    # per-capability rows proportionally, so a long plan can never surface an impossible "+114" on
+    # a 0-100 scale. current_score derives from the latest run's goal_alignment (the canonical score).
+    current_ga = float(cur_row["goal_alignment"]) if cur_row and cur_row["goal_alignment"] is not None else None
+    current_score = round((current_ga + 1) / 2 * 100) if current_ga is not None else None
+    if current_score is not None and total > 0:
+        headroom = max(0.0, 100.0 - current_score)
+        if total > headroom:
+            scale = (headroom / total) if total else 0.0
+            for c in by_cap:
+                c["predicted_points"] = round(c["predicted_points"] * scale, 2)
+            total = round(headroom, 1)
+    projected_score = min(100, current_score + round(total)) if current_score is not None else None
     return {
         "predicted_points": round(total, 1),
+        "current_score": current_score,
+        "projected_score": projected_score,
         "open_tasks": sum(int(t["n"]) for t in tasks),
         "by_capability": by_cap[:12],
         "basis_mix": basis_counts,
         "confidence": overall_conf,
         "horizon_weeks": horizon_weeks,
-        "note": ("Predicted lift in AI-score points from finishing the open plan. Uses this client's "
+        "note": ("Projected AI-score after finishing the open plan, capped at 100. Uses this client's "
                  "measured effectiveness first, then what's worked across all clients, then an "
                  "industry baseline. A learned prior, not a guarantee."),
     }

@@ -5,20 +5,13 @@ import { Card } from "./ui";
 import { useOnboarding } from "@/lib/hooks";
 
 // Getting-started checklist: guides a new owner from an empty account to a running program.
-// Hides into a one-line confirmation once every step is done.
+// Once every step is done it has served its purpose, so it disappears entirely (no lingering
+// "setup complete" banner cluttering the dashboard).
 export default function OnboardingCard({ businessId }: { businessId: number | null }) {
   const { data } = useOnboarding(businessId);
   if (!data) return null;
 
-  if (data.complete) {
-    return (
-      <Card className="border-emerald-200 bg-emerald-50/50">
-        <p className="text-sm text-emerald-800">
-          ✓ Setup complete — all {data.total} getting-started steps done.
-        </p>
-      </Card>
-    );
-  }
+  if (data.complete) return null;
 
   return (
     <Card className="border-indigo-200 bg-indigo-50/40">

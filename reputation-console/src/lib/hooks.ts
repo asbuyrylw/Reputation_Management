@@ -76,6 +76,8 @@ import type {
   GscOpportunity,
   GscRoi,
   GscSite,
+  GscVerifyStart,
+  GscVerifyComplete,
   GaSummary,
   GaTrendPoint,
   GaPage,
@@ -1278,6 +1280,35 @@ export function useSetGscProperty(businessId: number | null, connId: number | nu
       qc.invalidateQueries({ queryKey: ["gsc-pages", businessId] });
       qc.invalidateQueries({ queryKey: ["gsc-opportunities", businessId] });
       qc.invalidateQueries({ queryKey: ["gsc-roi", businessId] });
+    },
+  });
+}
+
+// Guided verification (for a site not yet in Search Console). Step 1 mints a token to place.
+export function useStartGscVerification(businessId: number | null, connId: number | null) {
+  return useMutation({
+    mutationFn: (vars: { site_url: string; method: string }) =>
+      apiFetch<GscVerifyStart>(
+        `/businesses/${businessId}/connections/${connId}/gsc/verify/start`,
+        { method: "POST", body: vars },
+      ),
+  });
+}
+
+// Step 2: verify ownership + register the property. On success the picker (gsc-sites) refreshes
+// so the new property is selectable; if it auto-selected, the GSC summary refreshes too.
+export function useCompleteGscVerification(businessId: number | null, connId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { site_url: string; method: string }) =>
+      apiFetch<GscVerifyComplete>(
+        `/businesses/${businessId}/connections/${connId}/gsc/verify/complete`,
+        { method: "POST", body: vars },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["gsc-sites", businessId, connId] });
+      qc.invalidateQueries({ queryKey: ["connections", businessId] });
+      qc.invalidateQueries({ queryKey: ["gsc-summary", businessId] });
     },
   });
 }

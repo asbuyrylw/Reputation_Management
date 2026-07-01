@@ -13,6 +13,8 @@ import {
   useDisconnectConnection,
   useGscSites,
   useSetGscProperty,
+  useStartGscVerification,
+  useCompleteGscVerification,
   useGaProperties,
   useSetGaProperty,
   useZerniaSetup,
@@ -125,6 +127,108 @@ const PROVIDERS: ProviderDef[] = [
   },
 ];
 
+// Guided verification: for a site the owner hasn't verified in Search Console yet. Get a code,
+// place it (a <head> meta tag for a URL, or a DNS TXT record for a whole domain), then verify —
+// we register the property so it becomes selectable. No history exists before verification.
+function GscVerifyForm({ businessId, connId }: { businessId: number | null; connId: number }) {
+  const start = useStartGscVerification(businessId, connId);
+  const complete = useCompleteGscVerification(businessId, connId);
+  const [siteUrl, setSiteUrl] = useState("");
+  const [method, setMethod] = useState<"META" | "DNS_TXT">("META");
+  const [token, setToken] = useState<string | null>(null);
+  const [instructions, setInstructions] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const onStart = () => {
+    setNote(null);
+    setToken(null);
+    start.mutate(
+      { site_url: siteUrl.trim(), method },
+      {
+        onSuccess: (r) => { setToken(r.token); setInstructions(r.instructions); },
+        onError: (e) => setNote(e instanceof ApiError ? e.message : "Couldn't get a verification code."),
+      },
+    );
+  };
+
+  const onVerify = () => {
+    setNote(null);
+    complete.mutate(
+      { site_url: siteUrl.trim(), method },
+      {
+        onSuccess: (r) => {
+          if (r.verified && r.added) setNote(`Verified — importing ${r.property}. It'll appear above shortly.`);
+          else if (r.verified) setNote(r.add_error || "Verified, but couldn't auto-add it — reconnect Search Console and try again.");
+          else setNote(r.error || "Not verified yet — give the change a moment, then retry.");
+        },
+        onError: (e) => setNote(e instanceof ApiError ? e.message : "Verification failed — give DNS/the tag a moment, then retry."),
+      },
+    );
+  };
+
+  const copy = () => {
+    if (!token) return;
+    navigator.clipboard?.writeText(token);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-3">
+      <div className="text-xs font-semibold text-slate-700">Verify a site that isn&apos;t in Search Console yet</div>
+      <p className="mt-0.5 text-[11px] text-slate-500">
+        Enter the site, get a code, place it, then verify — we register the property for you.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <input
+          value={siteUrl}
+          onChange={(e) => setSiteUrl(e.target.value)}
+          placeholder="example.com"
+          className="min-w-[14rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+        />
+        <select
+          value={method}
+          onChange={(e) => setMethod(e.target.value as "META" | "DNS_TXT")}
+          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+        >
+          <option value="META">HTML tag (one website URL)</option>
+          <option value="DNS_TXT">DNS record (whole domain)</option>
+        </select>
+        <button
+          onClick={onStart}
+          disabled={start.isPending || !siteUrl.trim()}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+        >
+          {start.isPending ? "Getting code…" : "Get code"}
+        </button>
+      </div>
+      {token && (
+        <div className="mt-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              {method === "DNS_TXT" ? "Add this DNS TXT record" : "Add this tag inside <head>"}
+            </span>
+            <button onClick={copy} className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800">
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-white p-2 font-mono text-[11px] text-slate-700 ring-1 ring-slate-200">{token}</pre>
+          {instructions && <p className="mt-1 whitespace-pre-wrap text-[11px] text-slate-500">{instructions}</p>}
+          <button
+            onClick={onVerify}
+            disabled={complete.isPending}
+            className="mt-2 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {complete.isPending ? "Verifying…" : "I've added it — Verify & connect"}
+          </button>
+        </div>
+      )}
+      {note && <p className="mt-1.5 text-xs text-slate-600">{note}</p>}
+    </div>
+  );
+}
+
 // Property picker (GSC only): once a Search Console connection exists, choose which verified
 // property to pull data from. Reads the saved value off connection.meta.gsc_property; saving
 // invalidates the connection + every GSC query. Gated to canEdit by the parent.
@@ -140,6 +244,7 @@ function GscPropertyPicker({
   const saved = (connection.meta?.gsc_property as string | undefined) ?? "";
   const [selected, setSelected] = useState<string>(saved);
   const [note, setNote] = useState<string | null>(null);
+  const [showVerify, setShowVerify] = useState(false);
 
   const sites = data?.sites ?? [];
   const current = selected || saved;
@@ -161,7 +266,12 @@ function GscPropertyPicker({
       ) : error ? (
         <p className="text-xs text-rose-600">Couldn&apos;t load properties — try Test, or reconnect.</p>
       ) : sites.length === 0 ? (
-        <p className="text-xs text-slate-500">No verified properties found on this Google account.</p>
+        <div>
+          <p className="text-xs text-slate-500">
+            No verified properties on this Google account yet — verify your site below to start importing data.
+          </p>
+          <GscVerifyForm businessId={businessId} connId={connection.id} />
+        </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <select
@@ -183,6 +293,17 @@ function GscPropertyPicker({
           >
             {save.isPending ? "Saving…" : "Save property"}
           </button>
+        </div>
+      )}
+      {sites.length > 0 && (
+        <div className="mt-2">
+          <button
+            onClick={() => setShowVerify((s) => !s)}
+            className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
+          >
+            {showVerify ? "Hide" : "Don't see your site? Verify a new one"}
+          </button>
+          {showVerify && <GscVerifyForm businessId={businessId} connId={connection.id} />}
         </div>
       )}
       <p className="mt-1.5 text-[11px] text-slate-400">
@@ -834,8 +955,8 @@ export default function IntegrationsPage() {
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
-      {/* tabs */}
-      <div className="mb-4 flex gap-1 border-b border-slate-200">
+      {/* In-page switch — segmented pill (distinct from the Settings hub's underline tab bar above). */}
+      <div className="mb-4 flex w-fit gap-1 rounded-lg bg-slate-100 p-0.5">
         {([
           { key: "connections", label: "Connections" },
           { key: "imports", label: "Data imports" },
@@ -843,10 +964,10 @@ export default function IntegrationsPage() {
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               tab === t.key
-                ? "border-indigo-600 text-indigo-700"
-                : "border-transparent text-slate-500 hover:text-slate-800"
+                ? "bg-white text-slate-900 shadow-sm"
+                : "text-slate-500 hover:text-slate-800"
             }`}
           >
             {t.label}

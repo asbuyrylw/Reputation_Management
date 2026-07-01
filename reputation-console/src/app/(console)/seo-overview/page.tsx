@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { MetricCard, EmptyState, CopyButton } from "@/components/primitives";
+import { MetricCard, EmptyState, CopyButton, DataSection } from "@/components/primitives";
+import { FlowStep, NextActions } from "@/components/flow";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
@@ -312,6 +313,17 @@ export default function SeoOverviewPage() {
   const fieldSize = c.field_size ?? null;
   const siteAsOf = site.data?.created_at ? new Date(site.data.created_at).toLocaleDateString() : null;
 
+  const seoActions: { title: string; note?: string | null; href: string }[] = [];
+  if (reviewSla.data && reviewSla.data.summary.awaiting > 0) {
+    const n = reviewSla.data.summary.awaiting;
+    seoActions.push({ title: `Reply to ${n} negative review${n === 1 ? "" : "s"}`, note: "Protect your local rating — respond fast.", href: "/approvals" });
+  }
+  seoActions.push({ title: "Publish content targeting your priority keywords", note: "Turn target keywords into pages that rank.", href: "/content/briefs" });
+  if (!s || s.page_one_rate < 0.5) {
+    seoActions.push({ title: "Fix the technical SEO issues holding you back", note: "Indexing + on-page health.", href: "/seo" });
+  }
+  seoActions.push({ title: "Win the local searches you're losing to rivals", note: "Where competitors outrank you.", href: "/local-seo" });
+
   return (
     <div>
       <PageHeader
@@ -323,53 +335,18 @@ export default function SeoOverviewPage() {
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
       <div className="space-y-6">
-        {/* Get-to-page-1 goal (the local-SEO timeline) */}
-        <LocalSeoGoalCard goal={goal.data} />
-
-        {/* Real Google search traffic (clicks/impressions/CTR/position) — the measured proof */}
-        <SearchPerformanceCard businessId={businessId} />
-
-        {/* AI-crawler readiness — schema.org coverage + the generated llms.txt for AI crawlers */}
-        <AiCrawlerReadinessCard businessId={businessId} />
-
-        {/* One-line content-impact proof (deep view lives on /search-performance) */}
-        <OurContentImpactLine impact={impact.data} />
-
-        {/* Google reviews & rating (the local-reputation signal) */}
-        <ReviewsCard businessId={businessId} canEdit={canEdit} data={revs.data} />
-
-        {/* Get more reviews — copy-paste ask + NAP consistency + SLA + send */}
-        <ReviewRequestCard kit={reviewKit.data} businessId={businessId} canEdit={canEdit} sla={reviewSla.data} />
-
-        {/* Keywords to rank for (the SEO keyword-intelligence set) */}
-        <KeywordsCard businessId={businessId} canEdit={canEdit} kws={kws.data} />
-
-        {/* Local rankings scorecard */}
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Local Google rankings</div>
-            <Link href="/local-seo" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">Details →</Link>
-          </div>
+        {/* Where you stand — local Google rankings (the headline of "search & SEO") */}
+        <FlowStep label="Where you stand" hint="Your local Google visibility right now." action={{ label: "Local detail", href: "/local-seo" }}>
           {s ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <MetricCard
-                label="On page one"
-                value={pct(s.page_one_rate)}
-                tone={s.page_one_rate >= 0.5 ? "good" : "bad"}
-                whyItMatters="Share of local searches where you appear on Google's first page."
-              />
-              <MetricCard
-                label="In the map pack"
-                value={pct(s.local_pack_rate)}
-                tone={s.local_pack_rate >= 0.5 ? "good" : "bad"}
-                whyItMatters="Share of searches where you show in Google's local 3-pack."
-              />
-              <MetricCard
-                label="Avg. position"
-                value={s.avg_organic_rank == null ? "—" : `#${s.avg_organic_rank}`}
-                tone={s.avg_organic_rank != null && s.avg_organic_rank <= 10 ? "good" : "bad"}
-                whyItMatters={`Average Google rank where you appear (${s.ranked_queries} of ${s.queries} searches).`}
-              />
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                You&apos;re on page&nbsp;1 for <span className="font-semibold text-slate-900">{pct(s.page_one_rate)}</span> of local searches and in Google&apos;s map pack for <span className="font-semibold text-slate-900">{pct(s.local_pack_rate)}</span>.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <MetricCard label="On page one" value={pct(s.page_one_rate)} tone={s.page_one_rate >= 0.5 ? "good" : "bad"} whyItMatters="Share of local searches where you appear on Google's first page." />
+                <MetricCard label="In the map pack" value={pct(s.local_pack_rate)} tone={s.local_pack_rate >= 0.5 ? "good" : "bad"} whyItMatters="Share of searches where you show in Google's local 3-pack." />
+                <MetricCard label="Avg. position" value={s.avg_organic_rank == null ? "—" : `#${s.avg_organic_rank}`} tone={s.avg_organic_rank != null && s.avg_organic_rank <= 10 ? "good" : "bad"} whyItMatters={`Average Google rank where you appear (${s.ranked_queries} of ${s.queries} searches).`} />
+              </div>
             </div>
           ) : (
             <Card>
@@ -379,38 +356,62 @@ export default function SeoOverviewPage() {
               </p>
             </Card>
           )}
-        </div>
+        </FlowStep>
 
-        {/* Competitor standing */}
-        <Card accent={subjectRank != null && fieldSize != null && subjectRank <= Math.ceil(fieldSize / 2) ? "good" : "bad"}>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold tracking-tight text-slate-900">Competitive standing (AI answers)</h3>
-              {subjectRank != null ? (
-                <p className="mt-1 text-sm text-slate-600">
-                  AI surfaces you at{" "}
-                  <span className="font-bold text-slate-900">rank {subjectRank} of {fieldSize}</span> for category questions.
-                </p>
-              ) : (
-                <p className="mt-1 text-sm text-slate-600">No competitor benchmark yet.</p>
-              )}
-            </div>
-            <Link href="/competitors" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">Compare →</Link>
-          </div>
-        </Card>
+        {/* What we'll do */}
+        <FlowStep label="What we'll do" hint="The highest-impact moves to climb Google." action={{ label: "Full plan", href: "/next-steps" }}>
+          <NextActions items={seoActions.slice(0, 4)} />
+        </FlowStep>
 
-        {/* Site technical health */}
-        <Card>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold tracking-tight text-slate-900">Site &amp; technical SEO</h3>
-              <p className="mt-1 text-sm text-slate-600">
-                {siteAsOf ? `Last crawled ${siteAsOf}. Review technical issues and on-page coverage.` : "No site crawl yet — run one to surface technical SEO issues."}
-              </p>
-            </div>
-            <Link href="/seo" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">Open →</Link>
+        {/* How we'll know it's working — page-1 timeline, real clicks, content traffic */}
+        <FlowStep label="How we'll know it's working" hint="Your page-1 timeline, real Google clicks, and the traffic your content earns." action={{ label: "Search traffic", href: "/search-performance" }}>
+          <div className="space-y-6">
+            <LocalSeoGoalCard goal={goal.data} />
+            <SearchPerformanceCard businessId={businessId} />
+            <OurContentImpactLine impact={impact.data} />
           </div>
-        </Card>
+        </FlowStep>
+
+        {/* Supporting detail — collapsed by default; deep dives live in the Search & SEO hub tabs. */}
+        <DataSection title="More detail — reviews, keywords, AI-readiness, competitors & site" headline="Your Google reviews + how to get more, the keywords to target, AI-crawler readiness, competitive standing, and site health." detailsLabel="Show detail">
+          <div className="space-y-6">
+            <ReviewsCard businessId={businessId} canEdit={canEdit} data={revs.data} />
+            <ReviewRequestCard kit={reviewKit.data} businessId={businessId} canEdit={canEdit} sla={reviewSla.data} />
+            <KeywordsCard businessId={businessId} canEdit={canEdit} kws={kws.data} />
+            <AiCrawlerReadinessCard businessId={businessId} />
+
+            {/* Competitor standing */}
+            <Card accent={subjectRank != null && fieldSize != null && subjectRank <= Math.ceil(fieldSize / 2) ? "good" : "bad"}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold tracking-tight text-slate-900">Competitive standing (AI answers)</h3>
+                  {subjectRank != null ? (
+                    <p className="mt-1 text-sm text-slate-600">
+                      AI surfaces you at{" "}
+                      <span className="font-bold text-slate-900">rank {subjectRank} of {fieldSize}</span> for category questions.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-600">No competitor benchmark yet.</p>
+                  )}
+                </div>
+                <Link href="/competitors" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">Compare →</Link>
+              </div>
+            </Card>
+
+            {/* Site technical health */}
+            <Card>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold tracking-tight text-slate-900">Site &amp; technical SEO</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {siteAsOf ? `Last crawled ${siteAsOf}. Review technical issues and on-page coverage.` : "No site crawl yet — run one to surface technical SEO issues."}
+                  </p>
+                </div>
+                <Link href="/seo" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">Open →</Link>
+              </div>
+            </Card>
+          </div>
+        </DataSection>
 
         <div>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Go deeper</div>

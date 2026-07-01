@@ -1225,6 +1225,27 @@ export interface GscSite {
   permission: string;
 }
 
+// Guided verification (onboarding assist) for a site not yet verified in Search Console.
+// start() returns the token to place; complete() verifies ownership + registers the property.
+export interface GscVerifyStart {
+  ok: boolean;
+  method: string; // "META" (a URL) | "DNS_TXT" (a whole domain)
+  identifier: string; // the URL or domain being verified
+  property: string; // the resulting GSC property string
+  token: string; // the exact <meta> tag or DNS TXT value to place
+  instructions: string;
+}
+
+export interface GscVerifyComplete {
+  ok: boolean;
+  verified: boolean;
+  property?: string;
+  added?: boolean; // false when ownership verified but sites.add failed (reconnect needed)
+  add_error?: string | null;
+  ingest_started?: boolean;
+  error?: string;
+}
+
 // =====================================================================================
 // Google Analytics (GA4) — what visitors DO after they arrive: sessions, users, pageviews,
 // conversions, engagement. The behavior-side counterpart to Search Console's traffic story.

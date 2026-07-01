@@ -85,6 +85,7 @@ export function ReputationHero({
   coverage,
   sentiment,
   asOf,
+  delta,
 }: {
   goalAlignment: number | null;
   contestedRate: number | null;
@@ -93,6 +94,7 @@ export function ReputationHero({
   coverage: { configured: string[]; expected: string[]; partial: boolean } | null;
   sentiment?: DonutSlice[];
   asOf?: string | null;
+  delta?: number | null;
 }) {
   const score = repScore(goalAlignment);
   const band = repBand(score);
@@ -117,8 +119,16 @@ export function ReputationHero({
             <div className="relative"><ScoreRing score={score} stroke={ring.stroke} /></div>
           </div>
           <div className="min-w-0 flex-1 text-center sm:text-left">
-            <div className="flex items-center justify-center gap-2 sm:justify-start">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
               <span className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-bold ring-1 ring-inset ${ring.chip}`}>{band.label}</span>
+              {delta != null && Math.abs(delta) >= 0.5 && (
+                <span className={`text-sm font-semibold ${delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  {delta >= 0 ? "▲ +" : "▼ "}{Math.abs(delta)} pts vs last audit
+                </span>
+              )}
+              {delta != null && Math.abs(delta) < 0.5 && (
+                <span className="text-sm font-medium text-slate-400">no change vs last audit</span>
+              )}
               <span className="text-sm font-medium text-slate-500">0 = unfavorable · 100 = champion</span>
             </div>
             <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-600">{MEANING[band.tone]}</p>

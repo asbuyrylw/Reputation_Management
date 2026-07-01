@@ -9,6 +9,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { BusinessSwitcher } from "@/components/BusinessSwitcher";
 import { FilterBar } from "@/components/FilterBar";
 import { NotificationBell } from "@/components/NotificationBell";
+import { HubTabs } from "@/components/HubTabs";
 import { Spinner } from "@/components/ui";
 
 export default function ConsoleLayout({ children }: { children: React.ReactNode }) {
@@ -69,7 +70,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
                 </button>
               </div>
             </header>
-            <main className="flex-1 p-6">{children}</main>
+            <main className="flex-1 p-6"><HubTabs />{children}</main>
           </div>
         </div>
       </FilterProvider>

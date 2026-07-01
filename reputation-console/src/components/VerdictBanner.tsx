@@ -33,13 +33,27 @@ export function VerdictBanner({
   businessName,
   score,
   challenge,
+  compact = false,
 }: {
   businessName: string;
   score: number | null;
   challenge: Challenge | null | undefined;
+  compact?: boolean;
 }) {
   if (score == null) return null;
   const band = repBand(score);
+  // Compact: a single small bullet line (used at the bottom of the score hero) instead of the
+  // full colored banner.
+  if (compact) {
+    return (
+      <p className="flex gap-2 px-1 text-xs leading-relaxed text-slate-500">
+        <span aria-hidden className="select-none text-slate-300">•</span>
+        <span>
+          AI assistants currently {leanPhrase(score)} {businessName} ({score}/100, {band.label}). {issuePhrase(challenge)}
+        </span>
+      </p>
+    );
+  }
   const dot =
     band.tone === "red"
       ? "bg-rose-500"
