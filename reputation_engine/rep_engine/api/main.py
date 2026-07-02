@@ -226,7 +226,12 @@ def create_app() -> FastAPI:
         if api_settings().job_worker == "worker":
             from .worker import seconds_since_heartbeat
             age = seconds_since_heartbeat()
-            checks["worker"] = "ok" if (age is not None and age < 120) else (
+            # A single long LLM job (e.g. gap_model, minutes per call) legitimately blocks the
+            # single-threaded worker's poll loop between heartbeat checkpoints, so the default 120s
+            # was too tight and false-alarmed "stale". Default 300s (tunable) tolerates a normal long
+            # job while still surfacing a genuinely hung/dead worker.
+            stale_after = int(os.getenv("WORKER_STALE_SECONDS", "300"))
+            checks["worker"] = "ok" if (age is not None and age < stale_after) else (
                 f"stale ({int(age)}s)" if age is not None else "no heartbeat")
         healthy = all(v == "ok" for v in checks.values())
         return JSONResponse(status_code=200 if healthy else 503,
