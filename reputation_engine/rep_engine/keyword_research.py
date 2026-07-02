@@ -159,10 +159,14 @@ def _norm(s: str) -> str:
 # Those are NOT keywords THIS business should target or build topic authority around, so we drop
 # them before storing. (Reported: "Is Cincinnati Financial a good place to work?" / "Cincinnati
 # Insurance" showing up as topic authorities for a business that is neither of those companies.)
+# Corporate-profile / employer-BRAND phrases that, for a small local business, almost always name a
+# DIFFERENT (large) company. Deliberately NARROW: we do NOT drop generic "careers/jobs/salary/
+# hiring" terms — those are legitimate targets for a RECRUITING business (e.g. a financial-services
+# agency that recruits agents). Bare competitor brand names are handled by the competitor/contested
+# list + the LLM relevance pass, not here.
 _EMPLOYER_RE = re.compile(
-    r"\b(good place to work|great place to work|good company to work|work(?:ing)? (?:at|for)|"
-    r"careers?|hiring|glassdoor|indeed|employee reviews?|salary|salaries|benefits package|"
-    r"who owns|headquarters|stock price|ceo of)\b",
+    r"\b(good place to work|great place to work|good company to work|glassdoor|"
+    r"stock price|who owns|headquarters|ceo of)\b",
     re.I,
 )
 
@@ -207,9 +211,10 @@ _RELEVANCE_SYSTEM = (
     "relevant to THIS business: keywords that name a DIFFERENT company or brand (competitors or "
     "unrelated organizations), employer-reputation or job-seeker queries about other companies "
     "(e.g. 'is <other company> a good place to work', 'careers', 'glassdoor', 'salary'), or terms "
-    "off-topic for this business's services and customers. KEEP everything a prospective CUSTOMER "
-    "of this business would plausibly search (its services, category, questions, and location). "
-    "If nothing should be removed, return {\"drop\":[]}."
+    "off-topic for this business's services and customers. KEEP everything relevant to THIS "
+    "business — its own services, category, questions, location, and (if it recruits) its own "
+    "careers/opportunity. Only remove keywords that reference a DIFFERENT company or are clearly "
+    "off-topic. If nothing should be removed, return {\"drop\":[]}."
 )
 
 
@@ -281,10 +286,10 @@ _SEED_SYSTEM = (
     "\"intent\":\"commercial|informational|local|navigational\",\"rationale\":str}]}. Include: "
     "2-4 primary service terms; several local terms (service + city, 'near me'); and 4-8 question "
     "keywords real customers ask (what they'd type or ask an AI). Keep them realistic and specific "
-    "to this business + its area. Do NOT include competitor or other companies' brand names, and do "
-    "NOT include employer-reputation / job-seeker queries (e.g. 'is <company> a good place to work', "
-    "'careers', 'glassdoor', 'salary') — only terms a prospective CUSTOMER of THIS business would "
-    "search. 10-18 keywords."
+    "to this business + its area. Do NOT include OTHER companies' or competitors' brand names, or "
+    "queries ABOUT another company (e.g. 'is <another company> a good place to work', a competitor's "
+    "reviews / glassdoor / stock price). Keywords about THIS business's own services — and, if it "
+    "recruits, its own careers/opportunity — are welcome. 10-18 keywords."
 )
 
 
