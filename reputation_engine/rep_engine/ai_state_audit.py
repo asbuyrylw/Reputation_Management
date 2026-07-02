@@ -119,6 +119,12 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")                    
 # at the token cap -> "unparseable JSON"). Override with GAP_MODEL_TIER=full|mid|cheap.
 GAP_MODEL_TIER = os.getenv("GAP_MODEL_TIER", "mid")
 
+# Total wall-clock budget (seconds) for EACH gap-model LLM call, across all its retries. Caps the
+# pathological tail where a stalled call retries 3x its 240s timeout (~12 min); a normal call
+# (~2-4 min, succeeds on the first attempt) is unaffected. On exhaustion the call fails and the
+# previous good gap model is preserved (fail-safe). Override with GAP_MODEL_DEADLINE.
+GAP_MODEL_DEADLINE = int(os.getenv("GAP_MODEL_DEADLINE", "300"))
+
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
 # Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
@@ -951,16 +957,18 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
 
 
 def orchestrator_json(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
-                      timeout: int = 90) -> dict:
+                      timeout: int = 90, deadline: Optional[float] = None) -> dict:
     """Call the configured orchestrator LLM and parse a JSON object response.
     Uses provider structured-output modes where available so parsing is reliable.
     tier='cheap' routes to the smaller model (high-volume scoring); max_tokens lets large
     structured outputs (e.g. the gap model) avoid truncation; timeout accommodates large
-    syntheses whose generation can exceed the default read timeout."""
+    syntheses whose generation can exceed the default read timeout. deadline (optional) caps the
+    TOTAL wall-clock across retries so a stalled call fails fast instead of retrying its full
+    timeout N times."""
     if ORCHESTRATOR == "openai":
-        text = _openai_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout)
+        text = _openai_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout, deadline=deadline)
     else:
-        text = _anthropic_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout)
+        text = _anthropic_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout, deadline=deadline)
     if not text:
         return {}
     return _parse_json_lenient(text)
@@ -985,7 +993,7 @@ def _parse_json_lenient(text: str) -> dict:
 
 
 def _anthropic_complete(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
-                        timeout: int = 90) -> str:
+                        timeout: int = 90, deadline: Optional[float] = None) -> str:
     if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
         return ""
     model, _ = _model_for(tier)
@@ -1008,6 +1016,7 @@ def _anthropic_complete(system: str, user: str, tier: str = "full", max_tokens: 
         headers=_anthropic_headers(),
         json=body,
         timeout=timeout,
+        deadline=deadline,
     )
     if res.failed:
         log.warning("orchestrator(anthropic) failed: %s", res.error)
@@ -1017,7 +1026,7 @@ def _anthropic_complete(system: str, user: str, tier: str = "full", max_tokens: 
 
 
 def _openai_complete(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
-                     timeout: int = 90) -> str:
+                     timeout: int = 90, deadline: Optional[float] = None) -> str:
     if "YOUR_OPENAI" in OPENAI_API_KEY:
         return ""
     _, model = _model_for(tier)
@@ -1034,6 +1043,7 @@ def _openai_complete(system: str, user: str, tier: str = "full", max_tokens: int
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         json=body,
         timeout=timeout,
+        deadline=deadline,
     )
     if res.failed:
         log.warning("orchestrator(openai) failed: %s", res.error)
@@ -1587,7 +1597,7 @@ def _gap_critic_refine(draft: dict, first_party_signals: dict) -> dict:
             GAP_CRITIC_SYSTEM,
             json.dumps({"draft_plan": draft, "first_party_signals": first_party_signals,
                         "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str),
-            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=240)
+            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
         if isinstance(crit, dict) and crit.get("summary"):
             log.info("gap critic pass refined the plan")
             return crit
@@ -1782,7 +1792,7 @@ def build_gap_model(business_id: int) -> dict:
         # and site_technical_gaps, so the JSON runs longer -- too small a cap truncates it
         # mid-object and the synthesis is discarded as unparseable.
         model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
-                                  max_tokens=12000, timeout=240)
+                                  max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
         # A failed/empty synthesis must NOT overwrite the last good gap model.
         # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
         # completion, unparseable JSON, missing key). Persisting that empty model would
