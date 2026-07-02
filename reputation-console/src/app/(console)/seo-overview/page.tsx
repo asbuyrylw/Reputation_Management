@@ -3,17 +3,87 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests, useSiteHealthTrend, useSchemaVerify, useGscSummary } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { MetricCard, EmptyState, CopyButton, DataSection } from "@/components/primitives";
-import { FlowStep, NextActions } from "@/components/flow";
+import { EmptyState, CopyButton, DataSection } from "@/components/primitives";
+import { SecHead } from "@/components/DashboardV2";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
-import { LocalSeoGoalCard } from "@/components/LocalSeoGoalCard";
 import { SearchPerformanceCard } from "@/components/SearchPerformanceCard";
 import { AiCrawlerReadinessCard } from "@/components/AiCrawlerReadinessCard";
 import { NapBlock } from "@/components/NapBlock";
-import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact, ReviewSla } from "@/lib/types";
+import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact, ReviewSla, LocalSeoGoal } from "@/lib/types";
+
+const healthColor = (s: number | null) => (s == null ? "#94A3B8" : s >= 60 ? "#059669" : s >= 40 ? "#D97706" : "#E0672E");
+const healthLabel = (s: number | null) => (s == null ? "—" : s >= 75 ? "Strong" : s >= 60 ? "Good" : s >= 40 ? "Fair" : "Poor");
+const fmtDate = (d?: string | null) => (d ? new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—");
+
+function Tile({ k, value, small, sub, color }: { k: string; value: string; small?: string; sub: string; color?: string }) {
+  return (
+    <div className="rounded-[14px] border border-line bg-card p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="mb-1.5 font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">{k}</div>
+      <div className="font-display text-[26px] font-semibold leading-none tracking-[-0.02em]" style={{ color: color ?? "var(--ink)" }}>{value}{small && <small className="text-[14px] text-ink-4">{small}</small>}</div>
+      <div className="mt-1.5 text-[12px] text-ink-3">{sub}</div>
+    </div>
+  );
+}
+
+function SiteHealthGauge({ score }: { score: number | null }) {
+  const s = Math.max(0, Math.min(100, score ?? 0));
+  const R = 40, C = 2 * Math.PI * R;
+  const col = healthColor(score);
+  return (
+    <div className="relative h-24 w-24 shrink-0">
+      <svg width="96" height="96" viewBox="0 0 96 96" className="-rotate-90">
+        <circle cx="48" cy="48" r={R} fill="none" stroke="#EEF0F4" strokeWidth="9" />
+        <circle cx="48" cy="48" r={R} fill="none" stroke={col} strokeWidth="9" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - s / 100)} />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <div className="font-display text-[30px] font-semibold" style={{ color: col }}>{score ?? "—"}</div>
+        <div className="font-mono text-[10px] text-ink-4">/100</div>
+      </div>
+    </div>
+  );
+}
+
+function SeoGoalCard({ goal, gscConnected }: { goal?: LocalSeoGoal; gscConnected: boolean }) {
+  const exp = goal?.projection?.expected;
+  const now = goal?.current_page_one_rate != null ? Math.round(goal.current_page_one_rate * 100) : 0;
+  return (
+    <Card className="flex flex-col">
+      <div className="eyebrow mb-3">Goal · get to page 1 of Google</div>
+      <div className="font-display text-[28px] font-semibold tracking-[-0.02em] text-ink">{fmtDate(exp?.target_date)}</div>
+      <p className="mt-1 text-[13.5px] text-ink-3">{exp?.months ? `~${exp.months} months` : "Projection pending"} to rank on page 1 for 80% of your local searches.</p>
+      <div className="my-4">
+        <div className="mb-1.5 flex justify-between font-mono text-[12px]"><span className="text-ink-4">now · {now}% on page 1</span><span className="font-semibold text-indigo-strong">target 80%</span></div>
+        <div className="h-2 overflow-hidden rounded-full bg-line"><i className="block h-full rounded-full bg-indigo" style={{ width: `${Math.max(2, Math.round((now / 80) * 100))}%` }} /></div>
+      </div>
+      {!gscConnected && (
+        <div className="mt-auto rounded-[11px] border border-amber/30 bg-amber-bg px-3.5 py-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-amber">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[15px] w-[15px]"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+            Get real Google numbers
+          </div>
+          <p className="mb-1.5 text-[12.5px] leading-relaxed text-ink-3">Connect Search Console to import real clicks, impressions and rankings.</p>
+          <Link href="/integrations" className="inline-flex items-center gap-1 text-[13px] font-semibold text-indigo hover:text-indigo-strong">Connect Search Console<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3 w-3"><path d="M5 12h14M13 6l6 6-6 6" /></svg></Link>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function TabSummary({ href, title, chip, chipTone, desc }: { href: string; title: string; chip: string; chipTone: "good" | "alert" | "amber" | "neutral"; desc: string }) {
+  const tones = { good: "bg-good-bg text-good", alert: "bg-alert-bg text-alert", amber: "bg-amber-bg text-amber", neutral: "bg-paper text-ink-3 border border-line-2" };
+  return (
+    <Link href={href} className="group block rounded-[14px] border border-line bg-card p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:border-indigo hover:shadow-md">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <b className="text-[15px] text-ink group-hover:text-indigo">{title}</b>
+        <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold ${tones[chipTone]}`}>{chip}</span>
+      </div>
+      <div className="text-[13px] text-ink-3">{desc} →</div>
+    </Link>
+  );
+}
 
 function Stars({ rating }: { rating: number | null }) {
   if (rating == null) return <span className="text-slate-400">—</span>;
@@ -240,7 +310,6 @@ function ReviewRequestCard({ kit, businessId, canEdit, sla }: { kit: ReviewReque
   );
 }
 
-const pct = (v: number | undefined | null) => `${Math.round((v ?? 0) * 100)}%`;
 
 // One-line proof line: how many pages WE published are earning search traffic. The deep view
 // (per-page clicks + sessions) lives on /search-performance. Hidden until something's published.
@@ -291,12 +360,15 @@ export default function SeoOverviewPage() {
   const reviewKit = useReviewRequest(businessId);
   const reviewSla = useReviewSla(businessId);
   const impact = useOurContentImpact(businessId);
+  const health = useSiteHealthTrend(businessId);
+  const schema = useSchemaVerify(businessId);
+  const gsc = useGscSummary(businessId);
 
   if (loading) return <Spinner />;
   if (businesses.length === 0) {
     return (
       <div>
-        <PageHeader eyebrow="Search & SEO" title="SEO overview" />
+        <PageHeader eyebrow="Search & SEO · Overview" title="Your Google visibility" />
         <EmptyState
           title="No data yet"
           why="Set up a business and run a local rank check to see your search visibility."
@@ -313,6 +385,17 @@ export default function SeoOverviewPage() {
   const fieldSize = c.field_size ?? null;
   const siteAsOf = site.data?.created_at ? new Date(site.data.created_at).toLocaleDateString() : null;
 
+  // v2 top: readiness + delta, schema coverage, and connection state.
+  const readiness = health.data?.length ? health.data[health.data.length - 1].score : null;
+  const readinessDelta = health.data && health.data.length >= 2 ? Math.round((health.data[health.data.length - 1].score) - health.data[0].score) : null;
+  const schemaDeployed = schema.data?.deployed_schema.length ?? null;
+  const schemaTotal = schema.data ? schema.data.deployed_schema.length + schema.data.recommended_missing.length : null;
+  const topMissingSchema = schema.data?.recommended_missing[0] ?? null;
+  const pagesChecked = schema.data?.checked_pages ?? null;
+  const gscConnected = !!(gsc.data?.has_data || gsc.data?.collecting);
+  const p1 = s ? Math.round(s.page_one_rate * 100) : null;
+  const mp = s ? Math.round(s.local_pack_rate * 100) : null;
+
   const seoActions: { title: string; note?: string | null; href: string }[] = [];
   if (reviewSla.data && reviewSla.data.summary.awaiting > 0) {
     const n = reviewSla.data.summary.awaiting;
@@ -327,50 +410,75 @@ export default function SeoOverviewPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Search & SEO"
-        title="SEO overview"
-        subtitle="Your traditional search visibility — local Google rankings, how you stack up against rivals, and your site's technical health."
+        eyebrow="Search & SEO · Overview"
+        title="Your Google visibility"
+        subtitle="Traditional search — your site's health for AI & Google crawlers, local rankings, and the moves to climb. A summary of every tab."
       />
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
-      <div className="space-y-6">
-        {/* Where you stand — local Google rankings (the headline of "search & SEO") */}
-        <FlowStep label="Where you stand" hint="Your local Google visibility right now." action={{ label: "Local detail", href: "/local-seo" }}>
-          {s ? (
-            <div className="space-y-3">
-              <p className="text-sm text-slate-600">
-                You&apos;re on page&nbsp;1 for <span className="font-semibold text-slate-900">{pct(s.page_one_rate)}</span> of local searches and in Google&apos;s map pack for <span className="font-semibold text-slate-900">{pct(s.local_pack_rate)}</span>.
-              </p>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <MetricCard label="On page one" value={pct(s.page_one_rate)} tone={s.page_one_rate >= 0.5 ? "good" : "bad"} whyItMatters="Share of local searches where you appear on Google's first page." />
-                <MetricCard label="In the map pack" value={pct(s.local_pack_rate)} tone={s.local_pack_rate >= 0.5 ? "good" : "bad"} whyItMatters="Share of searches where you show in Google's local 3-pack." />
-                <MetricCard label="Avg. position" value={s.avg_organic_rank == null ? "—" : `#${s.avg_organic_rank}`} tone={s.avg_organic_rank != null && s.avg_organic_rank <= 10 ? "good" : "bad"} whyItMatters={`Average Google rank where you appear (${s.ranked_queries} of ${s.queries} searches).`} />
+      <div className="space-y-5">
+        {/* KPI tiles */}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Tile k="AI-crawler readiness" value={readiness != null ? String(readiness) : "—"} small="/100" color={healthColor(readiness)} sub={readinessDelta != null ? `From site health · ${readinessDelta >= 0 ? "+" : ""}${readinessDelta}` : "From site health"} />
+          <Tile k="On page one" value={p1 != null ? `${p1}%` : "—"} sub="Local searches, Google p.1" />
+          <Tile k="In the map pack" value={mp != null ? `${mp}%` : "—"} sub="Local 3-pack" />
+          <Tile k="Schema coverage" value={schemaDeployed != null ? String(schemaDeployed) : "—"} small={schemaTotal != null ? `/${schemaTotal}` : undefined} color={schemaDeployed === 0 ? "var(--alert)" : undefined} sub={schemaDeployed === 0 ? "No structured data yet" : "Structured-data types live"} />
+        </div>
+
+        {/* Site health — the important one */}
+        <Card>
+          <SecHead title="Site health" note="how readable your site is to AI & Google" link={{ label: "Full site audit", href: "/seo" }} />
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-4">
+              <SiteHealthGauge score={readiness} />
+              <div>
+                <span className="inline-flex rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold uppercase" style={{ background: `${healthColor(readiness)}1a`, color: healthColor(readiness) }}>{healthLabel(readiness)}</span>
+                {readinessDelta != null && readinessDelta !== 0 && <span className={`ml-1.5 inline-flex rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold ${readinessDelta >= 0 ? "bg-good-bg text-good" : "bg-alert-bg text-alert"}`}>{readinessDelta >= 0 ? "▲" : "▼"} {readinessDelta >= 0 ? "+" : ""}{readinessDelta}</span>}
+                <p className="mt-2.5 max-w-[220px] text-[12.5px] leading-relaxed text-ink-3">When AI can&apos;t read your site, it uses forums and reviews you don&apos;t control.</p>
               </div>
             </div>
-          ) : (
-            <Card>
-              <p className="text-sm text-slate-600">
-                No local rank snapshot yet.{" "}
-                <Link href="/local-seo" className="font-medium text-indigo-600 hover:text-indigo-700">Run a local rank check →</Link>
-              </p>
-            </Card>
-          )}
-        </FlowStep>
-
-        {/* What we'll do */}
-        <FlowStep label="What we'll do" hint="The highest-impact moves to climb Google." action={{ label: "Full plan", href: "/next-steps" }}>
-          <NextActions items={seoActions.slice(0, 4)} />
-        </FlowStep>
-
-        {/* How we'll know it's working — page-1 timeline, real clicks, content traffic */}
-        <FlowStep label="How we'll know it's working" hint="Your page-1 timeline, real Google clicks, and the traffic your content earns." action={{ label: "Search traffic", href: "/search-performance" }}>
-          <div className="space-y-6">
-            <LocalSeoGoalCard goal={goal.data} />
-            <SearchPerformanceCard businessId={businessId} />
-            <OurContentImpactLine impact={impact.data} />
+            <div className="grid min-w-[280px] flex-1 grid-cols-2 gap-3">
+              <div className="rounded-[12px] border border-line bg-paper p-3.5">
+                <div className="eyebrow mb-1.5">Pages checked</div>
+                <div className="font-display text-[24px] font-semibold tracking-[-0.02em] text-ink">{pagesChecked ?? "—"}</div>
+              </div>
+              <div className="rounded-[12px] border border-line bg-paper p-3.5">
+                <div className="eyebrow mb-1.5">Top fix</div>
+                <div className="mt-1 text-[14px] font-semibold text-ink">{topMissingSchema ? `Add ${topMissingSchema} schema` : "Site is in good shape"}</div>
+                {topMissingSchema && <div className="text-[12px] text-ink-4">helps AI extract your facts</div>}
+              </div>
+            </div>
           </div>
-        </FlowStep>
+        </Card>
+
+        {/* Do this next + Goal */}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <Card>
+            <SecHead title="Do this next" note="highest-impact SEO moves" />
+            <div>
+              {seoActions.slice(0, 3).map((a, i) => (
+                <div key={i} className="flex gap-3 border-b border-line py-3 last:border-0">
+                  <div className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg bg-ink font-mono text-[13px] font-semibold text-white">{i + 1}</div>
+                  <div><div className="text-[14px] font-semibold text-ink">{a.title}</div>{a.note && <div className="mt-0.5 text-[12.5px] text-ink-3">{a.note}</div>}</div>
+                </div>
+              ))}
+            </div>
+            <Link href="/next-steps" className="mt-3 inline-flex items-center gap-1 text-[13px] font-semibold text-indigo hover:text-indigo-strong">Full plan<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg></Link>
+          </Card>
+          <SeoGoalCard goal={goal.data} gscConnected={gscConnected} />
+        </div>
+
+        {/* tab summaries */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <TabSummary href="/search-performance" title="Search Console" chip={gscConnected ? "Connected" : "Not connected"} chipTone={gscConnected ? "good" : "neutral"} desc={gscConnected ? "Real clicks & rankings" : "Connect to import real clicks & rankings"} />
+          <TabSummary href="/local-seo" title="Local rankings" chip={p1 != null ? `${p1}% page 1` : "No data"} chipTone={p1 && p1 >= 50 ? "good" : "alert"} desc={s ? `${s.queries} tracked searches` : "Run a local rank check"} />
+          <TabSummary href="/seo" title="Site health" chip={readiness != null ? `${readiness} · ${healthLabel(readiness)}` : "No crawl"} chipTone={readiness == null ? "neutral" : readiness >= 60 ? "good" : readiness >= 40 ? "amber" : "alert"} desc="Page-by-page audit & schema fixes" />
+        </div>
+
+        {/* real Google clicks + content-earned traffic (kept from the info-flow view) */}
+        <SearchPerformanceCard businessId={businessId} />
+        <OurContentImpactLine impact={impact.data} />
 
         {/* Supporting detail — collapsed by default; deep dives live in the Search & SEO hub tabs. */}
         <DataSection title="More detail — reviews, keywords, AI-readiness, competitors & site" headline="Your Google reviews + how to get more, the keywords to target, AI-crawler readiness, competitive standing, and site health." detailsLabel="Show detail">
