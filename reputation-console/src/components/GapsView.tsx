@@ -13,7 +13,7 @@ import { Term } from "./Term";
 import { engineLabel } from "@/lib/engines";
 
 type Json = Record<string, unknown>;
-type WeakQuery = { prompt?: string; engine?: string; problem?: string };
+type WeakQuery = { prompt?: string; engine?: string; problem?: string; fix?: string; addressed_by?: string };
 type Missing = { topic?: string; asset_type?: string; why?: string };
 type Thin = { claim?: string; where_to_get_it?: string };
 type LocalGap = { query?: string; current_rank?: unknown; recommendation?: string; why?: string };
@@ -136,6 +136,12 @@ export function GapsView({
                 <ul className="mt-1 list-disc space-y-0.5 pl-6 text-sm text-slate-600">
                   {w.problem.split(/;\s+/).filter(Boolean).map((p, j) => <li key={j}>{p}</li>)}
                 </ul>
+              )}
+              {w.fix && (
+                <div className="ml-6 mt-1.5 rounded-md bg-emerald-50 px-2 py-1.5 text-sm text-slate-700 ring-1 ring-inset ring-emerald-200">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">The fix</span>
+                  <div className="mt-0.5">{w.fix}</div>
+                </div>
               )}
               {w.engine && <div className="mt-0.5 pl-6 text-xs text-slate-400">Seen on {engineLabel(w.engine)}</div>}
             </li>

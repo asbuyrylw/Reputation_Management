@@ -26,25 +26,9 @@ import { repScore, dashboardScore } from "@/lib/repScore";
 import type { SeriesPoint, WorkOrder, Business } from "@/lib/types";
 
 type Json = Record<string, unknown>;
-type WeakQuery = { prompt?: string; engine?: string; problem?: string };
+type WeakQuery = { prompt?: string; engine?: string; problem?: string; fix?: string; addressed_by?: string };
 
 const pct = (v: number | null | undefined) => `${Math.round((v ?? 0) * 100)}%`;
-
-// --- Collapsible "see more" wrapper for any object that can get tall ---
-function SeeMore({ children, label = "See more", max = "max-h-64" }: { children: React.ReactNode; label?: string; max?: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <div className={open ? "" : `relative ${max} overflow-hidden`}>
-        {children}
-        {!open && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-linear-to-t from-white to-transparent" />}
-      </div>
-      <button type="button" onClick={() => setOpen((o) => !o)} className="mt-2 text-sm font-medium text-indigo-600 hover:text-indigo-700">
-        {open ? "Show less ▲" : `${label} ▾`}
-      </button>
-    </div>
-  );
-}
 
 // --- Live monitor: incidents + mentions at a glance. Always visible (shows 0 / all-clear). ---
 function LiveMonitorStrip({ businessId }: { businessId: number | null }) {
@@ -178,6 +162,11 @@ function BiggestGaps({ gap }: { gap: Json | undefined }) {
                 {w.problem && (
                   <div className="mt-1 flex gap-2 text-sm leading-relaxed text-slate-600">
                     <span className="select-none text-slate-300" aria-hidden>–</span><span>{w.problem}</span>
+                  </div>
+                )}
+                {w.fix && (
+                  <div className="mt-1.5 text-sm leading-relaxed text-emerald-700">
+                    <span className="font-semibold">Fix:</span> {w.fix}
                   </div>
                 )}
               </div>
@@ -482,23 +471,42 @@ export default function DashboardPage() {
           {/* 4) Results & Proof — moved below the trajectory */}
           <ResultsProofCard businessId={businessId} currentScore={score} />
 
-          {/* 5) Do this next, beside biggest gaps */}
+          {/* 5) Fix the worst things AI is saying — pulled out + actionable (highest ROI) */}
+          {answers && answers.some((a) => !a.failed && a.goal_alignment != null) && (
+            <section>
+              <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">
+                Fix the worst things AI is saying <span className="font-normal text-slate-400">— your highest-ROI moves</span>
+              </h2>
+              <p className="mb-3 text-xs text-slate-500">
+                The lowest-scoring answers from your latest audit — each paired with the specific action that fixes it.
+              </p>
+              <Card accent="bad">
+                <WorstAnswers
+                  answers={answers}
+                  runId={latestRunId}
+                  limit={4}
+                  weakQueries={data.gap?.weak_queries as WeakQuery[] | undefined}
+                  showFix
+                />
+                <div className="mt-3 border-t border-slate-100 pt-3 text-right">
+                  <Link href="/next-steps" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                    See your full prioritized plan →
+                  </Link>
+                </div>
+              </Card>
+            </section>
+          )}
+
+          {/* 6) Do this next, beside biggest gaps */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <DoThisNext workOrders={workOrders} businessId={businessId} />
             <BiggestGaps gap={data.gap} />
           </div>
 
-          {/* 6) Worst answers & per-engine — drill-down detail (collapsed) */}
-          <DataSection title="Worst answers & per-engine scores" severity="med" headline="The worst things AI is saying about you right now, plus each assistant's score." detailsLabel="Show worst answers">
-            <Card accent="bad">
-              <h3 className="text-base font-semibold tracking-tight text-slate-900">Worst things AI is saying right now</h3>
-              <div className="mt-3"><WorstAnswers answers={answers} runId={latestRunId} limit={3} /></div>
-              <div className="mt-4 border-t border-slate-100 pt-3">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Each AI assistant&apos;s score</div>
-                <SeeMore label="See every engine">
-                  <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
-                </SeeMore>
-              </div>
+          {/* 7) Per-engine AI scores — drill-down detail (collapsed) */}
+          <DataSection title="Per-engine AI scores" headline="Each AI assistant's score for you." detailsLabel="Show per-engine scores">
+            <Card>
+              <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
             </Card>
           </DataSection>
 
