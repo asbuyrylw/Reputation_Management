@@ -46,6 +46,7 @@ _FINANCIAL_FIRMS = {"ria", "broker_dealer", "insurance"}
 # Provider API endpoints (host-pinned; all I/O via http.request_json).
 _OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations"
 _STABILITY_URL = "https://api.stability.ai/v2beta/stable-image/generate/core"
+_GEMINI_BASE = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +57,11 @@ def _image_provider() -> str:
 
 
 def _image_model() -> str:
-    return (os.getenv("IMAGE_MODEL") or "gpt-image-1").strip()
+    m = (os.getenv("IMAGE_MODEL") or "").strip()
+    if m:
+        return m
+    # Gemini default = Imagen 4 (high-quality dedicated image model); OpenAI default = gpt-image-1.
+    return "imagen-4.0-generate-001" if _image_provider() == "gemini" else "gpt-image-1"
 
 
 def _image_key() -> str:
@@ -70,6 +75,8 @@ def _image_key() -> str:
         return os.getenv("STABILITY_API_KEY", "").strip()
     if prov == "replicate":
         return os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if prov == "gemini":
+        return os.getenv("GEMINI_API_KEY", "").strip()
     return ""
 
 
@@ -145,6 +152,8 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
             raw = _openai_image(full_prompt, model, size)
         elif provider == "stability":
             raw = _stability_image(full_prompt)
+        elif provider == "gemini":
+            raw = _gemini_image(full_prompt, model, size)
         else:
             return {"skipped": True, "reason": f"unsupported IMAGE_PROVIDER '{provider}'"}
     except Exception as e:  # noqa: BLE001
@@ -209,6 +218,58 @@ def _stability_image(prompt: str) -> Optional[bytes]:
         raise RuntimeError(res.error or "stability image failed")
     b64 = res.data.get("image")
     return base64.b64decode(b64) if b64 else None
+
+
+def _aspect_from_size(size: str) -> str:
+    """Nearest Imagen aspect ratio for a WxH size (Imagen supports 1:1, 3:4, 4:3, 9:16, 16:9)."""
+    try:
+        w, h = (int(x) for x in (size or "1024x1024").lower().split("x"))
+        r = w / h
+    except Exception:  # noqa: BLE001
+        return "1:1"
+    if r >= 1.5:
+        return "16:9"
+    if r >= 1.15:
+        return "4:3"
+    if r <= 0.6:
+        return "9:16"
+    if r <= 0.85:
+        return "3:4"
+    return "1:1"
+
+
+def _gemini_image(prompt: str, model: str, size: str) -> Optional[bytes]:
+    """Google image generation via the GEMINI API key. Handles both Imagen models
+    (…:predict -> predictions[].bytesBase64Encoded) and gemini-*-image models
+    (…:generateContent -> candidates[].content.parts[].inlineData)."""
+    key = _image_key()
+    if not key:
+        raise RuntimeError("no Gemini API key")
+    hdr = {"Content-Type": "application/json", "x-goog-api-key": key}
+    if model.startswith("imagen"):
+        res = _http.request_json(
+            "POST", f"{_GEMINI_BASE}/models/{model}:predict", headers=hdr,
+            json={"instances": [{"prompt": prompt}],
+                  "parameters": {"sampleCount": 1, "aspectRatio": _aspect_from_size(size)}},
+            timeout=180, max_retries=2, guard_redirects=True)
+        if res.failed or not isinstance(res.data, dict):
+            raise RuntimeError(res.error or "imagen image failed")
+        preds = res.data.get("predictions") or []
+        b64 = (preds[0] or {}).get("bytesBase64Encoded") if preds else None
+        return base64.b64decode(b64) if b64 else None
+    # gemini-*-image via generateContent (inline image bytes)
+    res = _http.request_json(
+        "POST", f"{_GEMINI_BASE}/models/{model}:generateContent", headers=hdr,
+        json={"contents": [{"parts": [{"text": f"{prompt} Target size ~{size}."}]}]},
+        timeout=180, max_retries=2, guard_redirects=True)
+    if res.failed or not isinstance(res.data, dict):
+        raise RuntimeError(res.error or "gemini image failed")
+    parts = (((res.data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+    for p in parts:
+        inl = p.get("inlineData") or p.get("inline_data")
+        if inl and inl.get("data"):
+            return base64.b64decode(inl["data"])
+    return None
 
 
 # ---------------------------------------------------------------------------
