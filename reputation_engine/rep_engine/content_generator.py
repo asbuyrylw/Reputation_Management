@@ -743,6 +743,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     except Exception as e:  # noqa: BLE001
         log.debug("topic/link enrichment skipped: %s", e)
 
+    # Phase-4 visual content: pull the ![alt](IMAGE: prompt) markers the writer embedded into
+    # structured metadata (alt text + prompt + section) so images can be produced per marker.
+    try:
+        from . import image_extraction as _ie
+        quality_notes["image_markers"] = _ie.extract_image_markers(body)
+    except Exception as e:  # noqa: BLE001
+        log.debug("image marker extraction skipped: %s", e)
+
     # NeuronWriter draft content-score (the SERP-coverage gauge), stored alongside our own scores so
     # the editor can show both. Free (/evaluate-content). Dormant-safe -- skipped without a key/query.
     try:

@@ -131,14 +131,16 @@ function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> })
 function TopicLinksPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> }) {
   const tc = qn.topic_coverage;
   const links = qn.suggested_links ?? [];
-  if (!tc && links.length === 0) return null;
+  const images = qn.image_markers ?? [];
+  if (!tc && links.length === 0 && images.length === 0) return null;
   return (
     <details className="mt-2 rounded-[12px] border border-line bg-paper/60 p-2.5 text-xs">
       <summary className="flex cursor-pointer flex-wrap items-center gap-1.5">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">Topic &amp; links</span>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">Topic · links · images</span>
         {tc?.score != null && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${G_CHIP[gTone(tc.score)]}`}>Topic fit {tc.score}/100</span>}
         {tc?.fills_gap && <span className="rounded-full bg-good-bg px-2 py-0.5 text-[10px] font-semibold text-good">Fills a gap</span>}
         {links.length > 0 && <span className="rounded-full bg-indigo-050 px-2 py-0.5 text-[10px] font-semibold text-indigo-strong">{links.length} link{links.length === 1 ? "" : "s"}</span>}
+        {images.length > 0 && <span className="rounded-full bg-indigo-050 px-2 py-0.5 text-[10px] font-semibold text-indigo-strong">{images.length} image{images.length === 1 ? "" : "s"}</span>}
       </summary>
       <div className="mt-2.5 space-y-3">
         {tc && (
@@ -164,6 +166,23 @@ function TopicLinksPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]
                     ¶{l.paragraph_idx + 1} → <a href={l.target_url} target="_blank" rel="noreferrer" className="font-medium text-indigo hover:underline">{l.anchor_text}</a>
                     <span className="text-ink-4"> — {l.reason}</span>
                   </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {images.length > 0 && (
+          <div>
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-ink-4">Images to produce (AI + SEO alt text)</div>
+            <ul className="space-y-1.5">
+              {images.map((im) => (
+                <li key={im.index} className="rounded-[8px] border border-line bg-card px-2 py-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3 w-3 shrink-0 text-indigo"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></svg>
+                    {im.section_heading && <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">{im.section_heading}</span>}
+                  </div>
+                  <div className="mt-0.5 font-medium text-ink-2">{im.alt_text || "(no alt text)"}</div>
+                  {im.prompt && <div className="text-ink-4">prompt: {im.prompt}</div>}
                 </li>
               ))}
             </ul>

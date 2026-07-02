@@ -279,6 +279,7 @@ export interface ContentDraft {
         intent_serp?: DraftIntentSerp;
         topic_coverage?: DraftTopicCoverage;
         suggested_links?: DraftSuggestedLink[];
+        image_markers?: DraftImageMarker[];
       } & Record<string, unknown>)
     | null;
 }
@@ -1418,6 +1419,14 @@ export interface DraftSuggestedLink {
   target_title: string;
   priority: "high" | "normal";
   reason: string;
+}
+// Phase-4: an ![alt](IMAGE: prompt) marker the writer embedded — the image to produce for a section.
+export interface DraftImageMarker {
+  index: number;
+  alt_text: string;
+  prompt: string;
+  section_heading: string;
+  position: number;
 }
 
 // Topic-authority clusters — pillar + spoke keywords grouped into the topics to own.
