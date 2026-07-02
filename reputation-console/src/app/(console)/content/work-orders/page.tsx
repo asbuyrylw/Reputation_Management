@@ -10,7 +10,7 @@ import { Card, PageHeader, Spinner } from "@/components/ui";
 import { Badge, Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { VisualContentPanel } from "@/components/VisualContentPanel";
-import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, TaskImpact, RoadmapItem } from "@/lib/types";
+import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, RoadmapItem } from "@/lib/types";
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
 // task -> draft -> published asset).
@@ -655,6 +655,27 @@ function FocusItem({
   );
 }
 
+// A compact labeled dropdown for the task filter bar.
+function FilterSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: [string, string][];
+}) {
+  const active = value !== "all";
+  return (
+    <label className="inline-flex items-center gap-1 text-slate-500">
+      <span className="text-slate-400">{label}:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`rounded border px-1.5 py-1 text-xs ${active ? "border-indigo-300 bg-indigo-50 text-indigo-800" : "border-slate-300 bg-white text-slate-700"}`}
+      >
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </label>
+  );
+}
+
+const EMPTY_FILTERS = { state: "all", area: "all", assignee: "all", due: "all", start: "all", focus: "all", impact: "all", gap: "all" };
+
 export default function WorkOrdersPage() {
   const { businessId, canEdit } = useBusiness();
   const { user } = useAuth();
@@ -666,6 +687,7 @@ export default function WorkOrdersPage() {
   const [sortRoi, setSortRoi] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [view, setView] = useState<ViewMode>("status");
+  const [filters, setFilters] = useState<Record<string, string>>(EMPTY_FILTERS);
   // Fast = just "Today's focus" (3 tasks); Deep = the full board + why/impact detail.
   const [mode, setMode] = useState<"fast" | "deep">("deep");
 
@@ -682,9 +704,43 @@ export default function WorkOrdersPage() {
   const managed = data.filter((w) => w.planned || w.status !== "pending");
   const archivedCount = managed.filter((w) => w.superseded).length;
   const visible = showArchived ? managed : managed.filter((w) => !w.superseded);
+
+  // --- Filtering: reduce the board by any combination of due/start date, assignee, state, where,
+  // impact (score lift), impact focus (AI vs SEO), and the gap it closes. Grouping/views run on the
+  // FILTERED set; the header progress stays board-level. ---
+  const todayStr = todayISO();
+  const distinctAssignees = Array.from(new Set(visible.map((w) => w.assignee?.trim() || "Unassigned")))
+    .sort((a, b) => (a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b)));
+  const distinctAreas = AREA_ORDER.filter((k) => visible.some((w) => areaKey(w.area) === k));
+  const distinctGaps = Array.from(new Set(visible.map((w) => (w.gap_source || "").trim()).filter(Boolean))).sort();
+  const taskState = (w: WorkOrder): "open" | "closed" | "approval" => {
+    if (draftByWo.get(w.id)?.status === "pending_review") return "approval";
+    if (w.status === "done" || w.status === "verified" || w.status === "skipped") return "closed";
+    return "open";
+  };
+  const matches = (w: WorkOrder): boolean => {
+    if (filters.state !== "all" && taskState(w) !== filters.state) return false;
+    if (filters.area !== "all" && areaKey(w.area) !== filters.area) return false;
+    if (filters.assignee !== "all" && (w.assignee?.trim() || "Unassigned") !== filters.assignee) return false;
+    if (filters.due !== "all" && dueBucket(w.target_date).key !== filters.due) return false;
+    if (filters.start !== "all") {
+      const s = (w.start_date || "").slice(0, 10);
+      const started = !s || s <= todayStr;
+      if (filters.start === "started" && !started) return false;
+      if (filters.start === "upcoming" && started) return false;
+    }
+    if (filters.focus === "ai" && !w.why_helps_ai_rep) return false;
+    if (filters.focus === "seo" && !w.why_helps_seo) return false;
+    if (filters.impact !== "all" && (w.predicted_ai_points ?? 0) < Number(filters.impact)) return false;
+    if (filters.gap !== "all" && (w.gap_source || "").trim() !== filters.gap) return false;
+    return true;
+  };
+  const filtered = visible.filter(matches);
+  const anyFilter = Object.values(filters).some((v) => v !== "all");
+
   const sortRows = (rows: WorkOrder[]) =>
     sortRoi ? [...rows].sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1)) : rows;
-  const byStatus = (s: string) => sortRows(visible.filter((w) => w.status === s));
+  const byStatus = (s: string) => sortRows(filtered.filter((w) => w.status === s));
   const total = visible.length;
   const done = visible.filter((w) => w.status === "done" || w.status === "verified").length;
   const inProgress = visible.filter((w) => w.status === "in_progress").length;
@@ -706,7 +762,7 @@ export default function WorkOrdersPage() {
   // Grouping for the "by area" view. Each area is a labeled, collapsible section (default open).
   const areaGroups = (() => {
     const map = new Map<string, WorkOrder[]>();
-    for (const w of visible) {
+    for (const w of filtered) {
       const k = areaKey(w.area);
       (map.get(k) ?? map.set(k, []).get(k)!).push(w);
     }
@@ -720,7 +776,7 @@ export default function WorkOrdersPage() {
   // Grouping for the assignee / due views.
   const assigneeGroups = (() => {
     const map = new Map<string, WorkOrder[]>();
-    for (const w of visible) {
+    for (const w of filtered) {
       const k = w.assignee?.trim() || "Unassigned";
       (map.get(k) ?? map.set(k, []).get(k)!).push(w);
     }
@@ -730,7 +786,7 @@ export default function WorkOrdersPage() {
   })();
   const dueGroups = (() => {
     const map = new Map<string, { label: string; order: number; items: WorkOrder[] }>();
-    for (const w of visible) {
+    for (const w of filtered) {
       const b = dueBucket(w.target_date);
       if (!map.has(b.key)) map.set(b.key, { label: b.label, order: b.order, items: [] });
       map.get(b.key)!.items.push(w);
@@ -744,12 +800,12 @@ export default function WorkOrdersPage() {
   })();
 
   // "My tasks" — only the work orders assigned to the signed-in user (FK assignee_user_id).
-  const myTasks = user ? sortRows(visible.filter((w) => w.assignee_user_id === user.id)) : [];
+  const myTasks = user ? sortRows(filtered.filter((w) => w.assignee_user_id === user.id)) : [];
 
   // Roadmap = impact-ranked open tasks (server-sorted best-first by impact_score). The top 3
   // power "Today's focus"; the full list drives the "By priority" board view. We pair each
   // roadmap item back to its WorkOrder (by wo_id) so the board can reuse WorkOrderCard.
-  const woById = new Map<number, WorkOrder>(visible.map((w) => [w.id, w]));
+  const woById = new Map<number, WorkOrder>(filtered.map((w) => [w.id, w]));
   const roadmapItems = roadmap?.items ?? [];
   const focusItems = roadmapItems.slice(0, 3);
   // Open tasks in roadmap impact order — the WorkOrders that still have a card to render.
@@ -867,6 +923,34 @@ export default function WorkOrdersPage() {
               </div>
             </div>
             <ToneBar pct={donePct} tone="good" />
+            {/* Filters — narrow the board by any combination of these dimensions. */}
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+                <span className="font-semibold uppercase tracking-wide text-slate-400">Filter</span>
+                <FilterSelect label="Status" value={filters.state} onChange={(v) => setFilters((f) => ({ ...f, state: v }))}
+                  options={[["all", "All"], ["open", "Open"], ["approval", "Waiting for approval"], ["closed", "Closed / complete"]]} />
+                <FilterSelect label="Where" value={filters.area} onChange={(v) => setFilters((f) => ({ ...f, area: v }))}
+                  options={[["all", "Anywhere"], ...distinctAreas.map((k) => [k, AREA_LABEL[k]] as [string, string])]} />
+                <FilterSelect label="Assignee" value={filters.assignee} onChange={(v) => setFilters((f) => ({ ...f, assignee: v }))}
+                  options={[["all", "Anyone"], ...distinctAssignees.map((a) => [a, a] as [string, string])]} />
+                <FilterSelect label="Due" value={filters.due} onChange={(v) => setFilters((f) => ({ ...f, due: v }))}
+                  options={[["all", "Any"], ["overdue", "Overdue"], ["week", "This week"], ["month", "This month"], ["later", "Later"], ["none", "No due date"]]} />
+                <FilterSelect label="Start" value={filters.start} onChange={(v) => setFilters((f) => ({ ...f, start: v }))}
+                  options={[["all", "Any"], ["started", "Started"], ["upcoming", "Upcoming"]]} />
+                <FilterSelect label="Focus" value={filters.focus} onChange={(v) => setFilters((f) => ({ ...f, focus: v }))}
+                  options={[["all", "AI + SEO"], ["ai", "AI visibility"], ["seo", "SEO"]]} />
+                <FilterSelect label="Impact" value={filters.impact} onChange={(v) => setFilters((f) => ({ ...f, impact: v }))}
+                  options={[["all", "Any"], ["1", "1+ AI pts"], ["3", "3+ AI pts"], ["5", "5+ AI pts"], ["10", "10+ AI pts"]]} />
+                {distinctGaps.length > 0 && (
+                  <FilterSelect label="Gap" value={filters.gap} onChange={(v) => setFilters((f) => ({ ...f, gap: v }))}
+                    options={[["all", "Any gap"], ...distinctGaps.map((g) => [g, g] as [string, string])]} />
+                )}
+                <span className="text-slate-400">Showing {filtered.length} of {visible.length}</span>
+                {anyFilter && (
+                  <button onClick={() => setFilters(EMPTY_FILTERS)} className="font-medium text-indigo-600 hover:underline">Clear filters</button>
+                )}
+              </div>
+            </div>
           </Card>
 
           {view === "status" && (
