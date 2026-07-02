@@ -670,9 +670,19 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         from . import content_quality as _cq
         _kw = list(coverage.get("covered", [])) + list(coverage.get("missing", []))
         _site = grounding if isinstance(grounding, dict) else None
+        # NeuronWriter SERP/NLP terms -> covered-vs-missing term-coverage grade (Rec 1 backend).
+        _nterms: list[str] = []
+        if isinstance(neuron, dict):
+            for _k in ("terms_h2", "terms_basic"):
+                _v = neuron.get(_k)
+                if isinstance(_v, str):
+                    _nterms += [t.strip() for t in _v.replace("\n", ",").split(",") if len(t.strip()) > 2]
+        _nterms = list(dict.fromkeys(_nterms))[:40]
         quality_notes.update(_cq.analyze_draft(
             body, target_query=wo.get("target_query") or "", keywords=_kw,
-            site_summary=_site, with_fact_check=True))
+            site_summary=_site, with_fact_check=True, neuron_terms=_nterms or None,
+            business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
+            geo=(biz.get("geo") if isinstance(biz, dict) else "") or ""))
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
         log.debug("draft quality analysis skipped: %s", e)
 

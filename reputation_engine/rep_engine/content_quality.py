@@ -29,6 +29,10 @@ _LINK = re.compile(r"(?<!\!)\[([^\]]+)\]\(([^)]+)\)")   # [text](url)
 _STAT = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s?(?:%|percent|million|billion|k\b|years?|clients?|"
                    r"customers?|reviews?|\$)", re.I)
 _SENT = re.compile(r"[.!?]+\s")
+_HEADING_LVL = re.compile(r"^(\s{0,3})(#{1,6})\s+(.+)$", re.M)
+_FRESH = re.compile(r"(last[-\s]?updated|updated on|as of|reviewed on)\b", re.I)
+_SYLL = re.compile(r"[aeiouy]+", re.I)
+_PASSIVE = re.compile(r"\b(?:was|were|is|are|been|be|being)\s+\w+ed\b", re.I)
 
 
 def _words(body: str) -> list[str]:
@@ -154,13 +158,189 @@ def fact_check(body: str, site_summary: Optional[dict] = None) -> dict:
 
 
 # ============================================================================================
+# Structure / layout grade (Phase 1, Rec 2) -- heading hierarchy + organization, 0-100
+# ============================================================================================
+def _heading_map(body: str) -> list[dict]:
+    return [{"level": len(m.group(2)), "text": m.group(3).strip()} for m in _HEADING_LVL.finditer(body or "")]
+
+
+def structure_score(body: str) -> dict:
+    """Grade heading hierarchy + layout for AI extraction (a dedicated layout score, not just booleans)."""
+    body = body or ""
+    hmap = _heading_map(body)
+    h1 = sum(1 for h in hmap if h["level"] == 1)
+    h2 = sum(1 for h in hmap if h["level"] == 2)
+    # hierarchy: never jump more than one level deeper than the previous heading (no H3 before an H2)
+    hierarchy_valid, prev = True, 0
+    for h in hmap:
+        if prev and h["level"] > prev + 1:
+            hierarchy_valid = False
+            break
+        prev = h["level"]
+    # section balance: no section runs far longer than the average
+    sections = re.split(r"^\s{0,3}#{1,6}\s+.+$", body, flags=re.M)
+    seclens = [n for n in (len(_words(s)) for s in sections) if n > 0]
+    avgsec = (sum(seclens) / len(seclens)) if seclens else 0
+    balanced = (not seclens) or max(seclens) <= max(160, 5 * avgsec)
+    imgs = _IMG.findall(body)
+    has_lists = bool(re.search(r"^\s*[-*]\s+\S", body, re.M)) or bool(re.search(r"^\s*\d+\.\s+\S", body, re.M))
+    avg_sent = _avg_sentence_len(body)
+    checks = [
+        (h1 == 1, 20, "Single H1 title", "Use exactly one H1." if h1 == 0 else "Only one H1; demote the rest."),
+        (h2 >= 2, 20, "2+ H2 sections", "Break the body into 2+ H2 sections."),
+        (hierarchy_valid, 15, "Valid heading hierarchy", "Don't skip heading levels (e.g. an H3 before any H2)."),
+        (balanced, 15, "Balanced section lengths", "One section is far longer than the rest — split it."),
+        (len(imgs) >= 1, 10, "Image present", "Add a relevant image near the top."),
+        (has_lists, 10, "Scannable list block", "Add a bulleted or numbered list of key points."),
+        (10 <= avg_sent <= 24, 10, "Readable sentence length", f"Avg sentence {avg_sent} words — aim 10–24."),
+    ]
+    earned = sum(w for ok, w, _, _ in checks if ok)
+    possible = sum(w for _, w, _, _ in checks)
+    return {"score": round(100 * earned / possible) if possible else 0,
+            "hierarchy_valid": hierarchy_valid,
+            "structure_map": [{"level": h["level"], "text": h["text"][:80]} for h in hmap[:24]],
+            "issues": [{"label": l, "fix": f} for ok, w, l, f in checks if not ok]}
+
+
+# ============================================================================================
+# Keyword density (Phase 1, Rec 6) -- occurrence rate per keyword, flag under/over-optimized
+# ============================================================================================
+def keyword_density_check(body: str, keywords: Optional[list[str]] = None) -> dict:
+    words = _words(body)
+    wc = len(words) or 1
+    low = " ".join(words).lower()
+    out, issues = [], []
+    for k in (keywords or [])[:20]:
+        kl = (k or "").lower().strip()
+        if not kl:
+            continue
+        occ = low.count(kl)
+        density = round(100 * occ * len(kl.split()) / wc, 2)
+        band = "missing" if occ == 0 else "low" if density < 0.3 else "high" if density > 2.0 else "ok"
+        out.append({"keyword": k, "count": occ, "density_pct": density, "band": band})
+        if band == "missing":
+            issues.append({"label": f"Missing keyword: “{k}”", "fix": f"Weave “{k}” in naturally."})
+        elif band == "high":
+            issues.append({"label": f"Over-optimized: “{k}” at {density}%", "fix": f"Ease off “{k}” — above ~2% reads as stuffing."})
+    return {"keyword_densities": out, "issues": issues}
+
+
+# ============================================================================================
+# Readability grade (Phase 1, EXTRA #10) -- Flesch-Kincaid grade + passive voice
+# ============================================================================================
+def _syllables(word: str) -> int:
+    return max(1, len(_SYLL.findall(word.lower().rstrip("e"))))
+
+
+def readability_score(body: str) -> dict:
+    text = re.sub(r"[#*_>`\[\]()!]", " ", body or "")
+    words = _words(text)
+    sents = [s for s in _SENT.split(text) if s.strip()]
+    nw, ns = len(words), max(1, len(sents))
+    if nw == 0:
+        return {"grade": None, "avg_sentence_len": 0, "passive_hits": 0, "issues": []}
+    syl = sum(_syllables(w) for w in words)
+    grade = round(0.39 * (nw / ns) + 11.8 * (syl / nw) - 15.59, 1)
+    passive = len(_PASSIVE.findall(text))
+    issues = []
+    if grade > 12:
+        issues.append({"label": f"Reading grade {grade} (hard)", "fix": "Shorten sentences + simpler words; aim grade 8–10."})
+    if passive > max(3, ns // 4):
+        issues.append({"label": f"{passive} passive-voice phrases", "fix": "Rewrite passive sentences in active voice."})
+    return {"grade": grade, "avg_sentence_len": round(nw / ns, 1), "passive_hits": passive,
+            "target": "grade 8–10 for a broad audience", "issues": issues}
+
+
+# ============================================================================================
+# NeuronWriter-style term coverage (Phase 1, Rec 1 backend) -- covered vs missing SERP terms
+# ============================================================================================
+def term_coverage(body: str, terms: Optional[list[str]] = None) -> dict:
+    low = (body or "").lower()
+    terms = [t for t in (terms or []) if t and str(t).strip()]
+    covered = [t for t in terms if str(t).lower() in low]
+    missing = [t for t in terms if str(t).lower() not in low]
+    n = len(terms)
+    return {"terms_total": n, "terms_covered": covered[:60], "terms_missing": missing[:60],
+            "covered_pct": round(100 * len(covered) / n) if n else None}
+
+
+# ============================================================================================
+# AEO sub-scores (Phase 1, Rec 7) -- per-pillar "will an AI quote this?" incl entity + freshness
+# ============================================================================================
+def aeo_score(body: str, target_query: str = "", business_name: str = "", geo: str = "") -> dict:
+    body = body or ""
+    headings = _HEADING.findall(body)
+    first_para = (re.split(r"\n\s*\n", body.strip(), 1)[0] if body.strip() else "")
+    qterms = _terms(target_query)
+    crisp = bool(qterms) and sum(t in first_para.lower() for t in qterms) >= max(1, len(qterms) // 2) \
+        and 15 <= len(_words(first_para)) <= 90
+    has_stat = bool(_STAT.search(body))
+    faq = sum(1 for h in headings if h.strip().endswith("?"))
+    low = body.lower()
+    name_hits = low.count((business_name or "").lower()) if (business_name or "").strip() else 0
+    entity_clear = ((not (business_name or "").strip()) or name_hits >= 3) and \
+                   ((not (geo or "").strip()) or (geo or "").lower() in low)
+    fresh = bool(_FRESH.search(body))
+    pillars = [
+        {"name": "Direct answer up top", "ok": crisp, "weight": 25, "fix": "Open with a crisp 40–60 word answer to the target query."},
+        {"name": "Quotable statistic", "ok": has_stat, "weight": 15, "fix": "Add a concrete, attributable number AI can lift."},
+        {"name": "Q&A / FAQ structure", "ok": faq >= 1, "weight": 20, "fix": "Add question-form headings AI can quote."},
+        {"name": "Entity clarity (name + place)", "ok": entity_clear, "weight": 20, "fix": "Name the business + city explicitly and consistently (3+ times)."},
+        {"name": "Freshness marker", "ok": fresh, "weight": 10, "fix": "Add a visible ‘Last updated: <month year>’ line."},
+        {"name": "Schema-ready shape", "ok": True, "weight": 10, "fix": ""},
+    ]
+    return {"score": sum(p["weight"] for p in pillars if p["ok"]),
+            "suggested_schema": "FAQPage" if faq else "Article",
+            "pillars": [{"name": p["name"], "score": p["weight"] if p["ok"] else 0, "max": p["weight"], "ok": p["ok"]} for p in pillars],
+            "tips": [{"label": p["name"], "fix": p["fix"]} for p in pillars if not p["ok"]]}
+
+
+# ============================================================================================
+# Search-intent + SERP-shape (Phase 1, EXTRA #3) -- tells the writer WHAT SHAPE to write
+# ============================================================================================
+def intent_and_serp(target_query: str = "", intent: str = "") -> dict:
+    q = (target_query or "").lower()
+    it = (intent or "").lower().strip()
+    if not it:
+        if re.search(r"\b(near me|in [a-z]+ (oh|ohio|[a-z]{2})|local)\b", q):
+            it = "local"
+        elif re.search(r"\b(buy|price|cost|hire|book|quote|best|top|vs|review)\b", q):
+            it = "commercial"
+        elif re.search(r"\b(how|what|why|when|guide|tips|ideas|examples)\b", q):
+            it = "informational"
+        else:
+            it = "informational"
+    shape = {
+        "informational": "Answer-first + FAQ; target the featured snippet & People-Also-Ask.",
+        "commercial": "Comparison / list format with a clear recommendation + pros & cons.",
+        "transactional": "Concise, CTA-forward, with pricing / next-step clarity.",
+        "local": "Local landing shape: NAP, service + city in the H1/intro, GBP/map.",
+        "navigational": "Direct brand answer; keep it short.",
+    }.get(it, "Answer-first + FAQ.")
+    return {"intent": it, "recommended_shape": shape}
+
+
+# ============================================================================================
 # combined
 # ============================================================================================
 def analyze_draft(body: str, *, target_query: str = "", keywords: Optional[list[str]] = None,
-                  site_summary: Optional[dict] = None, with_fact_check: bool = True) -> dict:
-    """Run all three scorers -> a dict suitable for content_drafts.quality_notes."""
-    out = {"on_page": on_page_score(body, target_query, keywords),
-           "citation_ready": citation_ready(body, target_query)}
+                  site_summary: Optional[dict] = None, with_fact_check: bool = True,
+                  neuron_terms: Optional[list[str]] = None, business_name: str = "",
+                  geo: str = "", keyword_intent: str = "") -> dict:
+    """Run every scorer -> a dict suitable for content_drafts.quality_notes. All deterministic +
+    keyless except the optional fact_check LLM pass; new callers can pass neuron_terms / business_name
+    / geo / keyword_intent for the richer term-coverage, entity, and intent grades."""
+    out = {
+        "on_page": on_page_score(body, target_query, keywords),
+        "citation_ready": citation_ready(body, target_query),
+        "structure": structure_score(body),
+        "keyword_density": keyword_density_check(body, keywords),
+        "readability": readability_score(body),
+        "aeo": aeo_score(body, target_query, business_name, geo),
+        "intent_serp": intent_and_serp(target_query, keyword_intent),
+    }
+    if neuron_terms:
+        out["term_coverage"] = term_coverage(body, neuron_terms)
     if with_fact_check:
         out["fact_check"] = fact_check(body, site_summary)
     return out
