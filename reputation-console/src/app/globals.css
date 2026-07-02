@@ -52,8 +52,11 @@
   --color-indigo-050: var(--indigo-050);
   --color-indigo-100: var(--indigo-100);
   --color-alert: var(--alert);
+  --color-alert-bg: var(--alert-bg);
   --color-good: var(--good);
+  --color-good-bg: var(--good-bg);
   --color-amber: var(--amber);
+  --color-amber-bg: var(--amber-bg);
   --color-score: var(--score);
   --color-score-bg: var(--score-bg);
   /* v2 fonts loaded by the root layout: Inter (body), IBM Plex Mono (labels), Fraunces (display). */

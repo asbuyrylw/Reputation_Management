@@ -10,7 +10,7 @@ import {
   useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
 } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
-import { DashboardHero } from "@/components/DashboardHero";
+import { GoalBanner, ScoreHero, TwoGoals } from "@/components/DashboardV2";
 import { MetricTrend } from "@/components/MetricTrend";
 import { ScoreTrend } from "@/components/ScoreTrend";
 import { VerdictBanner } from "@/components/VerdictBanner";
@@ -364,6 +364,16 @@ export default function DashboardPage() {
   const goalScore = repScore((timeline as Json | undefined)?.dominance_target as number);
   const goalText = (businesses.find((b) => b.id === businessId)?.goal || "").trim();
 
+  // v2 dashboard props — AI projection ETA, local goal ETA, and the worst-scoring answers.
+  const aiExp = ((timeline as Json | undefined)?.projection as Json | undefined)?.expected as Json | undefined;
+  const aiDate = aiExp?.target_date as string | undefined;
+  const aiMonths = (aiExp?.months as number | undefined) ?? null;
+  const localExpDate = localGoal?.projection?.expected?.target_date;
+  const worstAnswers = (answers ?? [])
+    .filter((a) => !a.failed && a.goal_alignment != null)
+    .sort((a, b) => (a.goal_alignment ?? 0) - (b.goal_alignment ?? 0))
+    .slice(0, 2);
+
   const engVals = perEngine ? Object.values(perEngine.engines) : [];
   const grounded = engVals.filter((e) => e.grounded_rate);
   const groundedRate = grounded.length ? grounded.reduce((a, e) => a + (e.grounded_rate!.p ?? 0), 0) / grounded.length : null;
@@ -414,19 +424,22 @@ export default function DashboardPage() {
         />
       ) : (
         <div className="space-y-6">
-          {/* HERO — the whole picture in one glance: score, goal, time-to-goal, local search. */}
-          <DashboardHero
-            businessId={businessId}
+          {/* v2 HERO — dark org-goal banner, then the score gauge + worst answers side by side. */}
+          <GoalBanner goalText={goalText || undefined} aiTarget={goalScore} aiDate={aiDate} localDate={localExpDate} />
+          <ScoreHero
             score={score}
             delta={deltaVsLast}
             goalScore={goalScore}
-            timeline={timeline as Json | undefined}
-            goalText={goalText || undefined}
-            localGoal={localGoal}
+            aiDate={aiDate}
+            aiMonths={aiMonths}
+            worst={worstAnswers}
           />
 
           {/* live monitor — incidents + mentions at a glance */}
           <LiveMonitorStrip businessId={businessId} />
+
+          {/* v2 — your two goals: AI reputation + local page-1. */}
+          <TwoGoals score={score} goalScore={goalScore} aiDate={aiDate} aiMonths={aiMonths} localGoal={localGoal} />
 
           {/* ============================================================== */}
           {/* Detailed AI Reputation Score — drivers + sentiment + verdict.   */}
