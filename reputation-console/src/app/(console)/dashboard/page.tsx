@@ -8,9 +8,11 @@ import { OperatorHome } from "@/components/OperatorHome";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
   useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
+  useCompare, useSiteHealthTrend,
 } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
-import { GoalBanner, ScoreHero, TwoGoals } from "@/components/DashboardV2";
+import { GoalBanner, ScoreHero, TwoFronts, TwoGoals, DoThisNext as DoNextV2, StandingAtAGlance, SecHead } from "@/components/DashboardV2";
+import type { FrontData, ActionItem } from "@/components/DashboardV2";
 import { MetricTrend } from "@/components/MetricTrend";
 import { ScoreTrend } from "@/components/ScoreTrend";
 import { VerdictBanner } from "@/components/VerdictBanner";
@@ -334,6 +336,12 @@ export default function DashboardPage() {
   const { data: timeline } = useTimeline(businessId);
   const { data: localGoal } = useLocalSeoGoal(businessId);
   const { data: notifs } = useNotifications(businessId);
+  // v2 "two fronts" + "standing at a glance" + "do this next" data.
+  const { data: compare } = useCompare(businessId);
+  const { data: localRankings } = useLocalRankings(businessId);
+  const { data: approvals } = useApprovalQueue(businessId);
+  const { data: gsc } = useGscSummary(businessId);
+  const { data: siteHealth } = useSiteHealthTrend(businessId);
 
   if (bizLoading) return <Spinner />;
   if (businesses.length === 0) {
@@ -373,6 +381,57 @@ export default function DashboardPage() {
     .filter((a) => !a.failed && a.goal_alignment != null)
     .sort((a, b) => (a.goal_alignment ?? 0) - (b.goal_alignment ?? 0))
     .slice(0, 2);
+
+  // Open tasks ranked by predicted AI-score points — powers "Do this next" + each front's "Do next".
+  const openWOs = (workOrders ?? [])
+    .filter((w) => w.status !== "done" && w.status !== "verified" && w.status !== "cancelled" && !w.superseded)
+    .sort((a, b) => (b.predicted_ai_points ?? 0) - (a.predicted_ai_points ?? 0));
+  const topActions: ActionItem[] = openWOs.slice(0, 3).map((w, i) => ({
+    rank: i + 1,
+    impact: w.predicted_ai_points ?? null,
+    title: w.title ?? "Untitled task",
+    desc: (w.why_helps_ai_rep || w.why_helps_seo || w.instruction || "A prioritized move in your plan.").slice(0, 130),
+    cat: [w.area, w.why_helps_ai_rep ? "AI" : w.why_helps_seo ? "SEO" : null].filter(Boolean).join(" · ") || "Task",
+  }));
+  const aiTopWO = openWOs.find((w) => w.why_helps_ai_rep) ?? openWOs[0];
+  const seoTopWO = openWOs.find((w) => w.why_helps_seo || (w.area && /website|seo|local|schema|blog/i.test(w.area)));
+  const approvalsCount = approvals?.items?.length ?? 0;
+  const openTasksCount = openWOs.length;
+  const gscConnected = !!(gsc?.has_data || gsc?.collecting);
+  const siteReadiness = siteHealth?.length ? siteHealth[siteHealth.length - 1].score : null;
+  const siteReadinessFirst = siteHealth?.length ? siteHealth[0].score : null;
+  const localSum = localRankings?.summary ?? null;
+
+  const aiFront: FrontData = {
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" /></svg>,
+    title: "AI Visibility",
+    sub: "How AI assistants answer about you",
+    score,
+    rows: [
+      { tone: "good", k: "What's working", v: <>Owned sources cited <b>{pct(latest.owned_rate)}</b>{latest.contested_rate != null ? <> · contested just <b>{pct(latest.contested_rate)}</b></> : null}.</> },
+      deltaVsLast != null && Math.abs(deltaVsLast) >= 0.5
+        ? { tone: deltaVsLast >= 0 ? "trend" : "alert", k: "Trending", v: <><b>{deltaVsLast >= 0 ? "Up" : "Down"} {Math.abs(deltaVsLast)} pts</b> at the last audit.</> }
+        : { tone: "trend", k: "Trending", v: "Holding steady since the last audit." },
+      { tone: "next", k: "Do next", v: aiTopWO?.title ?? "Run an audit to generate your plan." },
+    ],
+    href: "/ai-overview",
+    linkLabel: "Open AI Visibility",
+  };
+  const seoFront: FrontData = {
+    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>,
+    title: "Search & SEO",
+    sub: "AI-crawler readiness of your site",
+    score: siteReadiness,
+    rows: [
+      siteReadiness != null && siteReadinessFirst != null && siteReadiness > siteReadinessFirst
+        ? { tone: "good", k: "What's working", v: <>Crawler readiness <b>up +{Math.round(siteReadiness - siteReadinessFirst)}</b> since first crawl.</> }
+        : { tone: "good", k: "What's working", v: "Your site is discovered and being parsed." },
+      { tone: "alert", k: "Biggest gap", v: <>You rank page 1 for <b>{localSum ? pct(localSum.page_one_rate) : "—"}</b> of local searches.</> },
+      { tone: "next", k: "Do next", v: seoTopWO?.title ?? "Add LocalBusiness + Organization schema, then connect Search Console." },
+    ],
+    href: "/seo-overview",
+    linkLabel: "Open Search & SEO",
+  };
 
   const engVals = perEngine ? Object.values(perEngine.engines) : [];
   const grounded = engVals.filter((e) => e.grounded_rate);
@@ -438,92 +497,110 @@ export default function DashboardPage() {
           {/* live monitor — incidents + mentions at a glance */}
           <LiveMonitorStrip businessId={businessId} />
 
+          {/* v2 — your two fronts: AI Visibility + Search & SEO. */}
+          <TwoFronts ai={aiFront} seo={seoFront} />
+
           {/* v2 — your two goals: AI reputation + local page-1. */}
           <TwoGoals score={score} goalScore={goalScore} aiDate={aiDate} aiMonths={aiMonths} localGoal={localGoal} />
 
-          {/* ============================================================== */}
-          {/* Detailed AI Reputation Score — drivers + sentiment + verdict.   */}
-          {/* ============================================================== */}
-          <div className="space-y-3">
-            <ReputationHero
-              goalAlignment={latest.goal_alignment}
-              contestedRate={latest.contested_rate}
-              ownedRate={latest.owned_rate}
-              groundedRate={groundedRate}
-              coverage={perEngine?.coverage ?? null}
-              sentiment={sentimentData}
-              asOf={latest.date}
-              delta={deltaVsLast}
-            />
-            {/* plain-English verdict, as a small bullet beneath the score */}
-            <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} compact />
-            <div className="flex justify-end px-1"><ToneLegend /></div>
+          {/* v2 — do this next: top-3 actions + plan bar. */}
+          <DoNextV2 actions={topActions} approvalsCount={approvalsCount} openTasksCount={openTasksCount} />
+
+          {/* v2 — your standing at a glance: share of voice, rivals, local search. */}
+          <StandingAtAGlance
+            ownedRate={latest.owned_rate}
+            contestedRate={latest.contested_rate}
+            compare={compare}
+            local={localSum}
+            gscConnected={gscConnected}
+          />
+
+          {/* v2 — how you're trending. */}
+          <div>
+            <SecHead title="How you're trending" note="your score & visibility over time" />
+            <div className="space-y-5">
+              <Card>
+                <div className="mb-3 text-base font-semibold tracking-tight text-ink">Your score over time (0–100)</div>
+                <ScoreTrend series={s} goal={goalScore} projected={goalScore} />
+              </Card>
+              <VisibilityTrendChart businessId={businessId} />
+            </div>
           </div>
 
-          {/* 2) Search performance — surfaced (local + organic) */}
-          <section>
-            <h2 className="mb-3 text-sm font-semibold tracking-tight text-slate-900">
-              Search performance <span className="font-normal text-slate-400">— your Google visibility</span>
-            </h2>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <LocalSearchCard businessId={businessId} />
-              <OrganicSearchCard businessId={businessId} />
-            </div>
-          </section>
-
-          {/* 3) Trajectory & projection — surfaced (projection + score-over-time + visibility) */}
-          <section className="space-y-6">
-            <h2 className="text-sm font-semibold tracking-tight text-slate-900">
-              Where your score is heading <span className="font-normal text-slate-400">— trend over time</span>
-            </h2>
-            <Card>
-              <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
-              <ScoreTrend series={s} goal={goalScore} projected={goalScore} />
-            </Card>
-            <VisibilityTrendChart businessId={businessId} />
-          </section>
-
-          {/* 4) Results & Proof — moved below the trajectory */}
+          {/* Results & Proof — tactic impact */}
           <ResultsProofCard businessId={businessId} currentScore={score} />
 
-          {/* 5) Fix the worst things AI is saying — pulled out + actionable (highest ROI) */}
-          {answers && answers.some((a) => !a.failed && a.goal_alignment != null) && (
-            <section>
-              <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">
-                Fix the worst things AI is saying <span className="font-normal text-slate-400">— your highest-ROI moves</span>
-              </h2>
-              <p className="mb-3 text-xs text-slate-500">
-                The lowest-scoring answers from your latest audit — each paired with the specific action that fixes it.
-              </p>
-              <Card accent="bad">
-                <WorstAnswers
-                  answers={answers}
-                  runId={latestRunId}
-                  limit={4}
-                  weakQueries={data.gap?.weak_queries as WeakQuery[] | undefined}
-                  workOrders={workOrders}
-                  showFix
+          {/* Deeper detail — drivers, sentiment, search performance, worst answers, task & gap detail, per-engine. */}
+          <DataSection title="Full breakdown & detail" headline="Drivers, sentiment, search performance, the worst answers with their fixes, your task & gap detail, and per-engine scores." detailsLabel="Show full breakdown">
+            <div className="space-y-6">
+              {/* drivers + sentiment + verdict */}
+              <div className="space-y-3">
+                <ReputationHero
+                  goalAlignment={latest.goal_alignment}
+                  contestedRate={latest.contested_rate}
+                  ownedRate={latest.owned_rate}
+                  groundedRate={groundedRate}
+                  coverage={perEngine?.coverage ?? null}
+                  sentiment={sentimentData}
+                  asOf={latest.date}
+                  delta={deltaVsLast}
                 />
-                <div className="mt-3 border-t border-slate-100 pt-3 text-right">
-                  <Link href="/next-steps" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
-                    See your full prioritized plan →
-                  </Link>
+                <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} compact />
+                <div className="flex justify-end px-1"><ToneLegend /></div>
+              </div>
+
+              {/* search performance */}
+              <section>
+                <h2 className="mb-3 text-sm font-semibold tracking-tight text-slate-900">
+                  Search performance <span className="font-normal text-slate-400">— your Google visibility</span>
+                </h2>
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <LocalSearchCard businessId={businessId} />
+                  <OrganicSearchCard businessId={businessId} />
                 </div>
-              </Card>
-            </section>
-          )}
+              </section>
 
-          {/* 6) Do this next, beside biggest gaps */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <DoThisNext workOrders={workOrders} businessId={businessId} />
-            <BiggestGaps gap={data.gap} />
-          </div>
+              {/* fix the worst things — actionable, with fixes */}
+              {answers && answers.some((a) => !a.failed && a.goal_alignment != null) && (
+                <section>
+                  <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">
+                    Fix the worst things AI is saying <span className="font-normal text-slate-400">— your highest-ROI moves</span>
+                  </h2>
+                  <p className="mb-3 text-xs text-slate-500">
+                    The lowest-scoring answers from your latest audit — each paired with the specific action that fixes it.
+                  </p>
+                  <Card accent="bad">
+                    <WorstAnswers
+                      answers={answers}
+                      runId={latestRunId}
+                      limit={4}
+                      weakQueries={data.gap?.weak_queries as WeakQuery[] | undefined}
+                      workOrders={workOrders}
+                      showFix
+                    />
+                    <div className="mt-3 border-t border-slate-100 pt-3 text-right">
+                      <Link href="/next-steps" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                        See your full prioritized plan →
+                      </Link>
+                    </div>
+                  </Card>
+                </section>
+              )}
 
-          {/* 7) Per-engine AI scores — drill-down detail (collapsed) */}
-          <DataSection title="Per-engine AI scores" headline="Each AI assistant's score for you." detailsLabel="Show per-engine scores">
-            <Card>
-              <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
-            </Card>
+              {/* task detail beside biggest gaps */}
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <DoThisNext workOrders={workOrders} businessId={businessId} />
+                <BiggestGaps gap={data.gap} />
+              </div>
+
+              {/* per-engine AI scores */}
+              <section className="space-y-2">
+                <h2 className="text-sm font-semibold tracking-tight text-slate-900">Per-engine AI scores</h2>
+                <Card>
+                  <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
+                </Card>
+              </section>
+            </div>
           </DataSection>
 
           {/* 7) Your progress — action plan + this month's work, combined, at the bottom */}
