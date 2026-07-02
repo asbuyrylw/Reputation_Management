@@ -738,6 +738,7 @@ export interface LocalSeoGoal {
   remaining_gap?: number;
   avg_organic_rank?: number | null;
   monthly_gain_estimate?: number;
+  gain_basis?: string; // plain-English basis for the estimate (grounded cold-start / measured velocity)
   confidence?: string;
   no_data?: boolean;
   note?: string;

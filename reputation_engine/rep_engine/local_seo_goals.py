@@ -21,7 +21,10 @@ except ImportError:  # pragma: no cover
 
 # Target: share of category-local searches where the business is on Google's first page.
 LOCAL_SEO_TARGET = float(os.getenv("LOCAL_SEO_TARGET", "0.8"))
-# Baseline monthly gain in page-one rate before we have this business's own measured velocity.
+# Cap the cold-start estimate so the projected date stays believable (never multi-year on the hero).
+LOCAL_SEO_MONTHS_CAP = float(os.getenv("LOCAL_SEO_MONTHS_CAP", "18"))
+# Last-resort monthly gain if EVERY grounded signal is unavailable (kept for backward compat). The
+# normal cold-start path now uses the grounded _coldstart_months() model instead of this flat guess.
 _BASE_MONTHLY_GAIN = float(os.getenv("LOCAL_SEO_BASE_GAIN", "0.06"))
 
 _DISCLAIMER = (
@@ -42,6 +45,72 @@ def _page_one_rate_by_run(conn, business_id: int) -> list[tuple]:
         (business_id,),
     ).fetchall()
     return [(r["run_id"], r["ts"], float(r["rate"])) for r in rows if r["rate"] is not None]
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _coldstart_months(business_id: int, summ: dict, cur: float, target: float) -> tuple[float, str]:
+    """Research-grounded time-to-page-1 (in months) for when we have NO measured local velocity yet
+    -- so the first estimate is defensible, not a flat guess.
+
+    Anchored to published local-SEO ranking timelines: local-pack visibility ~2-4mo, organic map
+    ~4-6mo, new/cold or competitive 6-12+mo (Ahrefs 2025: <2% of new pages reach the top 10 within a
+    year). We start from DISTANCE-to-page-1 (current average rank), then adjust for keyword DIFFICULTY
+    and Google Business Profile STRENGTH (GBP + reviews are the primary/fastest local levers). Every
+    signal is optional and None-safe -- a missing one is neutral, never an error.
+    """
+    avg_rank = summ.get("avg_organic_rank")
+    # 1) distance -> base months (whole-journey anchor from the current position)
+    if avg_rank is not None:
+        ar = float(avg_rank)
+        base = 3.0 if ar <= 12 else 5.0 if ar <= 20 else 8.0 if ar <= 30 else 11.0
+    else:
+        # nothing ranks yet -> lean on how much of page 1 is already won
+        base = 4.0 if cur >= 0.5 else 6.0 if cur >= 0.25 else 8.0 if cur > 0 else 11.0
+    # shorten as current progress approaches the target
+    base *= _clamp((target - cur) / target, 0.15, 1.0) if target > 0 else 1.0
+
+    # 2) keyword-difficulty multiplier (0-100 competition index -> 0.75x easy .. 1.65x hard)
+    kd = None
+    try:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT AVG(keyword_difficulty) AS kd FROM target_keywords "
+                "WHERE business_id=%s AND keyword_difficulty IS NOT NULL", (business_id,)).fetchone()
+        kd = float(row["kd"]) if row and row["kd"] is not None else None
+    except Exception:  # noqa: BLE001 -- difficulty is optional
+        kd = None
+    difficulty_mult = 1.0 if kd is None else _clamp(0.75 + (kd / 100.0) * 0.9, 0.75, 1.65)
+
+    # 3) Google Business Profile strength (the primary local ranking factor; complete + reviewed = faster)
+    gbp_mult = 1.0
+    try:
+        try:
+            from . import gbp_reviews as _gbp
+        except ImportError:  # pragma: no cover
+            import gbp_reviews as _gbp  # type: ignore
+        curr = (_gbp.latest(business_id) or {}).get("current")
+        if not curr:
+            gbp_mult = 1.2                      # no GBP found -> slower
+        else:
+            rc = int(curr.get("review_count") or 0)
+            rt = float(curr.get("rating") or 0)
+            if rc >= 10 and rt >= 4.0:
+                gbp_mult = 0.80                 # credible, active profile -> faster
+            elif rc < 5 or rt < 3.5:
+                gbp_mult = 1.10                 # thin/weak profile
+    except Exception:  # noqa: BLE001 -- GBP is optional
+        gbp_mult = 1.0
+    gbp_mult = _clamp(gbp_mult, 0.7, 1.3)
+
+    months = _clamp(base * difficulty_mult * gbp_mult, 1.0, LOCAL_SEO_MONTHS_CAP)
+    rank_txt = f"~#{round(float(avg_rank))}" if avg_rank is not None else "not yet ranking"
+    basis = (f"your current local rank ({rank_txt}), keyword difficulty (×{difficulty_mult:.2f}) "
+             f"and Google Business Profile strength (×{gbp_mult:.2f}), anchored to typical local-SEO "
+             f"ranking timelines")
+    return months, basis
 
 
 def estimate(business_id: int, quiet: bool = False, persist: bool = False) -> dict:
@@ -74,6 +143,8 @@ def estimate(business_id: int, quiet: bool = False, persist: bool = False) -> di
     with db() as conn:
         history = _page_one_rate_by_run(conn, business_id)
 
+    remaining = max(0.0, target - cur)
+
     monthly_gain: Optional[float] = None
     basis, confidence = "", "low"
     if len(history) >= 2:
@@ -83,14 +154,20 @@ def estimate(business_id: int, quiet: bool = False, persist: bool = False) -> di
         delta = v1 - v0
         if delta > 0:
             monthly_gain = delta / months
-            basis = "observed velocity (this business)"
+            basis = "measured from your own local-rank movement"
             confidence = "high" if len(history) >= 4 else "medium"
     if not monthly_gain or monthly_gain <= 0:
-        monthly_gain = _BASE_MONTHLY_GAIN
-        basis = "baseline model (no measured local velocity yet)"
+        # No measured velocity yet -> a research-grounded estimate from current position + keyword
+        # difficulty + Google Business Profile strength (not a flat guess). Back-solve the monthly
+        # gain the projection math below expects so all downstream windows stay consistent.
+        try:
+            cs_months, basis = _coldstart_months(business_id, summ, cur, target)
+            monthly_gain = max(remaining / cs_months, 1e-4) if remaining > 0 else _BASE_MONTHLY_GAIN
+        except Exception:  # noqa: BLE001 -- never let optional-signal reads break the projection
+            monthly_gain = _BASE_MONTHLY_GAIN
+            basis = "baseline model (no measured local velocity yet)"
         confidence = "low"
 
-    remaining = max(0.0, target - cur)
     expected_months = 0.0 if remaining <= 0 else remaining / monthly_gain
     today = date.today()
 

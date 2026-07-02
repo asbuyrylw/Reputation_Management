@@ -49,7 +49,10 @@ export function LocalSeoGoalCard({ goal }: { goal: LocalSeoGoal | undefined }) {
           Tracking: {goal.target_searches.slice(0, 4).map((q) => `“${q}”`).join(" · ")}
         </p>
       )}
-      <p className="mt-2 text-[11px] text-slate-400">A projection that sharpens as your local-rank history grows.</p>
+      {goal.gain_basis && (
+        <p className="mt-2 text-[11px] text-slate-500">Based on {goal.gain_basis}.</p>
+      )}
+      <p className="mt-1 text-[11px] text-slate-400">A projection that sharpens as your local-rank history grows.</p>
     </Card>
   );
 }

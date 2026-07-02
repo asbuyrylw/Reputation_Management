@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { OperatorHome } from "@/components/OperatorHome";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
-  useLocalRankings, useLocalRankTrend, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
+  useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
 } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
 import { DashboardHero } from "@/components/DashboardHero";
@@ -332,6 +332,7 @@ export default function DashboardPage() {
   const { data: answers } = useRunAnswers(businessId, latestRunId);
   const { data: workOrders } = useWorkOrders(businessId);
   const { data: timeline } = useTimeline(businessId);
+  const { data: localGoal } = useLocalSeoGoal(businessId);
   const { data: notifs } = useNotifications(businessId);
 
   if (bizLoading) return <Spinner />;
@@ -421,6 +422,7 @@ export default function DashboardPage() {
             goalScore={goalScore}
             timeline={timeline as Json | undefined}
             goalText={goalText || undefined}
+            localGoal={localGoal}
           />
 
           {/* live monitor — incidents + mentions at a glance */}

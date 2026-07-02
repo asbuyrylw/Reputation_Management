@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { repBand } from "@/lib/repScore";
 import { useLocalRankings } from "@/lib/hooks";
+import type { LocalSeoGoal } from "@/lib/types";
 import { Card } from "./ui";
 
 type Json = Record<string, unknown>;
@@ -57,6 +58,7 @@ export function DashboardHero({
   goalScore,
   timeline,
   goalText,
+  localGoal,
 }: {
   businessId: number | null;
   score: number | null;
@@ -64,6 +66,7 @@ export function DashboardHero({
   goalScore: number | null;
   timeline: Json | undefined;
   goalText?: string;
+  localGoal?: LocalSeoGoal;
 }) {
   const band = repBand(score);
   const { data: ranks } = useLocalRankings(businessId);
@@ -71,6 +74,19 @@ export function DashboardHero({
   const proj = (timeline?.projection as Json | undefined)?.expected as Json | undefined;
   const targetDate = proj?.target_date as string | undefined;
   const gap = score != null && goalScore != null ? Math.max(0, goalScore - score) : null;
+
+  // Local page-1 goal + ETA — mirrors the AI "Time to goal" tile. Grounded projection from the
+  // local-SEO estimator; degrades to today's page-1 rate when no projection exists yet.
+  const lgMet = !!localGoal && (localGoal.remaining_gap ?? 1) <= 0;
+  const lgDate = localGoal?.projection?.expected?.target_date;
+  const lgMonths = localGoal?.projection?.expected?.months;
+  const lgNow = localGoal?.current_page_one_rate ?? local?.page_one_rate ?? null;
+  const lgValue = lgMet ? "On page 1 🎉" : lgDate ?? (lgNow != null ? pct(lgNow) : "—");
+  const lgSub = lgMet
+    ? "holding your position"
+    : lgDate
+    ? `~${lgMonths} mo · now ${pct(lgNow)} on page 1`
+    : "run a local check";
 
   return (
     <Card className="overflow-hidden bg-linear-to-br from-indigo-50/60 to-white">
@@ -114,16 +130,11 @@ export function DashboardHero({
           size="md"
         />
         <Tile
-          label="Local search"
-          value={local ? pct(local.page_one_rate) : "—"}
-          sub={
-            local
-              ? local.avg_organic_rank != null
-                ? `on page 1 · avg rank #${local.avg_organic_rank}`
-                : "on page 1"
-              : "run a local check"
-          }
+          label="Local page-1 goal"
+          value={lgValue}
+          sub={lgSub}
           href="/seo-overview"
+          size={lgDate && !lgMet ? "md" : "lg"}
         />
       </div>
     </Card>
