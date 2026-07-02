@@ -32,7 +32,6 @@ function quality(s: number | null): { label: string; cls: string } | null {
 // the terms already ranking for its query.
 function NeuronGauge({ neuron }: { neuron: DraftNeuron }) {
   const score = Math.round(neuron.content_score);
-  const bar = Math.max(0, Math.min(100, score));
   const goal = neuron.target != null ? Math.round(neuron.target) : 80;
   const tone: BadgeTone = score >= goal ? "emerald" : score >= 60 ? "amber" : "rose";
   return (
@@ -42,6 +41,99 @@ function NeuronGauge({ neuron }: { neuron: DraftNeuron }) {
         {neuron.target != null && <span className="opacity-70"> · target {Math.round(neuron.target)}</span>}
       </Badge>
     </span>
+  );
+}
+
+// A NeuronWriter-style grade tone from a 0..100 score.
+const gTone = (s: number): "good" | "amber" | "alert" => (s >= 80 ? "good" : s >= 60 ? "amber" : "alert");
+const G_CHIP: Record<"good" | "amber" | "alert", string> = {
+  good: "bg-good-bg text-good",
+  amber: "bg-amber-bg text-amber",
+  alert: "bg-alert-bg text-alert",
+};
+
+// Phase-1 content grades — structure, AEO (per-pillar), readability, NeuronWriter term coverage,
+// keyword density, and search-intent shape. A scannable chip strip that expands to the detail +
+// the specific fixes, so a reviewer can grade a draft the way NeuronWriter grades a page.
+function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> }) {
+  const { structure, aeo, readability, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
+  if (!structure && !aeo && !readability && !term && !intent) return null;
+  const chips = [
+    structure && { k: "Structure", v: `${structure.score}/100`, tone: gTone(structure.score) },
+    aeo && { k: "AEO", v: `${aeo.score}/100`, tone: gTone(aeo.score) },
+    readability?.grade != null && { k: "Readability", v: `grade ${readability.grade}`, tone: (readability.grade <= 10 ? "good" : readability.grade <= 12 ? "amber" : "alert") as "good" | "amber" | "alert" },
+    term?.covered_pct != null && { k: "SERP terms", v: `${term.covered_pct}%`, tone: gTone(term.covered_pct) },
+  ].filter(Boolean) as { k: string; v: string; tone: "good" | "amber" | "alert" }[];
+  const fixes = [...(structure?.issues ?? []), ...(aeo?.tips ?? []), ...(readability?.issues ?? []), ...(density?.issues ?? [])];
+
+  return (
+    <details className="mt-2 rounded-[12px] border border-line bg-paper/60 p-2.5 text-xs">
+      <summary className="flex cursor-pointer flex-wrap items-center gap-1.5">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">Content grades</span>
+        {chips.map((c) => (
+          <span key={c.k} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${G_CHIP[c.tone]}`}>{c.k} {c.v}</span>
+        ))}
+        {intent && <span className="rounded-full bg-indigo-050 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-strong">{intent.intent}</span>}
+      </summary>
+      <div className="mt-2.5 space-y-3">
+        {/* AEO — will an AI quote this? per-pillar */}
+        {aeo && aeo.pillars.length > 0 && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">Will AI quote this? · {aeo.score}/100 · schema {aeo.suggested_schema}</div>
+            <div className="space-y-1">
+              {aeo.pillars.map((p) => (
+                <div key={p.name} className="flex items-center gap-2">
+                  <span className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full text-[9px] ${p.ok ? "bg-good text-white" : "bg-line-2 text-ink-4"}`}>{p.ok ? "✓" : "○"}</span>
+                  <span className={`flex-1 ${p.ok ? "text-ink-2" : "text-ink-3"}`}>{p.name}</span>
+                  <span className="font-mono text-ink-4">{p.score}/{p.max}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Structure — heading hierarchy */}
+        {structure && structure.structure_map.length > 0 && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">Structure · {structure.score}/100 {structure.hierarchy_valid ? "· hierarchy ✓" : "· hierarchy ✗"}</div>
+            <div className="space-y-0.5">
+              {structure.structure_map.slice(0, 10).map((h, i) => (
+                <div key={i} className="truncate text-ink-3" style={{ paddingLeft: `${(h.level - 1) * 12}px` }}>
+                  <span className="font-mono text-ink-4">H{h.level}</span> {h.text}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* NeuronWriter term coverage — missing SERP terms to weave in */}
+        {term && term.terms_missing.length > 0 && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">SERP terms missing ({term.terms_missing.length} of {term.terms_total})</div>
+            <div className="flex flex-wrap gap-1">
+              {term.terms_missing.slice(0, 16).map((t) => (
+                <span key={t} className="rounded-full bg-alert-bg px-1.5 py-0.5 text-[10px] text-alert">✗ {t}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Readability numbers */}
+        {readability?.grade != null && (
+          <div className="text-ink-3">Reading grade <b className="text-ink-2">{readability.grade}</b> · avg sentence {readability.avg_sentence_len} words · {readability.passive_hits} passive{readability.target ? ` · aim ${readability.target}` : ""}</div>
+        )}
+        {/* Search intent shape */}
+        {intent && <div className="text-ink-3">Write it as <b className="text-ink-2">{intent.intent}</b>: {intent.recommended_shape}</div>}
+        {/* The fixes to apply */}
+        {fixes.length > 0 && (
+          <div>
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-ink-4">Fixes to raise the grade</div>
+            <ul className="space-y-0.5 text-ink-3">
+              {fixes.slice(0, 5).map((f, i) => (
+                <li key={i}>· {f.label} — <span className="text-ink-4">{f.fix}</span></li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -274,6 +366,9 @@ export function DraftReviewCard({
           )}
         </div>
       )}
+
+      {/* Phase-1 NeuronWriter-style content grades — structure, AEO, readability, term coverage, intent */}
+      {draft.quality_notes && <GradesPanel qn={draft.quality_notes} />}
 
       {whyHelps && <p className="mt-2 text-xs text-slate-500">💡 {whyHelps}</p>}
 

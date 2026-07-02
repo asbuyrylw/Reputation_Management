@@ -271,6 +271,12 @@ export interface ContentDraft {
         citation_ready?: DraftCitationReady;
         fact_check?: DraftFactCheck;
         neuron?: DraftNeuron;
+        structure?: DraftStructure;
+        keyword_density?: DraftKeywordDensity;
+        readability?: DraftReadability;
+        aeo?: DraftAeo;
+        term_coverage?: DraftTermCoverage;
+        intent_serp?: DraftIntentSerp;
       } & Record<string, unknown>)
     | null;
 }
@@ -1359,6 +1365,41 @@ export interface DraftCitationReady {
 export interface DraftFactCheck {
   claims: { claim: string; status: string; note: string }[];
   unverified: number;
+}
+
+// Phase-1 draft grades (from content_quality.analyze_draft) — a NeuronWriter-style scorecard.
+export interface DraftStructure {
+  score: number; // 0..100 heading hierarchy + layout for AI extraction
+  hierarchy_valid: boolean;
+  structure_map: { level: number; text: string }[];
+  issues: { label: string; fix: string }[];
+}
+export interface DraftKeywordDensity {
+  keyword_densities: { keyword: string; count: number; density_pct: number; band: "missing" | "low" | "ok" | "high" }[];
+  issues: { label: string; fix: string }[];
+}
+export interface DraftReadability {
+  grade: number | null; // Flesch-Kincaid grade level
+  avg_sentence_len: number;
+  passive_hits: number;
+  target?: string;
+  issues: { label: string; fix: string }[];
+}
+export interface DraftAeo {
+  score: number; // 0..100 across pillars
+  suggested_schema: string;
+  pillars: { name: string; score: number; max: number; ok: boolean }[];
+  tips: { label: string; fix: string }[];
+}
+export interface DraftTermCoverage {
+  terms_total: number;
+  terms_covered: string[];
+  terms_missing: string[];
+  covered_pct: number | null;
+}
+export interface DraftIntentSerp {
+  intent: string;
+  recommended_shape: string;
 }
 
 // Topic-authority clusters — pillar + spoke keywords grouped into the topics to own.

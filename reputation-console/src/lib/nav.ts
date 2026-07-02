@@ -24,7 +24,6 @@ export const HUBS: Hub[] = [
       { href: "/prompts", label: "Questions asked", opLabel: "Prompts" },
       { href: "/rankings", label: "Who AI quotes", opLabel: "AI citations" },
       { href: "/competitors", label: "Vs. competitors", opLabel: "Competitors" },
-      { href: "/social", label: "Social" },
     ],
   },
   {
@@ -40,9 +39,10 @@ export const HUBS: Hub[] = [
     key: "plan", label: "Your problems & plan", opLabel: "Strategy & Plan", href: "/gaps",
     tabs: [
       { href: "/gaps", label: "What's hurting you", opLabel: "Gaps" },
-      { href: "/next-steps", label: "Do this next" },
       { href: "/content/work-orders", label: "Improvement tasks", opLabel: "Tasks" },
+      { href: "/next-steps", label: "Recommendations" },
       { href: "/timeline", label: "Time to goal" },
+      { href: "/social", label: "Social" },
     ],
   },
   {
@@ -51,6 +51,7 @@ export const HUBS: Hub[] = [
       { href: "/content/briefs", label: "To produce" },
       { href: "/content/drafts", label: "Drafts" },
       { href: "/content/finalized", label: "Published" },
+      { href: "/approvals", label: "Approvals" },
       { href: "/content/outreach", label: "Outreach" },
     ],
   },
@@ -60,7 +61,6 @@ export const HUBS: Hub[] = [
       { href: "/notifications", label: "Attention", opLabel: "Notifications" },
       { href: "/sustain/mentions", label: "Mentions" },
       { href: "/sustain/incidents", label: "Incidents" },
-      { href: "/approvals", label: "Approvals" },
     ],
   },
   {
