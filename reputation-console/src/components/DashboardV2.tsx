@@ -77,77 +77,93 @@ function worstReason(a: Answer): string {
   return "AI leans unfavorable here";
 }
 
-export function ScoreHero({ score, delta, goalScore, aiDate, aiMonths, worst }: {
+// The score card — gauge + band + delta + path-to-goal bar with ETA. Reused by the dashboard
+// ScoreHero (beside the worst answers) and the AI Visibility overview (beside "what it means").
+export function ScorePanel({ score, delta, goalScore, aiDate, aiMonths, eyebrow = "AI Reputation Score" }: {
   score: number | null; delta?: number | null; goalScore: number | null;
-  aiDate?: string | null; aiMonths?: number | null; worst: Answer[];
+  aiDate?: string | null; aiMonths?: number | null; eyebrow?: string;
 }) {
   const band = repBand(score);
   const col = scoreColor(score);
   const fillPct = score != null ? Math.max(2, Math.min(100, score)) : 0;
   const gap = score != null && goalScore != null ? Math.max(0, goalScore - score) : null;
   return (
-    <section className="mb-5 grid grid-cols-1 gap-5 lg:grid-cols-[1.55fr_1fr]">
-      {/* score panel */}
-      <div className="relative overflow-hidden rounded-[18px] border border-line bg-card p-7 px-[30px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
-        <div className="flex items-center gap-[30px]">
-          <ScoreGauge score={score} />
-          <div className="flex flex-1 flex-col gap-[11px]">
-            <div className="eyebrow">AI Reputation Score</div>
-            <span className="inline-flex items-center gap-1.5 self-start rounded-full px-[11px] py-[5px] font-mono text-[12px] font-semibold uppercase tracking-[0.04em]" style={{ background: `${col}1a`, color: col }}>{band.label}</span>
-            {delta != null && Math.abs(delta) >= 0.5 && (
-              <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-[11px] py-[5px] font-mono text-[12px] font-semibold uppercase tracking-[0.04em] ${delta >= 0 ? "bg-good-bg text-good" : "bg-alert-bg text-alert"}`}>
-                {delta >= 0 ? "▲" : "▼"} {Math.abs(delta)} pts vs last audit
-              </span>
-            )}
-            <div className="text-[14px] leading-relaxed text-ink-3">How favorably AI assistants describe you, averaged across engines. <b className="font-semibold text-ink-2">The indigo marker below is your goal — {goalScore ?? "—"}.</b></div>
-          </div>
-        </div>
-        <div className="mt-6 border-t border-line pt-[22px]">
-          <div className="mb-3 flex items-baseline justify-between"><span className="eyebrow">Path to goal</span><span className="font-mono text-[13px] font-semibold text-indigo-strong">GOAL {goalScore ?? "—"}</span></div>
-          <div className="relative h-[11px] overflow-hidden rounded-full bg-line">
-            <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${fillPct}%`, background: `linear-gradient(90deg, ${col}, #EBA46A)` }} />
-            {goalScore != null && <div className="absolute -top-[3px] h-[17px] w-[3px] rounded-[2px] bg-indigo" style={{ left: `${goalScore}%` }} />}
-          </div>
-          <div className="mt-[9px] flex justify-between font-mono text-[12px] text-ink-4"><span>0</span><span>you · {score ?? "—"}</span><span>100</span></div>
-          {aiDate && (
-            <div className="mt-4 flex items-center gap-[9px] text-[14px] text-ink-3">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[15px] w-[15px] text-indigo"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
-              <span>On current pace, you reach <b className="font-mono font-semibold text-ink-2">{goalScore}</b> by <b className="font-mono font-semibold text-ink-2">{fmtDate(aiDate)}</b>{aiMonths ? ` — ~${aiMonths} months` : ""}{gap != null ? ` · ${gap} pts to close` : ""}.</span>
-            </div>
+    <div className="relative overflow-hidden rounded-[18px] border border-line bg-card p-7 px-[30px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
+      <div className="flex items-center gap-[30px]">
+        <ScoreGauge score={score} />
+        <div className="flex flex-1 flex-col gap-[11px]">
+          <div className="eyebrow">{eyebrow}</div>
+          <span className="inline-flex items-center gap-1.5 self-start rounded-full px-[11px] py-[5px] font-mono text-[12px] font-semibold uppercase tracking-[0.04em]" style={{ background: `${col}1a`, color: col }}>{band.label}</span>
+          {delta != null && Math.abs(delta) >= 0.5 && (
+            <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-[11px] py-[5px] font-mono text-[12px] font-semibold uppercase tracking-[0.04em] ${delta >= 0 ? "bg-good-bg text-good" : "bg-alert-bg text-alert"}`}>
+              {delta >= 0 ? "▲" : "▼"} {Math.abs(delta)} pts vs last audit
+            </span>
           )}
+          <div className="text-[14px] leading-relaxed text-ink-3">How favorably AI assistants describe you, averaged across engines. <b className="font-semibold text-ink-2">The indigo marker below is your goal — {goalScore ?? "—"}.</b></div>
         </div>
       </div>
-
-      {/* worst answers */}
-      <div className="flex flex-col rounded-[18px] border border-line bg-card p-[22px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
-        <div className="mb-[3px] font-mono text-[11px] uppercase tracking-[0.14em] text-alert">Needs attention · loudest now</div>
-        <h2 className="mb-1 font-display text-[18px] font-semibold tracking-[-0.01em] text-ink">What AI says worst about you</h2>
-        <div className="mb-3.5 text-[13px] text-ink-3">The answers doing the most damage.</div>
-        {worst.length === 0 ? (
-          <div className="text-[13px] text-ink-4">No scored answers yet — run an audit.</div>
-        ) : (
-          worst.slice(0, 2).map((a) => {
-            const sc = repScore(a.goal_alignment);
-            const snip = (a.answer_text ?? "").slice(0, 120);
-            return (
-              <div key={a.id} className="mb-2.5 rounded-r-[12px] border-l-[3px] border-alert bg-alert-bg px-3.5 py-3 last:mb-0">
-                <div className="mb-[7px] flex items-center gap-2">
-                  <span className="rounded-[5px] border border-line-2 bg-white px-[7px] py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-ink-2">{engineLabel(a.engine)}</span>
-                  {sc != null && <span className="font-mono text-[10px] font-semibold text-alert">{sc}/100 · {worstReason(a)}</span>}
-                </div>
-                <div className="mb-1.5 text-[14px] font-semibold leading-snug text-ink">“{a.prompt}”</div>
-                {snip && <div className="relative pl-[22px] text-[13.5px] italic leading-relaxed text-ink-2 before:absolute before:left-1.5 before:top-0 before:font-semibold before:not-italic before:text-ink-4 before:content-['~']">“{snip}…”</div>}
-              </div>
-            );
-          })
+      <div className="mt-6 border-t border-line pt-[22px]">
+        <div className="mb-3 flex items-baseline justify-between"><span className="eyebrow">Path to goal</span><span className="font-mono text-[13px] font-semibold text-indigo-strong">GOAL {goalScore ?? "—"}</span></div>
+        <div className="relative h-[11px] overflow-hidden rounded-full bg-line">
+          <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${fillPct}%`, background: `linear-gradient(90deg, ${col}, #EBA46A)` }} />
+          {goalScore != null && <div className="absolute -top-[3px] h-[17px] w-[3px] rounded-[2px] bg-indigo" style={{ left: `${goalScore}%` }} />}
+        </div>
+        <div className="mt-[9px] flex justify-between font-mono text-[12px] text-ink-4"><span>0</span><span>you · {score ?? "—"}</span><span>100</span></div>
+        {aiDate && (
+          <div className="mt-4 flex items-center gap-[9px] text-[14px] text-ink-3">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[15px] w-[15px] text-indigo"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+            <span>On current pace, you reach <b className="font-mono font-semibold text-ink-2">{goalScore}</b> by <b className="font-mono font-semibold text-ink-2">{fmtDate(aiDate)}</b>{aiMonths ? ` — ~${aiMonths} months` : ""}{gap != null ? ` · ${gap} pts to close` : ""}.</span>
+          </div>
         )}
-        <div className="mt-3.5">
-          <Link href="/next-steps" className="flex h-[34px] w-full items-center justify-center gap-1.5 rounded-[10px] bg-indigo px-[13px] text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong">Fix these in the plan</Link>
-        </div>
       </div>
+    </div>
+  );
+}
+
+// Worst-answers list — the loudest damaging answers. Reused by the dashboard hero + AI overview.
+export function WorstAnswersPanel({ worst, limit = 2 }: { worst: Answer[]; limit?: number }) {
+  return (
+    <div className="flex flex-col rounded-[18px] border border-line bg-card p-[22px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
+      <div className="mb-[3px] font-mono text-[11px] uppercase tracking-[0.14em] text-alert">Needs attention · loudest now</div>
+      <h2 className="mb-1 font-display text-[18px] font-semibold tracking-[-0.01em] text-ink">What AI says worst about you</h2>
+      <div className="mb-3.5 text-[13px] text-ink-3">The answers doing the most damage.</div>
+      {worst.length === 0 ? (
+        <div className="text-[13px] text-ink-4">No scored answers yet — run an audit.</div>
+      ) : (
+        worst.slice(0, limit).map((a) => {
+          const sc = repScore(a.goal_alignment);
+          const snip = (a.answer_text ?? "").slice(0, 120);
+          return (
+            <div key={a.id} className="mb-2.5 rounded-r-[12px] border-l-[3px] border-alert bg-alert-bg px-3.5 py-3 last:mb-0">
+              <div className="mb-[7px] flex items-center gap-2">
+                <span className="rounded-[5px] border border-line-2 bg-white px-[7px] py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-ink-2">{engineLabel(a.engine)}</span>
+                {sc != null && <span className="font-mono text-[10px] font-semibold text-alert">{sc}/100 · {worstReason(a)}</span>}
+              </div>
+              <div className="mb-1.5 text-[14px] font-semibold leading-snug text-ink">“{a.prompt}”</div>
+              {snip && <div className="relative pl-[22px] text-[13.5px] italic leading-relaxed text-ink-2 before:absolute before:left-1.5 before:top-0 before:font-semibold before:not-italic before:text-ink-4 before:content-['~']">“{snip}…”</div>}
+            </div>
+          );
+        })
+      )}
+      <div className="mt-3.5">
+        <Link href="/next-steps" className="flex h-[34px] w-full items-center justify-center gap-1.5 rounded-[10px] bg-indigo px-[13px] text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong">Fix these in the plan</Link>
+      </div>
+    </div>
+  );
+}
+
+export function ScoreHero({ score, delta, goalScore, aiDate, aiMonths, worst }: {
+  score: number | null; delta?: number | null; goalScore: number | null;
+  aiDate?: string | null; aiMonths?: number | null; worst: Answer[];
+}) {
+  return (
+    <section className="mb-5 grid grid-cols-1 gap-5 lg:grid-cols-[1.55fr_1fr]">
+      <ScorePanel score={score} delta={delta} goalScore={goalScore} aiDate={aiDate} aiMonths={aiMonths} />
+      <WorstAnswersPanel worst={worst} />
     </section>
   );
 }
+
 
 function GoalCard({ tone, icon, title, now, target, targetLabel, fillPct, targetMark, date, months }: {
   tone: "score" | "indigo"; icon: ReactNode; title: string; now: string; target: string;
