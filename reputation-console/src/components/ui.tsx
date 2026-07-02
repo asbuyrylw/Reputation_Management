@@ -196,16 +196,16 @@ export function StatTile({
     <Card accent={tone} hover className="flex h-full flex-col">
       <div className="flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 rounded-full ${toneDot[tone]}`} aria-hidden />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-4">{label}</span>
       </div>
       <div className={`mt-2 text-[28px] font-bold leading-none tracking-tight ${toneText[tone]}`}>{value}</div>
-      {sub && <div className="mt-1 text-xs font-medium text-slate-500">{sub}</div>}
+      {sub && <div className="mt-1 text-xs font-medium text-ink-3">{sub}</div>}
       {bar != null && (
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-line">
           <div className={`h-full rounded-full ${toneBar[tone]}`} style={{ width: `${Math.max(0, Math.min(100, bar))}%` }} />
         </div>
       )}
-      {hint && <p className="mt-auto pt-2 text-xs leading-snug text-slate-500">{hint}</p>}
+      {hint && <p className="mt-auto pt-2 text-xs leading-snug text-ink-3">{hint}</p>}
     </Card>
   );
 }
@@ -231,11 +231,11 @@ export function SectionCard({
     <Card accent={accent} className={className}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-base font-semibold tracking-tight text-slate-900">{title}</h3>
-          {subtitle && <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{subtitle}</p>}
+          <h3 className="text-base font-semibold tracking-tight text-ink">{title}</h3>
+          {subtitle && <p className="mt-0.5 text-xs leading-relaxed text-ink-3">{subtitle}</p>}
         </div>
         {action && (
-          <Link href={action.href} className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">
+          <Link href={action.href} className="shrink-0 text-sm font-medium text-indigo hover:text-indigo-strong">
             {action.label} →
           </Link>
         )}
