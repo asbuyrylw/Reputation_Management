@@ -126,6 +126,54 @@ function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> })
   );
 }
 
+// Phase-3 — where the draft sits in the topic-cluster portfolio + concrete internal links to weave
+// in (anchor → existing owned/site page, by paragraph). Suggestions only; the reviewer adds them.
+function TopicLinksPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> }) {
+  const tc = qn.topic_coverage;
+  const links = qn.suggested_links ?? [];
+  if (!tc && links.length === 0) return null;
+  return (
+    <details className="mt-2 rounded-[12px] border border-line bg-paper/60 p-2.5 text-xs">
+      <summary className="flex cursor-pointer flex-wrap items-center gap-1.5">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">Topic &amp; links</span>
+        {tc?.score != null && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${G_CHIP[gTone(tc.score)]}`}>Topic fit {tc.score}/100</span>}
+        {tc?.fills_gap && <span className="rounded-full bg-good-bg px-2 py-0.5 text-[10px] font-semibold text-good">Fills a gap</span>}
+        {links.length > 0 && <span className="rounded-full bg-indigo-050 px-2 py-0.5 text-[10px] font-semibold text-indigo-strong">{links.length} link{links.length === 1 ? "" : "s"}</span>}
+      </summary>
+      <div className="mt-2.5 space-y-3">
+        {tc && (
+          <div>
+            <div className="mb-1 text-ink-3">{tc.note}</div>
+            {tc.clusters_covered.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {tc.clusters_covered.map((c) => (
+                  <span key={c.topic} className={`rounded-full px-1.5 py-0.5 text-[10px] ${c.was_uncovered ? "bg-good-bg text-good" : "bg-line text-ink-3"}`}>{c.was_uncovered ? "★ " : ""}{c.topic}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {links.length > 0 && (
+          <div>
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-ink-4">Add these internal links</div>
+            <ul className="space-y-1">
+              {links.map((l, i) => (
+                <li key={i} className="flex items-start gap-1.5">
+                  <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${l.priority === "high" ? "bg-indigo" : "bg-line-2"}`} />
+                  <span className="text-ink-3">
+                    ¶{l.paragraph_idx + 1} → <a href={l.target_url} target="_blank" rel="noreferrer" className="font-medium text-indigo hover:underline">{l.anchor_text}</a>
+                    <span className="text-ink-4"> — {l.reason}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export function DraftReviewCard({
   draft,
   businessId,
@@ -351,6 +399,9 @@ export function DraftReviewCard({
 
       {/* Phase-1 NeuronWriter-style content grades — structure, AEO, readability, term coverage, intent */}
       {draft.quality_notes && <GradesPanel qn={draft.quality_notes} />}
+
+      {/* Phase-3 — topic-portfolio coverage + concrete in-draft internal-link suggestions */}
+      {draft.quality_notes && <TopicLinksPanel qn={draft.quality_notes} />}
 
       {whyHelps && <p className="mt-2 text-xs text-ink-3">💡 {whyHelps}</p>}
 

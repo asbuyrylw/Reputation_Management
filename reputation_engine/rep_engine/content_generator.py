@@ -733,6 +733,16 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
         log.debug("draft quality analysis skipped: %s", e)
 
+    # Phase-3 portfolio grades: where this draft sits in the topic clusters, and concrete in-draft
+    # internal-link suggestions to existing owned/site pages. Best-effort -- never blocks generation.
+    try:
+        from . import topical_authority as _ta, internal_links as _il
+        _tq = wo.get("target_query") or ""
+        quality_notes["topic_coverage"] = _ta.score_draft_topic_coverage(business_id, body, _tq)
+        quality_notes["suggested_links"] = _il.suggest_internal_links_for_draft(business_id, body, _tq)
+    except Exception as e:  # noqa: BLE001
+        log.debug("topic/link enrichment skipped: %s", e)
+
     # NeuronWriter draft content-score (the SERP-coverage gauge), stored alongside our own scores so
     # the editor can show both. Free (/evaluate-content). Dormant-safe -- skipped without a key/query.
     try:

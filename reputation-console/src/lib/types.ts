@@ -277,6 +277,8 @@ export interface ContentDraft {
         aeo?: DraftAeo;
         term_coverage?: DraftTermCoverage;
         intent_serp?: DraftIntentSerp;
+        topic_coverage?: DraftTopicCoverage;
+        suggested_links?: DraftSuggestedLink[];
       } & Record<string, unknown>)
     | null;
 }
@@ -1400,6 +1402,22 @@ export interface DraftTermCoverage {
 export interface DraftIntentSerp {
   intent: string;
   recommended_shape: string;
+}
+// Phase-3: where a draft sits in the topic-cluster portfolio + concrete in-draft internal links.
+export interface DraftTopicCoverage {
+  score: number | null;
+  clusters_covered: { topic: string; overlap: number; was_uncovered: boolean }[];
+  clusters_uncovered: string[];
+  fills_gap: boolean;
+  note: string;
+}
+export interface DraftSuggestedLink {
+  paragraph_idx: number;
+  anchor_text: string;
+  target_url: string;
+  target_title: string;
+  priority: "high" | "normal";
+  reason: string;
 }
 
 // Topic-authority clusters — pillar + spoke keywords grouped into the topics to own.

@@ -109,6 +109,44 @@ def analyze(business_id: int) -> dict:
                         "under_linked": len(under_linked), "suggestions": len(suggestions)}}
 
 
+def suggest_internal_links_for_draft(business_id: int, draft_body: str, target_query: str = "",
+                                     limit: int = 6) -> list[dict]:
+    """Concrete IN-DRAFT internal links: for each paragraph of THIS draft, the most topically-related
+    existing owned page / site page to link to (anchor = target title). Suggestions only — the human
+    weaves them in (no auto-injection, which would mangle the copy the reviewer is approving). Ranks
+    owned pieces above generic site pages. Best-effort; returns [] when there's nothing to link to."""
+    targets: list[dict] = []
+    for a in _owned(business_id):
+        if a.get("url") and a.get("tokens"):
+            targets.append({"url": a["url"], "title": a.get("title") or _path_label(a["url"]),
+                            "tokens": a["tokens"], "owned": True})
+    for p in _site_pages(business_id):
+        if p.get("tokens"):
+            targets.append({"url": p["url"], "title": p["title"], "tokens": p["tokens"], "owned": False})
+    if not targets:
+        return []
+    paras = [pp.strip() for pp in re.split(r"\n\s*\n", draft_body or "") if len(pp.strip()) > 40]
+    out: list[dict] = []
+    used: set = set()
+    for idx, para in enumerate(paras):
+        pt = _tokens(para)
+        if not pt:
+            continue
+        # owned pages get a +1 tiebreak so a relevant owned piece beats an equally-relevant site page
+        ranked = sorted(targets, key=lambda t: -(len(pt & t["tokens"]) + (1 if t["owned"] else 0)))
+        for t in ranked:
+            if len(pt & t["tokens"]) >= 2 and t["url"] not in used:
+                used.add(t["url"])
+                out.append({"paragraph_idx": idx, "anchor_text": t["title"][:60], "target_url": t["url"],
+                            "target_title": t["title"], "priority": "high" if t["owned"] else "normal",
+                            "reason": ("Link to your owned page on this topic." if t["owned"]
+                                       else "Link to this related page on your site.")})
+                break
+        if len(out) >= limit:
+            break
+    return out
+
+
 def main() -> None:  # pragma: no cover
     ap = argparse.ArgumentParser(description="Internal-linking optimizer")
     sub = ap.add_subparsers(dest="cmd", required=True)

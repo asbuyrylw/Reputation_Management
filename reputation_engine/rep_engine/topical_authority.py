@@ -136,6 +136,38 @@ def next_to_write(business_id: int, limit: int = 5) -> list[dict]:
             for c in cs if c["needs_content"]][:limit]
 
 
+def score_draft_topic_coverage(business_id: int, draft_body: str, target_query: str = "") -> dict:
+    """Place a single draft in the business's topic PORTFOLIO (not just its own keywords): which
+    topic clusters it addresses, whether it FILLS a cluster that has no owned content yet, and a
+    0..100 topic-relevance score. Portfolio-aware — reads all target-keyword clusters. Best-effort;
+    returns a score of None when there are no clusters yet."""
+    cs = clusters(business_id).get("clusters", [])
+    if not cs:
+        return {"score": None, "clusters_covered": [], "clusters_uncovered": [],
+                "fills_gap": False, "note": "No topic clusters yet — run keyword research."}
+    dt = _tokens(f"{draft_body or ''} {target_query or ''}")
+    covered, uncovered, best = [], [], 0
+    fills_gap = False
+    for c in cs:
+        theme: set = set()
+        for kw in [c.get("pillar", ""), *c.get("spokes", [])]:
+            theme |= _tokens(kw)
+        ov = len(dt & theme)
+        if ov >= 2:
+            best = max(best, ov)
+            covered.append({"topic": c["topic"], "overlap": ov, "was_uncovered": bool(c.get("needs_content"))})
+            if c.get("needs_content"):
+                fills_gap = True
+        elif c.get("needs_content"):
+            uncovered.append(c["topic"])
+    score = min(100, round(best * 100 / 3)) if covered else 0  # overlap >=3 tokens -> full relevance
+    note = ("Fills a topic cluster with no owned content yet — high leverage." if fills_gap
+            else "Reinforces a topic cluster you already cover." if covered
+            else "Doesn't clearly map to any tracked topic cluster — check the target keyword.")
+    return {"score": score, "clusters_covered": sorted(covered, key=lambda x: -x["overlap"])[:8],
+            "clusters_uncovered": uncovered[:8], "fills_gap": fills_gap, "note": note}
+
+
 def main() -> None:  # pragma: no cover
     ap = argparse.ArgumentParser(description="Topical authority clustering")
     sub = ap.add_subparsers(dest="cmd", required=True)
