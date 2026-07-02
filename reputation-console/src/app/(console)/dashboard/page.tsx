@@ -486,6 +486,7 @@ export default function DashboardPage() {
                   runId={latestRunId}
                   limit={4}
                   weakQueries={data.gap?.weak_queries as WeakQuery[] | undefined}
+                  workOrders={workOrders}
                   showFix
                 />
                 <div className="mt-3 border-t border-slate-100 pt-3 text-right">

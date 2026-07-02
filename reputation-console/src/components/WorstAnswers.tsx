@@ -5,7 +5,7 @@
 // Reused on the dashboard and the Audits index.
 
 import Link from "next/link";
-import type { Answer } from "@/lib/types";
+import type { Answer, WorkOrder } from "@/lib/types";
 import { repScore, repBand, repClasses } from "@/lib/repScore";
 import { engineLabel } from "@/lib/engines";
 
@@ -41,6 +41,7 @@ export function WorstAnswers({
   limit = 3,
   href = "/audits",
   weakQueries,
+  workOrders,
   showFix = false,
 }: {
   answers: Answer[] | undefined;
@@ -48,6 +49,7 @@ export function WorstAnswers({
   limit?: number;
   href?: string;
   weakQueries?: WeakQuery[];
+  workOrders?: WorkOrder[];
   showFix?: boolean;
 }) {
   const scored = (answers ?? []).filter((a) => !a.failed && a.goal_alignment != null);
@@ -55,6 +57,25 @@ export function WorstAnswers({
   if (worst.length === 0) return null;
   const byPrompt = new Map<string, WeakQuery>();
   for (const w of weakQueries ?? []) if (w.prompt) byPrompt.set(norm(w.prompt), w);
+
+  // Deep-link a worst answer to the exact task that fixes it: weak_query.addressed_by (the topic/
+  // query the plan uses) matched to a work order's gap_specifics.source_query, with tolerant
+  // fallbacks (title contains) so a paraphrase still lands somewhere useful.
+  const woSources = (workOrders ?? [])
+    .filter((w) => !w.superseded && w.gap_specifics?.source_query)
+    .map((w) => ({ q: norm(w.gap_specifics!.source_query!), wo: w }));
+  const planHref = (wq?: WeakQuery): string => {
+    const a = norm(wq?.addressed_by);
+    if (a) {
+      const hit =
+        woSources.find((x) => x.q === a) ||
+        woSources.find((x) => x.q && (a.includes(x.q) || x.q.includes(a))) ||
+        (workOrders ?? []).filter((w) => !w.superseded).find((w) => w.title && norm(w.title).includes(a));
+      const wo = hit && "wo" in hit ? hit.wo : hit;
+      if (wo && "id" in wo) return `/content/work-orders#wo-${wo.id}`;
+    }
+    return "/next-steps";
+  };
 
   return (
     <div className="space-y-2">
@@ -84,7 +105,7 @@ export function WorstAnswers({
               </div>
             )}
             <div className="mt-2 flex items-center justify-end gap-3">
-              <Link href="/next-steps" className="text-xs font-medium text-emerald-700 hover:underline">
+              <Link href={planHref(wq)} className="text-xs font-medium text-emerald-700 hover:underline">
                 {showFix ? "See it in your plan →" : "Fix this →"}
               </Link>
               <Link

@@ -213,7 +213,7 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
     (wo.execution ?? "auto") !== "manual" &&
     !["done", "verified"].includes(wo.status);
   return (
-    <Card className="p-3">
+    <Card id={`wo-${wo.id}`} className="scroll-mt-24 p-3 target:ring-2 target:ring-indigo-400">
       {/* category (left) · phase above date (right) */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -273,6 +273,9 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
                   <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-amber-700">recommendation</span>
                 )}
               </div>
+            )}
+            {wo.gap_specifics?.source_query && (
+              <div><span className="font-medium text-rose-600">Fixes the AI gap:</span> “{wo.gap_specifics.source_query}”</div>
             )}
             {wo.rationale?.why && <div>{wo.rationale.why}</div>}
             {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {wo.why_helps_ai_rep}</div>}

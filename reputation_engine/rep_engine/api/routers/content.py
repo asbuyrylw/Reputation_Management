@@ -77,7 +77,7 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
     rows = conn.execute(
         "SELECT id, wo_code, title, capability, execution, phase, status, assignee, "
         "target_date, instruction, recommended_tool, result_notes, created_at, "
-        "rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision, "
+        "rationale, gap_source, gap_specifics, why_helps_ai_rep, why_helps_seo, added_in_revision, "
         "start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, area, platform, "
         "completed_at, "
         "COALESCE(superseded, false) AS superseded, "

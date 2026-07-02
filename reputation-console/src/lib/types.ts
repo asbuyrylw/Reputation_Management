@@ -139,6 +139,7 @@ export interface WorkOrder {
   result_notes: string | null;
   rationale?: { gap_source?: string; why?: string; source?: string } | null;
   gap_source?: string | null;
+  gap_specifics?: { source_query?: string } | null; // ties a task to the worst AI query/topic it fixes
   why_helps_ai_rep?: string | null;
   why_helps_seo?: string | null;
   added_in_revision?: number | null;

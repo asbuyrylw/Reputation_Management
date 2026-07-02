@@ -159,6 +159,8 @@ class WorkOrder:
     predicted_basis: str = ""                        # "measured from your results" | "industry baseline"
     area: str = ""                                   # website|blog|outreach|social|local|reviews|tracking
     platform: str = ""                               # for social/local tasks: linkedin|facebook|gbp|...
+    gap_specifics: dict = field(default_factory=dict)  # {source_query} -> the weak query/topic this task fixes,
+    #                                                    so the UI can link a worst AI answer straight to its task
 
 
 # Plain-English "how this helps" by capability, so EVERY task shows its why (C10).
@@ -300,7 +302,7 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     n = 0
 
     def add(title, capability, instruction, week, deps=None, *, gap_source="", why="",
-            source="audited gap", area=None, platform=""):
+            source="audited gap", area=None, platform="", source_query=""):
         nonlocal n
         n += 1
         tool = best_tool(capability)
@@ -317,6 +319,9 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
             why_helps_seo=_WHY_SEO.get(capability, ""),
             area=area or _CAPABILITY_AREA.get(capability, "other"),
             platform=platform,
+            # source_query is the topic/query string the LLM also names in weak_queries[].addressed_by,
+            # so a worst answer can be linked to the exact task that fixes it.
+            gap_specifics={"source_query": source_query} if source_query else {},
         ))
 
     # --- Phase 0: fast wins (reviews, tracking baseline, one explainer) ---
@@ -338,7 +343,7 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         add(f"Create owned asset: {topic}", cap,
             f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
             f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
-            gap_source="audited gap: missing owned content", why=why)
+            gap_source="audited gap: missing owned content", why=why, source_query=topic)
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
@@ -388,7 +393,7 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         rec = g.get("recommendation", "Create geo-specific content + strengthen GBP / local citations.")
         add(f"Reach page 1 for '{q}'", "local_content_creation",
             f"{rec} Current position: {g.get('current_rank', 'off page 1')}.", 4,
-            gap_source="local search ranking", why=g.get("why", ""))
+            gap_source="local search ranking", why=g.get("why", ""), source_query=q)
 
     # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
     for i, g in enumerate(gap.get("competitor_defense", []) or []):
@@ -396,7 +401,7 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
         add(f"Compete for '{q}'", "content_writing",
             f"{rec} A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.", 4,
-            gap_source="competitor analysis", why=g.get("why", ""))
+            gap_source="competitor analysis", why=g.get("why", ""), source_query=q)
 
     # --- Site-technical gaps -> tasks (thin/missing pages, schema, weak coverage) ---
     for i, g in enumerate(gap.get("site_technical_gaps", []) or []):

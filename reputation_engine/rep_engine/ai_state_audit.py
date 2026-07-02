@@ -1746,6 +1746,22 @@ def build_gap_model(business_id: int) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("gap model: social presence unavailable (%s)", e)
 
+        # Keep the worker heartbeat fresh across the long LLM passes so /readyz doesn't false-alarm
+        # "worker stale" during a healthy gap synthesis. Best-effort + lazy-imported (avoids an
+        # import cycle) + no-op outside worker mode. db() opens a fresh connection per call, so this
+        # never disturbs the connection this function holds open.
+        def _hb() -> None:
+            try:
+                try:
+                    from .api.worker import heartbeat as _wb
+                except ImportError:  # pragma: no cover -- loose-script fallback
+                    from api.worker import heartbeat as _wb  # type: ignore
+                _wb()
+            except Exception:  # noqa: BLE001 -- heartbeat is best-effort
+                pass
+
+        _hb()  # first-party signals collected
+
         payload = json.dumps({
             "business": {k: b[k] for k in ("name", "domain", "services", "goal",
                                            "contested_terms", "geo")},
@@ -1781,14 +1797,27 @@ def build_gap_model(business_id: int) -> dict:
             raise RuntimeError(
                 "Gap model synthesis failed (empty/invalid LLM output); previous model preserved."
             )
+        _hb()  # GAP_SYSTEM pass complete
         # Completeness-critic + refine pass (fail-safe): catch under-addressed/ungrounded dimensions
-        # so the persisted plan is the best one, not just the first plausible one.
-        model = _gap_critic_refine(model, {
-            "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,
-            "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
-            "social_presence": social_presence,
-            "external_signal_types": [s.get("signal_type") for s in external_signals],
-        })
+        # so the persisted plan is the best one, not just the first plausible one. SKIP it when the
+        # first pass already marked every coverage dimension addressed -- the critic returns the
+        # draft unchanged in that case anyway (its own contract), and skipping avoids a full second
+        # ~12k-token/240s LLM pass, the dominant cost of this job. GAP_CRITIC_ENABLED still gates it
+        # inside _gap_critic_refine for the runs that do need it.
+        cov = model.get("coverage") if isinstance(model.get("coverage"), dict) else None
+        needs_critic = (not cov) or any(
+            isinstance(v, dict) and not v.get("addressed", False) for v in cov.values()
+        )
+        if needs_critic:
+            model = _gap_critic_refine(model, {
+                "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,
+                "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
+                "social_presence": social_presence,
+                "external_signal_types": [s.get("signal_type") for s in external_signals],
+            })
+        else:
+            log.info("gap model: first pass addressed all coverage dimensions; skipping critic pass")
+        _hb()  # critic pass done (or skipped)
         conn.execute(
             "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
             (business_id, run["id"], json.dumps(model)),

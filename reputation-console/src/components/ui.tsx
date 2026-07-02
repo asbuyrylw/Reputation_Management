@@ -127,15 +127,18 @@ export function Card({
   accent,
   hover = false,
   padded = true,
+  id,
 }: {
   children: ReactNode;
   className?: string;
   accent?: Tone;
   hover?: boolean;
   padded?: boolean;
+  id?: string;
 }) {
   return (
     <div
+      id={id}
       className={`relative overflow-hidden rounded-2xl bg-white ${padded ? "p-5" : ""} shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.12)] ring-1 ring-slate-900/[0.06] ${
         hover ? "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,23,42,0.06),0_18px_36px_-18px_rgba(15,23,42,0.22)]" : ""
       } ${className}`}
