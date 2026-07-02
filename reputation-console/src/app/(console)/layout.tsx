@@ -37,7 +37,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
           {navOpen && <div className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setNavOpen(false)} />}
           <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
           <div className="flex min-w-0 flex-1 flex-col">
-            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+            <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-line bg-paper/85 px-4 py-3 backdrop-blur-md sm:px-6">
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   onClick={() => setNavOpen(true)}

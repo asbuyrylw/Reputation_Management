@@ -7,20 +7,59 @@
    page inherits the same polish.
 --------------------------------------------------------------------------- */
 :root {
-  --background: #f5f6fb;     /* soft slate canvas, never flat white */
-  --foreground: #0f172a;     /* slate-900 ink */
-  --surface: #ffffff;
-  --border: rgba(15, 23, 42, 0.08);
-  --brand: #4f46e5;          /* indigo-600 */
-  --brand-strong: #4338ca;   /* indigo-700 */
+  /* v2 redesign tokens (from the provided HTML design system) */
+  --paper: #F7F8FA;
+  --card: #FFFFFF;
+  --ink: #0F172A;
+  --ink-2: #334155;
+  --ink-3: #64748B;
+  --ink-4: #94A3B8;
+  --line: #E9ECF2;
+  --line-2: #DDE2EB;
+  --indigo: #4F46E5;
+  --indigo-strong: #4338CA;
+  --indigo-050: #EEF0FE;
+  --indigo-100: #E0E3FC;
+  --alert: #DC2626;
+  --alert-bg: #FEF2F2;
+  --good: #059669;
+  --good-bg: #ECFDF5;
+  --amber: #D97706;
+  --amber-bg: #FFFBEB;
+  --score: #E0672E;          /* weak = burnt orange, not alarm red */
+  --score-bg: #FDF1EA;
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --surface: var(--card);
+  --border: var(--line);
+  --brand: var(--indigo);
+  --brand-strong: var(--indigo-strong);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  /* Use the Geist webfont that the root layout already loads (was overridden by Arial). */
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-indigo: var(--indigo);
+  --color-indigo-strong: var(--indigo-strong);
+  --color-indigo-050: var(--indigo-050);
+  --color-indigo-100: var(--indigo-100);
+  --color-alert: var(--alert);
+  --color-good: var(--good);
+  --color-amber: var(--amber);
+  --color-score: var(--score);
+  --color-score-bg: var(--score-bg);
+  /* v2 fonts loaded by the root layout: Inter (body), IBM Plex Mono (labels), Fraunces (display). */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-plex), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
 }
 
 html {
@@ -34,15 +73,23 @@ html {
 body {
   min-height: 100vh;
   color: var(--foreground);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  /* Aligned figures everywhere — KPIs, tables and deltas line up column-to-column, which reads
-     noticeably more premium in a numbers-heavy console. */
+  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Aligned figures everywhere — KPIs, tables and deltas line up column-to-column. */
   font-variant-numeric: tabular-nums;
-  background-color: var(--background);
-  background-image:
-    radial-gradient(1100px 560px at 100% -8%, rgba(99, 102, 241, 0.07), transparent 60%),
-    radial-gradient(900px 480px at -8% 4%, rgba(16, 185, 129, 0.05), transparent 55%);
-  background-attachment: fixed;
+  background-color: var(--paper);
+}
+
+/* Display serif (Fraunces) for page/section headings + big scores. */
+.font-display { font-family: var(--font-fraunces), Georgia, "Times New Roman", serif; }
+
+/* Mono eyebrow label — the v2 section/kicker style. */
+.eyebrow {
+  font-family: var(--font-plex), ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-4);
 }
 
 ::selection {

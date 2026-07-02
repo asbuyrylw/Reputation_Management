@@ -139,8 +139,8 @@ export function Card({
   return (
     <div
       id={id}
-      className={`relative overflow-hidden rounded-2xl bg-white ${padded ? "p-5" : ""} shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.12)] ring-1 ring-slate-900/[0.06] ${
-        hover ? "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,23,42,0.06),0_18px_36px_-18px_rgba(15,23,42,0.22)]" : ""
+      className={`relative overflow-hidden rounded-[18px] border border-line bg-card ${padded ? "p-5" : ""} shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)] ${
+        hover ? "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,23,42,0.05),0_12px_32px_-10px_rgba(15,23,42,0.14)]" : ""
       } ${className}`}
     >
       {accent && <span aria-hidden className={`absolute inset-y-0 left-0 w-1.5 ${toneAccentBar[accent]}`} />}
@@ -167,12 +167,10 @@ export function PageHeader({
   eyebrow?: string;
 }) {
   return (
-    <div className="mb-6">
-      {eyebrow && (
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-600">{eyebrow}</div>
-      )}
-      <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-[1.7rem]">{title}</h1>
-      {subtitle && <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-slate-500">{subtitle}</p>}
+    <div className="mb-[18px]">
+      {eyebrow && <div className="eyebrow mb-1.5">{eyebrow}</div>}
+      <h1 className="font-display text-[28px] font-semibold leading-[1.05] tracking-[-0.02em] text-ink sm:text-[32px]">{title}</h1>
+      {subtitle && <p className="mt-1.5 max-w-[560px] text-[15px] leading-relaxed text-ink-3">{subtitle}</p>}
     </div>
   );
 }
