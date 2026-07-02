@@ -84,20 +84,59 @@ def _ensure_table() -> None:
                 revision_count INT DEFAULT 0, compliance_pass BOOLEAN,
                 compliance_flags JSONB DEFAULT '[]'::jsonb,
                 status TEXT DEFAULT 'pending_review', reviewer TEXT, reviewed_at TIMESTAMPTZ,
-                published_asset_id BIGINT, created_at TIMESTAMPTZ DEFAULT now(),
+                published_asset_id BIGINT, content_hash TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now())
         """)
+        conn.execute("ALTER TABLE content_drafts ADD COLUMN IF NOT EXISTS content_hash TEXT")
         conn.commit()
 
 
 # ----------------------------------------------------------------------------
-# pgvector hook (no-op until wired) -- would prevent regenerating existing content
+# Content dedup -- avoid regenerating content we've already published.
 # ----------------------------------------------------------------------------
 def _already_covered(business_id: int, topic: str) -> bool:
-    """Placeholder for the pgvector semantic-dedup check. Returns False (always
-    generate) until pgvector memory is wired in -- a future enhancement (the
-    pgvector extension may not be installed). PH 4."""
-    return False
+    """Cheap pre-generation dedup: skip if we've ALREADY PUBLISHED an asset with this exact
+    title for the business. Exact-title only (case-insensitive) -- a conservative gate that
+    catches obvious re-runs without blocking legitimate new angles. Near-duplicate semantic
+    dedup (pgvector) is a deferred enhancement; the post-generation content_hash check (below)
+    catches byte-identical bodies. Never raises -- returns False on any error so a lookup
+    problem can't block generation."""
+    t = (topic or "").strip()
+    if not t:
+        return False
+    try:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM assets WHERE business_id=%s AND lower(btrim(title))=lower(%s) LIMIT 1",
+                (business_id, t),
+            ).fetchone()
+        return bool(row)
+    except Exception as e:  # noqa: BLE001 -- dedup must never break generation
+        log.debug("_already_covered lookup skipped: %s", e)
+        return False
+
+
+def _duplicate_body(business_id: int, content_hash: str) -> bool:
+    """Post-generation exact-content dedup: True if this exact body (by sha256) already exists
+    as a published asset OR an approved draft for the business. Used to FLAG (not drop) a
+    byte-identical duplicate for human review. Never raises."""
+    if not content_hash:
+        return False
+    try:
+        with db() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM assets WHERE business_id=%s AND body_hash=%s
+                   UNION ALL
+                   SELECT 1 FROM content_drafts
+                   WHERE business_id=%s AND content_hash=%s AND status IN ('approved','pending_review','needs_fix')
+                   LIMIT 1""",
+                (business_id, content_hash, business_id, content_hash),
+            ).fetchone()
+        return bool(row)
+    except Exception as e:  # noqa: BLE001
+        log.debug("_duplicate_body lookup skipped: %s", e)
+        return False
 
 
 # ----------------------------------------------------------------------------
@@ -649,6 +688,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
                 comp_flags = list(recheck.get("flags", []))
 
     placeholders = _extract_placeholders(body)
+    # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
+    content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
 
     # status:
     #  - a REAL evaluation below threshold, or a REAL compliance failure -> needs_fix
@@ -662,6 +703,12 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
         status = "needs_fix"
     if comp_pass is False:
         status = "needs_fix"
+    # Exact-duplicate guard: if this same body already exists (published asset or live draft),
+    # FLAG it for the human rather than silently dropping or re-publishing the same page.
+    if _duplicate_body(business_id, content_hash):
+        status = "needs_fix"
+        comp_flags = list(comp_flags) + [
+            "exact duplicate of already-drafted/published content -- don't re-publish the same page"]
 
     # quality_notes carries the rubric eval + the SEO keyword-coverage scorecard (CI-3 UI reads it)
     # + the Wave-2 draft-quality scorers (on-page SEO, citation-readiness, fact-check).
@@ -718,12 +765,12 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
             """INSERT INTO content_drafts
                (business_id, work_order_id, asset_type, title, body, target_query,
                 quality_score, quality_notes, revision_count, compliance_pass,
-                compliance_flags, status, highlighted_sections, placeholders_pending)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                compliance_flags, status, highlighted_sections, placeholders_pending, content_hash)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, wo.get("_db_id"), asset_type, topic, body,
              wo.get("target_query"), round(score, 2), json.dumps(quality_notes),
              revisions, comp_pass, json.dumps(comp_flags), status,
-             json.dumps(highlighted), json.dumps(placeholders)),
+             json.dumps(highlighted), json.dumps(placeholders), content_hash),
         ).fetchone()
         conn.commit()
     log.info("Draft %d for '%s' (type=%s, score=%.2f, rev=%d, compliance=%s, status=%s, placeholders=%d)",
@@ -849,14 +896,17 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None)
         # can paste the live URL later. No site/social integration yet -> the link is manual.
         body = (d.get("body") or "").strip()
         summary = (body[:280] + "…") if len(body) > 280 else body
+        # Exact-content fingerprint on the asset (matches the draft's content_hash) so future
+        # generation can detect a byte-identical duplicate of already-published content.
+        body_hash = hashlib.sha256((d.get("body") or "").encode("utf-8")).hexdigest()
         # Copy the draft's compliance verdict onto the asset: the publish runner re-checks
         # assets.compliance_pass IS TRUE before any auto-post (Integrations Phase 2).
         asset = conn.execute(
             """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta,
-                                   summary, published_status, compliance_pass)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s) RETURNING id""",
+                                   summary, published_status, compliance_pass, body_hash)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s) RETURNING id""",
             (d["business_id"], d["work_order_id"], d["asset_type"], d["title"],
-             "own_site", json.dumps({"from_draft": draft_id}), summary, d.get("compliance_pass")),
+             "own_site", json.dumps({"from_draft": draft_id}), summary, d.get("compliance_pass"), body_hash),
         ).fetchone()
         conn.execute(
             "UPDATE content_drafts SET status='approved', reviewer=%s, reviewed_at=now(), "
@@ -870,8 +920,8 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None)
                 "updated_at=now() WHERE id=%s AND status IN ('pending','in_progress')",
                 (d["work_order_id"],),
             )
-        # Immutable compliance sign-off record (FINRA 2210 / SEC recordkeeping).
-        body_hash = hashlib.sha256((d.get("body") or "").encode("utf-8")).hexdigest()
+        # Immutable compliance sign-off record (FINRA 2210 / SEC recordkeeping). Reuses body_hash
+        # computed above (same sha256 of the draft body).
         conn.execute(
             "INSERT INTO compliance_signoffs (business_id, draft_id, asset_id, approver, "
             "compliance_pass, compliance_flags, placeholders, body_hash, override_reason) "
