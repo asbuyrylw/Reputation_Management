@@ -360,12 +360,13 @@ def trend(business_id: int) -> list[dict]:
         ).fetchall()
     out = []
     for r in rows:
-        if r["p1"] is None:
-            continue
         d = r["run_at"]
+        # Require a real audit-run date; skips stray/seed rows (e.g. negative run_ids) with no run.
+        if r["p1"] is None or d is None:
+            continue
         out.append({
             "run_id": r["run_id"],
-            "date": (d.date().isoformat() if d else str(r["run_id"])),
+            "date": d.date().isoformat(),
             "score": round(float(r["p1"]) * 100),
         })
     return out
