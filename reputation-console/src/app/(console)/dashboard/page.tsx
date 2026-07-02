@@ -7,9 +7,11 @@ import { useAuth } from "@/lib/auth";
 import { OperatorHome } from "@/components/OperatorHome";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
-  useLocalRankings, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
+  useLocalRankings, useLocalRankTrend, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
 } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
+import { DashboardHero } from "@/components/DashboardHero";
+import { MetricTrend } from "@/components/MetricTrend";
 import { ScoreTrend } from "@/components/ScoreTrend";
 import { VerdictBanner } from "@/components/VerdictBanner";
 import { ResultsProofCard } from "@/components/ResultsProofCard";
@@ -235,6 +237,7 @@ function ActionPlanProgress({ woCounts, assetsN, delta }: { woCounts: Record<str
 // --- Local search snapshot (grouped with organic search under "Search performance") ---
 function LocalSearchCard({ businessId }: { businessId: number | null }) {
   const { data: ranks } = useLocalRankings(businessId);
+  const { data: trend } = useLocalRankTrend(businessId);
   const sum = ranks?.summary ?? null;
   return (
     <Card>
@@ -250,6 +253,11 @@ function LocalSearchCard({ businessId }: { businessId: number | null }) {
         </div>
       ) : (
         <p className="mt-3 text-sm text-slate-500">No local-rank snapshot yet. <Link href="/local-seo" className="font-medium text-indigo-600 hover:text-indigo-700">Run a check →</Link></p>
+      )}
+      {trend && trend.length >= 2 && (
+        <div className="mt-4 border-t border-slate-100 pt-3">
+          <MetricTrend data={trend} label="Local visibility over time" suffix="%" hint="Share of your tracked local searches ranking on page 1, per check." />
+        </div>
       )}
     </Card>
   );
@@ -321,38 +329,6 @@ function ThisMonthPanel({ businessId }: { businessId: number | null }) {
           </div>
         ))}
       </div>
-    </Card>
-  );
-}
-
-// --- When will I know it improved: projection + recheck ---
-function ProjectionStrip({ timeline }: { timeline: Json | undefined }) {
-  if (!timeline) return null;
-  const cur = repScore((timeline.current_alignment as number) ?? null);
-  const goal = repScore((timeline.dominance_target as number) ?? null);
-  const proj = (timeline.projection as Json | undefined)?.expected as Json | undefined;
-  const date = proj?.target_date as string | undefined;
-  const confidence = timeline.confidence as string | undefined;
-  return (
-    <Card accent="info" className="bg-linear-to-br from-indigo-50/60 to-white">
-      <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold tracking-tight text-slate-900">When will I know it improved?</h3>
-        <Link href="/timeline" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">See full projection →</Link>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-900/5">
-          <span className="text-2xl font-bold text-slate-900">{cur ?? "—"}</span><span className="text-xs font-medium text-slate-400">today</span>
-        </div>
-        <span className="text-lg text-slate-300">→</span>
-        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 ring-1 ring-emerald-200">
-          <span className="text-2xl font-bold text-emerald-600">{goal ?? "—"}</span><span className="text-xs font-medium text-emerald-700">goal</span>
-        </div>
-        {date && <div className="text-sm text-slate-600">on track to arrive around <span className="font-semibold text-slate-900">{date}</span></div>}
-      </div>
-      <p className="mt-3 text-xs text-slate-500">
-        {confidence && <>Confidence: <span className="font-medium text-slate-600">{confidence}</span> (sharpens after each audit). </>}
-        Your score updates every time an audit runs — recheck after your next audit to see movement.
-      </p>
     </Card>
   );
 }
@@ -448,20 +424,23 @@ export default function DashboardPage() {
         />
       ) : (
         <div className="space-y-6">
+          {/* HERO — the whole picture in one glance: score, goal, time-to-goal, local search. */}
+          <DashboardHero
+            businessId={businessId}
+            score={score}
+            delta={deltaVsLast}
+            goalScore={goalScore}
+            timeline={timeline as Json | undefined}
+            goalText={goalText || undefined}
+          />
+
           {/* live monitor — incidents + mentions at a glance */}
           <LiveMonitorStrip businessId={businessId} />
 
           {/* ============================================================== */}
-          {/* 1) HERO — your goal, the ONE reputation score, the verdict.     */}
+          {/* Detailed AI Reputation Score — drivers + sentiment + verdict.   */}
           {/* ============================================================== */}
           <div className="space-y-3">
-            {goalText && (
-              <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Your goal</div>
-                <p className="mt-1 text-base font-normal leading-relaxed text-slate-700">{goalText}</p>
-                <p className="mt-0.5 text-xs text-slate-500">Your AI Reputation Score below is how close AI is to saying this about you today.</p>
-              </Card>
-            )}
             <ReputationHero
               goalAlignment={latest.goal_alignment}
               contestedRate={latest.contested_rate}
@@ -491,9 +470,8 @@ export default function DashboardPage() {
           {/* 3) Trajectory & projection — surfaced (projection + score-over-time + visibility) */}
           <section className="space-y-6">
             <h2 className="text-sm font-semibold tracking-tight text-slate-900">
-              Where your score is heading <span className="font-normal text-slate-400">— projection &amp; trend over time</span>
+              Where your score is heading <span className="font-normal text-slate-400">— trend over time</span>
             </h2>
-            <ProjectionStrip timeline={timeline as Json | undefined} />
             <Card>
               <div className="mb-3 text-base font-semibold tracking-tight text-slate-900">Your score over time (0–100)</div>
               <ScoreTrend series={s} goal={goalScore} projected={goalScore} />

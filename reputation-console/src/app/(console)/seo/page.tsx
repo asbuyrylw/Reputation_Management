@@ -183,7 +183,7 @@ export default function SeoPage() {
         ) : (
           <div>
             <div className="mb-3 text-xs text-slate-400">As of {new Date(data.created_at).toLocaleDateString()}</div>
-            <SiteAuditView summary={data.summary} />
+            <SiteAuditView summary={data.summary} businessId={businessId} />
           </div>
         )}
       </div>

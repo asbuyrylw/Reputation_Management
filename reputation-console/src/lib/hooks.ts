@@ -459,6 +459,16 @@ export function useMetricsTrend(businessId: number | null) {
   return useApiQuery<MetricsTrend>(["metrics-trend", businessId], base(businessId, "/metrics-trend"));
 }
 
+// Trackable site-health (AI-crawler readiness) + local-visibility trends over time (0-100),
+// the same way the AI reputation score is tracked.
+export type MetricTrendPoint = { date: string | null; score: number; run_id?: number };
+export function useSiteHealthTrend(businessId: number | null) {
+  return useApiQuery<MetricTrendPoint[]>(["site-health-trend", businessId], base(businessId, "/site-health-trend"));
+}
+export function useLocalRankTrend(businessId: number | null) {
+  return useApiQuery<MetricTrendPoint[]>(["local-rank-trend", businessId], base(businessId, "/local-rank-trend"));
+}
+
 // Cross-engine divergence + persona/location lens.
 export function useAnswerLenses(businessId: number | null) {
   return useApiQuery<AnswerLenses>(["answer-lenses", businessId], base(businessId, "/answer-lenses"));

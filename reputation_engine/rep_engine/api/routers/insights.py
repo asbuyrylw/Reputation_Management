@@ -373,6 +373,35 @@ def report_view(business_id: int = Depends(authorize_business), conn=Depends(get
     }
 
 
+@router.get("/site-health-trend")
+def site_health_trend(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Per-audit AI-crawler readiness (0-100) over time — makes site health a TRACKABLE trend
+    like the AI reputation score. Source: site_audits.summary.avg_semantic_readiness."""
+    rows = conn.execute(
+        "SELECT summary, created_at FROM site_audits WHERE business_id=%s ORDER BY id ASC",
+        (business_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        s = r["summary"] if isinstance(r["summary"], dict) else {}
+        v = s.get("avg_semantic_readiness")
+        if v is None:
+            continue
+        d = r["created_at"]
+        out.append({"date": d.date().isoformat() if d else None, "score": round(float(v))})
+    return out
+
+
+@router.get("/local-rank-trend")
+def local_rank_trend(business_id: int = Depends(authorize_business)):
+    """Per-run local page-one rate (0-100) over time — a trackable local-visibility trend."""
+    try:
+        from ... import local_seo as _ls
+    except ImportError:  # pragma: no cover
+        import local_seo as _ls  # type: ignore
+    return _ls.trend(business_id)
+
+
 @router.get("/answer-lenses")
 def answer_lenses(business_id: int = Depends(authorize_business)):
     """Cross-engine divergence (where engines disagree) + persona/location lens (how different

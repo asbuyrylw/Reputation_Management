@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Term } from "./Term";
+import { useSiteHealthTrend } from "@/lib/hooks";
+import { MetricTrend } from "./MetricTrend";
 
 // ---- shape of the crawl summary we render (subset we use) ----
 type PageAudit = {
@@ -89,8 +91,9 @@ function Stat({ label, value, sub }: { label: React.ReactNode; value: React.Reac
   );
 }
 
-export function SiteAuditView({ summary }: { summary: Record<string, unknown> }) {
+export function SiteAuditView({ summary, businessId }: { summary: Record<string, unknown>; businessId?: number | null }) {
   const s = summary as SiteSummary;
+  const { data: healthTrend } = useSiteHealthTrend(businessId ?? null);
   const allPages = s.pages ?? [];
   const pages = allPages.filter((p) => isContentUrl(p.url)).sort((a, b) => scoreOf(a) - scoreOf(b));
   // URLs crawled that weren't real content pages (WordPress feeds/APIs/assets) — surfaced so the
@@ -145,6 +148,13 @@ export function SiteAuditView({ summary }: { summary: Record<string, unknown> })
         We found {s.pages_crawled ?? allPages.length} URLs and reviewed the {pages.length} that are real content
         pages — system files (feeds, code, images) and any that failed to load are skipped.
       </p>
+
+      {/* ---- site-health readiness over time (trackable, like the AI score) ---- */}
+      {businessId != null && healthTrend && healthTrend.length >= 2 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <MetricTrend data={healthTrend} label="Site health over time" suffix="/100" hint="AI-crawler readiness at each site audit — higher means AI can read and quote your site more easily." />
+        </div>
+      )}
       {pages.length > 0 && pages.length <= 2 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
           <div className="font-semibold">

@@ -344,6 +344,33 @@ def latest(business_id: int) -> dict:
             "queries": list(by_query.values()), "summary": summary}
 
 
+def trend(business_id: int) -> list[dict]:
+    """Per-run local page-one rate (0-100) over time, so local visibility is a TRACKABLE number
+    like the AI reputation score. Mirrors latest()'s page_one_rate (subject rows only)."""
+    _ensure()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT lr.run_id AS run_id, "
+            "AVG(CASE WHEN lr.on_page_one THEN 1.0 ELSE 0.0 END) AS p1, "
+            "MAX(ar.started_at) AS run_at "
+            "FROM local_rankings lr LEFT JOIN audit_runs ar ON ar.id = lr.run_id "
+            "WHERE lr.business_id=%s AND lr.is_subject "
+            "GROUP BY lr.run_id ORDER BY lr.run_id ASC",
+            (business_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        if r["p1"] is None:
+            continue
+        d = r["run_at"]
+        out.append({
+            "run_id": r["run_id"],
+            "date": (d.date().isoformat() if d else str(r["run_id"])),
+            "score": round(float(r["p1"]) * 100),
+        })
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Local Google rank tracking (organic + local pack)")
     sub = ap.add_subparsers(dest="cmd", required=True)
