@@ -4,6 +4,7 @@
 // -1..1 the old TrendChart used). Good (>=60) and poor (<40) bands are shaded so "is this
 // going the right way" is obvious; the latest point is labeled with its score.
 
+import { useState } from "react";
 import type { SeriesPoint } from "@/lib/types";
 import { repScore } from "@/lib/repScore";
 
@@ -11,6 +12,9 @@ export function ScoreTrend({ series, goal, projected }: { series: SeriesPoint[];
   const pts = series
     .map((s) => ({ date: s.date, score: repScore(s.goal_alignment) }))
     .filter((p): p is { date: string; score: number } => p.score != null);
+
+  // Interactive hover: index of the point the pointer is over (null = none).
+  const [hover, setHover] = useState<number | null>(null);
 
   if (pts.length < 2) {
     return (
@@ -31,10 +35,12 @@ export function ScoreTrend({ series, goal, projected }: { series: SeriesPoint[];
   const last = pts[pts.length - 1];
   const first = pts[0];
   const rising = last.score >= first.score;
+  // Even hit bands so hovering anywhere near a point selects it.
+  const bandW = (lastX - P) / (pts.length - 1);
 
   return (
     <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Reputation score over time">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Reputation score over time" onMouseLeave={() => setHover(null)}>
         {/* good band >=60, poor band <40 */}
         <rect x={P} y={y(100)} width={W - 2 * P} height={y(60) - y(100)} fill="#16a34a" opacity={0.06} />
         <rect x={P} y={y(40)} width={W - 2 * P} height={y(0) - y(40)} fill="#dc2626" opacity={0.06} />
@@ -63,6 +69,37 @@ export function ScoreTrend({ series, goal, projected }: { series: SeriesPoint[];
             <text x={W - P} y={H - 8} textAnchor="end" className="fill-indigo-400 text-[10px]">expected</text>
           </>
         )}
+        {/* hover: guide line, emphasized point, and a tooltip with the exact score */}
+        {hover != null && pts[hover] && (() => {
+          const hx = xs[hover];
+          const hy = y(pts[hover].score);
+          const bw = 104, bh = 36;
+          const bx = Math.min(Math.max(hx - bw / 2, P), W - P - bw);
+          const by = hy - bh - 12 < 2 ? hy + 12 : hy - bh - 12;
+          return (
+            <g pointerEvents="none">
+              <line x1={hx} x2={hx} y1={P} y2={H - P} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" />
+              <circle cx={hx} cy={hy} r={5} fill="#fff" stroke={rising ? "#16a34a" : "#dc2626"} strokeWidth={2.5} />
+              <rect x={bx} y={by} width={bw} height={bh} rx={6} fill="#0f172a" opacity={0.92} />
+              <text x={bx + bw / 2} y={by + 14} textAnchor="middle" className="fill-slate-300 text-[10px]">{pts[hover].date}</text>
+              <text x={bx + bw / 2} y={by + 28} textAnchor="middle" className="fill-white text-xs font-semibold">{pts[hover].score}/100</text>
+            </g>
+          );
+        })()}
+        {/* transparent hit bands — one per point */}
+        {pts.map((p, i) => (
+          <rect
+            key={`hit-${i}`}
+            x={Math.max(xs[i] - bandW / 2, 0)}
+            y={0}
+            width={bandW}
+            height={H}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+          >
+            <title>{`${p.date}: ${p.score}/100`}</title>
+          </rect>
+        ))}
       </svg>
       <div className="mt-1 flex justify-between text-xs text-slate-400">
         <span>{first.date}</span>

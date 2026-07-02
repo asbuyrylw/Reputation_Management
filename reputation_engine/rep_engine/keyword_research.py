@@ -152,6 +152,87 @@ def _norm(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Off-brand / off-topic filtering
+# ---------------------------------------------------------------------------
+# Serper's relatedSearches / peopleAlsoAsk / autocomplete happily return queries about OTHER
+# companies (competitor brands) and job-seeker "is <company> a good place to work" questions.
+# Those are NOT keywords THIS business should target or build topic authority around, so we drop
+# them before storing. (Reported: "Is Cincinnati Financial a good place to work?" / "Cincinnati
+# Insurance" showing up as topic authorities for a business that is neither of those companies.)
+_EMPLOYER_RE = re.compile(
+    r"\b(good place to work|great place to work|good company to work|work(?:ing)? (?:at|for)|"
+    r"careers?|hiring|glassdoor|indeed|employee reviews?|salary|salaries|benefits package|"
+    r"who owns|headquarters|stock price|ceo of)\b",
+    re.I,
+)
+
+
+def _name_tokens(s: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 2}
+
+
+def _blocked_phrases(ctx: dict) -> list[str]:
+    """Full brand phrases (competitors + confusion/contested entities) that a candidate keyword
+    naming a DIFFERENT company would contain. Whole-phrase (>=5 chars) so we never drop a keyword
+    just for sharing the client's own city/word."""
+    phrases: list[str] = []
+    ct = ctx.get("contested_terms")
+    if isinstance(ct, str):
+        ct = [t for t in re.split(r"[,\n;]+", ct) if t.strip()]
+    for src in (ctx.get("competitors") or []), (ct or []):
+        for name in src:
+            p = _norm(name)
+            if len(p) >= 5:
+                phrases.append(p)
+    return phrases
+
+
+def _is_offtopic(keyword: str, blocked: list[str], client_tokens: set[str]) -> bool:
+    n = _norm(keyword)
+    if not n:
+        return True
+    # names another company (a competitor or a confusion entity)
+    for b in blocked:
+        if b and b in n:
+            return True
+    # employer-reputation / job-seeker / corporate-profile query about someone OTHER than the client
+    if _EMPLOYER_RE.search(n) and not (client_tokens & _name_tokens(n)):
+        return True
+    return False
+
+
+_RELEVANCE_SYSTEM = (
+    "You audit candidate SEO keywords for ONE specific business. Return STRICT JSON "
+    "{\"drop\":[str,...]} listing the EXACT candidate strings to REMOVE because they are not "
+    "relevant to THIS business: keywords that name a DIFFERENT company or brand (competitors or "
+    "unrelated organizations), employer-reputation or job-seeker queries about other companies "
+    "(e.g. 'is <other company> a good place to work', 'careers', 'glassdoor', 'salary'), or terms "
+    "off-topic for this business's services and customers. KEEP everything a prospective CUSTOMER "
+    "of this business would plausibly search (its services, category, questions, and location). "
+    "If nothing should be removed, return {\"drop\":[]}."
+)
+
+
+def _drop_offbrand_llm(candidates: list[dict], ctx: dict) -> set[str]:
+    """LLM relevance safety net: returns the normalized keywords to drop. Fail-safe — on any error
+    or unparseable response it drops nothing (never nukes the whole set)."""
+    if not candidates:
+        return set()
+    payload = json.dumps({
+        "business": {k: ctx.get(k) for k in ("name", "industry", "services", "geo")},
+        "competitors": ctx.get("competitors"),
+        "candidates": [c["keyword"] for c in candidates],
+    })[:8000]
+    try:
+        res = _llm.orchestrator_json(_RELEVANCE_SYSTEM, payload, tier="mid")
+    except Exception as e:  # noqa: BLE001 -- relevance filtering is best-effort
+        log.debug("relevance filter failed: %s", e)
+        return set()
+    drop = (res or {}).get("drop") if isinstance(res, dict) else None
+    return {_norm(d) for d in (drop or []) if isinstance(d, str) and d.strip()}
+
+
+# ---------------------------------------------------------------------------
 # Serper grounding (real Google data)
 # ---------------------------------------------------------------------------
 def _serper(endpoint: str, body: dict) -> Optional[dict]:
@@ -200,7 +281,10 @@ _SEED_SYSTEM = (
     "\"intent\":\"commercial|informational|local|navigational\",\"rationale\":str}]}. Include: "
     "2-4 primary service terms; several local terms (service + city, 'near me'); and 4-8 question "
     "keywords real customers ask (what they'd type or ask an AI). Keep them realistic and specific "
-    "to this business + its area. 10-18 keywords."
+    "to this business + its area. Do NOT include competitor or other companies' brand names, and do "
+    "NOT include employer-reputation / job-seeker queries (e.g. 'is <company> a good place to work', "
+    "'careers', 'glassdoor', 'salary') — only terms a prospective CUSTOMER of THIS business would "
+    "search. 10-18 keywords."
 )
 
 
@@ -287,6 +371,20 @@ def research(business_id: int) -> dict:
             _add(e)
             expanded_n += 1
 
+    # Drop off-brand / off-topic candidates (competitor brands, employer-reputation queries about
+    # OTHER companies) that Serper expansion drags in — they are not this business's keywords.
+    blocked = _blocked_phrases(ctx)
+    client_tokens = _name_tokens(ctx.get("name") or "")
+    kept = {k: v for k, v in candidates.items() if not _is_offtopic(v["keyword"], blocked, client_tokens)}
+    dropped_det = len(candidates) - len(kept)
+    # LLM relevance safety net (fail-safe: only removes what it explicitly names; never empties the set).
+    drop_norm = _drop_offbrand_llm(list(kept.values()), ctx)
+    if drop_norm:
+        after = {k: v for k, v in kept.items() if k not in drop_norm}
+        if after:
+            kept = after
+    candidates = kept
+
     # Rank + cap.
     ranked = sorted(candidates.values(),
                     key=lambda x: _KIND_PRIORITY.get(x.get("kind", ""), 0), reverse=True)[:_MAX_STORED]
@@ -312,6 +410,7 @@ def research(business_id: int) -> dict:
             )
         conn.commit()
     out = {"seeds": len(seeds), "serper_candidates": expanded_n, "stored": len(ranked),
+           "dropped_offbrand": dropped_det, "dropped_llm": len(drop_norm),
            "serper_used": bool(os.getenv("SERPER_API_KEY")), "volume_enriched": len(vol)}
     log.info("keyword research biz %d: %s", business_id, out)
     return out

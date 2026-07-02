@@ -10,27 +10,36 @@ import Link from "next/link";
 import { useImpactReport, useRoiForecast } from "@/lib/hooks";
 import type { ImpactMetricDelta, ImpactReport, RoiForecast } from "@/lib/types";
 import { Card, CardSkeleton } from "./ui";
+import { repScore } from "@/lib/repScore";
 
 // The task board doesn't yet read an area filter from the query string, so every
 // ROI row links to the board itself (where the work for that area lives).
 const WORK_ORDERS_HREF = "/content/work-orders";
 
 // One metric's before -> after with a tone-colored delta. `goodDirection` flips the tone
-// for metrics where lower is better (contested%).
+// for metrics where lower is better (contested). `kind` controls formatting:
+//   "num"   — a raw 0–100 score, shown to one decimal (narrative dominance)
+//   "pct"   — a value the engine ALREADY stores as 0–100 percent; shown as "N%" (do NOT ×100)
+//   "score" — a goal-alignment value (−1..1) converted to the 0–100 reputation score
 function MetricRow({
   label,
   metric,
-  asPct = false,
+  kind = "num",
   goodDirection = "up",
 }: {
   label: string;
   metric: ImpactMetricDelta;
-  asPct?: boolean;
+  kind?: "num" | "pct" | "score";
   goodDirection?: "up" | "down";
 }) {
   const fmt = (v: number | null) => {
     if (v == null) return "—";
-    return asPct ? `${Math.round(v * 100)}%` : v.toFixed(1);
+    if (kind === "pct") return `${Math.round(v)}%`;
+    if (kind === "score") {
+      const s = repScore(v);
+      return s == null ? "—" : String(s);
+    }
+    return v.toFixed(1);
   };
   const delta = metric.delta;
   let tone = "text-slate-400";
@@ -41,12 +50,15 @@ function MetricRow({
     tone = good ? "text-emerald-600" : "text-rose-600";
     arrow = up ? "▲" : "▼";
   }
-  const deltaShown =
-    delta == null
-      ? "—"
-      : asPct
-      ? `${delta > 0 ? "+" : ""}${Math.round(delta * 100)} pts`
-      : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}`;
+  const deltaShown = (() => {
+    if (delta == null) return "—";
+    if (kind === "pct") return `${delta > 0 ? "+" : ""}${Math.round(delta)} pts`;
+    if (kind === "score") {
+      const ds = (repScore(metric.after) ?? 0) - (repScore(metric.before) ?? 0);
+      return `${ds > 0 ? "+" : ""}${ds} pts`;
+    }
+    return `${delta > 0 ? "+" : ""}${delta.toFixed(1)}`;
+  })();
   return (
     <tr className="border-t border-slate-100">
       <td className="py-1.5 pr-3 text-sm text-slate-700">{label}</td>
@@ -91,9 +103,9 @@ function ImpactPanel({ report }: { report: ImpactReport | undefined }) {
           </thead>
           <tbody>
             <MetricRow label="Narrative dominance" metric={m.narrative_score} />
-            <MetricRow label="Owned citation share" metric={m.owned_citation_share_pct} asPct />
-            <MetricRow label="Contested narrative" metric={m.contested_pct} asPct goodDirection="down" />
-            <MetricRow label="Goal alignment" metric={m.avg_goal_alignment} />
+            <MetricRow label="Owned citation share" metric={m.owned_citation_share_pct} kind="pct" />
+            <MetricRow label="Contested narrative" metric={m.contested_pct} kind="pct" goodDirection="down" />
+            <MetricRow label="Reputation score (goal alignment)" metric={m.avg_goal_alignment} kind="score" />
           </tbody>
         </table>
       )}

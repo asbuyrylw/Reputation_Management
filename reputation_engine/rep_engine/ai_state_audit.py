@@ -538,9 +538,30 @@ def _anthropic_grounded(d: dict) -> tuple[bool, list]:
     return used, sources
 
 
+# Google returns opaque vertexaisearch "grounding-api-redirect" URLs as citations. Resolve them
+# to the real source URL (once per unique redirect, cached for the process) so the UI shows a real
+# domain and owned-citation-share can match the client's own site. Gate: GEMINI_RESOLVE_SOURCES
+# (default on).
+_REDIRECT_CACHE: dict[str, str] = {}
+
+
+def _resolve_source(uri: str) -> str:
+    if not uri or ("grounding-api-redirect" not in uri and "vertexaisearch" not in uri):
+        return uri
+    if os.getenv("GEMINI_RESOLVE_SOURCES", "1").strip().lower() in ("0", "false", "no"):
+        return uri
+    cached = _REDIRECT_CACHE.get(uri)
+    if cached is not None:
+        return cached
+    resolved = http.resolve_url(uri) or uri
+    _REDIRECT_CACHE[uri] = resolved
+    return resolved
+
+
 def _gemini_grounded(cand: dict) -> tuple[bool, list]:
     gm = cand.get("groundingMetadata") or {}
-    sources = [(ch.get("web") or {}).get("uri") for ch in (gm.get("groundingChunks") or [])
+    sources = [_resolve_source((ch.get("web") or {}).get("uri"))
+               for ch in (gm.get("groundingChunks") or [])
                if (ch.get("web") or {}).get("uri")]
     return bool(gm), sources
 

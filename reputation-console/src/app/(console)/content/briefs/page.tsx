@@ -192,6 +192,8 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
 // video/social recipes (production_briefs). video_creation appears here but is produced from a recipe.
 const CONTENT_CAPS = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation", "video_creation"]);
 const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
+// Show a manageable first page of content pieces, then expand for the rest.
+const CONTENT_PREVIEW = 8;
 
 const CAP_LABEL: Record<string, string> = {
   content_writing: "Website content",
@@ -333,6 +335,7 @@ export default function BriefsPage() {
   const { data: assets } = useAssets(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
   const { data: keywordIntent } = useKeywordIntent(businessId);
+  const [showAllContent, setShowAllContent] = useState(false);
 
   if (lb || lw || !workOrders) return <Spinner />;
 
@@ -381,7 +384,7 @@ export default function BriefsPage() {
             <section>
               <h3 className="mb-2 text-sm font-semibold text-slate-900">Content pieces ({contentItems.length})</h3>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {contentItems.map((w) => (
+                {(showAllContent ? contentItems : contentItems.slice(0, CONTENT_PREVIEW)).map((w) => (
                   <ContentItem
                     key={w.id}
                     wo={w}
@@ -392,6 +395,16 @@ export default function BriefsPage() {
                   />
                 ))}
               </div>
+              {contentItems.length > CONTENT_PREVIEW && (
+                <button
+                  onClick={() => setShowAllContent((v) => !v)}
+                  className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                >
+                  {showAllContent
+                    ? "Show fewer"
+                    : `Show ${contentItems.length - CONTENT_PREVIEW} more`}
+                </button>
+              )}
             </section>
           )}
 

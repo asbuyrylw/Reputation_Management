@@ -360,7 +360,7 @@ function ProjectionStrip({ timeline }: { timeline: Json | undefined }) {
 export default function DashboardPage() {
   const { businessId, businesses, loading: bizLoading } = useBusiness();
   const { user } = useAuth();
-  const [ownerView, setOwnerView] = useState(false);
+  const [workView, setWorkView] = useState(false);
   const { data, isLoading, error } = useDashboard(businessId);
   const latestRunId = data?.series?.length ? data.series[data.series.length - 1].run_id : null;
   const { data: perEngine } = usePerEngine(businessId, latestRunId);
@@ -382,10 +382,11 @@ export default function DashboardPage() {
       </Card>
     );
   }
-  // Operators (staff) land on their work queue, not the owner's outcomes dashboard.
+  // Admins/operators land on the OWNER dashboard by default; the work queue is opt-in
+  // (a link in the header switches to it).
   const isOperator = user?.role === "admin";
-  if (isOperator && !ownerView) {
-    return <OperatorHome businessId={businessId} onViewOwner={() => setOwnerView(true)} />;
+  if (isOperator && workView) {
+    return <OperatorHome businessId={businessId} onViewOwner={() => setWorkView(false)} />;
   }
 
   if (isLoading || !data) return <Spinner />;
@@ -414,10 +415,10 @@ export default function DashboardPage() {
     <div>
       {isOperator && (
         <button
-          onClick={() => setOwnerView(false)}
+          onClick={() => setWorkView(true)}
           className="mb-3 text-sm font-medium text-indigo-600 hover:text-indigo-700"
         >
-          ← Back to your work queue
+          Open your work queue →
         </button>
       )}
       <PageHeader
@@ -457,7 +458,7 @@ export default function DashboardPage() {
             {goalText && (
               <Card accent="info" className="bg-linear-to-br from-indigo-50/70 to-white">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Your goal</div>
-                <p className="mt-0.5 text-base font-semibold tracking-tight text-slate-900">{goalText}</p>
+                <p className="mt-1 text-base font-normal leading-relaxed text-slate-700">{goalText}</p>
                 <p className="mt-0.5 text-xs text-slate-500">Your AI Reputation Score below is how close AI is to saying this about you today.</p>
               </Card>
             )}
