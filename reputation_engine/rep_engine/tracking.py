@@ -94,6 +94,7 @@ def sync_plan(business_id: int) -> dict:
         ).fetchone()["c"]
         existing = conn.execute(
             "SELECT w.id, w.title, w.capability, w.status, w.plan_id, w.superseded, w.task_key, "
+            "w.gap_specifics, "
             "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id=w.id) AS has_draft "
             "FROM work_orders w WHERE w.business_id=%s",
             (business_id,),
@@ -124,6 +125,13 @@ def sync_plan(business_id: int) -> dict:
                     conn.execute("UPDATE work_orders SET superseded=FALSE, updated_at=now() WHERE id=%s",
                                  (match["id"],))
                     revived += 1
+                # backfill the worst-answer link (gap_specifics.source_query) onto a carried-forward
+                # task so the "fix the worst things" deep-link works on existing tasks too, not just
+                # freshly-created ones.
+                src = (w.get("gap_specifics") or {}).get("source_query")
+                if src and not (match.get("gap_specifics") or {}).get("source_query"):
+                    conn.execute("UPDATE work_orders SET gap_specifics=%s, updated_at=now() WHERE id=%s",
+                                 (json.dumps({"source_query": src}), match["id"]))
                 continue
             td = w.get("target_date")
             sd = w.get("start_date")
