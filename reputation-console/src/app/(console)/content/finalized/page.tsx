@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useAssets, usePatchAsset, useAssetPlacements, useAddPlacement, useUpdatePlacement, useComplianceLedger } from "@/lib/hooks";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Card, PageHeader, Spinner, Chip, Input, Button } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { AssetPublishPanel } from "@/components/AssetPublishPanel";
+import { StatusBadge } from "@/components/content/StatusBadge";
+import { TableContainer, Th, Td } from "@/components/content/TableContainer";
 import type { Asset } from "@/lib/types";
 
 function fmtDate(d?: string | null): string {
@@ -27,20 +29,20 @@ function DistributionChecklist({ assetId, businessId, canEdit }: { assetId: numb
   const publishedN = (placements ?? []).filter((p) => p.status === "published").length;
 
   return (
-    <div className="mt-3 border-t border-slate-100 pt-3">
-      <div className="text-xs font-medium text-slate-500">Distribution{placements && placements.length > 0 ? ` — ${publishedN}/${placements.length} posted` : ""}</div>
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="text-xs font-medium text-ink-3">Distribution{placements && placements.length > 0 ? ` — ${publishedN}/${placements.length} posted` : ""}</div>
       {(placements ?? []).length > 0 && (
         <ul className="mt-1.5 space-y-1.5">
           {placements!.map((p) => (
             <li key={p.id} className="flex flex-wrap items-center gap-2 text-xs">
-              <span className={`rounded-full px-1.5 py-0.5 font-medium ${p.status === "published" ? "bg-emerald-100 text-emerald-700" : p.status === "skipped" ? "bg-slate-200 text-slate-500" : "bg-amber-100 text-amber-700"}`}>{p.channel}</span>
-              {p.url ? <a href={p.url} target="_blank" rel="noreferrer" className="break-all text-indigo-600 hover:underline">{p.url}</a> : <span className="text-slate-400">{p.status}</span>}
+              <Chip tone={p.status === "published" ? "good" : p.status === "skipped" ? "neutral" : "info"}>{p.channel}</Chip>
+              {p.url ? <a href={p.url} target="_blank" rel="noreferrer" className="break-all text-indigo hover:text-indigo-strong hover:underline">{p.url}</a> : <span className="text-ink-4">{p.status}</span>}
               {canEdit && p.status !== "published" && (
                 <span className="flex items-center gap-1">
-                  <input value={urlFor[p.id] ?? ""} onChange={(e) => setUrlFor((s) => ({ ...s, [p.id]: e.target.value }))}
-                    placeholder="link (optional)" className="w-40 rounded border border-slate-300 px-1.5 py-0.5 text-[11px]" />
-                  <button onClick={() => update.mutate({ assetId, placementId: p.id, status: "published", url: urlFor[p.id]?.trim() || undefined })}
-                    className="rounded bg-emerald-600 px-1.5 py-0.5 text-[11px] font-medium text-white hover:bg-emerald-700">Mark posted</button>
+                  <Input value={urlFor[p.id] ?? ""} onChange={(e) => setUrlFor((s) => ({ ...s, [p.id]: e.target.value }))}
+                    placeholder="link (optional)" className="w-40 px-1.5 py-0.5 text-[11px]" />
+                  <Button variant="primary" onClick={() => update.mutate({ assetId, placementId: p.id, status: "published", url: urlFor[p.id]?.trim() || undefined })}
+                    className="px-1.5 py-0.5 text-[11px]">Mark posted</Button>
                 </span>
               )}
             </li>
@@ -51,7 +53,7 @@ function DistributionChecklist({ assetId, businessId, canEdit }: { assetId: numb
         <div className="mt-2 flex flex-wrap gap-1">
           {COMMON_CHANNELS.filter((c) => !have.has(c)).map((c) => (
             <button key={c} onClick={() => add.mutate({ assetId, channel: c })}
-              className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100">+ {c}</button>
+              className="rounded-full border border-line px-2 py-0.5 text-[11px] text-ink-3 hover:bg-line">+ {c}</button>
           ))}
         </div>
       )}
@@ -69,61 +71,55 @@ function AssetRow({ a, businessId, canEdit }: { a: Asset; businessId: number | n
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-            live ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-          }`}
-        >
-          {live ? "Live" : "Pending link"}
-        </span>
-        {a.asset_type && <span className="text-xs text-slate-500">{a.asset_type}</span>}
-        {a.surface && <span className="text-xs text-slate-400">on {a.surface}</span>}
-        {a.published_at && <span className="ml-auto text-xs text-slate-400">{fmtDate(a.published_at)}</span>}
+        {live ? <StatusBadge status="live" /> : <Chip tone="info">Pending link</Chip>}
+        {a.asset_type && <span className="text-xs text-ink-3">{a.asset_type}</span>}
+        {a.surface && <span className="text-xs text-ink-4">on {a.surface}</span>}
+        {a.published_at && <span className="ml-auto text-xs text-ink-4">{fmtDate(a.published_at)}</span>}
       </div>
 
-      <div className="mt-1 text-sm font-semibold text-slate-900">{a.title || "(untitled)"}</div>
-      {a.target_query && <div className="text-xs text-slate-500">Answers: &ldquo;{a.target_query}&rdquo;</div>}
-      {summary && <p className="mt-1 text-sm text-slate-700">{summary}</p>}
+      <div className="mt-1 text-sm font-semibold text-ink">{a.title || "(untitled)"}</div>
+      {a.target_query && <div className="text-xs text-ink-3">Answers: &ldquo;{a.target_query}&rdquo;</div>}
+      {summary && <p className="mt-1 text-sm text-ink-2">{summary}</p>}
 
       {a.body && a.body.length > (summary?.length ?? 0) && (
         <>
           <button
             onClick={() => setOpen((o) => !o)}
-            className="mt-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+            className="mt-1 text-xs font-medium text-indigo hover:text-indigo-strong"
           >
             {open ? "Hide full content" : "Read the full content"}
           </button>
-          {open && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{a.body}</p>}
+          {open && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper p-3 text-sm text-ink-2">{a.body}</p>}
         </>
       )}
 
       {/* where it was published — manual link entry (no live site/social integration yet) */}
-      <div className="mt-3 border-t border-slate-100 pt-3">
+      <div className="mt-3 border-t border-line pt-3">
         {a.published_url ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="text-xs font-medium text-slate-500">Published at:</span>
-            <a href={a.published_url} target="_blank" rel="noreferrer" className="break-all text-indigo-600 hover:underline">
+            <span className="text-xs font-medium text-ink-3">Published at:</span>
+            <a href={a.published_url} target="_blank" rel="noreferrer" className="break-all text-indigo hover:text-indigo-strong hover:underline">
               {a.published_url}
             </a>
           </div>
         ) : (
-          <div className="text-xs text-slate-400">Not linked yet — add where you published this so it&apos;s tracked.</div>
+          <div className="text-xs text-ink-4">Not linked yet — add where you published this so it&apos;s tracked.</div>
         )}
         {canEdit && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
+            <Input
               value={link}
               onChange={(e) => setLink(e.target.value)}
               placeholder="https://… where you published it"
-              className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              className="min-w-[16rem] flex-1"
             />
-            <button
+            <Button
+              variant="primary"
               onClick={() => link.trim() && patch.mutate({ assetId: a.id, published_url: link.trim() })}
               disabled={patch.isPending || !link.trim()}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               {patch.isPending ? "Saving…" : a.published_url ? "Update link" : "Add published link"}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -142,25 +138,23 @@ function ComplianceLedger({ businessId }: { businessId: number | null }) {
   if (!data || data.length === 0) return null;
   return (
     <details className="mt-6">
-      <summary className="cursor-pointer text-sm font-semibold text-slate-700">Compliance sign-off record ({data.length})</summary>
-      <Card className="mt-2 overflow-hidden p-0">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50 text-left uppercase tracking-wide text-slate-500">
-            <tr><th className="px-3 py-2">When</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Approver</th><th className="px-3 py-2">Verdict</th><th className="px-3 py-2">Override reason</th></tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {data.map((s) => (
-              <tr key={s.id}>
-                <td className="px-3 py-2 text-slate-500">{s.signed_at ? new Date(s.signed_at).toLocaleString() : "—"}</td>
-                <td className="px-3 py-2 text-slate-700">{s.title || `draft ${s.draft_id}`}</td>
-                <td className="px-3 py-2 text-slate-700">{s.approver || "—"}</td>
-                <td className="px-3 py-2">{s.compliance_pass === true ? <span className="text-emerald-700">passed</span> : s.compliance_pass === false ? <span className="text-rose-600">flagged</span> : <span className="text-amber-600">unscreened</span>}</td>
-                <td className="px-3 py-2 text-slate-500">{s.override_reason || "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      <summary className="cursor-pointer text-sm font-semibold text-ink-2">Compliance sign-off record ({data.length})</summary>
+      <TableContainer className="mt-2">
+        <thead>
+          <tr><Th>When</Th><Th>Title</Th><Th>Approver</Th><Th>Verdict</Th><Th>Override reason</Th></tr>
+        </thead>
+        <tbody>
+          {data.map((s) => (
+            <tr key={s.id}>
+              <Td className="text-ink-3">{s.signed_at ? new Date(s.signed_at).toLocaleString() : "—"}</Td>
+              <Td>{s.title || `draft ${s.draft_id}`}</Td>
+              <Td>{s.approver || "—"}</Td>
+              <Td>{s.compliance_pass === true ? <Chip tone="good">passed</Chip> : s.compliance_pass === false ? <Chip tone="bad">flagged</Chip> : <Chip tone="info">unscreened</Chip>}</Td>
+              <Td className="text-ink-3">{s.override_reason || "—"}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </TableContainer>
     </details>
   );
 }

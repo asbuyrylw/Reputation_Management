@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
+import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
@@ -24,7 +25,7 @@ function MarkProducedControl({ brief, businessId }: { brief: ProductionBrief; bu
   const [open, setOpen] = useState(false);
   const [producedOn, setProducedOn] = useState(todayISO());
   return (
-    <div className="mt-3 border-t border-slate-100 pt-3">
+    <div className="mt-3 border-t border-line pt-3">
       {!open ? (
         <button
           onClick={() => { setProducedOn(todayISO()); setOpen(true); }}
@@ -53,7 +54,7 @@ function MarkProducedControl({ brief, businessId }: { brief: ProductionBrief; bu
             >
               {setStatus.isPending ? "Saving…" : "Confirm produced"}
             </button>
-            <button onClick={() => setOpen(false)} className="text-[11px] text-slate-500 hover:text-slate-700">Cancel</button>
+            <button onClick={() => setOpen(false)} className="text-[11px] text-ink-3 hover:text-ink-2">Cancel</button>
           </div>
         </div>
       )}
@@ -68,31 +69,29 @@ function TopicAuthoritySection({ data }: { data: TopicalAuthority | undefined })
   const clusters = [...data.clusters].sort((a, b) => a.priority - b.priority).slice(0, 8);
   return (
     <section>
-      <h3 className="mb-1 text-sm font-semibold text-slate-900">Topic authority</h3>
-      <p className="mb-2 text-xs text-slate-500">
-        {data.summary.topics} topic{data.summary.topics === 1 ? "" : "s"} from your keywords
-        {data.summary.uncovered > 0 ? ` · ${data.summary.uncovered} still need content` : " · all covered"}. Own a topic by
-        covering its pillar plus the supporting questions.
-      </p>
+      <SecHead
+        title="Topic authority"
+        note={`${data.summary.topics} topic${data.summary.topics === 1 ? "" : "s"} from your keywords${data.summary.uncovered > 0 ? ` · ${data.summary.uncovered} still need content` : " · all covered"}. Own a topic by covering its pillar plus the supporting questions.`}
+      />
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {clusters.map((c) => (
           <Card key={c.topic}>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-slate-900">{c.topic}</span>
+              <span className="text-sm font-semibold text-ink">{c.topic}</span>
               {c.needs_content ? (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Needs content</span>
+                <Chip tone="info">Needs content</Chip>
               ) : (
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{c.owned_pieces} covered</span>
+                <Chip tone="good">{c.owned_pieces} covered</Chip>
               )}
             </div>
-            <div className="mt-0.5 text-xs text-slate-500">
+            <div className="mt-0.5 text-xs text-ink-3">
               Pillar: {c.pillar} · {c.keyword_count} keyword{c.keyword_count === 1 ? "" : "s"}
               {c.total_search_volume != null ? ` · ~${c.total_search_volume.toLocaleString()} searches/mo` : ""}
             </div>
             {c.spokes.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
                 {c.spokes.slice(0, 6).map((s) => (
-                  <span key={s} className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{s}</span>
+                  <span key={s} className="rounded-full bg-line px-1.5 py-0.5 text-[10px] text-ink-3">{s}</span>
                 ))}
               </div>
             )}
@@ -100,15 +99,15 @@ function TopicAuthoritySection({ data }: { data: TopicalAuthority | undefined })
         ))}
       </div>
       {data.next_to_write.length > 0 && (
-        <Card className="mt-3 bg-linear-to-br from-indigo-50/50 to-white" accent="info">
-          <div className="text-sm font-semibold text-slate-900">What to write next</div>
-          <ul className="mt-2 space-y-2 text-sm text-slate-700">
+        <Card className="mt-3" accent="info">
+          <div className="text-sm font-semibold text-ink">What to write next</div>
+          <ul className="mt-2 space-y-2 text-sm text-ink-2">
             {data.next_to_write.slice(0, 3).map((n, i) => (
               <li key={i} className="flex gap-2.5">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" aria-hidden />
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo" aria-hidden />
                 <span>
-                  <span className="font-semibold text-slate-900">{n.topic}</span>
-                  <span className="text-slate-500"> — covers {n.covers_keywords} keyword{n.covers_keywords === 1 ? "" : "s"}. {n.why}</span>
+                  <span className="font-semibold text-ink">{n.topic}</span>
+                  <span className="text-ink-3"> — covers {n.covers_keywords} keyword{n.covers_keywords === 1 ? "" : "s"}. {n.why}</span>
                 </span>
               </li>
             ))}
@@ -125,26 +124,26 @@ function KeywordIntentSection({ data }: { data: KeywordIntent | undefined }) {
   if (!data || data.by_intent.length === 0) return null;
   return (
     <section>
-      <h3 className="mb-1 text-sm font-semibold text-slate-900">Keywords by intent</h3>
-      <p className="mb-2 text-xs text-slate-500">
-        What people are trying to do when they search these terms — {data.summary.uncovered > 0 ? `${data.summary.uncovered} intent${data.summary.uncovered === 1 ? "" : "s"} have no content yet.` : "all intents have content."}
-      </p>
+      <SecHead
+        title="Keywords by intent"
+        note={`What people are trying to do when they search these terms — ${data.summary.uncovered > 0 ? `${data.summary.uncovered} intent${data.summary.uncovered === 1 ? "" : "s"} have no content yet.` : "all intents have content."}`}
+      />
       <Card>
-        <ul className="divide-y divide-slate-100">
+        <ul className="divide-y divide-line">
           {data.by_intent.map((b) => (
             <li key={b.intent} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
               <div className="min-w-0">
-                <span className="font-medium capitalize text-slate-800">{b.intent.replace(/_/g, " ")}</span>
+                <span className="font-medium capitalize text-ink-2">{b.intent.replace(/_/g, " ")}</span>
                 {b.examples.length > 0 && (
-                  <span className="ml-2 text-xs text-slate-400">e.g. {b.examples.slice(0, 3).join(", ")}</span>
+                  <span className="ml-2 text-xs text-ink-4">e.g. {b.examples.slice(0, 3).join(", ")}</span>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <span className="text-xs text-slate-500">{b.keywords} keyword{b.keywords === 1 ? "" : "s"}</span>
+                <span className="text-xs text-ink-3">{b.keywords} keyword{b.keywords === 1 ? "" : "s"}</span>
                 {b.needs_content ? (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Needs content</span>
+                  <Chip tone="info">Needs content</Chip>
                 ) : (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{b.owned_pieces} covered</span>
+                  <Chip tone="good">{b.owned_pieces} covered</Chip>
                 )}
               </div>
             </li>
@@ -209,8 +208,8 @@ function stageOf(draft: ContentDraft | undefined, asset: Asset | undefined): { l
   if (asset || draft?.status === "approved") return { label: "Approved — ready to publish", cls: "bg-sky-100 text-sky-700" };
   if (draft?.status === "pending_review") return { label: "Draft in review", cls: "bg-amber-100 text-amber-700" };
   if (draft?.status === "needs_fix") return { label: "Draft needs a fix", cls: "bg-rose-100 text-rose-700" };
-  if (draft?.status === "rejected") return { label: "Draft rejected", cls: "bg-slate-200 text-slate-600" };
-  return { label: "Not started", cls: "bg-slate-100 text-slate-500" };
+  if (draft?.status === "rejected") return { label: "Draft rejected", cls: "bg-line text-ink-3" };
+  return { label: "Not started", cls: "bg-line text-ink-4" };
 }
 
 function ContentItem({ wo, draft, asset, businessId, canEdit }: {
@@ -224,32 +223,32 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">{CAP_LABEL[wo.capability ?? ""] ?? humanize(wo.capability ?? "Content")}</span>
+        <span className="rounded bg-line px-1.5 py-0.5 text-[11px] font-medium text-ink-3">{CAP_LABEL[wo.capability ?? ""] ?? humanize(wo.capability ?? "Content")}</span>
         <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${stage.cls}`}>{stage.label}</span>
         {wo.predicted_ai_points != null && wo.predicted_ai_points > 0 && (
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">≈ +{wo.predicted_ai_points} AI pts</span>
         )}
       </div>
-      <div className="mt-1.5 text-sm font-semibold text-slate-900">{wo.title}</div>
-      {target && <div className="mt-0.5 text-xs text-slate-500">Targets the search: “{target}”</div>}
+      <div className="mt-1.5 text-sm font-semibold text-ink">{wo.title}</div>
+      {target && <div className="mt-0.5 text-xs text-ink-3">Targets the search: “{target}”</div>}
       {(wo.why_helps_ai_rep || wo.why_helps_seo) && (
         <div className="mt-1 space-y-0.5 text-[11px]">
-          {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {wo.why_helps_ai_rep}</div>}
+          {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo">AI reputation:</span> {wo.why_helps_ai_rep}</div>}
           {wo.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {wo.why_helps_seo}</div>}
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         {canDraft && (
-          <button
+          <Button
+            size="sm"
             onClick={() => gen.mutate({ woId: wo.id })}
             disabled={gen.isPending || gen.isSuccess}
-            className="rounded-md bg-indigo-600 px-2.5 py-1.5 font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {gen.isPending ? "Generating draft…" : gen.isSuccess ? "Draft queued ✓" : "✨ Generate draft"}
-          </button>
+          </Button>
         )}
         {draft && !published && (
-          <Link href="/content/drafts" className="font-medium text-indigo-600 hover:underline">Review draft →</Link>
+          <Link href="/content/drafts" className="font-medium text-indigo hover:underline">Review draft →</Link>
         )}
         {published && asset?.published_url ? (
           <a href={asset.published_url} target="_blank" rel="noreferrer" className="font-medium text-emerald-700 hover:underline">View published →</a>
@@ -257,7 +256,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
           <Link href="/content/finalized" className="font-medium text-emerald-700 hover:underline">View published →</Link>
         ) : null}
         {!canDraft && !draft && (wo.capability === "video_creation") && (
-          <span className="text-slate-400">Produce from a recipe below</span>
+          <span className="text-ink-4">Produce from a recipe below</span>
         )}
       </div>
     </Card>
@@ -267,19 +266,19 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
 // A clean "content recipe": each brief field as a labeled row, arrays as bullets.
 function Recipe({ brief }: { brief: Record<string, unknown> }) {
   const entries = Object.entries(brief).filter(([, v]) => v != null && v !== "");
-  if (entries.length === 0) return <p className="text-sm text-slate-400">No recipe details.</p>;
+  if (entries.length === 0) return <p className="text-sm text-ink-4">No recipe details.</p>;
   return (
     <dl className="space-y-2">
       {entries.map(([k, v]) => (
         <div key={k} className="grid grid-cols-1 gap-0.5 sm:grid-cols-[160px_1fr]">
-          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{humanize(k)}</dt>
-          <dd className="text-sm text-slate-700">
+          <dt className="text-xs font-medium uppercase tracking-wide text-ink-4">{humanize(k)}</dt>
+          <dd className="text-sm text-ink-2">
             {Array.isArray(v) ? (
               <ul className="list-disc space-y-0.5 pl-4">
                 {v.map((it, i) => <li key={i}>{typeof it === "object" ? JSON.stringify(it) : String(it)}</li>)}
               </ul>
             ) : typeof v === "object" ? (
-              <span className="text-slate-500">{JSON.stringify(v)}</span>
+              <span className="text-ink-3">{JSON.stringify(v)}</span>
             ) : (
               String(v)
             )}
@@ -296,28 +295,28 @@ function RecipeCard({ brief: b, businessId, canEdit }: { brief: ProductionBrief;
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-slate-900 px-1.5 py-0.5 text-xs font-medium text-white">{b.channel}</span>
-        {b.platform && <span className="text-xs text-slate-500">{b.platform}</span>}
+        <span className="rounded bg-ink px-1.5 py-0.5 text-xs font-medium text-white">{b.channel}</span>
+        {b.platform && <span className="text-xs text-ink-3">{b.platform}</span>}
       </div>
-      <div className="mt-1 text-sm font-semibold text-slate-900">{b.title}</div>
+      <div className="mt-1 text-sm font-semibold text-ink">{b.title}</div>
       {b.target_query && (
-        <div className="mt-0.5 text-xs text-slate-500">Answers the question: “{b.target_query}”</div>
+        <div className="mt-0.5 text-xs text-ink-3">Answers the question: “{b.target_query}”</div>
       )}
-      <div className="mt-3 border-t border-slate-100 pt-3">
+      <div className="mt-3 border-t border-line pt-3">
         <Recipe brief={b.brief} />
       </div>
       {b.amplification_playbook && (
-        <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-indigo-500">How to share it (don’t just post once)</div>
+        <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-050 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-indigo">How to share it (don’t just post once)</div>
           {b.amplification_playbook.post_to && b.amplification_playbook.post_to.length > 0 && (
-            <div className="mt-1 text-sm text-slate-700"><span className="font-medium">Post to:</span> {b.amplification_playbook.post_to.join(", ")}</div>
+            <div className="mt-1 text-sm text-ink-2"><span className="font-medium">Post to:</span> {b.amplification_playbook.post_to.join(", ")}</div>
           )}
           {b.amplification_playbook.cross_share && b.amplification_playbook.cross_share.length > 0 && (
-            <div className="text-sm text-slate-700"><span className="font-medium">Then share on:</span> {b.amplification_playbook.cross_share.join(", ")}</div>
+            <div className="text-sm text-ink-2"><span className="font-medium">Then share on:</span> {b.amplification_playbook.cross_share.join(", ")}</div>
           )}
-          {b.amplification_playbook.sequence && <div className="mt-1 text-xs text-slate-600">{b.amplification_playbook.sequence}</div>}
+          {b.amplification_playbook.sequence && <div className="mt-1 text-xs text-ink-3">{b.amplification_playbook.sequence}</div>}
           <div className="mt-2 space-y-0.5 text-xs">
-            {b.why_helps_ai_rep && <div><span className="font-medium text-indigo-600">AI reputation:</span> {b.why_helps_ai_rep}</div>}
+            {b.why_helps_ai_rep && <div><span className="font-medium text-indigo">AI reputation:</span> {b.why_helps_ai_rep}</div>}
             {b.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {b.why_helps_seo}</div>}
           </div>
         </div>
@@ -360,7 +359,7 @@ export default function BriefsPage() {
       {canEdit && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-slate-600">
+            <span className="text-sm text-ink-3">
               Content comes from your latest gap analysis &amp; plan. Refresh the off-platform recipes below from the plan.
             </span>
             <RunJobButton businessId={businessId} jobType="production_briefs" label="Refresh recipes" />
@@ -382,7 +381,7 @@ export default function BriefsPage() {
           <KeywordIntentSection data={keywordIntent} />
           {contentItems.length > 0 && (
             <section>
-              <h3 className="mb-2 text-sm font-semibold text-slate-900">Content pieces ({contentItems.length})</h3>
+              <h3 className="mb-2 text-sm font-semibold text-ink">Content pieces ({contentItems.length})</h3>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                 {(showAllContent ? contentItems : contentItems.slice(0, CONTENT_PREVIEW)).map((w) => (
                   <ContentItem
@@ -396,14 +395,16 @@ export default function BriefsPage() {
                 ))}
               </div>
               {contentItems.length > CONTENT_PREVIEW && (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-3"
                   onClick={() => setShowAllContent((v) => !v)}
-                  className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
                 >
                   {showAllContent
                     ? "Show fewer"
                     : `Show ${contentItems.length - CONTENT_PREVIEW} more`}
-                </button>
+                </Button>
               )}
             </section>
           )}
@@ -411,21 +412,22 @@ export default function BriefsPage() {
           {recipes.length > 0 && (
             <section>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-slate-900">Video &amp; social recipes ({recipes.length})</h3>
-                <button
+                <h3 className="text-sm font-semibold text-ink">Video &amp; social recipes ({recipes.length})</h3>
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => businessId && downloadCsv(`/businesses/${businessId}/production-briefs/export`, "production_briefs.csv")}
-                  className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
                 >
                   Export all (CSV)
-                </button>
+                </Button>
               </div>
-              <p className="mb-2 text-xs text-slate-500">Off-platform pieces to film/post — what to make and the question it answers when someone asks AI about you. Grouped by platform.</p>
+              <p className="mb-2 text-xs text-ink-3">Off-platform pieces to film/post — what to make and the question it answers when someone asks AI about you. Grouped by platform.</p>
               <div className="space-y-5">
                 {groupByPlatform(recipes).map((g) => (
                   <div key={g.key}>
                     <div className="mb-2 flex items-center justify-between">
-                      <span className="text-sm font-semibold text-slate-700">{g.label}</span>
-                      <span className="text-xs text-slate-400">{g.items.length}</span>
+                      <span className="text-sm font-semibold text-ink-2">{g.label}</span>
+                      <span className="text-xs text-ink-4">{g.items.length}</span>
                     </div>
                     <div className="space-y-3">
                       {g.items.map((b) => (

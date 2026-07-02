@@ -6,6 +6,7 @@ import { useBusiness } from "@/lib/business";
 import { useContentDrafts, useContentOptimizationStatus } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
 import { Card, PageHeader, Spinner } from "@/components/ui";
+import { TabNav } from "@/components/content/TabNav";
 
 type Tab = "ready" | "fixes" | "all";
 
@@ -23,15 +24,6 @@ export default function DraftsPage() {
   const fixes = data.filter((d) => d.status === "needs_fix" || (d.status === "pending_review" && d.compliance_pass === false));
   const shown = tab === "all" ? data : tab === "ready" ? ready : fixes;
 
-  const TabBtn = ({ id, label, n }: { id: Tab; label: string; n: number }) => (
-    <button
-      onClick={() => setTab(id)}
-      className={`rounded-full px-3 py-1 text-sm ${tab === id ? "bg-slate-900 font-medium text-white" : "text-slate-500 hover:text-slate-700"}`}
-    >
-      {label} ({n})
-    </button>
-  );
-
   return (
     <div>
       <PageHeader
@@ -40,12 +32,16 @@ export default function DraftsPage() {
       />
 
       <Card className="mb-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <TabBtn id="ready" label="Ready to review" n={ready.length} />
-          <TabBtn id="fixes" label="Needs fixes first" n={fixes.length} />
-          <TabBtn id="all" label="All" n={data.length} />
-        </div>
-        <p className="mt-2 text-xs text-slate-500">
+        <TabNav
+          tabs={[
+            { key: "ready", label: "Ready to review", count: ready.length },
+            { key: "fixes", label: "Needs fixes first", count: fixes.length },
+            { key: "all", label: "All", count: data.length },
+          ]}
+          active={tab}
+          onSelect={(k) => setTab(k as Tab)}
+        />
+        <p className="mt-2 text-xs text-ink-3">
           {tab === "fixes"
             ? "These passed the writing-quality bar but were flagged on a compliance check — usually a missing disclosure (e.g. broker-dealer / licensing). Edit the draft to resolve the flag, which re-screens it, then approve."
             : "“Ready to review” passed our quality + compliance checks and just needs your sign-off. Approving publishes it and advances its task."}
@@ -53,9 +49,9 @@ export default function DraftsPage() {
         {/* Subtle dormant-feature hint: only when content-optimization is wired in the app but
             not yet configured for this business — drafts will then carry a SERP-coverage score. */}
         {optStatus && !optStatus.configured && (
-          <p className="mt-2 text-[11px] text-slate-400">
+          <p className="mt-2 text-[11px] text-ink-4">
             Content optimization:{" "}
-            <Link href="/integrations" className="font-medium text-indigo-600 hover:underline">connect NeuronWriter</Link>{" "}
+            <Link href="/integrations" className="font-medium text-indigo hover:text-indigo-strong">connect NeuronWriter</Link>{" "}
             to score each draft on SERP content coverage.
           </p>
         )}
@@ -63,7 +59,7 @@ export default function DraftsPage() {
 
       {shown.length === 0 ? (
         <Card>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-3">
             {tab === "ready" ? "Nothing waiting on you right now — check “Needs fixes first” or generate a draft from a content task." : "No drafts here."}
           </p>
         </Card>

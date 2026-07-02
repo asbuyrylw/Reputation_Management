@@ -8,7 +8,8 @@ import {
   useRejectQueueItem,
   useEditReviewReply,
 } from "@/lib/hooks";
-import { Card, PageHeader, Spinner, Pill } from "@/components/ui";
+import { Card, PageHeader, Spinner, Pill, Chip, Button } from "@/components/ui";
+import { TabNav } from "@/components/content/TabNav";
 import { EmptyState } from "@/components/primitives";
 import { ApiError } from "@/lib/api";
 import type { QueueItem, QueueItemKind } from "@/lib/types";
@@ -85,19 +86,19 @@ function QueueItemCard({ item, businessId }: { item: QueueItem; businessId: numb
       <div className="flex flex-wrap items-center gap-2">
         <Pill tone="neutral">{KIND_LABELS[item.kind]}</Pill>
         {item.capability === "alert_only" && <Pill tone="info">Alert only</Pill>}
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.surface === "owned" ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200"}`}>
+        <Chip tone={item.surface === "owned" ? "good" : "info"}>
           {item.surface === "owned" ? "You own this" : "Third-party"}
-        </span>
+        </Chip>
         <ComplianceBadge pass={item.compliance.pass} />
-        {item.source && <span className="text-xs text-slate-400">{item.source}</span>}
+        {item.source && <span className="text-xs text-ink-4">{item.source}</span>}
         {item.rating != null && <Stars rating={item.rating} />}
         {item.scheduled_for && (
-          <span className="ml-auto text-xs text-slate-400">scheduled {new Date(item.scheduled_for).toLocaleString()}</span>
+          <span className="ml-auto text-xs text-ink-4">scheduled {new Date(item.scheduled_for).toLocaleString()}</span>
         )}
       </div>
 
       {/* the thing being replied to */}
-      {item.title && <div className="mt-2 text-sm font-semibold text-slate-900">{item.title}</div>}
+      {item.title && <div className="mt-2 text-sm font-semibold text-ink">{item.title}</div>}
 
       {/* draft */}
       {item.kind === "review_reply" || item.kind === "mention_reply" ? (
@@ -106,31 +107,29 @@ function QueueItemCard({ item, businessId }: { item: QueueItem; businessId: numb
             value={draftText}
             onChange={(e) => setDraftText(e.target.value)}
             rows={4}
-            className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="mt-2 w-full rounded-md border border-line-2 px-3 py-2 text-sm"
           />
         ) : (
-          <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-            {item.draft || <span className="text-slate-400">No draft text.</span>}
+          <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper p-3 text-sm text-ink-2">
+            {item.draft || <span className="text-ink-4">No draft text.</span>}
           </p>
         )
       ) : (
-        <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-          {item.draft || <span className="text-slate-400">No draft text.</span>}
+        <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper p-3 text-sm text-ink-2">
+          {item.draft || <span className="text-ink-4">No draft text.</span>}
         </p>
       )}
 
       {flags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {flags.map((f, i) => (
-            <span key={i} className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-inset ring-rose-200">
-              {f}
-            </span>
+            <Chip key={i} tone="bad">{f}</Chip>
           ))}
         </div>
       )}
 
       {/* actions, branched on capability */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
         {item.capability === "alert_only" ? (
           <>
             {item.url && (
@@ -138,22 +137,18 @@ function QueueItemCard({ item, businessId }: { item: QueueItem; businessId: numb
                 href={item.url}
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+                className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-2"
               >
                 Open on platform →
               </a>
             )}
-            <button onClick={copyDraft} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100">
+            <Button variant="secondary" size="sm" onClick={copyDraft}>
               {copied ? "Copied" : "Copy draft"}
-            </button>
-            <button
-              onClick={doReject}
-              disabled={reject.isPending}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={doReject} disabled={reject.isPending}>
               Dismiss
-            </button>
-            <p className="w-full text-xs text-slate-500">
+            </Button>
+            <p className="w-full text-xs text-ink-3">
               This platform&apos;s terms require you to post manually — paste the draft yourself. You&apos;re responsible
               for what goes live here.
             </p>
@@ -162,19 +157,16 @@ function QueueItemCard({ item, businessId }: { item: QueueItem; businessId: numb
           <>
             {editing ? (
               <>
-                <button
-                  onClick={saveEdit}
-                  disabled={editReview.isPending}
-                  className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-                >
+                <Button size="sm" onClick={saveEdit} disabled={editReview.isPending}>
                   {editReview.isPending ? "Saving…" : "Save edit"}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => { setEditing(false); setDraftText(item.draft ?? ""); }}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
                 >
                   Cancel
-                </button>
+                </Button>
               </>
             ) : (
               <>
@@ -182,24 +174,21 @@ function QueueItemCard({ item, businessId }: { item: QueueItem; businessId: numb
                   onClick={() => doApprove("This reply will be posted publicly on the review. Approve?")}
                   disabled={blocked || approve.isPending}
                   title={blocked ? "Resolve the compliance flags before approving." : undefined}
-                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {approve.isPending ? "Approving…" : "Approve & post"}
                 </button>
-                <button
-                  onClick={doReject}
-                  disabled={reject.isPending}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                >
+                <Button variant="secondary" size="sm" onClick={doReject} disabled={reject.isPending}>
                   Reject
-                </button>
+                </Button>
                 {item.editable && (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => { setEditing(true); setDraftText(item.draft ?? ""); }}
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
                   >
                     Edit
-                  </button>
+                  </Button>
                 )}
               </>
             )}
@@ -211,32 +200,28 @@ function QueueItemCard({ item, businessId }: { item: QueueItem; businessId: numb
                 onClick={() => doApprove("This will be published. Approve?")}
                 disabled={blocked || approve.isPending}
                 title={blocked ? "Resolve the compliance flags before approving." : undefined}
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {approve.isPending ? "Approving…" : "Approve & publish"}
               </button>
-              <button
-                onClick={doReject}
-                disabled={reject.isPending}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-              >
+              <Button variant="secondary" size="sm" onClick={doReject} disabled={reject.isPending}>
                 Reject
-              </button>
+              </Button>
             </>
           ) : (
             // scheduled_post — read-only status
-            <span className="text-xs text-slate-500">
-              Status: <span className="font-medium text-slate-700">{item.status || "scheduled"}</span> — managed automatically.
+            <span className="text-xs text-ink-3">
+              Status: <span className="font-medium text-ink-2">{item.status || "scheduled"}</span> — managed automatically.
             </span>
           )
         ) : (
-          <span className="text-xs text-slate-500">
-            Status: <span className="font-medium text-slate-700">{item.status || "—"}</span>
+          <span className="text-xs text-ink-3">
+            Status: <span className="font-medium text-ink-2">{item.status || "—"}</span>
           </span>
         )}
       </div>
 
-      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+      {err && <p className="mt-2 text-xs text-alert">{err}</p>}
     </Card>
   );
 }
@@ -266,21 +251,12 @@ export default function ApprovalsPage() {
         subtitle="One inbox for everything waiting on you — review replies, mention replies, and scheduled posts. Approving an owned-surface item publishes it; third-party items are draft-only, so you post those yourself."
       />
 
-      <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-200">
-        {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setKind(f.key)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-              kind === f.key
-                ? "border-indigo-600 text-indigo-700"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
+      <TabNav
+        className="mb-4"
+        tabs={FILTERS}
+        active={kind}
+        onSelect={(k) => setKind(k as KindFilter)}
+      />
 
       {items.length === 0 ? (
         <EmptyState
