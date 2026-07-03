@@ -55,14 +55,6 @@ def seconds_since_heartbeat() -> Optional[float]:
         return None
 
 
-def _next_queued() -> Optional[int]:
-    with db() as conn:
-        row = conn.execute(
-            "SELECT id FROM api_jobs WHERE status='queued' ORDER BY id LIMIT 1"
-        ).fetchone()
-    return row["id"] if row else None
-
-
 def run_forever(poll_seconds: float = 3.0) -> None:  # pragma: no cover -- long-running loop
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     _ensure_heartbeat()
@@ -80,12 +72,16 @@ def run_forever(poll_seconds: float = 3.0) -> None:  # pragma: no cover -- long-
                 except Exception as e:  # noqa: BLE001
                     log.warning("scheduler tick failed: %s", e)
                 last_reap = now
-            job_id = _next_queued()
-            if job_id is None:
+            # Claim + run via pump(): the SINGLE dep-aware path. It only runs a job whose
+            # depends_on jobs are all 'complete', and cascade-fails a child whose prerequisite
+            # failed -- so a multi-step pipeline (gap_model -> plan -> sync_plan -> production_briefs,
+            # keyword_research -> neuron_enrich) stays correctly ordered in the durable worker too,
+            # not just the inline dev path. (Was a naive FIFO _next_queued(), which ignored
+            # ordering + let children run before/after a failed parent against stale inputs.)
+            ran = jobs.pump()
+            if not ran:
                 time.sleep(poll_seconds)
                 continue
-            log.info("running job %s", job_id)
-            jobs.run_job(job_id)   # atomic claim makes this safe even with multiple workers
         except Exception as e:  # noqa: BLE001 -- a transient DB blip must not kill the worker
             log.exception("worker loop error: %s", e)
             time.sleep(poll_seconds)

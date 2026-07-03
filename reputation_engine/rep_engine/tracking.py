@@ -94,7 +94,7 @@ def sync_plan(business_id: int) -> dict:
         ).fetchone()["c"]
         existing = conn.execute(
             "SELECT w.id, w.title, w.capability, w.status, w.plan_id, w.superseded, w.task_key, "
-            "w.gap_specifics, "
+            "w.gap_specifics, w.why_helps_ai_rep, w.why_helps_seo, w.gap_source, "
             "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id=w.id) AS has_draft "
             "FROM work_orders w WHERE w.business_id=%s",
             (business_id,),
@@ -132,6 +132,18 @@ def sync_plan(business_id: int) -> dict:
                 if src and not (match.get("gap_specifics") or {}).get("source_query"):
                     conn.execute("UPDATE work_orders SET gap_specifics=%s, updated_at=now() WHERE id=%s",
                                  (json.dumps({"source_query": src}), match["id"]))
+                # Backfill task CONTEXT onto carried-forward rows: older generator revisions left
+                # why_helps_*/gap_source NULL, so the console showed no "why" + no "From:" for them.
+                # COALESCE only fills what's currently missing -- never overwrites human/existing text.
+                _bf_src = (w.get("rationale") or {}).get("gap_source") or ""
+                if ((w.get("why_helps_ai_rep") and not match.get("why_helps_ai_rep"))
+                        or (w.get("why_helps_seo") and not match.get("why_helps_seo"))
+                        or (_bf_src and not (match.get("gap_source") or "").strip())):
+                    conn.execute(
+                        "UPDATE work_orders SET why_helps_ai_rep=COALESCE(why_helps_ai_rep, %s), "
+                        "why_helps_seo=COALESCE(why_helps_seo, %s), "
+                        "gap_source=COALESCE(NULLIF(gap_source,''), %s), updated_at=now() WHERE id=%s",
+                        (w.get("why_helps_ai_rep"), w.get("why_helps_seo"), _bf_src or None, match["id"]))
                 continue
             td = w.get("target_date")
             sd = w.get("start_date")
@@ -168,13 +180,26 @@ def sync_plan(business_id: int) -> dict:
                 conn.execute("UPDATE work_orders SET superseded=TRUE, updated_at=now() WHERE id=%s",
                              (e["id"],))
                 retired += 1
+
+        # Prune ancient cruft: plan-generated, never-drafted, still-pending tasks that were added
+        # 2+ revisions ago AND are superseded won't realistically revive and just bloat the table
+        # (title-churn across LLM regenerations mints near-duplicates). Keep anything with a draft,
+        # a non-pending status, or added within the last 2 revisions (still revivable). Bounded delete.
+        pruned = conn.execute(
+            "DELETE FROM work_orders w WHERE w.business_id=%s AND w.superseded=TRUE "
+            "AND w.plan_id IS NOT NULL AND w.status='pending' "
+            "AND COALESCE(w.added_in_revision, 0) <= %s "
+            "AND NOT EXISTS (SELECT 1 FROM content_drafts d WHERE d.work_order_id=w.id) "
+            "RETURNING w.id",
+            (business_id, max(0, revision - 2)),
+        ).fetchall()
         conn.commit()
     carried_total = sum(carried.values())
-    log.info("sync-plan rev %d: +%d new, carried %d (%d done/%d drafted/%d open), retired %d, revived %d",
-             revision, created, carried_total, carried["done"], carried["drafted"], carried["open"],
-             retired, revived)
+    log.info("sync-plan rev %d: +%d new, carried %d (%d done/%d drafted/%d open), retired %d, "
+             "revived %d, pruned %d", revision, created, carried_total, carried["done"],
+             carried["drafted"], carried["open"], retired, revived, len(pruned))
     return {"revision": revision, "created": created, "carried_forward": carried_total,
-            "retired": retired, "revived": revived, **carried}
+            "retired": retired, "revived": revived, "pruned": len(pruned), **carried}
 
 
 # ----------------------------------------------------------------------------
