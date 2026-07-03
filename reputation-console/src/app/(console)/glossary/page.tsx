@@ -15,9 +15,9 @@ export default function GlossaryPage() {
       <div className="space-y-3">
         {terms.map(([term, e]) => (
           <Card key={term}>
-            <div className="text-sm font-semibold capitalize text-slate-900">{term}</div>
-            <p className="mt-1 text-sm text-slate-700">{e.plain}</p>
-            <p className="mt-1 text-sm text-slate-500"><span className="font-medium">Why it matters:</span> {e.why}</p>
+            <div className="text-sm font-semibold capitalize text-ink">{term}</div>
+            <p className="mt-1 text-sm text-ink-2">{e.plain}</p>
+            <p className="mt-1 text-sm text-ink-3"><span className="font-medium">Why it matters:</span> {e.why}</p>
           </Card>
         ))}
       </div>

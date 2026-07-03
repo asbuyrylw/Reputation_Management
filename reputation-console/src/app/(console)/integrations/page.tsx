@@ -21,8 +21,9 @@ import {
   useZerniaConnect,
   useZerniaSync,
 } from "@/lib/hooks";
-import { Card, PageHeader, Spinner, Pill } from "@/components/ui";
+import { Card, PageHeader, Spinner, Pill, Button, Input } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import { TabNav } from "@/components/content/TabNav";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { Connection, ZerniaAccount } from "@/lib/types";
 import type { Tone } from "@/lib/uiTokens";
@@ -47,13 +48,13 @@ const STATUS_WORDS: Record<string, string> = {
 // Clean key/value render of a normalized report (replaces the raw JSON dump).
 function KeyValues({ data }: { data: Record<string, unknown> }) {
   const entries = Object.entries(data).filter(([, v]) => v != null && v !== "");
-  if (entries.length === 0) return <p className="text-sm text-slate-400">No details.</p>;
+  if (entries.length === 0) return <p className="text-sm text-ink-4">No details.</p>;
   return (
     <dl className="space-y-1">
       {entries.map(([k, v]) => (
         <div key={k} className="grid grid-cols-1 gap-0.5 sm:grid-cols-[160px_1fr]">
-          <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{k.replace(/_/g, " ")}</dt>
-          <dd className="text-sm text-slate-700">
+          <dt className="text-xs font-medium uppercase tracking-wide text-ink-4">{k.replace(/_/g, " ")}</dt>
+          <dd className="text-sm text-ink-2">
             {Array.isArray(v) ? v.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(", ")
               : typeof v === "object" ? JSON.stringify(v) : String(v)}
           </dd>
@@ -175,56 +176,56 @@ function GscVerifyForm({ businessId, connId }: { businessId: number | null; conn
   };
 
   return (
-    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-3">
-      <div className="text-xs font-semibold text-slate-700">Verify a site that isn&apos;t in Search Console yet</div>
-      <p className="mt-0.5 text-[11px] text-slate-500">
+    <div className="mt-2 rounded-md border border-line bg-paper p-3">
+      <div className="text-xs font-semibold text-ink-2">Verify a site that isn&apos;t in Search Console yet</div>
+      <p className="mt-0.5 text-[11px] text-ink-3">
         Enter the site, get a code, place it, then verify — we register the property for you.
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <input
+        <Input
           value={siteUrl}
           onChange={(e) => setSiteUrl(e.target.value)}
           placeholder="example.com"
-          className="min-w-[14rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          className="min-w-[14rem] flex-1"
         />
         <select
           value={method}
           onChange={(e) => setMethod(e.target.value as "META" | "DNS_TXT")}
-          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+          className="rounded-md border border-line-2 px-2 py-1.5 text-sm text-ink-2"
         >
           <option value="META">HTML tag (one website URL)</option>
           <option value="DNS_TXT">DNS record (whole domain)</option>
         </select>
-        <button
+        <Button
+          variant="secondary"
           onClick={onStart}
           disabled={start.isPending || !siteUrl.trim()}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
         >
           {start.isPending ? "Getting code…" : "Get code"}
-        </button>
+        </Button>
       </div>
       {token && (
         <div className="mt-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-4">
               {method === "DNS_TXT" ? "Add this DNS TXT record" : "Add this tag inside <head>"}
             </span>
-            <button onClick={copy} className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800">
+            <button onClick={copy} className="text-[11px] font-medium text-indigo hover:text-indigo-strong">
               {copied ? "Copied" : "Copy"}
             </button>
           </div>
-          <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-white p-2 font-mono text-[11px] text-slate-700 ring-1 ring-slate-200">{token}</pre>
-          {instructions && <p className="mt-1 whitespace-pre-wrap text-[11px] text-slate-500">{instructions}</p>}
-          <button
+          <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-card p-2 font-mono text-[11px] text-ink-2 ring-1 ring-line">{token}</pre>
+          {instructions && <p className="mt-1 whitespace-pre-wrap text-[11px] text-ink-3">{instructions}</p>}
+          <Button
+            className="mt-2"
             onClick={onVerify}
             disabled={complete.isPending}
-            className="mt-2 rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {complete.isPending ? "Verifying…" : "I've added it — Verify & connect"}
-          </button>
+          </Button>
         </div>
       )}
-      {note && <p className="mt-1.5 text-xs text-slate-600">{note}</p>}
+      {note && <p className="mt-1.5 text-xs text-ink-3">{note}</p>}
     </div>
   );
 }
@@ -259,15 +260,15 @@ function GscPropertyPicker({
   };
 
   return (
-    <div className="mt-3 border-t border-slate-100 pt-3">
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Search Console property</div>
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-4">Search Console property</div>
       {isLoading ? (
-        <p className="text-xs text-slate-500">Loading your verified properties…</p>
+        <p className="text-xs text-ink-3">Loading your verified properties…</p>
       ) : error ? (
-        <p className="text-xs text-rose-600">Couldn&apos;t load properties — try Test, or reconnect.</p>
+        <p className="text-xs text-alert">Couldn&apos;t load properties — try Test, or reconnect.</p>
       ) : sites.length === 0 ? (
         <div>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-ink-3">
             No verified properties on this Google account yet — verify your site below to start importing data.
           </p>
           <GscVerifyForm businessId={businessId} connId={connection.id} />
@@ -277,7 +278,7 @@ function GscPropertyPicker({
           <select
             value={current}
             onChange={(e) => setSelected(e.target.value)}
-            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="min-w-[16rem] flex-1 rounded-md border border-line-2 px-3 py-1.5 text-sm text-ink-2"
           >
             <option value="" disabled>Choose a property…</option>
             {sites.map((s) => (
@@ -286,30 +287,29 @@ function GscPropertyPicker({
               </option>
             ))}
           </select>
-          <button
+          <Button
             onClick={onSave}
             disabled={save.isPending || !current || current === saved}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {save.isPending ? "Saving…" : "Save property"}
-          </button>
+          </Button>
         </div>
       )}
       {sites.length > 0 && (
         <div className="mt-2">
           <button
             onClick={() => setShowVerify((s) => !s)}
-            className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
+            className="text-[11px] font-medium text-indigo hover:text-indigo-strong"
           >
             {showVerify ? "Hide" : "Don't see your site? Verify a new one"}
           </button>
           {showVerify && <GscVerifyForm businessId={businessId} connId={connection.id} />}
         </div>
       )}
-      <p className="mt-1.5 text-[11px] text-slate-400">
+      <p className="mt-1.5 text-[11px] text-ink-4">
         Search Console only has history from when the property was verified.
       </p>
-      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
+      {note && <p className="mt-1 text-xs text-ink-3">{note}</p>}
     </div>
   );
 }
@@ -344,20 +344,20 @@ function GaPropertyPicker({
   };
 
   return (
-    <div className="mt-3 border-t border-slate-100 pt-3">
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Analytics property</div>
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-4">Analytics property</div>
       {isLoading ? (
-        <p className="text-xs text-slate-500">Loading your GA4 properties…</p>
+        <p className="text-xs text-ink-3">Loading your GA4 properties…</p>
       ) : error ? (
-        <p className="text-xs text-rose-600">Couldn&apos;t load properties — try Test, or reconnect.</p>
+        <p className="text-xs text-alert">Couldn&apos;t load properties — try Test, or reconnect.</p>
       ) : properties.length === 0 ? (
-        <p className="text-xs text-slate-500">No GA4 properties found on this Google account.</p>
+        <p className="text-xs text-ink-3">No GA4 properties found on this Google account.</p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={current}
             onChange={(e) => setSelected(e.target.value)}
-            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="min-w-[16rem] flex-1 rounded-md border border-line-2 px-3 py-1.5 text-sm text-ink-2"
           >
             <option value="" disabled>Choose a property…</option>
             {properties.map((p) => (
@@ -367,19 +367,18 @@ function GaPropertyPicker({
               </option>
             ))}
           </select>
-          <button
+          <Button
             onClick={onSave}
             disabled={save.isPending || !current || current === saved}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {save.isPending ? "Saving…" : "Save property"}
-          </button>
+          </Button>
         </div>
       )}
-      <p className="mt-1.5 text-[11px] text-slate-400">
+      <p className="mt-1.5 text-[11px] text-ink-4">
         Conversions only show once you&apos;ve marked the key events (calls, forms, bookings) as conversions in GA4.
       </p>
-      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
+      {note && <p className="mt-1 text-xs text-ink-3">{note}</p>}
     </div>
   );
 }
@@ -480,26 +479,26 @@ function ProviderCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold tracking-tight text-slate-900">{provider.name}</h3>
+            <h3 className="text-base font-semibold tracking-tight text-ink">{provider.name}</h3>
             <Pill tone={tone}>{label}</Pill>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${provider.surface === "owned" ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200" : "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200"}`}>
+            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${provider.surface === "owned" ? "bg-good-bg text-good ring-good/30" : "bg-amber-bg text-amber ring-amber/30"}`}>
               {provider.surface === "owned" ? "You own this — auto-eligible" : "Third-party — draft + you post"}
             </span>
           </div>
-          <p className="mt-1 text-sm text-slate-600">{provider.blurb}</p>
+          <p className="mt-1 text-sm text-ink-3">{provider.blurb}</p>
           {connection && (
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-ink-4">
               Last checked {fmtWhen(connection.last_used_at)}
               {connection.label ? ` · ${connection.label}` : ""}
               {connection.account_ref ? ` · ${connection.account_ref}` : ""}
             </p>
           )}
           {connection?.last_error && (
-            <p className="mt-1 text-xs text-rose-600">Last error: {connection.last_error}</p>
+            <p className="mt-1 text-xs text-alert">Last error: {connection.last_error}</p>
           )}
           {/* GBP review-reply approval gate */}
           {provider.kind === "google_business_profile" && connected && connection?.gbp_access !== "approved" && (
-            <p className="mt-1 text-xs text-amber-700">Review replies need Google&apos;s approval — posting updates works now.</p>
+            <p className="mt-1 text-xs text-amber">Review replies need Google&apos;s approval — posting updates works now.</p>
           )}
         </div>
 
@@ -507,78 +506,72 @@ function ProviderCard({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {connected ? (
               <>
-                <button
+                <Button
+                  variant="secondary"
                   onClick={runTest}
                   disabled={test.isPending}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                 >
                   {test.isPending ? "Testing…" : "Test"}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="danger"
                   onClick={() => connection && window.confirm(`Disconnect ${provider.name}? Publishing to it will stop until you reconnect.`) && disconnect.mutate(connection.id)}
                   disabled={disconnect.isPending}
-                  className="rounded-md border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                 >
                   Disconnect
-                </button>
+                </Button>
               </>
             ) : isOauth ? (
-              <button
+              <Button
                 onClick={startOauth}
                 disabled={authorize.isPending}
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
               >
                 {authorize.isPending ? "Redirecting…" : "Connect with Google"}
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 onClick={() => { setShowForm((s) => !s); setErr(null); }}
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
               >
                 {showForm ? "Cancel" : "Connect"}
-              </button>
+              </Button>
             )}
           </div>
         )}
       </div>
 
-      {testNote && <p className="mt-2 text-xs text-slate-500">{testNote}</p>}
+      {testNote && <p className="mt-2 text-xs text-ink-3">{testNote}</p>}
 
       {/* Direct-credential forms (WordPress app-password / Ayrshare profile key) */}
       {canConnect && showForm && provider.kind === "wordpress_org" && (
-        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
-          <p className="text-xs text-slate-500">
+        <div className="mt-3 space-y-2 border-t border-line pt-3">
+          <p className="text-xs text-ink-3">
             Create an <span className="font-medium">Application Password</span> in WordPress (Users → Profile) and paste it
             here. We only accept secure <span className="font-medium">https://</span> sites.
           </p>
-          <input value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} placeholder="https://yoursite.com"
-            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+          <Input value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} placeholder="https://yoursite.com" />
           <div className="flex flex-wrap gap-2">
-            <input value={wpUser} onChange={(e) => setWpUser(e.target.value)} placeholder="WordPress username"
-              className="min-w-[12rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
-            <input value={appPassword} onChange={(e) => setAppPassword(e.target.value)} placeholder="Application password"
-              type="password" className="min-w-[12rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+            <Input value={wpUser} onChange={(e) => setWpUser(e.target.value)} placeholder="WordPress username"
+              className="min-w-48 flex-1" />
+            <Input value={appPassword} onChange={(e) => setAppPassword(e.target.value)} placeholder="Application password"
+              type="password" className="min-w-48 flex-1" />
           </div>
-          <button onClick={submitWordpress} disabled={connect.isPending || !siteUrl || !wpUser || !appPassword}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
+          <Button onClick={submitWordpress} disabled={connect.isPending || !siteUrl || !wpUser || !appPassword}>
             {connect.isPending ? "Saving…" : "Save connection"}
-          </button>
+          </Button>
         </div>
       )}
       {canConnect && showForm && provider.kind === "ayrshare_profile" && (
-        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
-          <p className="text-xs text-slate-500">
+        <div className="mt-3 space-y-2 border-t border-line pt-3">
+          <p className="text-xs text-ink-3">
             Paste your Ayrshare <span className="font-medium">Profile Key</span>. Social posts are prepared as drafts —
             you review and post them yourself (third-party platforms require manual posting).
           </p>
-          <input value={profileKey} onChange={(e) => setProfileKey(e.target.value)} placeholder="Ayrshare profile key"
-            type="password" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (optional)"
-            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
-          <button onClick={submitAyrshare} disabled={connect.isPending || !profileKey}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
+          <Input value={profileKey} onChange={(e) => setProfileKey(e.target.value)} placeholder="Ayrshare profile key"
+            type="password" />
+          <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (optional)" />
+          <Button onClick={submitAyrshare} disabled={connect.isPending || !profileKey}>
             {connect.isPending ? "Saving…" : "Save connection"}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -592,7 +585,7 @@ function ProviderCard({
         <GaPropertyPicker connection={connection} businessId={businessId} />
       )}
 
-      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+      {err && <p className="mt-2 text-xs text-alert">{err}</p>}
     </Card>
   );
 }
@@ -685,17 +678,17 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold tracking-tight text-slate-900">Social media (Zernio)</h3>
+            <h3 className="text-base font-semibold tracking-tight text-ink">Social media (Zernio)</h3>
             <Pill tone={isSetUp ? "good" : "neutral"}>{isSetUp ? "Set up" : "Not set up"}</Pill>
-            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+            <span className="rounded-full bg-amber-bg px-2 py-0.5 text-[11px] font-medium text-amber ring-1 ring-inset ring-amber/30">
               Third-party — you authorize each network
             </span>
           </div>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-sm text-ink-3">
             Connect the client&apos;s social accounts to publish approved posts.
           </p>
           {isSetUp && connectedCount > 0 && (
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-ink-4">
               {connectedCount} of {platforms.length} platform{platforms.length === 1 ? "" : "s"} connected
             </p>
           )}
@@ -703,27 +696,26 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
 
         {canEdit && !isSetUp && (
           <div className="flex shrink-0 items-center gap-2">
-            <button
+            <Button
               onClick={runSetup}
               disabled={setup.isPending}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               {setup.isPending ? "Setting up…" : "Set up social publishing"}
-            </button>
+            </Button>
           </div>
         )}
       </div>
 
       {/* Set up: per-platform connect grid + sync. */}
       {canEdit && isSetUp && (
-        <div className="mt-3 border-t border-slate-100 pt-3">
-          <p className="text-xs text-slate-500">
+        <div className="mt-3 border-t border-line pt-3">
+          <p className="text-xs text-ink-3">
             Your Zernio profile is ready. Click <span className="font-medium">Connect</span> on each network to authorize
             that account in a Zernio popup, then <span className="font-medium">Sync</span> to confirm.
           </p>
 
           {platforms.length === 0 ? (
-            <p className="mt-3 text-xs text-slate-400">No connectable platforms returned yet.</p>
+            <p className="mt-3 text-xs text-ink-4">No connectable platforms returned yet.</p>
           ) : (
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {platforms.map((platform) => {
@@ -731,21 +723,22 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
                 return (
                   <div
                     key={platform}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2"
+                    className="flex items-center justify-between gap-2 rounded-lg border border-line px-3 py-2"
                   >
-                    <span className="text-sm font-medium text-slate-700">{platformLabel(platform)}</span>
+                    <span className="text-sm font-medium text-ink-2">{platformLabel(platform)}</span>
                     {handle ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-good-bg px-2 py-0.5 text-[11px] font-medium text-good ring-1 ring-inset ring-good/30">
                         ✓ connected{handle !== "connected" ? ` as ${handle}` : ""}
                       </span>
                     ) : (
-                      <button
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         onClick={() => openConnect(platform)}
                         disabled={connect.isPending && connect.variables === platform}
-                        className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                       >
                         {connect.isPending && connect.variables === platform ? "Opening…" : "Connect"}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 );
@@ -754,22 +747,21 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
           )}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
+            <Button
               onClick={runSync}
               disabled={sync.isPending}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               {sync.isPending ? "Syncing…" : "Sync connected accounts"}
-            </button>
-            <span className="text-xs text-slate-400">
+            </Button>
+            <span className="text-xs text-ink-4">
               After you finish connecting in the popup, click Sync to pull your accounts.
             </span>
           </div>
-          {syncNote && <p className="mt-2 text-xs text-slate-500">{syncNote}</p>}
+          {syncNote && <p className="mt-2 text-xs text-ink-3">{syncNote}</p>}
         </div>
       )}
 
-      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+      {err && <p className="mt-2 text-xs text-alert">{err}</p>}
     </Card>
   );
 }
@@ -785,18 +777,18 @@ function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; ca
   return (
     <div>
       {!data.vault_ready && (
-        <Card className="mb-4 border-amber-200 bg-amber-50/50">
-          <div className="text-sm font-semibold text-slate-900">Connections aren&apos;t configured on this server yet</div>
-          <p className="mt-1 text-sm text-slate-700">
+        <Card className="mb-4 border-amber/30 bg-amber-bg">
+          <div className="text-sm font-semibold text-ink">Connections aren&apos;t configured on this server yet</div>
+          <p className="mt-1 text-sm text-ink-2">
             An administrator must set <span className="font-mono text-xs">TOKEN_ENC_KEY</span> before credentials can be
             stored securely. Until then, connecting is disabled.
           </p>
         </Card>
       )}
 
-      <Card className="mb-4 bg-indigo-50/50">
-        <div className="text-sm font-semibold text-slate-900">How publishing honesty works</div>
-        <p className="mt-1 text-sm text-slate-700">
+      <Card className="mb-4 bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">How publishing honesty works</div>
+        <p className="mt-1 text-sm text-ink-2">
           <span className="font-medium">Surfaces you own</span> (your WordPress site, your Google Business Profile) can be
           published to automatically once you approve. <span className="font-medium">Third-party platforms</span> (Facebook,
           Instagram, LinkedIn, Pinterest) are draft-only — we prepare the post and alert you, but{" "}
@@ -836,13 +828,13 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
 
   return (
     <div>
-      <Card className="mb-4 bg-indigo-50/50">
-        <div className="text-sm font-semibold text-slate-900">What this is for</div>
-        <p className="mt-1 text-sm text-slate-700">
+      <Card className="mb-4 bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">What this is for</div>
+        <p className="mt-1 text-sm text-ink-2">
           If you already use an SEO or analytics tool (SiteGuru, Screpy, ClickRank, Google Analytics, Search
           Console…), paste its report here. We read the real numbers and fold them into your reputation plan.
         </p>
-        <ul className="mt-2 list-disc space-y-1 pl-6 text-sm text-slate-700">
+        <ul className="mt-2 list-disc space-y-1 pl-6 text-sm text-ink-2">
           <li>
             <span className="font-medium">How it&apos;s used:</span> your real Google rankings, backlinks,
             technical-SEO issues, and traffic feed the gap model and site audit — so the plan targets what actually
@@ -853,22 +845,22 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
             keywords that genuinely move your AI visibility) and hard numbers to prove progress over time.
           </li>
         </ul>
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-ink-3">
           Paste a report as CSV, JSON, or plain text — we normalize it for you. Optional; you don&apos;t need it to get started.
         </p>
       </Card>
 
       {canEdit && (
         <Card className="mb-4">
-          <div className="mb-2 text-sm font-medium text-slate-700">Add a report</div>
+          <div className="mb-2 text-sm font-medium text-ink-2">Add a report</div>
           <div className="flex flex-wrap gap-2">
-            <input
+            <Input
               placeholder="Source (e.g. siteguru)"
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              className="w-auto"
             />
-            <select value={type} onChange={(e) => setType(e.target.value)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm">
+            <select value={type} onChange={(e) => setType(e.target.value)} className="rounded-md border border-line-2 px-3 py-1.5 text-sm text-ink-2">
               {TYPES.map((t) => (
                 <option key={t} value={t}>
                   {TYPE_LABELS[t] ?? t.replace(/_/g, " ")}
@@ -881,24 +873,23 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
             value={content}
             onChange={(e) => setContent(e.target.value)}
             rows={5}
-            className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+            className="mt-2 w-full rounded-md border border-line-2 px-3 py-2 font-mono text-sm text-ink-2"
           />
           <div className="mt-2 flex items-center gap-2">
-            <button
+            <Button
               disabled={ingest.isPending || !source || !content}
               onClick={() => ingest.mutate({ source, signal_type: type, content }, { onSuccess: () => setContent("") })}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
             >
               Upload
-            </button>
+            </Button>
             {rawCount > 0 && (
-              <button
+              <Button
+                variant="secondary"
                 disabled={normalize.isPending}
                 onClick={() => normalize.mutate({ jobType: "normalize_signals" })}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
               >
                 Normalize {rawCount} new with AI
-              </button>
+              </Button>
             )}
           </div>
         </Card>
@@ -915,20 +906,20 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
           {data.map((s) => (
             <Card key={s.id}>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded bg-slate-900 px-1.5 py-0.5 text-xs font-medium text-white">{s.source}</span>
-                <span className="text-xs text-slate-500">{TYPE_LABELS[s.signal_type ?? ""] ?? (s.signal_type || "").replace(/_/g, " ")}</span>
-                <span className={`text-xs ${s.status === "normalized" ? "text-emerald-700" : s.status === "failed" ? "text-rose-700" : "text-amber-700"}`}>
+                <span className="rounded bg-ink px-1.5 py-0.5 text-xs font-medium text-white">{s.source}</span>
+                <span className="text-xs text-ink-3">{TYPE_LABELS[s.signal_type ?? ""] ?? (s.signal_type || "").replace(/_/g, " ")}</span>
+                <span className={`text-xs ${s.status === "normalized" ? "text-good" : s.status === "failed" ? "text-alert" : "text-amber"}`}>
                   {STATUS_WORDS[s.status] ?? s.status}
                 </span>
-                <span className="text-xs text-slate-400">{s.created_at ? new Date(s.created_at).toLocaleDateString() : ""}</span>
+                <span className="text-xs text-ink-4">{s.created_at ? new Date(s.created_at).toLocaleDateString() : ""}</span>
               </div>
               {s.normalized ? (
-                <div className="mt-2 border-t border-slate-100 pt-2">
-                  <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">What we learned</div>
+                <div className="mt-2 border-t border-line pt-2">
+                  <div className="mb-1 text-xs font-medium uppercase tracking-wide text-ink-4">What we learned</div>
                   <KeyValues data={s.normalized} />
                 </div>
               ) : (
-                <p className="mt-2 text-xs text-slate-400">
+                <p className="mt-2 text-xs text-ink-4">
                   {s.status === "raw" ? "Ready to process — click ‘Normalize’ above." : "We couldn't read this report. Try pasting it as plain text."}
                 </p>
               )}
@@ -955,25 +946,16 @@ export default function IntegrationsPage() {
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
-      {/* In-page switch — segmented pill (distinct from the Settings hub's underline tab bar above). */}
-      <div className="mb-4 flex w-fit gap-1 rounded-lg bg-slate-100 p-0.5">
-        {([
+      {/* In-page switch — segmented filter (distinct from the Settings hub's underline tab bar above). */}
+      <TabNav
+        className="mb-4"
+        tabs={[
           { key: "connections", label: "Connections" },
           { key: "imports", label: "Data imports" },
-        ] as { key: Tab; label: string }[]).map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              tab === t.key
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+        ]}
+        active={tab}
+        onSelect={(k) => setTab(k as Tab)}
+      />
 
       {tab === "connections" ? (
         <ConnectionsTab businessId={businessId} canEdit={canEdit} />

@@ -4,6 +4,8 @@ import { useBusiness } from "@/lib/business";
 import { useLearnedLevers } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, ToneBar } from "@/components/primitives";
+import { SecHead } from "@/components/DashboardV2";
+import { TableContainer, Th, Td } from "@/components/content/TableContainer";
 
 const LEVER_LABELS: Record<string, string> = {
   content_writing: "Publishing website content",
@@ -42,7 +44,7 @@ export default function LeversPage() {
         />
       ) : (
         <Card>
-          <div className="mb-3 text-sm text-slate-600">
+          <div className="mb-3 text-sm text-ink-3">
             Each bar shows how much that action moves your score per effort, relative to the others.
           </div>
           <div className="space-y-3">
@@ -51,8 +53,8 @@ export default function LeversPage() {
               return (
                 <div key={k}>
                   <div className="mb-1 flex items-center justify-between text-sm">
-                    <span className="font-medium text-slate-800">{leverLabel(k)}</span>
-                    <span className={`text-xs ${tier === "Do more" ? "text-emerald-700" : tier === "Keep" ? "text-slate-500" : "text-slate-400"}`}>{tier}</span>
+                    <span className="font-medium text-ink-2">{leverLabel(k)}</span>
+                    <span className={`text-xs ${tier === "Do more" ? "text-good" : tier === "Keep" ? "text-ink-3" : "text-ink-4"}`}>{tier}</span>
                   </div>
                   <ToneBar pct={(Math.abs(v) / max) * 100} tone={v >= 0 ? "good" : "bad"} />
                 </div>
@@ -61,42 +63,41 @@ export default function LeversPage() {
           </div>
           {/* Predicted vs measured — the plan's estimate calibrating to your real results */}
           {data.predicted_levers && (
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <div className="text-sm font-semibold text-slate-900">Predicted vs. measured</div>
-              <p className="mb-2 text-xs text-slate-500">
-                What the plan estimated each action would add, vs. what we&apos;ve actually measured from your
-                results. This is how the per-task “predicted points” calibrate over time.
-              </p>
-              <table className="w-full text-sm">
-                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
-                  <tr><th className="py-1">Action</th><th className="py-1 text-right">Predicted /unit</th><th className="py-1 text-right">Measured /unit</th></tr>
+            <div className="mt-4 border-t border-line pt-3">
+              <SecHead
+                title="Predicted vs. measured"
+                note="what the plan estimated each action would add, vs. what we've actually measured from your results — how the per-task “predicted points” calibrate over time"
+              />
+              <TableContainer>
+                <thead>
+                  <tr><Th>Action</Th><Th className="text-right">Predicted /unit</Th><Th className="text-right">Measured /unit</Th></tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {levers.map(([k, v]) => {
                     const pred = data.predicted_levers?.[k];
                     const meas = v * 100;
                     return (
                       <tr key={k}>
-                        <td className="py-1">{leverLabel(k)}</td>
-                        <td className="py-1 text-right text-slate-500">{pred != null ? `+${pred.toFixed(2)} pts` : "—"}</td>
-                        <td className={`py-1 text-right font-medium ${pred != null && meas >= pred ? "text-emerald-700" : "text-amber-700"}`}>+{meas.toFixed(2)} pts</td>
+                        <Td>{leverLabel(k)}</Td>
+                        <Td className="text-right text-ink-3">{pred != null ? `+${pred.toFixed(2)} pts` : "—"}</Td>
+                        <Td className={`text-right font-medium ${pred != null && meas >= pred ? "text-good" : "text-amber"}`}>+{meas.toFixed(2)} pts</Td>
                       </tr>
                     );
                   })}
                 </tbody>
-              </table>
+              </TableContainer>
             </div>
           )}
 
           <details className="mt-4">
-            <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-700">▸ Show the raw numbers</summary>
-            <table className="mt-2 w-full text-sm">
-              <tbody className="divide-y divide-slate-100">
+            <summary className="cursor-pointer text-xs font-medium text-ink-4 hover:text-ink-2">▸ Show the raw numbers</summary>
+            <TableContainer className="mt-2">
+              <tbody>
                 {levers.map(([k, v]) => (
-                  <tr key={k}><td className="py-1">{leverLabel(k)}</td><td className="py-1 text-right font-medium">{v.toFixed(4)}</td></tr>
+                  <tr key={k}><Td>{leverLabel(k)}</Td><Td className="text-right font-medium">{v.toFixed(4)}</Td></tr>
                 ))}
               </tbody>
-            </table>
+            </TableContainer>
           </details>
         </Card>
       )}

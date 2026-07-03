@@ -13,15 +13,15 @@ export function TableContainer({ children, className = "" }: { children: ReactNo
 }
 
 // Header row — uppercase mono eyebrow labels on the paper tint.
-export function Th({ children, className = "" }: { children?: ReactNode; className?: string }) {
+export function Th({ children, className = "", colSpan }: { children?: ReactNode; className?: string; colSpan?: number }) {
   return (
-    <th className={`border-b border-line bg-paper px-3.5 py-2.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4 ${className}`}>
+    <th colSpan={colSpan} className={`border-b border-line bg-paper px-3.5 py-2.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4 ${className}`}>
       {children}
     </th>
   );
 }
 
 // Body cell — readable ink on the card surface, subtle row divider.
-export function Td({ children, className = "" }: { children?: ReactNode; className?: string }) {
-  return <td className={`border-b border-line px-3.5 py-3 align-top text-ink-2 ${className}`}>{children}</td>;
+export function Td({ children, className = "", colSpan }: { children?: ReactNode; className?: string; colSpan?: number }) {
+  return <td colSpan={colSpan} className={`border-b border-line px-3.5 py-3 align-top text-ink-2 ${className}`}>{children}</td>;
 }

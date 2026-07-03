@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useReports, useTriggerJob, useEmailReport, useReportView, usePublicSummary } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Button, Card, Input, PageHeader, Spinner } from "@/components/ui";
+import { TableContainer, Th, Td } from "@/components/content/TableContainer";
 import { EmptyState } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { Report } from "@/lib/types";
@@ -40,43 +41,47 @@ function ReportRow({
     );
 
   return (
-    <li className="py-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-slate-900">{r.filename}</p>
-          <p className="text-xs text-slate-500">{fmtDate(r.created_at)}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {canEdit && (
-            <button onClick={() => { setOpen((o) => !o); setNote(null); }}
-              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100">
-              Email
-            </button>
-          )}
-          {r.has_pdf && (
-            <button onClick={() => onDownload(r.id, r.filename, "pdf")} disabled={downloading}
-              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50">
-              PDF
-            </button>
-          )}
-          <button onClick={() => onDownload(r.id, r.filename, "docx")} disabled={downloading}
-            className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50">
-            {downloading ? "Downloading…" : r.has_pdf ? "Word" : "Download"}
-          </button>
-        </div>
-      </div>
-      {open && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com"
-            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
-          <button onClick={send} disabled={email.isPending || !to.trim()}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">
-            {email.isPending ? "Sending…" : "Send"}
-          </button>
-        </div>
+    <>
+      <tr>
+        <Td>
+          <p className="truncate text-sm font-medium text-ink">{r.filename}</p>
+        </Td>
+        <Td className="whitespace-nowrap text-xs text-ink-3">{fmtDate(r.created_at)}</Td>
+        <Td>
+          <div className="flex shrink-0 items-center justify-end gap-2">
+            {canEdit && (
+              <Button variant="secondary" size="sm" onClick={() => { setOpen((o) => !o); setNote(null); }}>
+                Email
+              </Button>
+            )}
+            {r.has_pdf && (
+              <Button variant="secondary" size="sm" onClick={() => onDownload(r.id, r.filename, "pdf")} disabled={downloading}>
+                PDF
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => onDownload(r.id, r.filename, "docx")} disabled={downloading}>
+              {downloading ? "Downloading…" : r.has_pdf ? "Word" : "Download"}
+            </Button>
+          </div>
+        </Td>
+      </tr>
+      {(open || note) && (
+        <tr>
+          <Td colSpan={3} className="pt-0">
+            {open && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com"
+                  className="min-w-[16rem] flex-1" />
+                <Button size="sm" onClick={send} disabled={email.isPending || !to.trim()}>
+                  {email.isPending ? "Sending…" : "Send"}
+                </Button>
+              </div>
+            )}
+            {note && <p className="mt-1 text-xs text-ink-3">{note}</p>}
+          </Td>
+        </tr>
       )}
-      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
-    </li>
+    </>
   );
 }
 
@@ -89,28 +94,28 @@ function ReportViewer({ businessId }: { businessId: number | null }) {
   return (
     <Card className="mb-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-slate-900">View report in browser</div>
-        <button onClick={() => setOpen((o) => !o)} className="text-sm font-medium text-indigo-600 hover:text-indigo-700">{open ? "Hide" : "Open"}</button>
+        <div className="text-sm font-semibold text-ink">View report in browser</div>
+        <button onClick={() => setOpen((o) => !o)} className="text-sm font-medium text-indigo hover:text-indigo-strong">{open ? "Hide" : "Open"}</button>
       </div>
       {open && (
         <div className="mt-3 space-y-4 text-sm">
-          {data.goal && <div><span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Goal</span><p className="text-slate-800">{data.goal}</p></div>}
+          {data.goal && <div><span className="text-xs font-semibold uppercase tracking-wide text-ink-4">Goal</span><p className="text-ink-2">{data.goal}</p></div>}
           <div className="flex flex-wrap gap-6">
-            <div><div className="text-2xl font-bold text-slate-900">{data.score ?? "—"}<span className="text-sm text-slate-400">/100</span></div><div className="text-[11px] text-slate-500">AI reputation score</div></div>
-            <div><div className="text-2xl font-bold text-slate-900">{data.tasks_done_this_month}</div><div className="text-[11px] text-slate-500">tasks done this month</div></div>
-            {lr && <div><div className="text-2xl font-bold text-slate-900">{lr.rating ?? "—"}★</div><div className="text-[11px] text-slate-500">{lr.review_count ?? "—"} Google reviews</div></div>}
+            <div><div className="text-2xl font-bold text-ink">{data.score ?? "—"}<span className="text-sm text-ink-4">/100</span></div><div className="text-[11px] text-ink-3">AI reputation score</div></div>
+            <div><div className="text-2xl font-bold text-ink">{data.tasks_done_this_month}</div><div className="text-[11px] text-ink-3">tasks done this month</div></div>
+            {lr && <div><div className="text-2xl font-bold text-ink">{lr.rating ?? "—"}★</div><div className="text-[11px] text-ink-3">{lr.review_count ?? "—"} Google reviews</div></div>}
           </div>
           {data.biggest_gaps.length > 0 && (
             <div>
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Biggest gaps</span>
-              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-slate-700">{data.biggest_gaps.map((g, i) => <li key={i}>“{g}”</li>)}</ul>
+              <span className="text-xs font-semibold uppercase tracking-wide text-ink-4">Biggest gaps</span>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-2">{data.biggest_gaps.map((g, i) => <li key={i}>“{g}”</li>)}</ul>
             </div>
           )}
           {/* Local Reputation section */}
           {data.local_reputation?.reviews && data.local_reputation.reviews.length > 0 && (
             <div>
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Local reputation — recent Google reviews</span>
-              <ul className="mt-1 space-y-1">{data.local_reputation.reviews.slice(0, 4).map((r, i) => <li key={i} className="text-xs text-slate-600">{r.rating}★ {r.author || "Google user"}: {(r.body || "").slice(0, 100)}</li>)}</ul>
+              <span className="text-xs font-semibold uppercase tracking-wide text-ink-4">Local reputation — recent Google reviews</span>
+              <ul className="mt-1 space-y-1">{data.local_reputation.reviews.slice(0, 4).map((r, i) => <li key={i} className="text-xs text-ink-3">{r.rating}★ {r.author || "Google user"}: {(r.body || "").slice(0, 100)}</li>)}</ul>
             </div>
           )}
         </div>
@@ -125,34 +130,34 @@ function ReportViewer({ businessId }: { businessId: number | null }) {
 function PublicSummaryCard({ businessId }: { businessId: number | null }) {
   const { data } = usePublicSummary(businessId);
   if (!data || !data.found) return null;
-  const bandTone = data.score == null ? "text-slate-700" : data.score >= 70 ? "text-emerald-700" : data.score >= 40 ? "text-amber-700" : "text-rose-600";
+  const bandTone = data.score == null ? "text-ink-2" : data.score >= 70 ? "text-good" : data.score >= 40 ? "text-amber" : "text-alert";
   return (
     <Card className="mb-4" accent="info">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold tracking-tight text-slate-900">Shareable public summary</h3>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <h3 className="text-base font-semibold tracking-tight text-ink">Shareable public summary</h3>
+          <p className="mt-0.5 text-xs text-ink-3">
             The data behind your public lead-magnet page — what a prospect sees before they sign up. A teaser, not the full report.
           </p>
         </div>
         {!data.has_audit && (
-          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">No audit yet</span>
+          <span className="shrink-0 rounded-full bg-amber-bg px-2 py-0.5 text-[11px] font-semibold text-amber">No audit yet</span>
         )}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-6">
         <div>
-          <div className={`text-2xl font-bold ${bandTone}`}>{data.score ?? "—"}<span className="text-sm text-slate-400">/100</span></div>
-          <div className="text-[11px] text-slate-500">{data.band || "AI reputation"}</div>
+          <div className={`text-2xl font-bold ${bandTone}`}>{data.score ?? "—"}<span className="text-sm text-ink-4">/100</span></div>
+          <div className="text-[11px] text-ink-3">{data.band || "AI reputation"}</div>
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-medium text-slate-800">{data.business}{data.area ? ` · ${data.area}` : ""}</div>
-          {data.teaser && <p className="mt-0.5 text-xs text-slate-500">{data.teaser}</p>}
+          <div className="text-sm font-medium text-ink-2">{data.business}{data.area ? ` · ${data.area}` : ""}</div>
+          {data.teaser && <p className="mt-0.5 text-xs text-ink-3">{data.teaser}</p>}
         </div>
       </div>
       {data.top_gaps.length > 0 && (
-        <div className="mt-3 border-t border-slate-100 pt-2">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Top gaps shown publicly</div>
-          <ul className="list-disc space-y-0.5 pl-5 text-xs text-slate-600">
+        <div className="mt-3 border-t border-line pt-2">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-4">Top gaps shown publicly</div>
+          <ul className="list-disc space-y-0.5 pl-5 text-xs text-ink-3">
             {data.top_gaps.slice(0, 4).map((g, i) => <li key={i}>{g}</li>)}
           </ul>
         </div>
@@ -222,21 +227,20 @@ export default function ReportsPage() {
       {canEdit && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-slate-600">Generate a new monthly report from the latest data.</span>
-            <button
+            <span className="text-sm text-ink-3">Generate a new monthly report from the latest data.</span>
+            <Button
               onClick={generate}
               disabled={generating || trigger.isPending}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               {generating || trigger.isPending ? "Generating…" : "Generate report"}
-            </button>
+            </Button>
           </div>
-          <p className="mt-2 text-xs text-slate-400">A report takes a minute or two to build; it appears here automatically when ready.</p>
+          <p className="mt-2 text-xs text-ink-4">A report takes a minute or two to build; it appears here automatically when ready.</p>
         </Card>
       )}
 
       {error && (
-        <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+        <div className="mb-4 rounded-md border border-alert/30 bg-alert-bg px-3 py-2 text-sm text-alert">{error}</div>
       )}
 
       {rows.length === 0 ? (
@@ -247,8 +251,15 @@ export default function ReportsPage() {
           timing="Generate one above, or it's produced automatically as part of the monthly cycle."
         />
       ) : (
-        <Card>
-          <ul className="divide-y divide-slate-100">
+        <TableContainer>
+          <thead>
+            <tr>
+              <Th>Report</Th>
+              <Th>Created</Th>
+              <Th className="text-right">Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
             {rows.map((r) => (
               <ReportRow
                 key={r.id}
@@ -259,8 +270,8 @@ export default function ReportsPage() {
                 downloading={busyId === r.id}
               />
             ))}
-          </ul>
-        </Card>
+          </tbody>
+        </TableContainer>
       )}
     </div>
   );

@@ -2,7 +2,7 @@
 
 import { useBusiness } from "@/lib/business";
 import { useSchedules, useUpsertSchedule, useDeleteSchedule } from "@/lib/hooks";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { jobLabel } from "@/lib/jobLabels";
 
 // Curated subset of jobs worth running on a schedule. Labels come from the shared jobLabels
@@ -50,34 +50,31 @@ export default function AutomationPage() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-slate-900">{label}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${on ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>
-                      {on ? "On" : "Off"}
-                    </span>
+                    <span className="text-sm font-semibold text-ink">{label}</span>
+                    <Chip tone={on ? "good" : "neutral"}>{on ? "On" : "Off"}</Chip>
                   </div>
-                  <div className="text-xs text-slate-500">{desc}</div>
-                  {on && <div className="mt-0.5 text-xs text-slate-400">Next run: {fmtNext(s.next_run_at)}</div>}
+                  <div className="text-xs text-ink-3">{desc}</div>
+                  {on && <div className="mt-0.5 text-xs text-ink-4">Next run: {fmtNext(s.next_run_at)}</div>}
                 </div>
                 {canEdit && (
                   <div className="flex items-center gap-2">
                     <select
                       value={s?.interval_hours ?? defaultHours}
                       onChange={(e) => upsert.mutate({ job_type: job, interval_hours: Number(e.target.value), enabled: true })}
-                      className="rounded border border-slate-200 px-2 py-1 text-sm"
+                      className="rounded border border-line px-2 py-1 text-sm"
                     >
                       {INTERVALS.map((i) => <option key={i.h} value={i.h}>{i.l}</option>)}
                     </select>
                     {on ? (
-                      <button onClick={() => s && del.mutate(s.id)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+                      <Button variant="secondary" onClick={() => s && del.mutate(s.id)}>
                         Turn off
-                      </button>
+                      </Button>
                     ) : (
-                      <button
+                      <Button
                         onClick={() => upsert.mutate({ job_type: job, interval_hours: defaultHours, enabled: true })}
-                        className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
                       >
                         Turn on
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}
@@ -86,7 +83,7 @@ export default function AutomationPage() {
           );
         })}
       </div>
-      <p className="mt-4 text-xs text-slate-400">
+      <p className="mt-4 text-xs text-ink-4">
         Scheduled jobs run in the background. You can also run any job on demand from Admin → Run jobs.
       </p>
     </div>

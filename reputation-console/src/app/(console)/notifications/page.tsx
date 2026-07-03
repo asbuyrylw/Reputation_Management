@@ -6,7 +6,7 @@ import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 
 const sevCls = (s: string) =>
-  s === "critical" ? "border-rose-200 bg-rose-50" : s === "warning" ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-white";
+  s === "critical" ? "border-alert bg-alert-bg" : s === "warning" ? "border-amber bg-amber-bg" : "border-line bg-card";
 
 export default function NotificationsPage() {
   const { businessId, canEdit } = useBusiness();
@@ -31,7 +31,7 @@ export default function NotificationsPage() {
         <>
           {data.unread > 0 && canEdit && (
             <div className="mb-3">
-              <button onClick={() => readAll.mutate()} className="text-sm font-medium text-indigo-600 hover:underline">
+              <button onClick={() => readAll.mutate()} className="text-sm font-medium text-indigo hover:underline">
                 Mark all read ({data.unread})
               </button>
             </div>
@@ -41,12 +41,12 @@ export default function NotificationsPage() {
               <Card key={n.id} className={`${sevCls(n.severity)} ${n.read ? "opacity-60" : ""}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">{n.title}</div>
-                    {n.body && <div className="mt-0.5 text-sm text-slate-600">{n.body}</div>}
-                    {n.created_at && <div className="mt-1 text-xs text-slate-400">{new Date(n.created_at).toLocaleString()}</div>}
+                    <div className="text-sm font-semibold text-ink">{n.title}</div>
+                    {n.body && <div className="mt-0.5 text-sm text-ink-3">{n.body}</div>}
+                    {n.created_at && <div className="mt-1 text-xs text-ink-4">{new Date(n.created_at).toLocaleString()}</div>}
                   </div>
                   {!n.read && canEdit && (
-                    <button onClick={() => read.mutate({ id: n.id })} className="shrink-0 text-xs font-medium text-indigo-600 hover:underline">
+                    <button onClick={() => read.mutate({ id: n.id })} className="shrink-0 text-xs font-medium text-indigo hover:underline">
                       Mark read
                     </button>
                   )}

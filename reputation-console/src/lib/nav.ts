@@ -36,8 +36,9 @@ export const HUBS: Hub[] = [
     ],
   },
   {
-    key: "plan", label: "Your problems & plan", opLabel: "Strategy & Plan", href: "/gaps",
+    key: "plan", label: "Your problems & plan", opLabel: "Strategy & Plan", href: "/strategy",
     tabs: [
+      { href: "/strategy", label: "Overview" },
       { href: "/gaps", label: "What's hurting you", opLabel: "Gaps" },
       { href: "/content/work-orders", label: "Improvement tasks", opLabel: "Tasks" },
       { href: "/next-steps", label: "Recommendations" },

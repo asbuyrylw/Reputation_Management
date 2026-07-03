@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBusiness } from "@/lib/business";
 import { useMentions, useKeywords, useAddKeyword, useDeleteKeyword, useTriggerJob, useJobs } from "@/lib/hooks";
-import { Card, PageHeader, Spinner } from "@/components/ui";
-import { SentimentBadge } from "@/components/SentimentBadge";
+import { Card, PageHeader, Spinner, Button, Input, Chip } from "@/components/ui";
+import type { Tone } from "@/lib/uiTokens";
 import { EmptyState } from "@/components/primitives";
 import { KeywordSuggestions } from "@/components/KeywordSuggestions";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
@@ -16,6 +16,15 @@ function relevanceLabel(r: number | null): string {
   if (r >= 0.5) return "Likely about you";
   return "Possibly unrelated";
 }
+
+// Sentiment → Chip tone, mirroring the old SentimentBadge palette:
+// positive=good (emerald), negative=bad (rose), mixed=amber→info, neutral=neutral.
+const SENTIMENT_TONE: Record<string, Tone> = {
+  positive: "good",
+  negative: "bad",
+  neutral: "neutral",
+  mixed: "info",
+};
 
 // Manage the terms we monitor + kick off a scan.
 function KeywordManager({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
@@ -36,18 +45,19 @@ function KeywordManager({ businessId, canEdit }: { businessId: number | null; ca
   return (
     <Card className="mb-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-900">Monitoring keywords</h3>
+        <h3 className="text-sm font-semibold text-ink">Monitoring keywords</h3>
         {canEdit && (
-          <button
+          <Button
+            variant="primary"
+            size="sm"
             onClick={runScan}
             disabled={scan.isPending || !(keywords && keywords.some((k) => !k.negative))}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {scan.isPending ? "Scanning…" : "Scan now"}
-          </button>
+          </Button>
         )}
       </div>
-      <p className="mt-1 text-sm text-slate-600">
+      <p className="mt-1 text-sm text-ink-3">
         We watch these terms across <span className="font-medium">Reddit</span> and{" "}
         <span className="font-medium">Google News</span> for free; add a search key (SERPER_API_KEY) and we also
         cover the broader <span className="font-medium">web, social (X / Facebook / YouTube / LinkedIn)</span>, and{" "}
@@ -57,28 +67,29 @@ function KeywordManager({ businessId, canEdit }: { businessId: number | null; ca
 
       {canEdit && (
         <>
-        <p className="mt-3 text-xs text-slate-400">Tip: separate multiple terms with commas — each is watched on its own.</p>
+        <p className="mt-3 text-xs text-ink-4">Tip: separate multiple terms with commas — each is watched on its own.</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <input
+          <Input
             value={kw}
             onChange={(e) => setKw(e.target.value)}
             placeholder="e.g. Team Unstoppable, Chris Koob, Primerica Cincinnati"
-            className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="min-w-[16rem] flex-1"
             title="Separate multiple terms with commas — each is watched on its own."
             onKeyDown={(e) => {
               if (e.key === "Enter" && kw.trim()) add.mutate({ keyword: kw, negative: neg }, { onSuccess: () => setKw("") });
             }}
           />
-          <label className="flex items-center gap-1 text-xs text-slate-600">
+          <label className="flex items-center gap-1 text-xs text-ink-3">
             <input type="checkbox" checked={neg} onChange={(e) => setNeg(e.target.checked)} /> exclude term
           </label>
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => kw.trim() && add.mutate({ keyword: kw, negative: neg }, { onSuccess: () => setKw("") })}
             disabled={add.isPending || !kw.trim()}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
           >
             Add
-          </button>
+          </Button>
         </div>
         </>
       )}
@@ -89,12 +100,12 @@ function KeywordManager({ businessId, canEdit }: { businessId: number | null; ca
             <span
               key={k.id}
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
-                k.negative ? "border-slate-200 bg-slate-100 text-slate-500" : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                k.negative ? "border-line bg-line text-ink-3" : "border-indigo-200 bg-indigo-050 text-indigo"
               }`}
             >
               {k.negative ? "exclude: " : ""}{k.keyword}
               {canEdit && (
-                <button onClick={() => del.mutate(k.id)} className="text-slate-400 hover:text-slate-700" aria-label="remove">
+                <button onClick={() => del.mutate(k.id)} className="text-ink-4 hover:text-ink-2" aria-label="remove">
                   ×
                 </button>
               )}
@@ -102,7 +113,7 @@ function KeywordManager({ businessId, canEdit }: { businessId: number | null; ca
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-slate-500">No keywords yet — add your business name and key people to start.</p>
+        <p className="mt-3 text-sm text-ink-3">No keywords yet — add your business name and key people to start.</p>
       )}
 
       <KeywordSuggestions
@@ -160,15 +171,15 @@ export default function MentionsPage() {
         <>
           <Card className="mb-4">
             <div className="flex flex-wrap gap-4 text-sm">
-              <span className="text-slate-500">{data.length} mentions</span>
-              <span className="text-emerald-700">{counts.positive} positive</span>
-              <span className="text-slate-600">{counts.neutral} neutral</span>
-              <span className="text-amber-700">{counts.mixed} mixed</span>
-              <span className="text-rose-600">{counts.negative} negative</span>
+              <span className="text-ink-3">{data.length} mentions</span>
+              <span className="text-good">{counts.positive} positive</span>
+              <span className="text-ink-3">{counts.neutral} neutral</span>
+              <span className="text-amber">{counts.mixed} mixed</span>
+              <span className="text-alert">{counts.negative} negative</span>
             </div>
             {topSources.length > 0 && (
-              <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
-                <span className="font-medium text-slate-600">Top sources talking about you:</span>{" "}
+              <div className="mt-2 border-t border-line pt-2 text-xs text-ink-3">
+                <span className="font-medium text-ink-2">Top sources talking about you:</span>{" "}
                 {topSources.map(([src, n]) => `${src} (${n})`).join(" · ")}
               </div>
             )}
@@ -178,20 +189,20 @@ export default function MentionsPage() {
             {data.map((m) => (
               <Card key={m.id}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{m.source}</span>
-                  <SentimentBadge sentiment={m.sentiment} />
-                  {m.relevance != null && <span className="text-xs text-slate-400">{relevanceLabel(m.relevance)}</span>}
-                  {m.matched_keyword && <span className="text-xs text-slate-400">&ldquo;{m.matched_keyword}&rdquo;</span>}
+                  <span className="rounded bg-line px-1.5 py-0.5 text-xs text-ink-3">{m.source}</span>
+                  {m.sentiment && <Chip tone={SENTIMENT_TONE[m.sentiment] ?? "neutral"}>{m.sentiment}</Chip>}
+                  {m.relevance != null && <span className="text-xs text-ink-4">{relevanceLabel(m.relevance)}</span>}
+                  {m.matched_keyword && <span className="text-xs text-ink-4">&ldquo;{m.matched_keyword}&rdquo;</span>}
                 </div>
-                {m.title && <div className="mt-1 text-sm font-medium text-slate-900">{m.title}</div>}
+                {m.title && <div className="mt-1 text-sm font-medium text-ink">{m.title}</div>}
                 {m.body && (
-                  <p className="mt-1 text-sm text-slate-700">
+                  <p className="mt-1 text-sm text-ink-2">
                     {m.body.slice(0, 240)}
                     {m.body.length > 240 ? "…" : ""}
                   </p>
                 )}
                 {m.source_url && (
-                  <a href={m.source_url} target="_blank" rel="noreferrer" className="mt-1 block break-all text-xs text-indigo-600 hover:underline">
+                  <a href={m.source_url} target="_blank" rel="noreferrer" className="mt-1 block break-all text-xs text-indigo hover:text-indigo-strong hover:underline">
                     {m.source_url}
                   </a>
                 )}

@@ -17,7 +17,7 @@ import {
   useLeads,
 } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
-import { Card, PageHeader } from "@/components/ui";
+import { Card, PageHeader, Button, Input, Chip } from "@/components/ui";
 import type { IntegrationSettings } from "@/lib/types";
 
 // Platform owner (super-admin) only: the billing master switch. The whole billing system is
@@ -30,35 +30,34 @@ function PlatformCard() {
   const toggle = (on: boolean) =>
     setBilling.mutate(on, { onSuccess: () => refresh() });
   return (
-    <Card className="border-amber-200 bg-amber-50/40">
-      <h3 className="text-sm font-semibold text-slate-900">Platform — billing master switch</h3>
-      <p className="mt-1 text-sm text-slate-600">
+    <Card className="border-amber-bg bg-amber-bg/40">
+      <h3 className="text-sm font-semibold text-ink">Platform — billing master switch</h3>
+      <p className="mt-1 text-sm text-ink-3">
         Turn the billing system on or off for the whole platform. While off, no one is metered or charged and the
         billing UI is hidden. The pilot organization stays exempt even when this is on.
       </p>
       <div className="mt-3 flex items-center gap-3">
-        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+        <Chip tone={enabled ? "good" : "neutral"}>
           {settings.isLoading ? "…" : enabled ? "Billing is ON" : "Billing is OFF"}
-        </span>
+        </Chip>
         {enabled ? (
-          <button
+          <Button
+            variant="secondary"
             onClick={() => toggle(false)}
             disabled={setBilling.isPending}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
           >
             {setBilling.isPending ? "…" : "Turn billing off"}
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button
             onClick={() => toggle(true)}
             disabled={setBilling.isPending}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {setBilling.isPending ? "…" : "Turn billing on"}
-          </button>
+          </Button>
         )}
       </div>
-      {setBilling.isError && <p className="mt-2 text-xs text-rose-600">Couldn’t change the setting — try again.</p>}
+      {setBilling.isError && <p className="mt-2 text-xs text-alert">Couldn’t change the setting — try again.</p>}
     </Card>
   );
 }
@@ -81,8 +80,8 @@ function ToggleRow({
   return (
     <label className={`flex items-start justify-between gap-3 py-2 ${disabled ? "opacity-60" : ""}`}>
       <span className="min-w-0">
-        <span className="block text-sm font-medium text-slate-800">{label}</span>
-        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+        <span className="block text-sm font-medium text-ink-2">{label}</span>
+        {hint && <span className="block text-xs text-ink-3">{hint}</span>}
       </span>
       <input
         type="checkbox"
@@ -119,20 +118,20 @@ function AutomationCard({ businessId, canEdit }: { businessId: number | null; ca
 
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-slate-900">Automation</h3>
-      <p className="mt-1 text-sm text-slate-600">
+      <h3 className="text-sm font-semibold text-ink">Automation</h3>
+      <p className="mt-1 text-sm text-ink-3">
         Control what posts on its own versus what waits for your approval. Approving keeps you in the loop;
         automation moves faster once you trust it.
       </p>
 
       {/* platform kill-switch (read-only) */}
-      <div className={`mt-3 rounded-lg px-3 py-2 text-xs ${globallyOn ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+      <div className={`mt-3 rounded-lg px-3 py-2 text-xs ${globallyOn ? "bg-good-bg text-good" : "bg-line text-ink-3"}`}>
         {globallyOn
           ? "Automated posting is enabled platform-wide."
           : "Automated posting is currently OFF platform-wide — auto-post settings are saved but won't post until it's turned on."}
       </div>
 
-      <div className="mt-2 divide-y divide-slate-100">
+      <div className="mt-2 divide-y divide-line">
         <ToggleRow
           label="Require approval before anything is posted"
           hint="Everything lands in your approval inbox first."
@@ -182,12 +181,12 @@ function AutomationCard({ businessId, canEdit }: { businessId: number | null; ca
       </div>
 
       {!data.can_manage_autopost && (
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mt-2 text-xs text-ink-4">
           Auto-post settings are managed by an organization manager. You can still set approval and notification
           preferences.
         </p>
       )}
-      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
+      {err && <p className="mt-2 text-xs text-alert">{err}</p>}
     </Card>
   );
 }
@@ -238,8 +237,8 @@ function WhiteLabelCard({ businessId, canEdit }: { businessId: number | null; ca
 
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-slate-900">White-label &amp; sharing</h3>
-      <p className="mt-1 text-sm text-slate-600">
+      <h3 className="text-sm font-semibold text-ink">White-label &amp; sharing</h3>
+      <p className="mt-1 text-sm text-ink-3">
         Brand the public audit page with your own name, logo, and color, then share a lead-magnet link that
         captures emails from prospects who want their full reputation report.
       </p>
@@ -247,29 +246,29 @@ function WhiteLabelCard({ businessId, canEdit }: { businessId: number | null; ca
       {/* branding form */}
       <div className="mt-4 space-y-3">
         <div>
-          <label className="block text-xs font-medium text-slate-700" htmlFor="wl-name">Brand name</label>
-          <input
+          <label className="block text-xs font-medium text-ink-2" htmlFor="wl-name">Brand name</label>
+          <Input
             id="wl-name"
             value={bName}
             onChange={(e) => setBrandName(e.target.value)}
             disabled={!canEdit}
             placeholder="Your agency or business name"
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+            className="mt-1"
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-700" htmlFor="wl-logo">Logo URL</label>
-          <input
+          <label className="block text-xs font-medium text-ink-2" htmlFor="wl-logo">Logo URL</label>
+          <Input
             id="wl-logo"
             value={bLogo}
             onChange={(e) => setLogoUrl(e.target.value)}
             disabled={!canEdit}
             placeholder="https://…/logo.png"
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+            className="mt-1"
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-700" htmlFor="wl-accent">Accent color</label>
+          <label className="block text-xs font-medium text-ink-2" htmlFor="wl-accent">Accent color</label>
           <div className="mt-1 flex items-center gap-2">
             <input
               id="wl-accent"
@@ -277,88 +276,85 @@ function WhiteLabelCard({ businessId, canEdit }: { businessId: number | null; ca
               value={/^#[0-9a-fA-F]{6}$/.test(bAccent) ? bAccent : "#4f46e5"}
               onChange={(e) => setAccent(e.target.value)}
               disabled={!canEdit}
-              className="h-8 w-10 cursor-pointer rounded border border-slate-300 disabled:cursor-not-allowed"
+              className="h-8 w-10 cursor-pointer rounded border border-line-2 disabled:cursor-not-allowed"
             />
-            <input
+            <Input
               value={bAccent}
               onChange={(e) => setAccent(e.target.value)}
               disabled={!canEdit}
               placeholder="#4f46e5"
-              className="w-28 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+              className="w-28"
             />
           </div>
         </div>
         {canEdit && (
           <div className="flex items-center gap-3">
-            <button
+            <Button
               onClick={save}
               disabled={setBranding.isPending}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               {setBranding.isPending ? "Saving…" : "Save branding"}
-            </button>
-            {saved && !setBranding.isPending && <span className="text-xs text-emerald-600">Saved.</span>}
-            {setBranding.isError && <span className="text-xs text-rose-600">Couldn’t save — try again.</span>}
+            </Button>
+            {saved && !setBranding.isPending && <span className="text-xs text-good">Saved.</span>}
+            {setBranding.isError && <span className="text-xs text-alert">Couldn’t save — try again.</span>}
           </div>
         )}
       </div>
 
       {/* public share link */}
-      <div className="mt-5 border-t border-slate-100 pt-4">
-        <h4 className="text-sm font-semibold text-slate-900">Public audit link</h4>
-        <p className="mt-1 text-xs text-slate-500">
+      <div className="mt-5 border-t border-line pt-4">
+        <h4 className="text-sm font-semibold text-ink">Public audit link</h4>
+        <p className="mt-1 text-xs text-ink-3">
           A shareable, branded lead-magnet page anyone can open (no login). It shows a teaser of this business’s
           AI reputation and captures the prospect’s email in exchange for the full report.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
             onClick={() => shareLink.mutate()}
             disabled={shareLink.isPending || !businessId}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
           >
             {shareLink.isPending ? "Generating…" : link ? "Regenerate link" : "Generate share link"}
-          </button>
+          </Button>
           {link && (
             <>
               <input
                 readOnly
                 value={link}
                 onFocus={(e) => e.currentTarget.select()}
-                className="min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600"
+                className="min-w-0 flex-1 rounded-md border border-line bg-paper px-3 py-1.5 text-sm text-ink-3"
               />
-              <button
+              <Button
+                variant="secondary"
                 onClick={copyLink}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100"
               >
                 {copied ? "Copied!" : "Copy"}
-              </button>
+              </Button>
             </>
           )}
         </div>
-        {shareLink.isError && <p className="mt-2 text-xs text-rose-600">Couldn’t generate a link — try again.</p>}
+        {shareLink.isError && <p className="mt-2 text-xs text-alert">Couldn’t generate a link — try again.</p>}
       </div>
 
       {/* captured leads */}
-      <div className="mt-5 border-t border-slate-100 pt-4">
+      <div className="mt-5 border-t border-line pt-4">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-slate-900">Captured leads</h4>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-            {sortedLeads.length}
-          </span>
+          <h4 className="text-sm font-semibold text-ink">Captured leads</h4>
+          <Chip tone="neutral">{sortedLeads.length}</Chip>
         </div>
         {sortedLeads.length === 0 ? (
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-ink-3">
             No leads yet. Share your public audit link to start capturing emails.
           </p>
         ) : (
-          <ul className="mt-3 divide-y divide-slate-100">
+          <ul className="mt-3 divide-y divide-line">
             {sortedLeads.map((lead) => (
               <li key={lead.id} className="flex items-center justify-between gap-3 py-2">
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-slate-800">{lead.email}</span>
-                  {lead.name && <span className="block truncate text-xs text-slate-500">{lead.name}</span>}
+                  <span className="block truncate text-sm font-medium text-ink-2">{lead.email}</span>
+                  {lead.name && <span className="block truncate text-xs text-ink-3">{lead.name}</span>}
                 </span>
-                <span className="shrink-0 text-xs text-slate-400">
+                <span className="shrink-0 text-xs text-ink-4">
                   {new Date(lead.captured_at).toLocaleDateString()}
                 </span>
               </li>
@@ -418,63 +414,65 @@ export default function AccountPage() {
 
         {/* sessions */}
         <Card>
-          <h3 className="text-sm font-semibold text-slate-900">Sessions</h3>
-          <p className="mt-1 text-sm text-slate-600">
+          <h3 className="text-sm font-semibold text-ink">Sessions</h3>
+          <p className="mt-1 text-sm text-ink-3">
             Sign out of every device and browser. Anyone currently signed in (including you) will need to log in again.
           </p>
-          <button
+          <Button
+            variant="secondary"
             onClick={signOutEverywhere}
             disabled={revoke.isPending}
-            className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            className="mt-3"
           >
             {revoke.isPending ? "Signing out…" : "Sign out everywhere"}
-          </button>
+          </Button>
           {revoke.isError && (
-            <p className="mt-2 text-xs text-rose-600">Could not sign out everywhere — please try again.</p>
+            <p className="mt-2 text-xs text-alert">Could not sign out everywhere — please try again.</p>
           )}
         </Card>
 
         {/* data export */}
         <Card>
-          <h3 className="text-sm font-semibold text-slate-900">Export your data</h3>
-          <p className="mt-1 text-sm text-slate-600">
+          <h3 className="text-sm font-semibold text-ink">Export your data</h3>
+          <p className="mt-1 text-sm text-ink-3">
             Download everything we hold for <span className="font-medium">{biz?.name ?? "this business"}</span> as a
             single JSON file (audits, prompts, content, mentions, and more).
           </p>
-          <button
+          <Button
+            variant="secondary"
             onClick={exportData}
             disabled={exporting || !businessId}
-            className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            className="mt-3"
           >
             {exporting ? "Preparing…" : "Export business data"}
-          </button>
-          {exportError && <p className="mt-2 text-xs text-rose-600">{exportError}</p>}
+          </Button>
+          {exportError && <p className="mt-2 text-xs text-alert">{exportError}</p>}
         </Card>
 
         {/* danger zone (admin only) */}
         {isAdmin && (
-          <Card className="border-rose-200">
-            <h3 className="text-sm font-semibold text-rose-700">Delete this business</h3>
-            <p className="mt-1 text-sm text-slate-600">
+          <Card className="border-alert-bg">
+            <h3 className="text-sm font-semibold text-alert">Delete this business</h3>
+            <p className="mt-1 text-sm text-ink-3">
               Permanently erase <span className="font-medium">{biz?.name ?? "this business"}</span> and all of its
               data. This cannot be undone. Type the business name to confirm.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <input
+              <Input
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
                 placeholder={biz?.name ?? "business name"}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                className="w-auto"
               />
-              <button
+              <Button
+                variant="danger"
                 onClick={deleteBusiness}
                 disabled={del.isPending || !biz || confirmText !== biz.name}
-                className="rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
               >
                 {del.isPending ? "Deleting…" : "Delete business"}
-              </button>
+              </Button>
             </div>
-            {del.isError && <p className="mt-2 text-xs text-rose-600">{(del.error as Error)?.message}</p>}
+            {del.isError && <p className="mt-2 text-xs text-alert">{(del.error as Error)?.message}</p>}
           </Card>
         )}
       </div>

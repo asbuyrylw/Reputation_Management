@@ -4,7 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useWorkOrders, useAcceleration, usePromoteWorkOrder, useTeam } from "@/lib/hooks";
-import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Card, PageHeader, Spinner, Chip, Button } from "@/components/ui";
+import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
 import type { WorkOrder } from "@/lib/types";
 
@@ -56,30 +57,30 @@ function TaskRow({ w, canEdit, onPromote, onDismiss }: { w: WorkOrder; canEdit: 
   const why = w.why_helps_ai_rep || w.why_helps_seo;
   const isRec = w.rationale?.source === "recommendation";
   return (
-    <li className="rounded-lg border border-slate-100 p-2.5">
+    <li className="rounded-lg border border-line p-2.5">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-slate-800">
+        <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-ink-2">
           {w.title}
           {w.added_in_revision != null && w.added_in_revision > 1 && (
-            <span className="rounded bg-indigo-100 px-1 py-0.5 text-[10px] font-semibold text-indigo-700">Rev {w.added_in_revision}</span>
+            <span className="rounded bg-indigo-100 px-1 py-0.5 text-[10px] font-semibold text-indigo-strong">Rev {w.added_in_revision}</span>
           )}
         </div>
-        <span className="shrink-0 text-[11px] text-slate-400">{STATUS_WORDS[w.status] ?? humanize(w.status)}</span>
+        <span className="shrink-0 text-[11px] text-ink-4">{STATUS_WORDS[w.status] ?? humanize(w.status)}</span>
       </div>
       {w.gap_source && (
-        <div className="mt-0.5 text-[11px] text-slate-400">
+        <div className="mt-0.5 text-[11px] text-ink-4">
           From: {w.gap_source}
-          {isRec && <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-amber-700">recommendation</span>}
+          {isRec && <span className="ml-1 rounded bg-amber-bg px-1 py-0.5 text-amber">recommendation</span>}
         </div>
       )}
-      {why && <div className="mt-0.5 text-xs text-slate-500">💡 {why}</div>}
+      {why && <div className="mt-0.5 text-xs text-ink-3">💡 {why}</div>}
       {/* Triage: save (promote onto the board) or dismiss. The vidIQ "swipe-to-save/dismiss"
           idea, rendered as two fast buttons. */}
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         {w.planned ? (
           <Link
             href="/content/work-orders"
-            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+            className="inline-flex items-center gap-1 rounded-full bg-good-bg px-2 py-0.5 text-[11px] font-semibold text-good hover:bg-emerald-100"
             title="This recommendation is being managed on your task board"
           >
             ✓ In tasks · {STAGE[w.status] ?? humanize(w.status)}
@@ -88,7 +89,7 @@ function TaskRow({ w, canEdit, onPromote, onDismiss }: { w: WorkOrder; canEdit: 
           <>
             <button
               onClick={() => onPromote(w)}
-              className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+              className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-strong hover:bg-indigo-100"
             >
               + Add to tasks
             </button>
@@ -96,7 +97,7 @@ function TaskRow({ w, canEdit, onPromote, onDismiss }: { w: WorkOrder; canEdit: 
                 hides the recommendation until the page is reloaded. */}
             <button
               onClick={() => onDismiss(w)}
-              className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              className="rounded-full border border-line px-2 py-0.5 text-[11px] font-medium text-ink-3 hover:bg-line hover:text-ink-2"
               title="Hide this for now (returns on reload)"
             >
               Dismiss
@@ -130,18 +131,18 @@ function PromoteModal({ wo, businessId, onClose }: { wo: WorkOrder; businessId: 
       { onSuccess: onClose },
     );
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-base font-bold text-slate-900">Add to Improvement tasks</h3>
-        <p className="mt-1 text-sm text-slate-600">{wo.title}</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-base font-bold text-ink">Add to Improvement tasks</h3>
+        <p className="mt-1 text-sm text-ink-3">{wo.title}</p>
         <div className="mt-4 space-y-3">
-          <label className="block text-xs font-medium text-slate-600">
+          <label className="block text-xs font-medium text-ink-3">
             Assign to
             {hasTeam ? (
               <select
                 value={assigneeUserId}
                 onChange={(e) => setAssigneeUserId(e.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                className="mt-1 w-full rounded-md border border-line-2 px-3 py-1.5 text-sm text-ink-2"
               >
                 <option value="">Unassigned</option>
                 {team!.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -151,37 +152,37 @@ function PromoteModal({ wo, businessId, onClose }: { wo: WorkOrder; businessId: 
                 value={assignee}
                 onChange={(e) => setAssignee(e.target.value)}
                 placeholder="Who's responsible?"
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                className="mt-1 w-full rounded-md border border-line-2 px-3 py-1.5 text-sm text-ink-2"
               />
             )}
           </label>
           <div className="flex gap-2">
-            <label className="flex-1 text-xs font-medium text-slate-600">
+            <label className="flex-1 text-xs font-medium text-ink-3">
               Start
               <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm" />
+                className="mt-1 w-full rounded-md border border-line-2 px-2 py-1.5 text-sm text-ink-2" />
             </label>
-            <label className="flex-1 text-xs font-medium text-slate-600">
+            <label className="flex-1 text-xs font-medium text-ink-3">
               Due
               <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm" />
+                className="mt-1 w-full rounded-md border border-line-2 px-2 py-1.5 text-sm text-ink-2" />
             </label>
           </div>
-          <label className="block text-xs font-medium text-slate-600">
+          <label className="block text-xs font-medium text-ink-3">
             First note (optional)
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. Start with the About page"
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+              className="mt-1 w-full rounded-md border border-line-2 px-3 py-1.5 text-sm text-ink-2" />
           </label>
         </div>
         <div className="mt-4 flex items-center justify-end gap-2">
-          <button onClick={onClose} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">Cancel</button>
-          <button
+          <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+          <Button
             onClick={submit}
             disabled={promote.isPending}
-            className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            size="sm"
           >
             {promote.isPending ? "Adding…" : "Add to tasks"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -215,12 +216,12 @@ export default function NextStepsPage() {
         subtitle="Recommendations to improve your AI reputation and local ranking, grouped by type."
       />
       {/* Intake banner — this page is the inbox; the task board is the canonical hub. */}
-      <Card className="mb-4 border-l-4 border-indigo-400 bg-indigo-50/40">
+      <Card className="mb-4 border-l-4 border-indigo-400 bg-indigo-050/40">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-slate-700">
-            <span className="font-semibold text-slate-900">Recommendations</span> — add the ones you’ll do to your task board.
+          <p className="text-sm text-ink-2">
+            <span className="font-semibold text-ink">Recommendations</span> — add the ones you’ll do to your task board.
           </p>
-          <Link href="/content/work-orders" className="text-sm font-semibold text-indigo-600 hover:underline">
+          <Link href="/content/work-orders" className="text-sm font-semibold text-indigo hover:text-indigo-strong">
             View your task board →
           </Link>
         </div>
@@ -236,38 +237,39 @@ export default function NextStepsPage() {
       ) : (
         <div className="space-y-4">
           <Card>
-            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
-              <span className="font-semibold text-slate-900">{open.length} recommendations</span>
+            <div className="flex flex-wrap items-center gap-2 text-sm text-ink-3">
+              <span className="font-semibold text-ink">{open.length} recommendations</span>
               {promotedCount > 0 && (
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">{promotedCount} in tasks</span>
+                <Chip tone="good">{promotedCount} in tasks</Chip>
               )}
               {grouped.map((c) => (
                 <button
                   key={c.key}
                   type="button"
                   onClick={() => scrollToCat(c.key)}
-                  className="rounded-full bg-slate-100 px-2 py-0.5 text-xs transition hover:bg-indigo-100 hover:text-indigo-700"
+                  className="rounded-full bg-line px-2 py-0.5 text-xs transition hover:bg-indigo-100 hover:text-indigo-strong"
                   title={`Jump to ${c.label}`}
                 >
-                  {c.emoji} {c.items.length} {c.label.split(" ")[0].toLowerCase()} <span aria-hidden className="text-slate-400">↓</span>
+                  {c.emoji} {c.items.length} {c.label.split(" ")[0].toLowerCase()} <span aria-hidden className="text-ink-4">↓</span>
                 </button>
               ))}
-              <Link href="/content/work-orders" className="ml-auto text-sm font-medium text-indigo-600 hover:underline">Manage my tasks →</Link>
+              <Link href="/content/work-orders" className="ml-auto text-sm font-medium text-indigo hover:text-indigo-strong">Manage my tasks →</Link>
             </div>
           </Card>
 
           {grouped.map((c) => (
             <div key={c.key} id={`cat-${c.key}`} className="scroll-mt-24">
             <Card>
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-900">{c.emoji} {c.label} ({c.items.length})</h3>
-                {c.key === "outreach" && (
-                  <Link href="/content/outreach" className="text-xs font-medium text-indigo-600 hover:underline">Find outreach targets →</Link>
-                )}
-                {c.key === "seo" && (
-                  <Link href="/local-seo" className="text-xs font-medium text-indigo-600 hover:underline">Local rankings →</Link>
-                )}
-              </div>
+              <SecHead
+                title={`${c.emoji} ${c.label} (${c.items.length})`}
+                link={
+                  c.key === "outreach"
+                    ? { label: "Find outreach targets →", href: "/content/outreach" }
+                    : c.key === "seo"
+                      ? { label: "Local rankings →", href: "/local-seo" }
+                      : undefined
+                }
+              />
               <ul className="mt-3 space-y-2">
                 {c.items.slice(0, 8).map((w) => (
                   <TaskRow
@@ -279,7 +281,7 @@ export default function NextStepsPage() {
                   />
                 ))}
               </ul>
-              {c.items.length > 8 && <div className="mt-2 text-xs text-slate-400">+{c.items.length - 8} more on the task board</div>}
+              {c.items.length > 8 && <div className="mt-2 text-xs text-ink-4">+{c.items.length - 8} more on the task board</div>}
             </Card>
             </div>
           ))}
@@ -287,19 +289,16 @@ export default function NextStepsPage() {
           {/* ways to go faster — link each lever to outreach */}
           {levers.length > 0 && (
             <Card>
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-900">⚡ Ways to go faster</h3>
-                <Link href="/timeline" className="text-sm font-medium text-indigo-600 hover:underline">See projection →</Link>
-              </div>
-              <p className="mt-0.5 text-xs text-slate-500">Outside actions (earned links, articles, reviews) that pull your timeline forward — find who to contact in Outreach.</p>
+              <SecHead title="⚡ Ways to go faster" link={{ label: "See projection →", href: "/timeline" }} />
+              <p className="mt-0.5 text-xs text-ink-3">Outside actions (earned links, articles, reviews) that pull your timeline forward — find who to contact in Outreach.</p>
               <ul className="mt-3 space-y-1.5">
                 {levers.slice(0, 5).map((l, i) => (
                   <li key={i} className="flex items-center justify-between gap-2 text-sm">
-                    <Link href="/content/outreach" className="text-slate-800 hover:text-indigo-600 hover:underline">{humanize(l.lever)}</Link>
+                    <Link href="/content/outreach" className="text-ink-2 hover:text-indigo hover:underline">{humanize(l.lever)}</Link>
                     {l.weeks_saved_range && (
-                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                      <Chip tone="good" className="shrink-0">
                         saves {l.weeks_saved_range.low}–{l.weeks_saved_range.high} wks
-                      </span>
+                      </Chip>
                     )}
                   </li>
                 ))}
