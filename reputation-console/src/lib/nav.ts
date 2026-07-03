@@ -73,8 +73,9 @@ export const HUBS: Hub[] = [
     ],
   },
   {
-    key: "settings", label: "Settings", href: "/account",
+    key: "settings", label: "Settings", href: "/runs",
     tabs: [
+      { href: "/runs", label: "Runs & jobs" },
       { href: "/account", label: "Account & data" },
       { href: "/integrations", label: "Integrations" },
       { href: "/automation", label: "Automation" },
