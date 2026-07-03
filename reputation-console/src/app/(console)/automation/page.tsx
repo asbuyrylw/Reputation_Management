@@ -1,0 +1,91 @@
+"use client";
+
+import { useBusiness } from "@/lib/business";
+import { useSchedules, useUpsertSchedule, useDeleteSchedule } from "@/lib/hooks";
+import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
+import { jobLabel } from "@/lib/jobLabels";
+
+// Curated subset of jobs worth running on a schedule. Labels come from the shared jobLabels
+// map (so they match the nav + Run-jobs page); the description + default cadence are
+// scheduling-specific.
+const SCHEDULABLE = [
+  { job: "cycle", desc: "Re-audit all AI engines, rebuild the plan, and refresh everything.", defaultHours: 720 },
+  { job: "mentions_scan", desc: "Sweep the web for new mentions and draft replies.", defaultHours: 24 },
+  { job: "incident_scan", desc: "Flag new serious negative mentions for a response.", defaultHours: 24 },
+  { job: "alert_check", desc: "Notify you of score drops, new negatives, and items needing attention.", defaultHours: 24 },
+  { job: "citation_analyze", desc: "Recompute which sources AI is quoting about you.", defaultHours: 168 },
+];
+const INTERVALS = [
+  { h: 24, l: "Daily" },
+  { h: 72, l: "Every 3 days" },
+  { h: 168, l: "Weekly" },
+  { h: 336, l: "Every 2 weeks" },
+  { h: 720, l: "Monthly" },
+];
+
+const fmtNext = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
+
+export default function AutomationPage() {
+  const { businessId, canEdit } = useBusiness();
+  const { data, isLoading } = useSchedules(businessId);
+  const upsert = useUpsertSchedule(businessId);
+  const del = useDeleteSchedule(businessId);
+
+  if (isLoading || !data) return <Spinner />;
+  const byJob: Record<string, (typeof data)[number]> = Object.fromEntries(data.map((s) => [s.job_type, s]));
+
+  return (
+    <div>
+      <PageHeader
+        title="Automation"
+        subtitle="Set what runs on its own and how often — so your monitoring is continuous, not something someone has to remember to click."
+      />
+      <div className="space-y-3">
+        {SCHEDULABLE.map(({ job, desc, defaultHours }) => {
+          const s = byJob[job];
+          const on = !!s && s.enabled;
+          const label = jobLabel(job);
+          return (
+            <Card key={job}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-ink">{label}</span>
+                    <Chip tone={on ? "good" : "neutral"}>{on ? "On" : "Off"}</Chip>
+                  </div>
+                  <div className="text-xs text-ink-3">{desc}</div>
+                  {on && <div className="mt-0.5 text-xs text-ink-4">Next run: {fmtNext(s.next_run_at)}</div>}
+                </div>
+                {canEdit && (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={s?.interval_hours ?? defaultHours}
+                      onChange={(e) => upsert.mutate({ job_type: job, interval_hours: Number(e.target.value), enabled: true })}
+                      className="rounded border border-line px-2 py-1 text-sm"
+                    >
+                      {INTERVALS.map((i) => <option key={i.h} value={i.h}>{i.l}</option>)}
+                    </select>
+                    {on ? (
+                      <Button variant="secondary" onClick={() => s && del.mutate(s.id)}>
+                        Turn off
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={() => upsert.mutate({ job_type: job, interval_hours: defaultHours, enabled: true })}
+                      >
+                        Turn on
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+      <p className="mt-4 text-xs text-ink-4">
+        Scheduled jobs run in the background. You can also run any job on demand from Admin → Run jobs.
+      </p>
+    </div>
+  );
+}

@@ -66,6 +66,7 @@ def _sleep_for(attempt: int, retry_after: Optional[str], base: float) -> float:
 
 def request_json(method: str, url: str, *, headers: dict | None = None,
                  json: dict | None = None, params: dict | None = None,
+                 data: dict | None = None,
                  timeout: int = DEFAULT_TIMEOUT, max_retries: int = DEFAULT_MAX_RETRIES,
                  base_delay: float = DEFAULT_BASE_DELAY,
                  parse_json: bool = True, guard_redirects: bool = False,
@@ -100,7 +101,7 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
         attempts_made = attempt + 1
         try:
             resp = requests.request(
-                method, url, headers=headers, json=json, params=params,
+                method, url, headers=headers, json=json, params=params, data=data,
                 timeout=eff_timeout, allow_redirects=follow,
             )
             if guard_redirects:
@@ -168,6 +169,45 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
     if last_err is None and last_status is not None:
         msg += f" (last status {last_status})"
     return HttpResult(ok=False, status=last_status, error=msg, attempts=attempts_made)
+
+
+def resolve_url(url: str, *, timeout: int = 8, max_hops: int = 5) -> Optional[str]:
+    """Follow HTTP redirects (SSRF-guarded) and return the real destination URL, or None on
+    failure. Used to turn opaque provider "redirect" citation URLs (e.g. Google's
+    vertexaisearch grounding-api-redirect links) into the actual source URL so the UI shows a
+    real domain and owned-citation-share can match the client's own site. Best-effort: never
+    raises. Returns as soon as it leaves a known redirector, so the destination site itself is
+    never fetched."""
+    from urllib.parse import urljoin
+    try:
+        from . import netguard as _ng
+    except ImportError:  # pragma: no cover
+        import netguard as _ng  # type: ignore
+    cur = url
+    try:
+        for _ in range(max_hops):
+            resp = requests.request(
+                "GET", cur, allow_redirects=False, stream=True, timeout=timeout,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; RepEngine/1.0; +sources)"},
+            )
+            loc = resp.headers.get("Location")
+            is_redirect = resp.is_redirect
+            resp.close()
+            if is_redirect and loc:
+                nxt = urljoin(cur, loc)
+                try:
+                    _ng.assert_url_allowed(nxt)
+                except _ng.UnsafeURLError:
+                    return None
+                cur = nxt
+                # Once we've left the redirector we have the real URL; don't fetch it.
+                if "grounding-api-redirect" not in cur and "vertexaisearch" not in cur:
+                    return cur
+                continue
+            return cur
+        return cur
+    except requests.RequestException:
+        return None
 
 
 def _short(url: str) -> str:

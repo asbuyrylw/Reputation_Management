@@ -181,24 +181,33 @@ def test_phase_assignment_monotonic():
 # ---------------------------------------------------------------------------
 # site_crawl: pyseoanalyzer enrichment (runs on local HTML, no network)
 # ---------------------------------------------------------------------------
-def test_seo_enrich_populates_keywords_when_available():
+def test_seo_enrich_normalizes_pyseo_keywords(monkeypatch):
+    # Hermetic: mock pyseoanalyzer's Page so the test verifies _seo_enrich's
+    # NORMALIZATION (its real logic) rather than pyseo's version-dependent keyword
+    # algorithm -- which yields different output across releases (a CI flake source).
     from rep_engine import site_crawl as sc
-    if not sc._HAS_SEO:
-        import pytest
-        pytest.skip("pyseoanalyzer not installed")
-    html = ("<html><head><title>Cincinnati Life Insurance Families</title>"
-            '<meta name="description" content="term life insurance for families">'
-            "</head><body><h1>Protect</h1><p>"
-            + ("insurance retirement planning protection savings " * 40)
-            + "</p></body></html>")
+
+    class _FakePage:
+        def __init__(self, **kw):
+            pass
+
+        def analyze(self, raw_html=""):
+            pass
+
+        def as_dict(self):
+            # pyseo may yield dicts {"word","count"} OR (count, word) tuples
+            return {"keywords": [{"word": "insurance", "count": 12}, (8, "retirement")],
+                    "warnings": ["thin title"], "word_count": 40}
+
+    monkeypatch.setattr(sc, "_HAS_SEO", True)
+    monkeypatch.setattr(sc, "USE_SEO_ANALYZER", True)
+    monkeypatch.setattr(sc, "_SeoPage", _FakePage, raising=False)
     pa = sc.PageAudit(url="https://acme.com")
-    ex = sc._extract(html)
-    pa.word_count = ex["words"]
-    sc._seo_enrich(pa, "https://acme.com", html)
+    sc._seo_enrich(pa, "https://acme.com", "<html><body>x</body></html>")
     words = [k["word"] for k in pa.keywords]
-    assert "insurance" in words
-    # entries are normalized dicts with word+count
+    assert "insurance" in words and "retirement" in words   # both dict + tuple forms normalized
     assert all(set(k.keys()) == {"word", "count"} for k in pa.keywords)
+    assert pa.seo_warnings == ["thin title"]
 
 
 # ---------------------------------------------------------------------------

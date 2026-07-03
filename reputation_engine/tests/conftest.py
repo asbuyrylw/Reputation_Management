@@ -37,10 +37,30 @@ def _have_db() -> bool:
 requires_db = pytest.mark.skipif(not _have_db(), reason="REP_TEST_DSN not set")
 
 
+def _guard_test_dsn(dsn: str) -> None:
+    """SAFETY: the `fresh_schema` fixture TRUNCATEs every table on REP_TEST_DSN. Refuse to run
+    against a database whose name doesn't look like a throwaway test DB, so a misconfigured
+    REP_TEST_DSN can never wipe real data (pointing it at the production `reputation` DB once
+    destroyed live data). Override deliberately with REP_TEST_DSN_ALLOW_UNSAFE=1."""
+    if os.getenv("REP_TEST_DSN_ALLOW_UNSAFE") == "1":
+        return
+    from urllib.parse import urlparse
+    name = (urlparse(dsn).path or "").lstrip("/").split("?")[0].lower()
+    if "test" not in name:
+        pytest.exit(
+            f"REFUSING to run: REP_TEST_DSN database '{name or dsn}' does not look like a throwaway "
+            f"test DB (its name must contain 'test'). The suite TRUNCATEs every table, which would "
+            f"wipe this database. Point REP_TEST_DSN at a disposable DB such as 'reputation_test', "
+            f"or set REP_TEST_DSN_ALLOW_UNSAFE=1 to override.",
+            returncode=2,
+        )
+
+
 @pytest.fixture(scope="session")
 def db_dsn() -> str:
     if not REP_TEST_DSN:
         pytest.skip("REP_TEST_DSN not set")
+    _guard_test_dsn(REP_TEST_DSN)
     # Point all modules at the test DB for the duration of the session.
     os.environ["REP_DB_DSN"] = REP_TEST_DSN
     return REP_TEST_DSN
@@ -57,12 +77,18 @@ def conn(db_dsn):
 
 # Every table the Alembic baseline creates -- truncated between tests for isolation.
 _ALL_TABLES = [
-    "answers", "assets", "attribution", "audit_runs", "business_config",
-    "businesses", "citation_momentum", "competitor_answers", "competitors",
-    "content_drafts", "cost_ledger", "gap_models", "learned_baseline",
-    "learned_effectiveness", "mention_replies", "mentions", "monitor_keywords",
-    "pipeline_runs", "pipeline_steps", "site_audits", "strategy_plans",
-    "work_orders",
+    "answers", "api_jobs", "assets", "attribution", "audit_log", "audit_runs", "auth_tokens",
+    "business_access",
+    "business_config", "businesses", "citation_momentum", "competitor_answers",
+    "competitors", "content_drafts", "cost_ledger", "custom_prompts", "discovery_targets",
+    "discovery_target_work_orders",
+    "external_signals", "gap_models",
+    "incidents", "learned_baseline", "learned_effectiveness", "local_rankings", "local_seo_goals",
+    "mention_replies",
+    "mentions", "monitor_keywords", "organizations", "pipeline_runs", "pipeline_steps",
+    "plan_catalog", "production_briefs", "reports", "root_cause", "social_presence", "stripe_events",
+    "subscriptions",
+    "site_audits", "strategy_plans", "users", "work_orders",
 ]
 
 

@@ -29,6 +29,51 @@ def test_negative_keyword_filter():
     assert mm._matches_negative("a normal post", ["hiring"]) is False
 
 
+def test_split_keyword_on_commas():
+    from rep_engine import mention_monitor as mm
+    assert mm._split_keyword("Team Unstoppable, Chris Koob, Team Unstoppable Cincinnati") == [
+        "Team Unstoppable", "Chris Koob", "Team Unstoppable Cincinnati"]
+    assert mm._split_keyword("Acme Financial") == ["Acme Financial"]
+    assert mm._split_keyword("  , ,a,  ") == ["a"]
+
+
+def test_score_sentiment_falls_back_to_heuristic_offline(monkeypatch):
+    from rep_engine import mention_monitor as mm
+    from rep_engine import ai_state_audit as m
+    # no orchestrator key -> heuristic (no LLM call)
+    monkeypatch.setattr(m, "ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_KEY")
+    monkeypatch.setattr(m, "ORCHESTRATOR", "anthropic")
+    assert mm.score_sentiment("this is a scam and a ripoff") == "negative"
+    assert mm.score_sentiment("") == "neutral"
+
+
+def test_score_sentiment_uses_llm_when_configured(monkeypatch):
+    from rep_engine import mention_monitor as mm
+    from rep_engine import ai_state_audit as m
+    monkeypatch.setattr(m, "ANTHROPIC_API_KEY", "sk-real-key")
+    monkeypatch.setattr(m, "ORCHESTRATOR", "anthropic")
+    seen = {}
+
+    def fake_json(system, user, **kw):
+        seen["user"] = user
+        return {"sentiment": "negative"}
+    monkeypatch.setattr(m, "orchestrator_json", fake_json)
+    # heuristic would say POSITIVE ('love','great'); the LLM (mocked) says negative (sarcasm)
+    assert mm.score_sentiment("Oh I just LOVE how great they are at losing my money") == "negative"
+    assert "losing my money" in seen["user"]   # the mention text was passed (fenced) to the LLM
+
+    # opt-out flag forces the heuristic even with a key
+    monkeypatch.setenv("MENTION_LLM_SENTIMENT", "0")
+    assert mm.score_sentiment("a total scam") == "negative"  # heuristic, no LLM
+
+
+def test_create_work_order_unit():
+    from rep_engine import tracking as t
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        t.create_work_order(1, "   ")
+
+
 # ----------------------------- integration -----------------------------
 @requires_db
 def test_add_keyword_and_discover_with_fake_source(fresh_schema):
@@ -48,11 +93,44 @@ def test_add_keyword_and_discover_with_fake_source(fresh_schema):
              "author": "u2", "title": "Unrelated", "body": "Something totally different."},
         ]
     mm.register_source("fake", fake)
-    out = mm.discover(bid, sources=["fake"], quiet=True)
-    # only the relevant, deduped mention should be stored (1 of 3)
-    assert out["found"] == 1
+    # count sentiment scoring calls to prove duplicates aren't re-scored on a re-scan
+    calls = {"n": 0}
+    real = mm.score_sentiment
+    def counting(text):
+        calls["n"] += 1
+        return real(text)
+    mm.score_sentiment = counting
+    try:
+        out = mm.discover(bid, sources=["fake"], quiet=True)
+        # only the relevant, deduped mention should be stored (1 of 3), and scored ONCE
+        assert out["found"] == 1
+        assert calls["n"] == 1
+        # a second scan re-returns the same items -> nothing new, and NO extra scoring calls
+        out2 = mm.discover(bid, sources=["fake"], quiet=True)
+        assert out2["found"] == 0
+        assert calls["n"] == 1   # the known mention was skipped before scoring
+    finally:
+        mm.score_sentiment = real
     n = conn.execute("SELECT COUNT(*) n FROM mentions WHERE business_id=%s", (bid,)).fetchone()["n"]
     assert n == 1
+
+
+@requires_db
+def test_compound_keyword_discovers_partial_match(fresh_schema):
+    """A comma-joined keyword must be split so a mention matching ONE variant is found
+    (regression: the whole phrase scored below the relevance threshold and dropped)."""
+    conn = fresh_schema
+    from rep_engine import mention_monitor as mm
+    bid = _biz(conn)
+    mm.add_keyword(bid, "Acme Financial, Chris Acme, Acme Financial Cincinnati")
+
+    def fake(keyword):
+        # the source returns a realistic mention that matches only ONE variant
+        return [{"source": "fake", "source_url": "https://x.com/9", "external_id": "9",
+                 "author": "u", "title": "Is Acme Financial legit?", "body": "Is Acme Financial legit?"}]
+    mm.register_source("fake", fake)
+    out = mm.discover(bid, sources=["fake"], quiet=True)
+    assert out["found"] == 1
 
 
 @requires_db

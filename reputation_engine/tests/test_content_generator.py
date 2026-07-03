@@ -98,6 +98,63 @@ def test_compliance_failure_sets_needs_fix(fresh_schema, monkeypatch):
 
 
 @requires_db
+def test_update_draft_edits_pending_only(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import content_generator as cg
+    bid = _seed_business(conn)
+    did = conn.execute(
+        "INSERT INTO content_drafts (business_id, asset_type, title, body, status) "
+        "VALUES (%s,'article','Old title','Old body','pending') RETURNING id", (bid,),
+    ).fetchone()["id"]
+    conn.commit()
+
+    # mark the draft as having passed screening (simulate the AI verdict) to prove the edit resets it
+    conn.execute("UPDATE content_drafts SET compliance_pass=TRUE, quality_score=0.9 WHERE id=%s", (did,))
+    conn.commit()
+
+    # edit a pending draft -> content changes AND the stale verdict is invalidated (re-screened)
+    assert cg.update_draft(did, title="New title", body="A clean body about saving.", business_id=bid) is True
+    d = conn.execute("SELECT title, body, quality_score, compliance_pass FROM content_drafts WHERE id=%s", (did,)).fetchone()
+    assert d["title"] == "New title" and d["body"] == "A clean body about saving."
+    assert d["quality_score"] is None              # AI score cleared
+    assert d["compliance_pass"] is None            # clean edit -> 'not checked yet', NOT a false pass
+
+    # editing in a HARD compliance violation re-screens to a fail (no false 'checks passed')
+    assert cg.update_draft(did, body="We offer guaranteed returns of 30%.", business_id=bid) is True
+    d2 = conn.execute("SELECT compliance_pass, compliance_flags FROM content_drafts WHERE id=%s", (did,)).fetchone()
+    assert d2["compliance_pass"] is False and d2["compliance_flags"]
+
+    # tenancy: another business can't edit it
+    assert cg.update_draft(did, body="hax", business_id=bid + 9999) is False
+    # nothing to change -> False
+    assert cg.update_draft(did, business_id=bid) is False
+    # once approved it is immutable
+    conn.execute("UPDATE content_drafts SET status='approved' WHERE id=%s", (did,))
+    conn.commit()
+    assert cg.update_draft(did, body="late edit", business_id=bid) is False
+    assert "guaranteed" in conn.execute("SELECT body FROM content_drafts WHERE id=%s", (did,)).fetchone()["body"]
+
+
+@requires_db
+def test_approve_after_edit_promotes_edited_content(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import content_generator as cg
+    bid = _seed_business(conn)
+    did = conn.execute(
+        "INSERT INTO content_drafts (business_id, asset_type, title, body, status) "
+        "VALUES (%s,'article','Original','Original body','pending') RETURNING id", (bid,),
+    ).fetchone()["id"]
+    conn.commit()
+    cg.update_draft(did, title="Edited title", body="Edited body", business_id=bid)
+    cg.approve(did, reviewer="Logan")
+    d = conn.execute("SELECT title, body, published_asset_id FROM content_drafts WHERE id=%s", (did,)).fetchone()
+    assert d["title"] == "Edited title" and d["body"] == "Edited body"
+    # the asset carries the EDITED title (approve snapshots title -> assets)
+    a = conn.execute("SELECT title FROM assets WHERE id=%s", (d["published_asset_id"],)).fetchone()
+    assert a["title"] == "Edited title"
+
+
+@requires_db
 def test_approve_promotes_to_asset_and_advances_wo(fresh_schema, monkeypatch):
     conn = fresh_schema
     from rep_engine import content_generator as cg

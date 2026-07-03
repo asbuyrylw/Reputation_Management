@@ -115,14 +115,17 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
-            raise SystemExit(f"No business id {business_id}")
+            # ValueError (not SystemExit): benchmark() runs as a background job and compare()
+            # in a request -- a BaseException would escape the runner / request handler.
+            raise ValueError(f"No business id {business_id}")
         comps = conn.execute("SELECT * FROM competitors WHERE business_id=%s", (business_id,)).fetchall()
         if not comps:
             if not quiet:
                 log.info("No competitors registered for business %d; add some first.", business_id)
             return {}
-        # a shared benchmark run id groups this comparison
-        run = conn.execute("INSERT INTO audit_runs (business_id) VALUES (%s) RETURNING id",
+        # a shared benchmark run id groups this comparison. kind='competitor' so it isn't
+        # mistaken for an AI-reputation audit in the Audits list.
+        run = conn.execute("INSERT INTO audit_runs (business_id, kind) VALUES (%s,'competitor') RETURNING id",
                            (business_id,)).fetchone()
         run_id = run["id"]
 
@@ -151,7 +154,12 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
                          json.dumps(sources), mentions_subject, mc, persona, location, failed),
                     )
                     recorded += 1
-        conn.execute("UPDATE audit_runs SET finished_at=now() WHERE id=%s", (run_id,))
+        # Leave finished_at NULL: a competitor benchmark is not an AI reputation audit, and the
+        # "latest AI audit" queries all filter `finished_at IS NOT NULL`. compare()/trend() read
+        # competitor_answers (by run_id), not this flag, so they're unaffected. (kind='competitor'.)
+        # Mark the run 'complete' (not the default 'in_progress') so it reaches a terminal status;
+        # finished_at stays NULL so it never enters the ai_audit finished-run selectors.
+        conn.execute("UPDATE audit_runs SET status='complete' WHERE id=%s", (run_id,))
         conn.commit()
     if not quiet:
         log.info("Benchmark run %d complete (%d competitor-answer rows).", run_id, recorded)
@@ -165,7 +173,9 @@ def compare(business_id: int, quiet: bool = False) -> dict:
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
-            raise SystemExit(f"No business id {business_id}")
+            # ValueError (not SystemExit): benchmark() runs as a background job and compare()
+            # in a request -- a BaseException would escape the runner / request handler.
+            raise ValueError(f"No business id {business_id}")
         run = conn.execute(
             "SELECT MAX(run_id) r FROM competitor_answers WHERE business_id=%s", (business_id,)
         ).fetchone()
@@ -206,21 +216,33 @@ def compare(business_id: int, quiet: bool = False) -> dict:
             })
         standings.sort(key=lambda x: x["appearance_rate"], reverse=True)
 
-        # head-to-head: prompts where subject appears and competitor doesn't (subject win) & vice-versa
+        # head-to-head: the actual prompts where subject appears and competitor doesn't (subject
+        # win), vice-versa, and where BOTH appear (ties). Returning the prompt text (not just a
+        # count) lets the console show WHICH questions drive each bucket -- the context the owner
+        # asked for ("only you / only them doesn't make sense without context").
+        def _distinct_prompts(comp_id: int, where: str) -> list[str]:
+            rows = conn.execute(
+                "SELECT DISTINCT a.prompt FROM competitor_answers a "
+                f"WHERE a.run_id=%s AND a.competitor_id=%s AND NOT a.failed AND {where} "
+                "ORDER BY a.prompt",
+                (rid, comp_id),
+            ).fetchall()
+            return [r["prompt"] for r in rows if r["prompt"]]
+
         head_to_head = []
         for comp in comps:
-            subj_only = conn.execute(
-                "SELECT COUNT(DISTINCT a.prompt) c FROM competitor_answers a "
-                "WHERE a.run_id=%s AND a.competitor_id=%s AND a.mentions_subject "
-                "AND NOT a.mentions_competitor AND NOT a.failed", (rid, comp["id"]),
-            ).fetchone()["c"]
-            comp_only = conn.execute(
-                "SELECT COUNT(DISTINCT a.prompt) c FROM competitor_answers a "
-                "WHERE a.run_id=%s AND a.competitor_id=%s AND a.mentions_competitor "
-                "AND NOT a.mentions_subject AND NOT a.failed", (rid, comp["id"]),
-            ).fetchone()["c"]
-            head_to_head.append({"competitor": comp["name"], "subject_only_prompts": subj_only,
-                                 "competitor_only_prompts": comp_only})
+            subj_only_list = _distinct_prompts(comp["id"], "a.mentions_subject AND NOT a.mentions_competitor")
+            comp_only_list = _distinct_prompts(comp["id"], "a.mentions_competitor AND NOT a.mentions_subject")
+            both_list = _distinct_prompts(comp["id"], "a.mentions_subject AND a.mentions_competitor")
+            head_to_head.append({
+                "competitor": comp["name"],
+                "subject_only_prompts": len(subj_only_list),
+                "competitor_only_prompts": len(comp_only_list),
+                # cap the lists so a huge battery can't bloat the payload; counts stay exact
+                "prompts_subject_only": subj_only_list[:30],
+                "prompts_competitor_only": comp_only_list[:30],
+                "prompts_both": both_list[:30],
+            })
 
     rank = next((i for i, s in enumerate(standings, 1) if s["is_subject"]), None)
     result = {
@@ -234,6 +256,49 @@ def compare(business_id: int, quiet: bool = False) -> dict:
     if not quiet:
         print(json.dumps(result, indent=2, default=str))
     return result
+
+
+def trend(business_id: int) -> dict:
+    """Subject vs. competitor APPEARANCE RATE over time -- one point per benchmark run,
+    so the console can chart visibility climbing (or not) against rivals. Same appearance-
+    rate definition as compare() (share of a run's non-failed category prompts in which the
+    party is mentioned); points are ordered by run date."""
+    _ensure()
+    with db() as conn:
+        biz = conn.execute("SELECT name FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not biz:
+            return {"business": None, "competitors": [], "points": []}
+        comps = [r["name"] for r in conn.execute(
+            "SELECT name FROM competitors WHERE business_id=%s ORDER BY id", (business_id,)
+        ).fetchall()]
+        runs = conn.execute(
+            "SELECT run_id, MIN(created_at) dt, "
+            "COUNT(DISTINCT prompt) FILTER (WHERE NOT failed) nprompts, "
+            "COUNT(DISTINCT prompt) FILTER (WHERE mentions_subject AND NOT failed) subj "
+            "FROM competitor_answers WHERE business_id=%s GROUP BY run_id "
+            # drop all-failed runs: a run with no usable prompts is 'no data', not a real 0%
+            "HAVING COUNT(*) FILTER (WHERE NOT failed) > 0 "
+            "ORDER BY MIN(created_at), run_id", (business_id,),
+        ).fetchall()
+        points = []
+        for r in runs:
+            np = r["nprompts"] or 0
+            point = {
+                "run_id": r["run_id"], "date": r["dt"],
+                "subject_rate": round(r["subj"] / np, 4) if np else 0.0,
+                "competitors": {},
+            }
+            for cname in comps:
+                cp = conn.execute(
+                    "SELECT COUNT(DISTINCT a.prompt) c FROM competitor_answers a "
+                    "JOIN competitors c ON c.id=a.competitor_id "
+                    "WHERE a.run_id=%s AND a.business_id=%s AND c.name=%s "
+                    "AND a.mentions_competitor AND NOT a.failed",
+                    (r["run_id"], business_id, cname),
+                ).fetchone()["c"]
+                point["competitors"][cname] = round(cp / np, 4) if np else 0.0
+            points.append(point)
+    return {"business": biz["name"], "competitors": comps, "points": points}
 
 
 def main() -> None:

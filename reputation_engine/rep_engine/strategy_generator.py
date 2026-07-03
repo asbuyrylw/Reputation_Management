@@ -151,6 +151,135 @@ class WorkOrder:
     phase: str
     week: int
     depends_on: list[str] = field(default_factory=list)
+    rationale: dict = field(default_factory=dict)   # B1: {gap_source, why, source}
+    why_helps_ai_rep: str = ""                       # C10: how it helps AI reputation
+    why_helps_seo: str = ""                          # C10: how it helps local/SEO
+    predicted_ai_points: Optional[float] = None      # estimated AI-score points this task adds
+    predicted_seo_impact: str = ""                   # qualitative SEO impact: High|Medium|Low
+    predicted_basis: str = ""                        # "measured from your results" | "industry baseline"
+    area: str = ""                                   # website|blog|outreach|social|local|reviews|tracking
+    platform: str = ""                               # for social/local tasks: linkedin|facebook|gbp|...
+    gap_specifics: dict = field(default_factory=dict)  # {source_query} -> the weak query/topic this task fixes,
+    #                                                    so the UI can link a worst AI answer straight to its task
+
+
+# Plain-English "how this helps" by capability, so EVERY task shows its why (C10).
+_WHY_AI = {
+    "content_writing": "Publishes accurate, ownable content AI assistants can cite about you.",
+    "schema_markup": "Helps AI engines cleanly extract and trust your facts.",
+    "review_generation": "More genuine reviews shift the sentiment AI sees about you.",
+    "press_outreach": "Third-party coverage corroborates your narrative from outside your site.",
+    "media_list_building": "Builds the outreach list that earns corroborating coverage.",
+    "social_publishing": "Adds accurate owned presence for AI to surface instead of the negatives.",
+    "local_content_creation": "Geo-specific content AI can cite for local questions about you.",
+    "link_building": "Editorial citations raise how often AI surfaces and trusts your sources.",
+    "ai_visibility_tracking": "Measures what AI says so you can see the plan working.",
+}
+_WHY_SEO = {
+    "content_writing": "An owned page that can rank for the target search.",
+    "schema_markup": "Rich-result eligibility + clearer relevance signals to Google.",
+    "review_generation": "Reviews lift your Google Business Profile and map-pack rank.",
+    "press_outreach": "Earned links + brand mentions raise domain authority.",
+    "media_list_building": "Feeds the earned-link/PR pipeline that lifts rankings.",
+    "social_publishing": "Brand signals + a complete GBP help your local rank.",
+    "local_content_creation": "A geo landing page to break onto page 1 locally.",
+    "link_building": "Backlinks raise domain authority and rankings.",
+    "ai_visibility_tracking": "",
+}
+
+# Predicted IMPACT: map each capability to the acceleration lever whose effectiveness predicts
+# how much one task of this type moves the AI-reputation score. The per-unit gain comes from the
+# business's LEARNED weights when available (refines over time), else the industry baseline.
+_CAPABILITY_TO_LEVER = {
+    "content_writing": "third_party_articles",
+    "local_content_creation": "third_party_articles",
+    "video_creation": "videos",
+    "press_outreach": "earned_press",
+    "media_list_building": "earned_press",
+    "link_building": "earned_links",
+    "review_generation": "reviews",
+    "social_publishing": "third_party_articles",
+    "gbp_optimization": "reviews",
+    # structural / tracking tasks have no direct per-unit score lever
+    "schema_markup": None,
+    "ai_visibility_tracking": None,
+}
+# Qualitative SEO impact (point prediction for local rank isn't reliable yet, so we keep it honest).
+_CAPABILITY_SEO = {
+    "local_content_creation": "High", "gbp_optimization": "High", "link_building": "High",
+    "schema_markup": "Medium", "content_writing": "Medium", "review_generation": "Medium",
+    "press_outreach": "Medium", "video_creation": "Medium",
+    "social_publishing": "Low", "media_list_building": "Low", "ai_visibility_tracking": "—",
+}
+
+# Effort weight per capability (1 = quick, 3 = heavy lift) for ROI ranking (item 5D). ROI =
+# impact x confidence / effort, so a high-impact, high-confidence, low-effort task ranks first.
+_EFFORT = {
+    "schema_markup": 1, "ai_visibility_tracking": 1, "social_publishing": 1, "gbp_optimization": 1,
+    "review_generation": 2, "content_writing": 2, "local_content_creation": 2, "media_list_building": 2,
+    "video_creation": 3, "press_outreach": 3, "link_building": 3,
+}
+# AEO/GEO content checklist appended to every content-creation task so the writer (human or LLM)
+# produces content engines actually CITE, not just SEO filler.
+_AEO_CHECKLIST = (
+    " AEO/GEO checklist: lead with a 40-60 word direct answer to the target question (front-load); "
+    "add an FAQ/Q&A block with FAQPage schema; include one quotable stat or definitive sentence per "
+    "section; name the business + city + service explicitly; add a visible last-updated date; match "
+    "the page title to the literal user question; add internal links to related owned pages."
+)
+
+_CONF_FACTOR = {"high": 1.0, "medium": 0.7, "low": 0.4}
+# Points-equivalent for a structural/SEO-only task that has no per-unit AI-score lever, so it can
+# still be ROI-ranked against scored tasks.
+_SEO_POINTS = {"High": 15.0, "Medium": 8.0, "Low": 3.0, "—": 0.0}
+
+# The AREA a task belongs to, so the plan groups by website / blog / outreach / social / local /
+# reviews instead of a flat capability list. surface_actions override this per platform.
+_CAPABILITY_AREA = {
+    "content_writing": "content", "video_creation": "content",
+    "schema_markup": "website", "link_building": "website",
+    "press_outreach": "outreach", "media_list_building": "outreach",
+    "social_publishing": "social",
+    "review_generation": "reviews",
+    "local_content_creation": "local", "gbp_optimization": "local",
+    "ai_visibility_tracking": "tracking",
+}
+
+
+def predict_impact(business_id: int, capability: str) -> dict:
+    """Estimate one task's impact: predicted AI-score points (from learned-or-baseline lever
+    effectiveness) + a qualitative SEO impact. Honest about basis + confidence; best used to RANK
+    tasks by return, and snapshotted so we can later compare predicted vs measured."""
+    lever = _CAPABILITY_TO_LEVER.get(capability)
+    ai_points = None
+    basis = ""
+    confidence = "low"
+    if lever:
+        try:
+            from . import feedback_loop as _fb, acceleration_advisor as _acc
+        except ImportError:  # pragma: no cover
+            import feedback_loop as _fb  # type: ignore
+            import acceleration_advisor as _acc  # type: ignore
+        learned = {}
+        try:
+            learned = _fb.learned_lever_weights(business_id) or {}
+        except Exception:  # noqa: BLE001 -- prediction must never break planning
+            learned = {}
+        if lever in learned and learned[lever] > 0:
+            gain = learned[lever]
+            basis, confidence = "measured from your results", "medium"
+        else:
+            gain = (_acc.LEVERS.get(lever, {}) or {}).get("weight", 0.0)
+            basis, confidence = "industry baseline", "low"
+        ai_points = round(gain * 100.0, 1)  # 0-1 alignment gain per unit -> 0-100 score points
+    seo_impact = _CAPABILITY_SEO.get(capability, "—")
+    # ROI = expected impact x confidence / effort. Use the AI-score points when a lever exists,
+    # else the SEO points-equivalent, so structural tasks rank fairly against scored ones.
+    effort = _EFFORT.get(capability, 2)
+    impact_pts = ai_points if ai_points is not None else _SEO_POINTS.get(seo_impact, 0.0)
+    roi_score = round((impact_pts * _CONF_FACTOR.get(confidence, 0.5)) / max(1, effort), 2)
+    return {"ai_points": ai_points, "ai_confidence": confidence, "seo_impact": seo_impact,
+            "basis": basis, "effort": effort, "roi_score": roi_score}
 
 
 PHASES = [
@@ -172,7 +301,8 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
 
-    def add(title, capability, instruction, week, deps=None):
+    def add(title, capability, instruction, week, deps=None, *, gap_source="", why="",
+            source="audited gap", area=None, platform="", source_query=""):
         nonlocal n
         n += 1
         tool = best_tool(capability)
@@ -184,6 +314,14 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
             alternatives=alts,
             instruction=instruction, phase=_phase_for_week(week), week=week,
             depends_on=deps or [],
+            rationale={"gap_source": gap_source, "why": why, "source": source},
+            why_helps_ai_rep=_WHY_AI.get(capability, ""),
+            why_helps_seo=_WHY_SEO.get(capability, ""),
+            area=area or _CAPABILITY_AREA.get(capability, "other"),
+            platform=platform,
+            # source_query is the topic/query string the LLM also names in weak_queries[].addressed_by,
+            # so a worst answer can be linked to the exact task that fixes it.
+            gap_specifics={"source_query": source_query} if source_query else {},
         ))
 
     # --- Phase 0: fast wins (reviews, tracking baseline, one explainer) ---
@@ -193,7 +331,8 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         "Build a GHL automation texting/emailing happy clients a direct Google review link "
         "post-positive-interaction. Seed reviews mentioning service + locale.", 0)
     add("Claim/optimize Google Business Profile", "social_publishing",
-        "Verify GBP; complete categories, services, photos, NAP consistency; enable reviews.", 1)
+        "Verify GBP; complete categories, services, photos, NAP consistency; enable reviews.", 1,
+        area="local", platform="gbp")
 
     # --- Phase 1: owned content for each missing topic + schema ---
     for i, item in enumerate(gap.get("missing_owned_content", []) or []):
@@ -203,40 +342,77 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         cap = "video_creation" if "video" in atype.lower() else "content_writing"
         add(f"Create owned asset: {topic}", cap,
             f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
-            f"fact-check trust-sensitive claims; publish on the business domain.", 3)
+            f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
+            gap_source="audited gap: missing owned content", why=why, source_query=topic)
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
-            f"can cleanly extract facts.", 4)
+            f"can cleanly extract facts.", 4, gap_source="audited gap: schema", source_query=str(sg))
 
     # --- Phase 2: corroboration (press, media list, partner, link) ---
     if gap.get("thin_corroboration"):
         add("Build local media list", "media_list_building",
             "Assemble a Cincinnati-area finance/local-business journalist + outlet list "
-            "with angles (veteran-owned, financial literacy, community workshops).", 5)
+            "with angles (veteran-owned, financial literacy, community workshops).", 5,
+            gap_source="audited gap: thin corroboration")
         for i, claim in enumerate(gap.get("thin_corroboration", [])):
             c = claim.get("claim", f"claim {i+1}")
             where = claim.get("where_to_get_it", "")
             add(f"Corroborate: {c}", "press_outreach",
                 f"Secure third-party coverage/mention supporting '{c}'. Source: {where}. "
-                f"Draft pitch; route via outreach tool; human approves before send.", 6)
+                f"Draft pitch; route via outreach tool; human approves before send.", 6,
+                gap_source="audited gap: thin corroboration", why=c, source_query=c)
     add("Book local/finance podcast appearances", "press_outreach",
         "Identify 3-5 relevant local/finance podcasts; pitch the principal as guest; "
-        "each episode yields an indexed third-party positive page.", 7)
+        "each episode yields an indexed third-party positive page.", 7,
+        gap_source="audited gap: thin corroboration")
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
+    # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks
+    # down by platform (linkedin / facebook / ... ) and local (GBP), not a single social bucket.
     surfaces = gap.get("surface_actions", {}) or {}
-    surface_week = {"google_business": 1, "linkedin": 5, "facebook": 5, "x": 6, "reddit": 8}
+    surface_week = {"google_business": 1, "gbp": 1, "linkedin": 5, "facebook": 5, "instagram": 6,
+                    "x": 6, "youtube": 7, "tiktok": 8, "pinterest": 9, "threads": 8, "reddit": 8}
+    # google_business is the local Google profile, not a social feed -> area=local
+    _SURFACE_AREA = {"google_business": "local", "gbp": "local"}
+    _SURFACE_PLATFORM = {"google_business": "gbp"}
     for surface, actions in surfaces.items():
         for act in (actions or []):
             wk = surface_week.get(surface, 6)
-            cap = "social_publishing"
+            platform = _SURFACE_PLATFORM.get(surface, surface)
+            area = _SURFACE_AREA.get(surface, "social")
             note = ""
             if surface == "reddit":
                 note = (" NOTE: Reddit must be genuine, human, value-add participation only "
                         "-- never automated reputation posting (ban risk + policy violation).")
-            add(f"{surface.replace('_',' ').title()} action", cap,
-                f"{act}{note}", wk)
+            add(f"Improve {surface.replace('_', ' ').title()} presence", "social_publishing",
+                f"{act}{note}", wk,
+                gap_source=f"recommended social presence ({surface})", why="",
+                source="recommendation", area=area, platform=platform)
+
+    # --- Local-SEO gaps -> tasks (from first-party SERP reads, via the gap model) ---
+    for i, g in enumerate(gap.get("local_seo_gaps", []) or []):
+        q = g.get("query", f"local query {i + 1}")
+        rec = g.get("recommendation", "Create geo-specific content + strengthen GBP / local citations.")
+        add(f"Reach page 1 for '{q}'", "local_content_creation",
+            f"{rec} Current position: {g.get('current_rank', 'off page 1')}.", 4,
+            gap_source="local search ranking", why=g.get("why", ""), source_query=q)
+
+    # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
+    for i, g in enumerate(gap.get("competitor_defense", []) or []):
+        q = g.get("query", f"query {i + 1}")
+        rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
+        add(f"Compete for '{q}'", "content_writing",
+            f"{rec} A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.", 4,
+            gap_source="competitor analysis", why=g.get("why", ""), source_query=q)
+
+    # --- Site-technical gaps -> tasks (thin/missing pages, schema, weak coverage) ---
+    for i, g in enumerate(gap.get("site_technical_gaps", []) or []):
+        issue = g.get("issue", f"site issue {i + 1}")
+        rec = g.get("recommendation", "Fix the on-site issue so AI engines can extract your facts.")
+        scap = "schema_markup" if "schema" in f"{issue} {rec}".lower() else "content_writing"
+        add(f"Fix site: {issue}", scap, rec, 3,
+            gap_source="site crawl", why=g.get("why", ""))
 
     # --- Phase 3: steady-state monitoring ---
     add("Recurring AI-visibility monitor", "ai_visibility_tracking",
@@ -260,9 +436,24 @@ METRICS = [
 
 def assemble_plan(business: dict, gap: dict, start: date) -> dict:
     wos = build_work_orders(gap)
+    bid = business.get("id")
     for w in wos:
         w_start = start + timedelta(weeks=w.week)
-        w.__dict__["target_date"] = w_start.isoformat()
+        # start = the planned start; target_date = the due/end date (~2 weeks to act on it).
+        w.__dict__["start_date"] = w_start.isoformat()
+        w.__dict__["target_date"] = (w_start + timedelta(weeks=2)).isoformat()
+        if bid is not None:
+            imp = predict_impact(bid, w.capability)
+            w.predicted_ai_points = imp["ai_points"]
+            w.predicted_seo_impact = imp["seo_impact"]
+            w.predicted_basis = imp["basis"]
+            # ROI score in the persisted rationale (no new column) so the task board can rank by it.
+            w.rationale = {**(w.rationale or {}), "roi_score": imp["roi_score"], "effort": imp["effort"]}
+    # Item 5D: order the plan so the highest-ROI work leads WITHIN each phase (phases keep their
+    # week sequencing; within a phase, best return first). Stable sort preserves prior order on ties.
+    _phase_rank = {name: i for i, (name, _lo, _hi) in enumerate(PHASES)}
+    wos.sort(key=lambda w: (_phase_rank.get(w.phase, 99),
+                            -float((w.rationale or {}).get("roi_score") or 0)))
     phases = {}
     for name, lo, hi in PHASES:
         phases[name] = {

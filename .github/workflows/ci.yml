@@ -52,19 +52,28 @@ jobs:
       - name: Lint -- real-error rules (BLOCKING)
         run: ruff check --select F,E9 rep_engine/   # undefined names, unused imports, syntax errors
 
-      - name: Lint -- full ruleset (advisory; ratchet toward blocking)
+      - name: Lint -- full ruleset (advisory; remaining backlog is style only)
+        # 86 findings, all stylistic (E702 deliberate one-line CLI parsers, E501 length);
+        # no correctness rules. The real-error rules (F, E9) are blocking above. Ratchet:
+        # reformat the style backlog, then drop the `|| true`.
         run: ruff check rep_engine/ || true
 
-      - name: Security -- bandit SAST (advisory; ratchet to blocking after triage)
-        run: bandit -r rep_engine/ -ll || true       # medium+ severity only
+      - name: Security -- bandit SAST (BLOCKING; medium+ severity)
+        # Triaged 2026-06: 3 medium findings resolved (env-driven bind + two parameterized
+        # SQL builders annotated # nosec with justification). Now blocks on any new medium+.
+        run: bandit -r rep_engine/ -ll
 
       - name: Type check (mypy, advisory until clean)
         run: mypy rep_engine/ --ignore-missing-imports || true
 
       - name: Run tests with coverage
-        # Baseline measured at 57.5% (full suite vs. Postgres). Floor set just below
-        # with headroom; ratchet up toward ~70% as the untested hubs get covered.
-        run: pytest --cov=rep_engine --cov-report=term-missing --cov-fail-under=50
+        # Baseline measured at 57.5% (full suite vs. Postgres). Floor ratcheted to 55%
+        # (just under baseline); keep raising toward ~70% as untested hubs get covered.
+        run: pytest --cov=rep_engine --cov-report=term-missing --cov-fail-under=55
+
+      # NOTE: the scoring-judge regression gate moved to its own WEEKLY workflow
+      # (.github/workflows/eval-gate.yml) -- it makes ~44 live LLM calls (~8-15 cents
+      # of API usage) so it runs on a schedule, not on every push/PR.
 
   secret-scan:
     runs-on: ubuntu-latest

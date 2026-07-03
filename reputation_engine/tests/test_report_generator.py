@@ -87,6 +87,28 @@ def test_generate_produces_nonempty_docx(fresh_schema, tmp_path, monkeypatch):
 
 
 @requires_db
+def test_per_engine_section_reports_grounding_and_partial_coverage(fresh_schema):
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    rid = _complete_run(conn, bid, days_ago=0)
+    for engine, ga, grounded in [("perplexity", 0.6, True), ("perplexity", 0.7, True),
+                                 ("anthropic", 0.2, False)]:
+        conn.execute("INSERT INTO answers (run_id,business_id,engine,goal_alignment,grounded,failed) "
+                     "VALUES (%s,%s,%s,%s,%s,false)", (rid, bid, engine, ga, grounded))
+    conn.commit()
+    out = []
+    rg._section_per_engine(lambda t, *a, **k: out.append(t),
+                           lambda t, *a, **k: out.append(t),
+                           lambda t, *a, **k: out.append(t), bid)
+    text = " ".join(out)
+    assert "What Each AI Engine Says" in text
+    assert "perplexity" in text and "anthropic" in text
+    assert "grounded in live web" in text       # grounding surfaced per engine
+    assert "Partial coverage" in text           # only 2 of the 4 canonical engines ran
+
+
+@requires_db
 def test_before_after_compares_same_engine(fresh_schema):
     """Before/Now must compare the SAME engine -- not the max-goal_alignment answer
     per run (which could put Perplexity 'Before' against ChatGPT 'Now')."""
@@ -174,3 +196,70 @@ def test_exec_summary_reports_contested_move_when_alignment_holds(fresh_schema, 
     assert "holding roughly steady" in text
     assert "contested framing have moved by" in text           # con_clause fired (else branch)
     assert "still early to call a trend" not in text
+
+
+@requires_db
+def test_report_surfaces_root_cause_and_incidents(fresh_schema, tmp_path, monkeypatch):
+    """When the agentic layer has run, the report shows the root-cause + flagged
+    incidents; otherwise the section is a no-op (verified by the smoke test)."""
+    import json
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    _answer(conn, r1, bid, "Is Reportco trustworthy?", "Some call it an MLM.", 0.10, True, False)
+    _answer(conn, r2, bid, "Is Reportco trustworthy?", "Trusted local firm.", 0.80, False, True)
+    conn.execute("INSERT INTO root_cause (business_id, model) VALUES (%s,%s)",
+                 (bid, json.dumps({"summary": "The MLM narrative is driven by ripoffreport.com",
+                                   "primary_sources": [{"url": "https://ripoffreport.com/x",
+                                                        "why": "top contested citation"}],
+                                   "recommended_counters": ["3 owned blog posts"]})))
+    conn.execute("INSERT INTO incidents (business_id, mention_url, severity, status) "
+                 "VALUES (%s,'https://r/1','high','pending_human_review')", (bid,))
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    text = _doc_text(rg.generate(bid))
+    assert "Why the Contested Narrative Surfaces" in text
+    assert "ripoffreport.com" in text
+    assert "New Contested Mentions Flagged This Period" in text
+
+
+@requires_db
+def test_report_surfaces_production_briefs(fresh_schema, tmp_path, monkeypatch):
+    """When production briefs exist (status to_produce), the report lists what to
+    create off-platform; absent any, the section is a no-op (smoke test covers that)."""
+    import json
+    conn = fresh_schema
+    from rep_engine import report_generator as rg
+    bid = _seed_business(conn)
+    r1 = _complete_run(conn, bid, days_ago=30)
+    r2 = _complete_run(conn, bid, days_ago=0)
+    _answer(conn, r1, bid, "Is Reportco trustworthy?", "Some call it an MLM.", 0.10, True, False)
+    _answer(conn, r2, bid, "Is Reportco trustworthy?", "Trusted local firm.", 0.80, False, True)
+    conn.execute(
+        "INSERT INTO production_briefs (business_id, channel, platform, title, target_query, brief, status) "
+        "VALUES (%s,'video','youtube','Is Reportco an MLM? Honest answer','is reportco an mlm',%s,'to_produce')",
+        (bid, json.dumps({"format": "talking-head", "target_length_seconds": 90,
+                          "keywords": ["Reportco", "licensed insurance"], "hook": "Straight answer.",
+                          "outline": ["state the answer", "show proof"], "cta": "Visit reportco.com"})))
+    conn.execute(
+        "INSERT INTO production_briefs (business_id, channel, platform, title, target_query, brief, status) "
+        "VALUES (%s,'social','linkedin','How to vet an agency','how to vet an insurance agency',%s,'to_produce')",
+        (bid, json.dumps({"format": "carousel", "target_length": "5-slide carousel",
+                          "keywords": ["#insurance"], "cta": "Follow for more"})))
+    # a superseded brief must NOT appear
+    conn.execute(
+        "INSERT INTO production_briefs (business_id, channel, platform, title, brief, status) "
+        "VALUES (%s,'video','tiktok','OLD superseded idea',%s,'superseded')",
+        (bid, json.dumps({"keywords": ["old"]})))
+    conn.commit()
+    monkeypatch.setattr(rg, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REP_REPORT_WATERMARK", raising=False)
+    text = _doc_text(rg.generate(bid))
+    assert "Content to Produce This Period" in text
+    assert "Videos to Produce" in text and "Social Posts to Produce" in text
+    assert "Is Reportco an MLM?" in text
+    assert "Reportco, licensed insurance" in text          # keywords rendered
+    assert "OLD superseded idea" not in text               # superseded excluded

@@ -1,0 +1,400 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useBusiness } from "@/lib/business";
+import {
+  useCreateBusiness,
+  useUpdateBusiness,
+  useDeleteBusiness,
+  useLocations,
+  useAddLocation,
+  useUpdateLocation,
+  useDeleteLocation,
+} from "@/lib/hooks";
+import { Card, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Button, Input } from "@/components/primitives";
+import { TagInput } from "@/components/TagInput";
+import type { Business } from "@/lib/types";
+
+// "Areas served" replaces the jargon "Geo" everywhere user-facing; the DB column stays `geo`.
+// services is rendered as a multi-tag input (handled separately), not in this generic grid.
+const FIELDS: [string, string][] = [
+  ["name", "Name"],
+  ["domain", "Domain"],
+  ["industry", "Industry (e.g. Financial services)"],
+  ["goal", "Goal"],
+  ["contested_terms", "Contested terms (comma-separated)"],
+  ["geo", "Areas served"],
+];
+const EMPTY: Record<string, string> = {
+  name: "", domain: "", industry: "", goal: "", contested_terms: "", geo: "", services: "", owned_domains: "",
+};
+
+// plain-input fields shown in the inline editor (services + industry handled specially below)
+const EDIT_FIELDS: [keyof Business, string][] = [
+  ["name", "Name"],
+  ["domain", "Domain"],
+  ["industry", "Industry"],
+  ["geo", "Areas served"],
+  ["goal", "Goal"],
+  ["contested_terms", "Contested terms"],
+];
+
+// "Locations" sub-section of the business edit form (multi-location). Lists each storefront/
+// office with its NAP details, lets you add a row, flag one primary, and delete. The single
+// free-text "Areas served"/geo field on the business stays — this is the structured per-site list.
+function LocationsSection({ businessId }: { businessId: number }) {
+  const { data: locations, isLoading } = useLocations(businessId);
+  const add = useAddLocation(businessId);
+  const update = useUpdateLocation(businessId);
+  const del = useDeleteLocation(businessId);
+  const [form, setForm] = useState({ label: "", address: "", city: "", state: "", postal: "", phone: "" });
+
+  const rows = locations ?? [];
+  const submit = () => {
+    const v = {
+      label: form.label.trim() || undefined,
+      address: form.address.trim() || undefined,
+      city: form.city.trim() || undefined,
+      state: form.state.trim() || undefined,
+      postal: form.postal.trim() || undefined,
+      phone: form.phone.trim() || undefined,
+      // first location added becomes the primary by default
+      is_primary: rows.length === 0 ? true : undefined,
+    };
+    add.mutate(v, { onSuccess: () => setForm({ label: "", address: "", city: "", state: "", postal: "", phone: "" }) });
+  };
+  const canAdd = Object.values(form).some((s) => s.trim());
+
+  return (
+    <div className="sm:col-span-2">
+      <div className="text-xs font-medium text-slate-500">Locations (multi-location)</div>
+      <p className="mt-0.5 text-[11px] leading-snug text-slate-400">
+        Each physical storefront/office with its own address &amp; phone. Flag one as primary. The “Areas served” field
+        above still applies to the whole business.
+      </p>
+
+      {/* existing locations */}
+      <div className="mt-2 space-y-1.5">
+        {isLoading ? (
+          <p className="text-xs text-slate-400">Loading locations…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-xs text-slate-400">No locations yet — add one below.</p>
+        ) : (
+          rows.map((loc) => (
+            <div key={loc.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+              <div className="min-w-0 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium text-slate-800">{loc.label || loc.city || loc.address || "Location"}</span>
+                  {loc.is_primary && <Badge tone="indigo">Primary</Badge>}
+                </div>
+                <div className="text-slate-500">
+                  {[loc.city, loc.state].filter(Boolean).join(", ") || "—"}
+                  {loc.phone ? ` · ${loc.phone}` : ""}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {!loc.is_primary && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={update.isPending}
+                    onClick={() => update.mutate({ locId: loc.id, is_primary: true })}
+                  >
+                    Set primary
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="danger"
+                  loading={del.isPending}
+                  onClick={() => del.mutate(loc.id)}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* add a location */}
+      <div className="mt-2 grid grid-cols-1 gap-1.5 rounded-md bg-slate-50 p-2 sm:grid-cols-2">
+        <Input placeholder="Label (e.g. Downtown office)" value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} />
+        <Input placeholder="Phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+        <Input placeholder="Address" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} className="sm:col-span-2" />
+        <Input placeholder="City" value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} />
+        <div className="grid grid-cols-2 gap-1.5">
+          <Input placeholder="State" value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} />
+          <Input placeholder="Postal" value={form.postal} onChange={(e) => setForm((f) => ({ ...f, postal: e.target.value }))} />
+        </div>
+        <div className="sm:col-span-2">
+          <Button size="sm" loading={add.isPending} disabled={!canAdd} onClick={submit}>
+            Add location
+          </Button>
+          {add.isError && <span className="ml-2 text-xs text-rose-600">Couldn’t add — try again.</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminBusinessesPage() {
+  const { businesses, loading } = useBusiness();
+  const create = useCreateBusiness();
+  const update = useUpdateBusiness();
+  const [form, setForm] = useState<Record<string, string>>(EMPTY);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [deleting, setDeleting] = useState<Business | null>(null);
+  // The delete hook is parameterized by id; recreating it as `deleting` changes targets the row.
+  const del = useDeleteBusiness(deleting?.id ?? null);
+
+  if (loading) return <Spinner />;
+
+  const startEdit = (b: Business) => {
+    setEditingId(b.id);
+    setEditForm({
+      name: b.name ?? "",
+      domain: b.domain ?? "",
+      industry: b.industry ?? "",
+      geo: b.geo ?? "",
+      goal: b.goal ?? "",
+      contested_terms: b.contested_terms ?? "",
+      services: b.services ?? "",
+      firm_type: b.regulatory_profile?.firm_type ?? "",
+      owned_domains: (b.owned_domains ?? []).join(", "),
+    });
+  };
+  const saveEdit = () => {
+    if (editingId == null) return;
+    const { firm_type, owned_domains, ...rest } = editForm;
+    const existing = businesses.find((b) => b.id === editingId)?.regulatory_profile ?? {};
+    const payload: Record<string, unknown> = { id: editingId, ...rest };
+    if (firm_type !== undefined) payload.regulatory_profile = { ...existing, firm_type };
+    // owned_domains is a comma/tag string in the form but an array on the wire.
+    payload.owned_domains = (owned_domains ?? "")
+      .split(",")
+      .map((d) => d.trim())
+      .filter(Boolean);
+    update.mutate(payload as { id: number } & Record<string, unknown>, { onSuccess: () => setEditingId(null) });
+  };
+  const confirmDelete = () => {
+    if (!deleting) return;
+    del.mutate(undefined, { onSuccess: () => setDeleting(null) });
+  };
+
+  return (
+    <div>
+      <PageHeader
+        eyebrow="Admin"
+        title="Businesses"
+        subtitle="The businesses the engine tracks. Set one up with the guided wizard, add a bare record manually, or edit/remove an existing one."
+      />
+
+      {/* Guided setup — the recommended path: captures the full profile and runs everything. */}
+      <Link
+        href="/onboarding"
+        className="mb-4 flex items-center justify-between gap-4 rounded-2xl bg-linear-to-r from-indigo-600 to-violet-600 p-5 text-white shadow-md shadow-indigo-500/20 transition hover:shadow-lg"
+      >
+        <div>
+          <div className="text-base font-bold tracking-tight">Set up a new business</div>
+          <div className="mt-0.5 text-sm text-indigo-100">
+            Guided wizard — capture goals, competitors, areas served &amp; keywords, then run the full pipeline automatically.
+          </div>
+        </div>
+        <span className="shrink-0 rounded-xl bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-inset ring-white/30">
+          Start setup →
+        </span>
+      </Link>
+
+      <Card className="mb-4">
+        <div className="mb-2 text-sm font-medium text-slate-700">Or add a business manually</div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {FIELDS.map(([k, label]) => (
+            <input
+              key={k}
+              placeholder={label}
+              value={form[k]}
+              onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            />
+          ))}
+        </div>
+        <div className="mt-2">
+          <label className="text-xs font-medium text-slate-500">Services (add several — e.g. financial services, financial advisors, life insurance, 401k)</label>
+          <TagInput
+            className="mt-1"
+            value={form.services}
+            onChange={(v) => setForm((f) => ({ ...f, services: v }))}
+            placeholder="Type a service and press Enter"
+          />
+        </div>
+        <div className="mt-2">
+          <label className="text-xs font-medium text-slate-500">Owned web properties (counted as “owned” in AI citations)</label>
+          <TagInput
+            className="mt-1"
+            value={form.owned_domains}
+            onChange={(v) => setForm((f) => ({ ...f, owned_domains: v }))}
+            placeholder="e.g. teamunstoppable.net, chrisandelizabethkoob.com"
+          />
+          <span className="mt-1 block text-[11px] leading-snug text-slate-400">
+            The Domain above is already owned (and its subdomains). Add any <em>other</em> sites you control —
+            alternate domains, the owners’ personal site, owned blogs/microsites — so AI citations to them count
+            as owned, not neutral. Subdomains are matched automatically.
+          </span>
+        </div>
+        <button
+          disabled={create.isPending || !form.name}
+          onClick={() => {
+            // owned_domains is a comma/tag string in the form but an array on the wire (like saveEdit).
+            const owned_domains = (form.owned_domains ?? "").split(",").map((d) => d.trim()).filter(Boolean);
+            const payload = { ...form, owned_domains } as { name: string; owned_domains: string[] };
+            create.mutate(payload, { onSuccess: () => setForm(EMPTY) });
+          }}
+          className="mt-3 rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+        >
+          Create
+        </button>
+        {create.isError && <p className="mt-2 text-xs text-amber-700">Could not create the business.</p>}
+      </Card>
+
+      <Card className="overflow-hidden p-0">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-2">Name</th>
+              <th className="px-4 py-2">Domain</th>
+              <th className="px-4 py-2">Areas served</th>
+              <th className="px-4 py-2">Goal</th>
+              <th className="px-4 py-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {businesses.map((b) =>
+              editingId === b.id ? (
+                <tr key={b.id} className="bg-indigo-50/40">
+                  <td colSpan={5} className="px-4 py-3">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {EDIT_FIELDS.map(([k, label]) => (
+                        <label key={String(k)} className="text-xs text-slate-500">
+                          {label}
+                          <input
+                            value={editForm[k as string] ?? ""}
+                            onChange={(e) => setEditForm((f) => ({ ...f, [k as string]: e.target.value }))}
+                            className="mt-0.5 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-900"
+                          />
+                        </label>
+                      ))}
+                      <label className="text-xs text-slate-500 sm:col-span-2">
+                        Services
+                        <TagInput
+                          className="mt-0.5"
+                          value={editForm.services ?? ""}
+                          onChange={(v) => setEditForm((f) => ({ ...f, services: v }))}
+                          placeholder="Type a service and press Enter"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-500 sm:col-span-2">
+                        Owned web properties (counted as “owned” in AI citations)
+                        <TagInput
+                          className="mt-0.5"
+                          value={editForm.owned_domains ?? ""}
+                          onChange={(v) => setEditForm((f) => ({ ...f, owned_domains: v }))}
+                          placeholder="e.g. teamunstoppable.net, chrisandelizabethkoob.com"
+                        />
+                        <span className="mt-1 block text-[11px] leading-snug text-slate-400">
+                          The main Domain above is already owned (and its subdomains). Add any <em>other</em> sites you
+                          control — alternate domains, the owners’ personal site, owned blogs/microsites — so AI
+                          citations to them count as owned, not neutral. Subdomains are matched automatically.
+                        </span>
+                      </label>
+                      <label className="text-xs text-slate-500">
+                        Firm type (drives compliance checks)
+                        <select
+                          value={editForm.firm_type ?? ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, firm_type: e.target.value }))}
+                          className="mt-0.5 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-900"
+                        >
+                          <option value="">— not set —</option>
+                          <option value="ria">RIA (Registered Investment Adviser)</option>
+                          <option value="broker_dealer">Broker-dealer / BD-affiliated</option>
+                          <option value="insurance">Insurance agency</option>
+                          <option value="non_financial">Non-financial</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </label>
+
+                      {/* Multi-location editor */}
+                      <LocationsSection businessId={b.id} />
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        onClick={saveEdit}
+                        disabled={update.isPending}
+                        className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                      >
+                        {update.isPending ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        onClick={() => setEditingId(null)}
+                        className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
+                      >
+                        Cancel
+                      </button>
+                      {update.isError && <span className="text-xs text-rose-600">Couldn’t save.</span>}
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={b.id}>
+                  <td className="px-4 py-2 font-medium text-slate-900">{b.name}</td>
+                  <td className="px-4 py-2">{b.domain}</td>
+                  <td className="px-4 py-2">{b.geo}</td>
+                  <td className="px-4 py-2">{b.goal}</td>
+                  <td className="px-4 py-2 text-right">
+                    <button onClick={() => startEdit(b)} className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                      Edit
+                    </button>
+                    <button onClick={() => setDeleting(b)} className="ml-3 text-sm font-medium text-rose-600 hover:text-rose-700">
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ),
+            )}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+
+      {/* delete confirmation */}
+      {deleting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={() => setDeleting(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-slate-900">Delete “{deleting.name}”?</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              This permanently removes the business <span className="font-semibold">and all of its data</span> — audits,
+              answers, gaps, plans, work-orders, content, mentions, reports. This cannot be undone.
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => setDeleting(null)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={del.isPending}
+                className="rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {del.isPending ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+            {del.isError && <p className="mt-2 text-right text-xs text-rose-600">Couldn’t delete — try again.</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

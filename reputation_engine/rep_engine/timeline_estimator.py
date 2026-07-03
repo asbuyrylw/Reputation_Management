@@ -35,8 +35,10 @@ from datetime import date, timedelta
 
 
 try:
+    from .challenge import challenge_profile
     from .db import db
 except ImportError:  # pragma: no cover
+    from challenge import challenge_profile  # type: ignore
     from db import db  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -181,20 +183,30 @@ def estimate(business_id: int, quiet: bool = False) -> dict:
             else:
                 cur = 0.0
 
+    # Primary-challenge profile: an awareness gap (a void to fill) closes FASTER than
+    # an entrenched negative narrative (citations to out-produce). Opens its own
+    # connection, so call it after the read block above closes.
+    chal = challenge_profile(business_id, quiet=True)
+    void_fill_factor = float(chal.get("void_fill_factor", 1.0))
+
     remaining = max(0.0, DOMINANCE_TARGET - cur)
 
     # --- choose the monthly-gain estimate ---
     if vel["monthly_gain"] is not None and vel["monthly_gain"] > 0:
-        # observed velocity dominates once we have it
+        # observed velocity dominates once we have it -- it already reflects whether the
+        # business is filling a void or fighting negatives, so no factor is applied.
         expected_gain = vel["monthly_gain"]
         confidence = "high" if vel["runs"] >= 4 else "medium"
         gain_basis = "observed velocity (this business)"
     else:
-        # baseline literature gain, adjusted by entrenchment (slows) and throughput (speeds)
+        # baseline literature gain, adjusted by entrenchment (slows), throughput (speeds),
+        # and the challenge profile's void-fill factor (awareness gaps fill faster than
+        # negative narratives crowd out).
         entrench_drag = 1.0 - 0.6 * ent["grade"]            # 0.4 .. 1.0
-        expected_gain = BASE_MONTHLY_GAIN * entrench_drag * thr["multiplier"]
+        expected_gain = BASE_MONTHLY_GAIN * entrench_drag * thr["multiplier"] * void_fill_factor
         confidence = "low"
-        gain_basis = "baseline model (no measured velocity yet)"
+        gain_basis = (f"baseline model (no measured velocity yet); challenge="
+                      f"{chal.get('profile')} (void-fill x{void_fill_factor})")
         # if observed velocity exists but is <=0 (stalled), flag it
         if vel["monthly_gain"] is not None:
             gain_basis += " -- note: measured velocity is flat/negative; plan may need adjustment"
@@ -228,12 +240,14 @@ def estimate(business_id: int, quiet: bool = False) -> dict:
         "monthly_gain_estimate": round(expected_gain, 4),
         "gain_basis": gain_basis,
         "confidence": confidence,
+        "challenge": chal,
         "projection": {
             "optimistic": to_window(optimistic_months),
             "expected": to_window(expected_months),
             "conservative": to_window(conservative_months),
         },
-        "drivers": {"entrenchment": ent, "plan_throughput": thr, "observed_velocity": vel},
+        "drivers": {"entrenchment": ent, "plan_throughput": thr,
+                    "observed_velocity": vel, "challenge_profile": chal},
         "disclaimer": (
             "This is a PROJECTION, not a guarantee. It estimates how long until the "
             "accurate narrative DOMINATES what AI assistants surface (drowning out, not "

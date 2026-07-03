@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from contextvars import ContextVar
 from typing import Any
 
@@ -68,6 +69,24 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+class _DynamicStderrHandler(logging.StreamHandler):
+    """StreamHandler that always targets the CURRENT sys.stderr. We configure logging
+    once per process, but a plain StreamHandler binds sys.stderr at creation -- which
+    silences anything that later swaps stderr (e.g. pytest's capsys). Resolving the
+    stream at emit time keeps output going wherever stderr currently points."""
+
+    def __init__(self) -> None:
+        logging.Handler.__init__(self)   # skip StreamHandler.__init__ (it sets self.stream)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, _value):  # noqa: D401 -- always use current sys.stderr; ignore sets
+        pass
+
+
 _configured = False
 
 
@@ -75,7 +94,7 @@ def configure() -> None:
     global _configured
     if _configured:
         return
-    handler = logging.StreamHandler()
+    handler = _DynamicStderrHandler()
     handler.addFilter(_ContextFilter())
     handler.setFormatter(_JsonFormatter() if _JSON else _HumanFormatter())
     root = logging.getLogger()

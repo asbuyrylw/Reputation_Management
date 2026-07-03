@@ -44,6 +44,16 @@ class ScoreResult(BaseModel):
     goal_alignment: float = Field(ge=-1.0, le=1.0)
     mentions_contested: bool = False
     surfaces_owned: bool = False
+    # awareness: does the AI actually RECOGNIZE this specific business (True) vs give a
+    # generic/no-information answer (False)? Separates an awareness gap (a void to fill --
+    # faster) from a negative narrative (entrenched negatives to crowd out -- slower).
+    awareness: bool = True
+    # entity_confusion: the answer confidently describes a DIFFERENT entity that merely shares
+    # the name (wrong company/person/product), not THIS business. When True, the answer's
+    # sentiment/contested mentions are about the wrong entity and must NOT be read as this
+    # business's reputation -- it is a disambiguation/grounding failure, tracked separately
+    # from both an awareness gap and a negative narrative.
+    entity_confusion: bool = False
     key_sources: list[str] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
 

@@ -64,6 +64,13 @@ except ImportError:  # pragma: no cover
     _HTMLParser = None
     _HAS_PARSER = False
 
+# Optional Trafilatura: when installed, gives much cleaner main-text (strips nav/boilerplate)
+# than our parser/regex extraction. Purely additive -- if absent, extraction is unchanged.
+try:
+    import trafilatura  # type: ignore
+except ImportError:  # pragma: no cover
+    trafilatura = None
+
 # Optional richer SEO analysis via pyseoanalyzer's Page parser, run on HTML we
 # fetch ourselves (with our resilient http layer) -- NOT its fragile networking.
 try:
@@ -72,6 +79,26 @@ try:
 except ImportError:  # pragma: no cover
     _SeoPage = None
     _HAS_SEO = False
+
+# Non-content system/asset URLs (WordPress feeds, xmlrpc, wp-json/admin/includes/content,
+# oembed, comment-reply links, CSS/JS/feed files). These are crawl artifacts -- never real
+# "thin content pages" and never content opportunities -- so they must not pollute the gap
+# model's missing_owned_content or the SEO view's thin-page list.
+_CRAWL_ARTIFACT_RE = re.compile(
+    r"(?:"
+    r"/feed/?$|/comments/feed|/trackback/?$|"
+    r"xmlrpc\.php|wp-(?:json|admin|includes|content)|oembed|"
+    r"\?replytocom=|"
+    r"\.(?:css|js|json|xml|rss|atom|map|ico|png|jpe?g|gif|svg|webp|woff2?|ttf)(?:\?|$)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_crawl_artifact(url: str) -> bool:
+    """True for non-content system/asset URLs that should never be treated as a thin
+    content page or turned into a content opportunity."""
+    return bool(_CRAWL_ARTIFACT_RE.search(url or ""))
 USE_SEO_ANALYZER = os.getenv("CRAWL_USE_PYSEO", "1") != "0"   # PH 4: 0 to disable
 
 # Firecrawl: optional JS-rendering fetch layer. When configured, the crawler fetches
@@ -179,11 +206,29 @@ def _schema_types(html: str) -> list[str]:
     return types
 
 
+def _main_text(html: str) -> Optional[str]:
+    """Optional cleaner main-content text via Trafilatura (strips nav/boilerplate/footers).
+    Returns None when trafilatura isn't installed or finds no extractable main content, so the
+    caller falls back to the existing extraction unchanged."""
+    if trafilatura is None:
+        return None
+    try:
+        txt = trafilatura.extract(html)
+    except Exception as e:  # noqa: BLE001 -- optional dependency must never break extraction
+        log.debug("trafilatura extract failed: %s", e)
+        return None
+    txt = (txt or "").strip()
+    return txt or None
+
+
 def _extract(html: str) -> dict:
     """Extract page fields. Uses selectolax (robust HTML parsing) when available,
     falling back to regex. Robust parsing matters because real-world markup breaks
     naive regex, and JS-heavy pages need accurate text counts to avoid false
-    'thin_content' flags."""
+    'thin_content' flags. When Trafilatura is installed, its cleaner main-text replaces
+    the boilerplate-laden body text (and word count); otherwise behavior is unchanged."""
+    # Optional Trafilatura main-content text -- None when unavailable/empty (fall back below).
+    main = _main_text(html)
     if _HAS_PARSER:
         try:
             tree = _HTMLParser(html)
@@ -201,6 +246,9 @@ def _extract(html: str) -> dict:
                 tag.decompose()
             body = tree.body
             text = body.text(separator=" ", strip=True) if body else tree.text(separator=" ", strip=True)
+            # Prefer Trafilatura's cleaner main-text for word count + the semantic scorer when present.
+            if main is not None:
+                text = main
             words = len(text.split())
             hrefs = [a.attributes.get("href", "") for a in tree.css("a[href]")]
             return {"title": title, "meta": meta, "h1_count": len(h1s),
@@ -211,13 +259,15 @@ def _extract(html: str) -> dict:
     # regex fallback
     no_tags = re.sub(r"<[^>]+>", " ", re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html,
                                               flags=re.DOTALL | re.IGNORECASE))
+    # Prefer Trafilatura's cleaner main-text for word count + the semantic scorer when present.
+    text = main if main is not None else " ".join(no_tags.split())
     return {
         "title": _find(r"<title[^>]*>(.*?)</title>", html),
         "meta": _find(r'<meta[^>]*name=["\']description["\'][^>]*content=["\'](.*?)["\']', html),
         "h1_count": len(re.findall(r"<h1[\s>]", html, re.IGNORECASE)),
         "canonical": bool(re.search(r'<link[^>]*rel=["\']canonical["\']', html, re.IGNORECASE)),
-        "words": _text_words(html),
-        "text": " ".join(no_tags.split()),
+        "words": len(text.split()) if main is not None else _text_words(html),
+        "text": text,
         "hrefs": re.findall(r'href=["\'](.*?)["\']', html, re.IGNORECASE),
         "schema": _schema_types(html),
     }
@@ -369,6 +419,11 @@ def audit_page(seed: str, url: str, targets: dict | None = None) -> tuple[PageAu
         clean = l.split("#")[0]
         if re.search(r"\.(pdf|jpg|jpeg|png|gif|zip|mp4|css|js)$", clean, re.IGNORECASE):
             continue
+        # Don't spend crawl budget on WordPress system URLs (feeds, wp-json, xmlrpc, oembed).
+        # On a small WP site these dominate the link graph and crowd real pages out of the
+        # capped queue, which is why a one-page site showed "only 2 content pages."
+        if _is_crawl_artifact(clean):
+            continue
         next_urls.append(clean)
     return pa, next_urls
 
@@ -437,8 +492,12 @@ def summarize(results: list[PageAudit], lh: dict) -> dict:
     schema_present = {t for pa in results for t in pa.schema_types}
     desired_schema = {"Organization", "FAQPage", "Person", "Review", "LocalBusiness"}
     schema_gaps = sorted(desired_schema - schema_present)
-    thin = [pa.url for pa in results if "thin_content" in pa.issues]
-    no_meta = [pa.url for pa in results if "missing_meta_description" in pa.issues]
+    # exclude WordPress/system crawl artifacts (feeds, xmlrpc, wp-json, CSS/JS) -- they are
+    # not real content pages, so flagging them as "thin" is noise in the SEO view and the gap
+    # model (the validation found ~5 such junk items polluting missing_owned_content).
+    thin = [pa.url for pa in results if "thin_content" in pa.issues and not _is_crawl_artifact(pa.url)]
+    no_meta = [pa.url for pa in results if "missing_meta_description" in pa.issues
+               and not _is_crawl_artifact(pa.url)]
     # markers that are informational, not defects -- kept on the page record but
     # not counted as issues (so reports don't show them as problems).
     _INFO_MARKERS = {"rendered_via_firecrawl"}
@@ -460,6 +519,22 @@ def summarize(results: list[PageAudit], lh: dict) -> dict:
             for term in (pa.semantic.get("entity_coverage", {}) or {}).get("missing", []) or []:
                 missing_counter[term] = missing_counter.get(term, 0) + 1
     top_missing = sorted(missing_counter, key=missing_counter.get, reverse=True)[:10]
+    # Aggregate the per-page GEO signals (front-loading, question coverage, freshness, title
+    # alignment) so the gap model can ACT on them -- not just the single avg readiness number.
+    # These are the signals 2026 GEO research links to being CITED by answer engines.
+    def _avg(vals):
+        v = [x for x in vals if isinstance(x, (int, float))]
+        return round(sum(v) / len(v), 3) if v else None
+    sems = [pa.semantic for pa in results if isinstance(pa.semantic, dict) and pa.semantic]
+    geo_signals = {
+        "avg_front_loading": _avg([s.get("front_loading") for s in sems]),
+        "avg_title_alignment": _avg([s.get("title_alignment") for s in sems]),
+        "avg_question_coverage": _avg([(s.get("question_coverage") or {}).get("rate") for s in sems]),
+        "pages_with_freshness_date": sum(1 for s in sems if (s.get("freshness") or {}).get("has_date")),
+        "pages_scored": len(sems),
+        "low_readiness_pages": sum(1 for s in sems
+                                   if (s.get("citation_readiness_score") or 100) < 60),
+    }
     return {
         "pages_crawled": total,
         "lighthouse": lh,
@@ -470,6 +545,7 @@ def summarize(results: list[PageAudit], lh: dict) -> dict:
         "issue_counts": issue_counts,
         "rendered_via_firecrawl": rendered_count,
         "avg_semantic_readiness": avg_semantic,
+        "geo_signals": geo_signals,
         "top_missing_entities": top_missing,
         "pages": [pa.__dict__ for pa in results],
     }
@@ -483,6 +559,9 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
             "SELECT id FROM audit_runs WHERE business_id=%s ORDER BY id DESC LIMIT 1",
             (business_id,),
         ).fetchone()
+        biz = conn.execute("SELECT contested_terms FROM businesses WHERE id=%s",
+                           (business_id,)).fetchone()
+        contested = [t.lower() for t in split_terms(biz["contested_terms"]) if t] if biz else []
         conn.execute(
             "CREATE TABLE IF NOT EXISTS site_audits ("
             "id BIGSERIAL PRIMARY KEY, business_id BIGINT, run_id BIGINT, "
@@ -506,8 +585,15 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
                 moc.append({"topic": f"Expand thin page {url}", "asset_type": "article",
                             "why": "Page below content threshold; weak for retrieval/extraction."})
             model["missing_owned_content"] = moc
-            # semantic-depth findings: missing entities become content opportunities
+            # semantic-depth findings: missing entities become content opportunities -- but
+            # NEVER auto-propose a page targeting a CONTESTED term (e.g. "pyramid scheme",
+            # "scam"). A naive keyword page reinforces the very negative association we are
+            # crowding out; the right response to a contested topic is a legitimacy /
+            # transparency / corroboration asset, which the gap-model LLM proposes separately.
             for term in (summary.get("top_missing_entities") or [])[:8]:
+                tl = (term or "").lower()
+                if any(ct in tl or tl in ct for ct in contested):
+                    continue
                 moc.append({"topic": f"Add/strengthen coverage of '{term}'", "asset_type": "article",
                             "why": "Topic AI answers expect but the site under-covers "
                                    "(semantic-depth gap; entity coverage drives AI citation)."})

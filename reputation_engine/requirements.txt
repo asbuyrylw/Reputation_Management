@@ -8,4 +8,19 @@ pyseoanalyzer>=2024.0   # richer SEO/keyword analysis, run on HTML we fetch ours
 #   npm install -g lighthouse        (Core Web Vitals / SEO scoring)
 #   Screaming Frog SEO Spider (CLI)  (deep crawl/export; optional)
 pydantic>=2.0
+email-validator>=2.0   # required by pydantic EmailStr (reports_router.ReportEmail) — clean
+                       # installs (Docker/Railway) fail to import the app without it
 alembic>=1.13          # database migrations -- single source of truth for the schema
+langgraph>=1.0,<2      # agentic layer (Graph 1+): root-cause/source-intelligence, ...
+langchain-core>=1.0,<2  # message/graph types used by the LangGraph layer
+langgraph-checkpoint-postgres>=3.0,<4   # durable human-gate checkpointer (AGENT_CHECKPOINT_PG=1)
+psycopg-pool>=3.2      # connection pool for the Postgres checkpointer + the read API
+# --- Web console API (rep_engine.api); read+write layer over the same DB. Password
+#     hashing uses stdlib pbkdf2 (no bcrypt/passlib native dep), so nothing else is needed. ---
+fastapi>=0.110         # JSON API for the console
+uvicorn[standard]>=0.29  # ASGI server (python -m uvicorn rep_engine.api.main:app)
+pyjwt>=2.8             # JWT auth tokens (HS256)
+stripe>=9.0            # Phase 2c billing (Checkout/Portal/webhooks); imported lazily,
+                       # the app runs fine without it until STRIPE_SECRET_KEY is set
+cryptography>=42       # Integrations vault: Fernet at-rest encryption for OAuth tokens /
+                       # app-passwords (rep_engine.crypto). Only loaded when connections are used.

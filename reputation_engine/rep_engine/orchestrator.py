@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 
 
 try:
@@ -48,6 +49,65 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 log = logging.getLogger("orchestrator")
 
 
+# ----------------------------------------------------------------------------
+# Optional LangGraph agentic steps -- OFF by default so the verified cycle's cost
+# and behavior are unchanged; opt in per-graph via env. Agent modules are imported
+# lazily (the orchestrator stays importable without langgraph) and a graph failure
+# can never break the core cycle.
+# ----------------------------------------------------------------------------
+def _agent_enabled(flag: str) -> bool:
+    return os.getenv(flag, "").lower() in ("1", "true", "yes")
+
+
+def _safe_agentic(label: str, fn):
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 -- an optional agent must never break the cycle
+        log.warning("agentic step %s skipped: %s", label, e)
+        return {"skipped": str(e)}
+
+
+def _maybe_agentic_steps(rs, bid: int) -> None:
+    """Append the opt-in agentic graphs as cycle steps (each gated by its own env
+    flag). Graphs 1/2/4 are read-only/queue-only; Graph 3 drafts a bundle that still
+    requires the existing per-asset human approval -- nothing is auto-published."""
+    if (_agent_enabled("AGENT_INCIDENT_IN_CYCLE") or _agent_enabled("AGENT_REMEDIATION_IN_CYCLE")) \
+            and not _agent_enabled("AGENT_CHECKPOINT_PG"):
+        log.warning("In-cycle incident/remediation enabled WITHOUT AGENT_CHECKPOINT_PG: human-gate "
+                    "interrupts use an in-memory checkpointer and won't be resumable after this "
+                    "process exits. Set AGENT_CHECKPOINT_PG=1 for durable cross-process review.")
+    if _agent_enabled("AGENT_ROOTCAUSE_IN_CYCLE"):
+        def _run():
+            from . import agent_rootcause as a
+            return a.investigate(bid)
+        rs.step("root_cause", lambda: _safe_agentic("root_cause", _run),
+                "CYCLE root-cause / source-intelligence (Graph 1)")
+    if _agent_enabled("AGENT_DISCOVERY_IN_CYCLE"):
+        def _run():
+            from . import agent_discovery as a
+            return a.discover(bid)
+        rs.step("discovery", lambda: _safe_agentic("discovery", _run),
+                "CYCLE discovery of outreach targets (Graph 2)")
+    if _agent_enabled("AGENT_INCIDENT_IN_CYCLE"):
+        def _run():
+            from . import agent_incident as a
+            return a.scan(bid)
+        rs.step("incident_scan", lambda: _safe_agentic("incident_scan", _run),
+                "CYCLE reactive-incident scan (Graph 4)")
+    if _agent_enabled("AGENT_REMEDIATION_IN_CYCLE"):
+        def _run():
+            from . import agent_content as a
+            return a.remediate(bid)
+        rs.step("remediation", lambda: _safe_agentic("remediation", _run),
+                "CYCLE multi-channel content remediation (Graph 3)")
+    if _agent_enabled("AGENT_PRODUCTION_BRIEFS_IN_CYCLE"):
+        def _run():
+            from . import production_brief as a
+            return a.plan(bid)
+        rs.step("production_briefs", lambda: _safe_agentic("production_briefs", _run),
+                "CYCLE video/social production briefs (off-platform specs)")
+
+
 
 
 
@@ -65,10 +125,19 @@ def _add_business(args) -> int:
     return row["id"]
 
 
+def _maybe_batch_score(rs, bid: int) -> None:
+    """When AUDIT_BATCH_SCORING is on, the audit deferred scoring; fill the metrics now via
+    the Anthropic Batch API (50% off). Must run BEFORE gap_model (which reads the scores)."""
+    if m1._batch_scoring():
+        from . import batch as m_batch
+        rs.step("batch_score", lambda: m_batch.score_run_batched(bid), "batch-score answers (50% off)")
+
+
 def run_full(args) -> None:
     bid = _add_business(args)
     rs = m_rs.RunState.start(bid, kind="run", resume=getattr(args, "resume", False))
     rs.step("audit", lambda: m1.audit(bid), "STEP audit — AI-state audit")
+    _maybe_batch_score(rs, bid)
     rs.step("site_crawl", lambda: m3.crawl_cmd(bid, args.max_pages), "STEP site crawl")
     rs.step("gap_model", lambda: m1.build_gap_model(bid), "STEP gap model")
     rs.step("remerge", lambda: _remerge(bid), "STEP re-merge site findings")
@@ -76,6 +145,7 @@ def run_full(args) -> None:
     rs.step("sync_tracking", lambda: m5.sync_plan(bid), "STEP sync work orders")
     if getattr(args, "generate_drafts", False):
         rs.step("generate_drafts", lambda: m6.generate(bid), "STEP generate content drafts (pending review)")
+    _maybe_agentic_steps(rs, bid)
     rs.step("report", lambda: m4.generate(bid), "STEP client report")
     rs.finish()
     log.info("DONE. Business id=%d fully processed.", bid)
@@ -100,6 +170,7 @@ def run_cycle(args) -> None:
     bid = args.business_id
     rs = m_rs.RunState.start(bid, kind="cycle", resume=getattr(args, "resume", False))
     rs.step("audit", lambda: m1.audit(bid), "CYCLE audit")
+    _maybe_batch_score(rs, bid)
     rs.step("gap_model", lambda: m1.build_gap_model(bid), "CYCLE gap model")
     rs.step("attribution", lambda: m5.attribute(bid), "CYCLE attribution")
     rs.step("alert", lambda: m5.check_alert(bid), "CYCLE alert check")
@@ -107,6 +178,7 @@ def run_cycle(args) -> None:
     rs.step("learn", lambda: m9.learn(bid, quiet=True), "CYCLE learn from outcomes")
     rs.step("timeline", lambda: m7.estimate(bid, quiet=True), "CYCLE timeline estimate")
     rs.step("accelerate", lambda: m8.advise(bid, quiet=True), "CYCLE acceleration options")
+    _maybe_agentic_steps(rs, bid)
     rs.step("report", lambda: m4.generate(bid), "CYCLE report")
     rs.finish()
     log.info("Cycle complete for business id=%d", bid)

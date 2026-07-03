@@ -1,0 +1,80 @@
+# Reputation Console backend: Postgres + API + durable job worker.
+# The Next.js console (reputation-console/) deploys separately (Vercel/Node) and
+# points NEXT_PUBLIC_API_BASE_URL at the api service. See DEPLOY.md.
+#
+#   JWT_SECRET=$(openssl rand -hex 32) ADMIN_SEED_PASSWORD=... docker compose up --build
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: reputation
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./reputation_engine
+    environment:
+      REP_DB_DSN: postgresql://postgres:postgres@db:5432/reputation
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (e.g. openssl rand -hex 32)}
+      ADMIN_SEED_EMAIL: ${ADMIN_SEED_EMAIL:-admin@local}
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:?set ADMIN_SEED_PASSWORD}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:3000}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}      # set to 1 in prod (HTTPS)
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      JOB_WORKER: worker
+      AGENT_CHECKPOINT_PG: "1"
+      # AI engines (default to placeholders -> treated as unconfigured until you add real keys)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-YOUR_ANTHROPIC_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-YOUR_OPENAI_KEY}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-YOUR_PERPLEXITY_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-YOUR_GEMINI_KEY}
+      ENGINE_GROUNDING: ${ENGINE_GROUNDING:-1}
+      # Transactional email (Zoho by default; blank = log links instead of sending)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      # Stripe (blank = billing disabled; the pilot runs free/unmetered without it)
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    # run migrations, then serve
+    command: sh -c "alembic upgrade head && uvicorn rep_engine.api.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: ./reputation_engine
+    environment:
+      REP_DB_DSN: postgresql://postgres:postgres@db:5432/reputation
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      AGENT_CHECKPOINT_PG: "1"
+      # the worker runs audits -> it needs the AI engine keys + grounding flag
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-YOUR_ANTHROPIC_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-YOUR_OPENAI_KEY}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-YOUR_PERPLEXITY_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-YOUR_GEMINI_KEY}
+      ENGINE_GROUNDING: ${ENGINE_GROUNDING:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: python -m rep_engine.api.worker
+
+volumes:
+  pgdata:

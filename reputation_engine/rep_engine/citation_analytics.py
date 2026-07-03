@@ -60,6 +60,10 @@ def _ensure() -> None:
             id BIGSERIAL PRIMARY KEY, business_id BIGINT, domain TEXT, run_id BIGINT,
             cite_count INT, share NUMERIC(6,4), classification TEXT,
             first_seen_run BIGINT, last_seen_run BIGINT, created_at TIMESTAMPTZ DEFAULT now())""")
+        # Idempotency guard (matches migration 0055): one row per (business, domain, run) so a
+        # re-run of citation_analyze upserts instead of duplicating + inflating share-of-voice.
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_citation_momentum "
+                     "ON citation_momentum(business_id, domain, run_id)")
         conn.commit()
 
 
@@ -75,13 +79,76 @@ def _domain(src) -> str:
     return _strip_www(netloc.lower()) if netloc else ""
 
 
+# An owned host must be REGISTRABLE: a mistaken owned_domains entry like "com" or "co.uk" would
+# otherwise mark EVERY *.com citation (incl. complaint sites) as owned and poison share-of-voice.
+# Require at least one dot and reject known public suffixes.
+_PUBLIC_SUFFIXES = {
+    "com", "net", "org", "io", "co", "ai", "app", "dev", "info", "biz", "me", "us", "uk", "ca",
+    "au", "de", "fr", "es", "it", "nl", "eu", "gov", "edu", "mil", "tv", "xyz", "online", "site",
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "net.au", "co.nz", "co.za", "com.br",
+}
+
+
+def _is_registrable_host(h: str) -> bool:
+    """True only for a plausibly-registrable host (has a dot, isn't a bare public suffix)."""
+    return bool(h) and "." in h and h not in _PUBLIC_SUFFIXES
+
+
+def _norm_host(s) -> str:
+    """Extract the bare host from a domain OR a full URL OR an email -> 'teamunstoppable.com'.
+    Handles scheme (https://), www, paths, ports, user@ prefixes, and a trailing root dot.
+    Non-string input (e.g. a malformed JSONB element) returns '' rather than raising."""
+    if not isinstance(s, str):
+        return ""
+    s = s.strip().lower()
+    if not s:
+        return ""
+    if "//" not in s:
+        s = "//" + s
+    netloc = urlparse(s).netloc or ""
+    host = netloc.split("@")[-1].split(":")[0]  # strip user@ and :port
+    return _strip_www(host).rstrip(".")  # rstrip: a rooted FQDN 'host.com.' must match 'host.com'
+
+
+def _owned_hosts(biz: dict) -> set:
+    """All registrable hosts the business owns: its main domain + any declared owned_domains
+    (other sites, the owners' personal site, alternate TLDs, blogs). Subdomains match by suffix.
+    Non-registrable entries (bare TLDs, blanks, malformed values) are dropped so they can't
+    over-match every cited domain."""
+    hosts = set()
+    main = _norm_host(biz.get("domain"))
+    if _is_registrable_host(main):
+        hosts.add(main)
+    extra = biz.get("owned_domains")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except (ValueError, TypeError):
+            extra = [extra]
+    if not isinstance(extra, (list, tuple, set)):
+        extra = [extra] if extra else []
+    for d in extra:
+        h = _norm_host(d)
+        if _is_registrable_host(h):
+            hosts.add(h)
+    return hosts
+
+
+def _is_owned_domain(domain: str, owned_hosts: set) -> bool:
+    """A cited domain is owned if it equals an owned host OR is a subdomain of one
+    (info.teamunstoppable.com is owned because teamunstoppable.com is)."""
+    d = _strip_www((domain or "").lower()).rstrip(".")
+    return any(d == h or d.endswith("." + h) for h in owned_hosts)
+
+
 def _classify(domain: str, biz: dict) -> str:
-    """owned | contested | neutral. Owned = the business's own domain; contested =
-    domain looks tied to a contested term; else neutral."""
+    """owned | contested | neutral. Owned = the business's own domain or any declared owned
+    property (incl. subdomains); contested = the SOURCE domain is a known complaint site or matches
+    a contested term; else neutral. (Note: 'contested' is about the source domain, not whether the
+    cited content is negative -- content negativity is tracked via answer sentiment, not here.)"""
     if not domain:
         return "unknown"
-    own = _strip_www((biz.get("domain") or "").lower())
-    if own and own in domain:
+    if _is_owned_domain(domain, _owned_hosts(biz)):
         return "owned"
     # Curated complaint-site markers stay broad (raw substring) -- a deliberate
     # heuristic (e.g. 'ripoff' must still catch 'ripoffreport.com').
@@ -96,6 +163,39 @@ def _classify(domain: str, biz: dict) -> str:
     if any(t in tokens for t in contested_terms):
         return "contested"
     return "neutral"
+
+
+# Typed source buckets so the strategy can target the RIGHT KIND of source -- e.g. "AI leans
+# on review sites for you" implies get-listed-on-more-review-sites, vs "it leans on news"
+# implies earn-press. Transparent substring heuristic, ordered so the more specific bucket
+# wins (a complaint site is not merely a 'review'; reddit/quora are 'forum', not 'social').
+_SOURCE_TYPE_TABLE = [
+    ("complaint", ("ripoffreport", "complaintsboard", "pissedconsumer", "ripoff", "scamadviser")),
+    ("reference", ("wikipedia", "wikidata", "britannica", "investopedia", ".gov", ".edu")),
+    ("forum", ("reddit", "quora", "stackexchange", "stackoverflow", "forum")),
+    ("review", ("yelp", "trustpilot", "g2.com", "bbb.org", "glassdoor", "consumeraffairs",
+                "sitejabber", "clutch.co", "capterra", "angi.", "birdeye", "trustradius", "reviews")),
+    ("social", ("facebook", "instagram", "twitter.", "x.com", "linkedin", "tiktok",
+                "youtube", "pinterest", "threads.net")),
+    ("news", ("nytimes", "wsj.com", "forbes", "bloomberg", "reuters", "cnbc", "businessinsider",
+              "apnews", "usatoday", "prnewswire", "businesswire", "techcrunch", "news")),
+    ("directory", ("yellowpages", "manta.com", "crunchbase", "mapquest", "foursquare",
+                   "chamberofcommerce", "dnb.com", "zoominfo", "yellowbook")),
+]
+
+
+def _source_type(domain: str, biz: dict) -> str:
+    """own | review | social | forum | news | directory | complaint | reference | other.
+    A cited domain's KIND, for source-mix analysis. Independent of owned/contested/neutral."""
+    if not domain:
+        return "other"
+    if _is_owned_domain(domain, _owned_hosts(biz)):
+        return "own"
+    d = domain.lower()
+    for label, markers in _SOURCE_TYPE_TABLE:
+        if any(m in d for m in markers):
+            return label
+    return "other"
 
 
 def _citations_for_run(conn, run_id: int, biz: dict, persona: str = "", location: str = "") -> dict:
@@ -119,9 +219,37 @@ def _citations_for_run(conn, run_id: int, biz: dict, persona: str = "", location
     out = []
     for d, c in counts.items():
         out.append({"domain": d, "count": c, "share": round(c / total, 4) if total else 0.0,
-                    "classification": _classify(d, biz)})
+                    "classification": _classify(d, biz), "source_type": _source_type(d, biz)})
     out.sort(key=lambda x: x["count"], reverse=True)
     return {"total_citations": total, "domains": out}
+
+
+def sources_to_win(business_id: int, limit: int = 12) -> dict:
+    """"Steal their citations" (Wave 3, item 13): the influential NON-owned domains AI engines cite
+    in answers about your space. Each is a source to earn a mention/listing on -- ranked by how
+    often AI quotes it. Turns the citation data into concrete outreach/content targets."""
+    with db() as conn:
+        run = conn.execute("SELECT MAX(run_id) r FROM citation_momentum WHERE business_id=%s",
+                           (business_id,)).fetchone()["r"]
+        if not run:
+            return {"run_id": None, "sources": []}
+        rows = conn.execute(
+            "SELECT domain, cite_count, share, classification FROM citation_momentum "
+            "WHERE business_id=%s AND run_id=%s AND classification IN ('neutral','contested') "
+            "ORDER BY cite_count DESC LIMIT %s", (business_id, run, limit)).fetchall()
+    sources = []
+    for r in rows:
+        contested = r["classification"] == "contested"
+        sources.append({
+            "domain": r["domain"], "cite_count": r["cite_count"],
+            "share": float(r["share"] or 0), "classification": r["classification"],
+            "action": ("Address the concern + earn a balanced mention here (AI cites this against you)."
+                       if contested else
+                       "Earn a mention/listing here — AI already trusts it but doesn't cite you yet."),
+            "capability": "press_outreach" if not contested else "press_outreach",
+        })
+    return {"run_id": run, "sources": sources,
+            "summary": {"total": len(sources), "contested": sum(1 for s in sources if s["classification"] == "contested")}}
 
 
 def analyze(business_id: int, quiet: bool = False) -> dict:
@@ -156,7 +284,10 @@ def analyze(business_id: int, quiet: bool = False) -> dict:
             conn.execute(
                 """INSERT INTO citation_momentum
                    (business_id, domain, run_id, cite_count, share, classification, first_seen_run, last_seen_run)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (business_id, domain, run_id) DO UPDATE SET
+                     cite_count=EXCLUDED.cite_count, share=EXCLUDED.share,
+                     classification=EXCLUDED.classification, last_seen_run=EXCLUDED.last_seen_run""",
                 (business_id, d["domain"], rid, d["count"], d["share"], d["classification"], first_seen, rid),
             )
         conn.commit()

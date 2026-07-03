@@ -1,0 +1,99 @@
+# Render Blueprint — Reputation Engine backend (FastAPI web + background worker + Postgres).
+# Built from the existing reputation_engine/Dockerfile so the cloud runtime == your local
+# `docker compose` (python:3.12-slim + LibreOffice for PDF reports). The worker also ticks the
+# scheduler (worker.py), so this is two processes + one database — no separate scheduler service.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> connect this repo + branch -> Apply. Then set
+# the `sync: false` secrets and (optionally) restore your local DB. Full steps: DEPLOY.md.
+#
+# NOTE: plan names / postgresMajorVersion may need tweaking to match Render's current options
+# (adjust in the UI if Blueprint validation flags them).
+
+databases:
+  - name: reputation-db
+    databaseName: reputation
+    plan: basic-1gb          # a PAID plan keeps data durable; the free DB expires
+    postgresMajorVersion: "16"
+
+envVarGroups:
+  - name: reputation-secrets
+    envVars:
+      # Auto-generated once by Render, shared by both services, stable across deploys:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OAUTH_STATE_SECRET
+        generateValue: true
+      # Fixed operational flags:
+      - key: ORCHESTRATOR
+        value: anthropic
+      - key: JOB_WORKER
+        value: worker
+      - key: AGENT_CHECKPOINT_PG
+        value: "1"
+      - key: ENGINE_GROUNDING
+        value: "1"
+      - key: COOKIE_SECURE          # REQUIRED over HTTPS (adds Secure flag to session/CSRF cookies)
+        value: "1"
+      - key: COOKIE_SAMESITE
+        value: lax                  # lax works because the /api proxy makes the API same-origin
+      # --- Set these yourself in the Render dashboard (sync:false = never stored in git) ---
+      - key: TOKEN_ENC_KEY          # use your EXACT local value if you migrate connected accounts
+        sync: false
+      - key: ANTHROPIC_API_KEY      # required (the orchestrator)
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PERPLEXITY_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: ADMIN_SEED_EMAIL       # a login you control (also seeds super-admin logan@nexgenixai.com)
+        sync: false
+      - key: ADMIN_SEED_PASSWORD
+        sync: false
+      - key: PUBLIC_APP_ORIGIN      # your Vercel URL, set AFTER the frontend deploys (OAuth redirects)
+        sync: false
+      - key: APP_BASE_URL           # your Vercel URL (email / checkout links)
+        sync: false
+      - key: API_CORS_ORIGINS       # your Vercel URL (defense-in-depth; the proxy is same-origin)
+        sync: false
+
+services:
+  - type: web
+    name: reputation-api
+    runtime: docker
+    dockerfilePath: ./reputation_engine/Dockerfile
+    dockerContext: ./reputation_engine
+    # migrate to head, then serve (mirrors docker-compose; only the WEB migrates so web+worker
+    # don't race). $PORT is provided by Render.
+    dockerCommand: sh -c "alembic upgrade head && uvicorn rep_engine.api.main:app --host 0.0.0.0 --port $PORT"
+    plan: starter                   # always-on; free web services sleep
+    branch: feature/premium-ui-redesign
+    healthCheckPath: /health
+    envVars:
+      - key: REP_DB_DSN
+        fromDatabase:
+          name: reputation-db
+          property: connectionString
+      - fromGroup: reputation-secrets
+
+  - type: worker
+    name: reputation-worker
+    runtime: docker
+    dockerfilePath: ./reputation_engine/Dockerfile
+    dockerContext: ./reputation_engine
+    dockerCommand: python -m rep_engine.api.worker
+    plan: starter
+    branch: feature/premium-ui-redesign
+    envVars:
+      - key: REP_DB_DSN
+        fromDatabase:
+          name: reputation-db
+          property: connectionString
+      - fromGroup: reputation-secrets

@@ -1,0 +1,5 @@
+# These files run on Linux (Replit / containers) and MUST stay LF — a CRLF shell
+# script fails with `bash\r`, and CRLF in a SQL COPY dump corrupts the data.
+*.sh        text eol=lf
+*.sql       text eol=lf
+replit/*    text eol=lf

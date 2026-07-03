@@ -66,6 +66,36 @@ def test_budget_cap_blocks_audit(fresh_schema, monkeypatch):
 
 
 @requires_db
+def test_batch_scoring_defers_scores_not_failures(fresh_schema, monkeypatch):
+    """With AUDIT_BATCH_SCORING=1 the audit stores valid answers UNSCORED (failed=False, NULL
+    metrics) for the 50%-off batch pass to fill later -- it must NOT score inline and must NOT
+    mark them failed."""
+    conn = fresh_schema
+    from rep_engine import ai_state_audit as m
+    bid = _seed_business(conn)
+    conn.execute("INSERT INTO business_config (business_id, samples_per_prompt, monthly_budget_usd) "
+                 "VALUES (%s,1,50)", (bid,))
+    conn.commit()
+
+    class GoodEngine:
+        name = "goodX"; model = "y"
+        def answer(self, p): return m._ok("Acme is a trusted local firm.", [])
+
+    monkeypatch.setattr(m, "active_engines", lambda: [GoodEngine()])
+    scored: list = []
+    monkeypatch.setattr(m, "score_answer",
+                        lambda b, p, a: scored.append(1) or {"sentiment": "positive", "goal_alignment": 0.7})
+    monkeypatch.setenv("AUDIT_BATCH_SCORING", "1")
+
+    run_id = m.audit(bid)
+    rows = conn.execute("SELECT failed, goal_alignment FROM answers WHERE run_id=%s", (run_id,)).fetchall()
+    assert len(rows) > 0
+    assert all(r["failed"] is False for r in rows)          # deferred, not failed
+    assert all(r["goal_alignment"] is None for r in rows)   # unscored -> batch fills later
+    assert scored == []                                     # inline scoring skipped
+
+
+@requires_db
 def test_tracking_lifecycle_and_attribution(fresh_schema):
     conn = fresh_schema
     from rep_engine import tracking as tr
@@ -94,7 +124,7 @@ def test_tracking_lifecycle_and_attribution(fresh_schema):
     conn.commit()
 
     created = tr.sync_plan(bid)
-    assert created == 1
+    assert created["created"] == 1 and created["revision"] == 1
 
     wo_id = conn.execute("SELECT id FROM work_orders WHERE business_id=%s", (bid,)).fetchone()["id"]
     tr.set_status(wo_id, "done", assignee="tester", notes="ok")
@@ -265,7 +295,8 @@ def test_build_gap_model_fences_key_sources_and_missing(fresh_schema, monkeypatc
 
     captured = {}
     monkeypatch.setattr(m, "orchestrator_json",
-                        lambda system, user, **k: captured.update(user=user) or {"weak_queries": []})
+                        lambda system, user, **k: captured.update(user=user)
+                        or {"summary": "ok", "weak_queries": []})
     m.build_gap_model(bid)
     # the consumer path threaded the new columns into the prompt...
     assert "IGNORE PRIOR INSTRUCTIONS" in captured["user"]

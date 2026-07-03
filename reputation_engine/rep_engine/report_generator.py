@@ -23,8 +23,12 @@ import argparse
 import json
 import logging
 import os
+import pathlib
+import shutil
+import subprocess
 import tempfile
 from datetime import date
+from typing import Optional
 
 
 try:
@@ -35,7 +39,9 @@ except ImportError:  # pragma: no cover
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("report_generator")
 
-OUTPUT_DIR = os.getenv("REP_OUTPUT_DIR", "output")                                        # PH 2
+# Absolute at import so the generating process and the API agree on the location regardless
+# of each one's working directory (the download endpoint anchors served files to this dir).
+OUTPUT_DIR = os.path.abspath(os.getenv("REP_OUTPUT_DIR", "output"))                       # PH 2
 
 NAVY = "1F3A5F"
 GOLD = "B08D2E"
@@ -47,8 +53,8 @@ RUST = "8A3B2E"
 
 def _run_series(conn, business_id: int) -> list:
     runs = conn.execute(
-        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-        "ORDER BY id ASC", (business_id,),
+        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+        "AND finished_at IS NOT NULL ORDER BY id ASC", (business_id,),
     ).fetchall()
     series = []
     for r in runs:
@@ -236,6 +242,43 @@ def _section_timeline(heading, body, business_id):
         body("A timeline projection is not available for this reporting period.", italic=True)
 
 
+def _section_search_performance(heading, body, bullet, business_id):
+    # ---- Real organic-search ROI (GSC clicks/impressions + GA behavior + our-content credit) ----
+    try:
+        from . import gsc_data as _g
+        latest = _g.latest(business_id)
+        if not latest.get("has_data"):
+            return  # nothing to show until Search Console is connected + collecting
+        heading("Organic Search Performance (Google Search Console)")
+        body(f"In the last 28 days you earned {latest.get('clicks', 0):,} clicks from "
+             f"{latest.get('impressions', 0):,} impressions "
+             f"(CTR {round((latest.get('ctr') or 0) * 100, 1)}%, avg position "
+             f"{round(latest.get('position') or 0, 1)}).")
+        roi = _g.roi_summary(business_id)
+        if roi.get("has_data"):
+            if roi.get("baseline_clicks") is not None:
+                body(f"Since we started, organic clicks moved from ~{roi['baseline_clicks']:,} to "
+                     f"~{roi['latest_clicks']:,} per 28-day window.")
+            if roi.get("our_content_clicks"):
+                body(f"Of that, ~{roi['our_content_clicks']:,} clicks came from the "
+                     f"{roi.get('our_content_pages', 0)} page(s) WE published — content we created "
+                     "now pulling its own search traffic.", italic=True)
+            if roi.get("equivalent_ads_value"):
+                body(f"That organic traffic is worth roughly ${roi['equivalent_ads_value']:,.0f}/mo "
+                     "in equivalent paid search — an estimate, and you're getting it for free.", italic=True)
+        # behavior layer (GA), if connected
+        try:
+            from . import ga_data as _ga
+            gl = _ga.latest(business_id)
+            if gl.get("has_data"):
+                body(f"Site behavior (Google Analytics): {gl.get('sessions', 0):,} sessions, "
+                     f"{gl.get('conversions', 0):,.0f} conversions in the last 28 days.")
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: search-performance section unavailable (%s)", e)
+
+
 def _section_acceleration(heading, body, business_id):
     # ---- Ways to accelerate (third-party / human levers) ----
     try:
@@ -283,6 +326,41 @@ def _section_share_of_voice(heading, body, business_id):
         log.warning("report: share-of-voice section unavailable (%s)", e)
 
 
+def _section_per_engine(heading, body, bullet, business_id):
+    # ---- Per-engine coverage & grounding: the cross-engine promise, reported honestly ----
+    try:
+        from . import ai_state_audit as _ai
+        pe = _ai.per_engine_metrics(business_id)
+        engines = pe.get("engines") or {}
+        if not engines:
+            return
+        heading("What Each AI Engine Says (and How Grounded)")
+        cov = pe.get("coverage") or {}
+        if cov.get("partial"):
+            cfg = cov.get("configured") or []
+            exp = cov.get("expected") or []
+            body("Partial coverage: this audit covered "
+                 f"{', '.join(cfg) or 'no engines'} ({len(cfg)} of {len(exp)} AI "
+                 f"engines). Configure the missing engines ({', '.join(cov.get('missing') or [])}) "
+                 "for a complete cross-engine read.", italic=True)
+        for name, m in engines.items():
+            ga = m.get("goal_alignment") or {}
+            gr = m.get("grounded_rate")
+            n = m.get("n", 0)
+            ga_txt = "n/a" if ga.get("mean") is None else f"{ga['mean']:+.2f}"
+            if ga.get("low") is not None:
+                ga_txt += f" (95% CI {ga['low']:+.2f}..{ga['high']:+.2f})"
+            grounded_txt = ("grounding not reported" if not gr
+                            else f"{round(gr['p'] * 100)}% grounded in live web (n={gr['n']})")
+            bullet(f"{name}: goal alignment {ga_txt} over {n} answers; {grounded_txt}.")
+        body("Goal alignment runs -1 (works against the goal) to +1 (strongly supports it); "
+             "ranges are 95% confidence intervals. “Grounded” means the engine answered "
+             "from a live web search rather than model memory — ungrounded answers reflect what "
+             "the model already believed, not the current web.", italic=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("report: per-engine section unavailable (%s)", e)
+
+
 def _section_competitor(heading, body, bullet, business_id):
     # ---- Competitor benchmarking (only if a benchmark has been run) ----
     try:
@@ -316,12 +394,222 @@ def _section_competitor(heading, body, bullet, business_id):
 def _save_report(doc, b) -> str:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     safe = "".join(c for c in b.get("name", "business") if c.isalnum() or c in " -_").strip().replace(" ", "_")
-    path = os.path.join(OUTPUT_DIR, f"{safe}_AI_Visibility_Report_{date.today().isoformat()}.docx")
+    filename = f"{safe}_AI_Visibility_Report_{date.today().isoformat()}.docx"
+    path = os.path.join(OUTPUT_DIR, filename)
     doc.save(path)
     _fix_settings_zoom(path)
     log.info("Report written: %s", path)
     print(path)
+    _record_report(b.get("id"), filename, os.path.abspath(path))
+    # A regenerated .docx (same per-day basename) must not keep a STALE colocated .pdf: drop
+    # any old sibling before (re)converting, so a failed/absent conversion leaves the fresh
+    # .docx as the single source of truth rather than serving last run's mismatched PDF.
+    stale_pdf = os.path.splitext(os.path.abspath(path))[0] + ".pdf"
+    try:
+        if os.path.exists(stale_pdf):
+            os.remove(stale_pdf)
+    except OSError:  # pragma: no cover -- best-effort cleanup
+        pass
+    pdf = _docx_to_pdf(path)   # best-effort: a colocated <basename>.pdf when LibreOffice is present
+    if pdf:
+        log.info("Report PDF written: %s", pdf)
     return path
+
+
+def _docx_to_pdf(docx_path: str) -> Optional[str]:
+    """Best-effort .docx -> PDF via headless LibreOffice (soffice/libreoffice). Returns the PDF
+    path (next to the .docx), or None when LibreOffice isn't installed or conversion fails --
+    callers then fall back to the .docx. Fixed argv (no shell); time-bounded; a PER-CALL user
+    profile (-env:UserInstallation) so concurrent conversions don't clash on the shared default
+    profile lock (and so it doesn't depend on a writable HOME)."""
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+    src = os.path.abspath(docx_path)
+    try:
+        with tempfile.TemporaryDirectory(prefix="lo_") as profile:
+            subprocess.run(
+                [soffice, f"-env:UserInstallation={pathlib.Path(profile).as_uri()}",
+                 "--headless", "--convert-to", "pdf", "--outdir", os.path.dirname(src), src],
+                check=True, timeout=180, capture_output=True)
+    except Exception as e:  # noqa: BLE001 -- PDF is optional; never break report generation
+        log.warning("report: PDF conversion failed (%s)", e)
+        return None
+    pdf = os.path.splitext(src)[0] + ".pdf"
+    return pdf if os.path.isfile(pdf) else None
+
+
+def _record_report(business_id, filename: str, path: str) -> None:
+    """Track the saved report so the console can list + download it. Best-effort: never let
+    a bookkeeping miss (e.g. pre-migration DB) fail an otherwise-good report generation."""
+    if not business_id:
+        return
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO reports (business_id, filename, path, kind) VALUES (%s,%s,%s,'monthly')",
+                (business_id, filename, path),
+            )
+            conn.commit()
+    except Exception as e:  # noqa: BLE001 -- bookkeeping must not break report generation
+        log.warning("report: could not record report row (%s)", e)
+
+
+def _section_root_cause_and_incidents(heading, body, bullet, business_id):
+    """Surface the agentic layer's output -- Graph 1 root-cause + Graph 4 pending
+    incidents -- when present. Read-only and a NO-OP when those tables are empty or
+    absent (so the report is unchanged unless the agents have run)."""
+    try:
+        with db() as conn:
+            rc = conn.execute("SELECT model FROM root_cause WHERE business_id=%s "
+                              "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+            inc = conn.execute("SELECT severity, COUNT(*) n FROM incidents WHERE business_id=%s "
+                               "AND status='pending_human_review' GROUP BY severity",
+                               (business_id,)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- tables may be absent on an un-migrated DB
+        log.warning("report: agentic-findings section unavailable (%s)", e)
+        return
+    model = (rc.get("model") if rc else None) or {}
+    if not isinstance(model, dict):       # tolerate a hand-edited / schema-drifted row
+        model = {}
+    summary = str(model.get("summary") or "")
+    if summary and "No contested sources" not in summary:
+        heading("Why the Contested Narrative Surfaces")
+        body(summary[:1500])              # bound a pathological injected string
+        sources = model.get("primary_sources")
+        for s in (sources if isinstance(sources, list) else [])[:3]:
+            if isinstance(s, dict):
+                bullet(f"{s.get('url', '')} — {s.get('why', '')}")
+        counters = model.get("recommended_counters")
+        counters = counters if isinstance(counters, list) else []
+        if counters:
+            body("Recommended counters: " + "; ".join(str(c) for c in counters[:5]) + ".", italic=True)
+    if inc:
+        heading("New Contested Mentions Flagged This Period")
+        for r in inc:
+            bullet(f"{r['severity']}: {r['n']} awaiting review")
+        body("These were auto-triaged with a drafted response pending your approval.", italic=True)
+
+
+def _render_brief(body, bullet, row):
+    """Render one production brief as a compact, human-actionable card. Shape-robust:
+    a hand-edited / schema-drifted JSONB row never raises (bounded strings, isinstance
+    guards) -- same hardening as _section_root_cause_and_incidents."""
+    brief = row.get("brief") if isinstance(row.get("brief"), dict) else {}
+    title = str(row.get("title") or brief.get("title") or "(untitled)")[:160]
+    platform = str(row.get("platform") or brief.get("platform") or "")[:40]
+    fmt = str(brief.get("format") or "")[:60]
+    length = brief.get("target_length") or brief.get("target_length_seconds")
+    length = str(length) if length not in (None, "") else ""
+    if length and row.get("channel") == "video" and length.isdigit():
+        length = f"{length}s"
+    meta = " · ".join(x for x in (platform, fmt, length) if x)
+    body(title + (f"  ({meta})" if meta else ""), bold=True)
+    tq = str(row.get("target_query") or brief.get("target_query") or "")
+    if tq:
+        bullet(f"Targets the query: {tq[:200]}")
+    kws = brief.get("keywords")
+    kws = kws if isinstance(kws, list) else []
+    if kws:
+        bullet("Keywords: " + ", ".join(str(k) for k in kws[:12])[:300])
+    hook = str(brief.get("hook") or "")
+    if hook:
+        bullet(f"Hook: {hook[:200]}")
+    outline = brief.get("outline")
+    outline = outline if isinstance(outline, list) else []
+    if outline:
+        bullet("Outline: " + " → ".join(str(o) for o in outline[:8])[:400])
+    cta = str(brief.get("cta") or "")
+    if cta:
+        bullet(f"Call to action: {cta[:200]}")
+
+
+def _render_owned_draft(body, bullet, row):
+    """Render one owned-website-page draft (content_drafts row) as a headline deliverable.
+    Shape-robust like _render_brief: a schema-drifted / partially-populated row never raises."""
+    title = str(row.get("title") or "(untitled page)")[:180]
+    asset_type = str(row.get("asset_type") or "").strip().lower()
+    _TYPE_LABEL = {"article": "Article", "faq": "FAQ page", "schema": "Structured-data / schema"}
+    kind = _TYPE_LABEL.get(asset_type, asset_type.replace("_", " ").title() or "Page")
+    status = str(row.get("status") or "").strip()
+    _STATUS_LABEL = {"pending_review": "ready for your review",
+                     "needs_fix": "needs a quick fix before it ships"}
+    status_label = _STATUS_LABEL.get(status, status.replace("_", " ") or "drafted")
+    meta = " · ".join(x for x in (kind, status_label) if x)
+    body(title + (f"  ({meta})" if meta else ""), bold=True)
+    tq = str(row.get("target_query") or "")
+    if tq:
+        bullet(f"Targets the query: {tq[:200]}")
+
+
+def _section_production_briefs(heading, body, bullet, business_id, gap=None):
+    """Surface the "Content to Produce" work for the period. The HEADLINE deliverable is the
+    owned WEBSITE PAGES we've drafted (content_drafts: article/faq/schema awaiting review) --
+    these are what actually move AI/search visibility. Beneath them, the video + social
+    PRODUCTION BRIEFS (production_briefs.plan) are shown as amplification: specs for off-platform
+    content the client/team produces. Read-only; each source is independently resilient so the
+    section renders whatever exists and is a NO-OP when both tables are empty (report unchanged
+    unless the content/brief steps ran). `gap` is the latest gap model, used only to flag a
+    plan-adequacy gap when the model wants owned content but none has been drafted yet."""
+    # --- Owned website pages (the headline deliverable) ---
+    drafts = []
+    try:
+        with db() as conn:
+            drafts = conn.execute(
+                "SELECT title, asset_type, target_query, status FROM content_drafts "
+                "WHERE business_id=%s AND asset_type IN ('article','faq','schema') "
+                "AND status IN ('pending_review','needs_fix') ORDER BY id DESC LIMIT 12",
+                (business_id,)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
+        log.warning("report: content-drafts unavailable for Content-to-Produce (%s)", e)
+        drafts = []
+
+    # --- Off-platform production briefs (amplification beneath the headline) ---
+    briefs = []
+    try:
+        with db() as conn:
+            briefs = conn.execute(
+                "SELECT channel, platform, title, target_query, brief FROM production_briefs "
+                "WHERE business_id=%s AND status='to_produce' ORDER BY channel, id",
+                (business_id,)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
+        log.warning("report: production-briefs unavailable (%s)", e)
+        briefs = []
+
+    vids = [r for r in briefs if r.get("channel") == "video"][:8]
+    socs = [r for r in briefs if r.get("channel") == "social"][:8]
+
+    # Plan-adequacy: the gap model wants owned content but nothing has been drafted yet.
+    moc = (gap or {}).get("missing_owned_content") if isinstance(gap, dict) else None
+    n_missing = len(moc) if isinstance(moc, list) else 0
+    plan_gap = n_missing > 0 and not drafts
+
+    # NO-OP when there is nothing to say at all (keeps the report unchanged unless a step ran).
+    if not drafts and not vids and not socs and not plan_gap:
+        return
+
+    heading("Content to Produce This Period")
+    body("The pages below are the owned content we draft for your own website — the primary lever "
+         "that moves how AI assistants and search describe you. Video and social specs beneath them "
+         "amplify that content off-platform. Each item lists the AI/search query it targets.", italic=True)
+
+    if drafts:
+        heading("Website Pages Drafted (Review & Publish)", size=12)
+        for r in drafts:
+            _render_owned_draft(body, bullet, r)
+    if plan_gap:
+        body(f"⚠ Plan gap: the gap model identifies {n_missing} owned page(s) worth producing, but "
+             f"none have been drafted yet this period. Generating these owned pages is the highest-"
+             f"leverage next step.", italic=True, color=RUST)
+
+    if vids:
+        heading("Videos to Produce", size=12)
+        for r in vids:
+            _render_brief(body, bullet, r)
+    if socs:
+        heading("Social Posts to Produce", size=12)
+        for r in socs:
+            _render_brief(body, bullet, r)
 
 
 def generate(business_id: int) -> str:
@@ -357,6 +645,14 @@ def generate(business_id: int) -> str:
         wr.bold = True; wr.font.size = Pt(13); wr.font.color.rgb = RGBColor.from_string("B00020")
 
     heading("Executive Summary")
+    # White-label hook (Wave 5, item 21): brand the deliverable for agencies (per-business meta -> env).
+    try:
+        from . import public_report as _pr
+        _brand = _pr.branding(business_id).get("brand_name")
+        if _brand and _brand != "Reputation Console":
+            body(f"Prepared by {_brand}.", italic=True)
+    except Exception:  # noqa: BLE001
+        pass
     n_runs = len(series)
     if n_runs >= 2:
         first, last = series[0], series[-1]
@@ -487,9 +783,11 @@ def generate(business_id: int) -> str:
         if deltas:
             body(f"Metric changes over the same window: {deltas}.")
 
+    _section_search_performance(heading, body, bullet, business_id)
     _section_timeline(heading, body, business_id)
     _section_acceleration(heading, body, business_id)
     _section_share_of_voice(heading, body, business_id)
+    _section_per_engine(heading, body, bullet, business_id)
     _section_competitor(heading, body, bullet, business_id)
 
     wos = plan.get("work_orders", []) or []
@@ -506,6 +804,9 @@ def generate(business_id: int) -> str:
     if shown == 0:
         for w in wos[:6]:
             bullet(w.get("title", ""))
+
+    _section_root_cause_and_incidents(heading, body, bullet, business_id)
+    _section_production_briefs(heading, body, bullet, business_id, gap)
 
     heading("How These Results Are Achieved", size=12, color=GOLD)
     body("This program works by out-producing and out-corroborating accurate, positive content so "
