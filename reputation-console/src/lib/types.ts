@@ -1328,6 +1328,21 @@ export interface OurContentAsset {
   has_traffic: boolean;
 }
 
+// Phase-5 freshness lever: published pieces old enough to be worth refreshing (read-only recs).
+export interface FreshnessItem {
+  asset_id: number;
+  title: string | null;
+  published_url: string;
+  published_at: string | null;
+  age_days: number;
+  age_months: number;
+}
+export interface FreshnessQueue {
+  threshold_months: number;
+  count: number;
+  items: FreshnessItem[];
+}
+
 export interface OurContentImpact {
   assets: OurContentAsset[];
   owned_citation_share: number; // 0..1 — share of citations pointing at content we own/published

@@ -84,6 +84,7 @@ import type {
   GaChannel,
   GaProperty,
   OurContentImpact,
+  FreshnessQueue,
   TopicalAuthority,
   InternalLinks,
   KeywordIntent,
@@ -408,6 +409,10 @@ const base = (businessId: number | null, suffix: string) =>
 
 export function useShareOfVoice(businessId: number | null) {
   return useApiQuery<ShareOfVoice>(["sov", businessId], base(businessId, "/citations/share-of-voice"));
+}
+// Published pieces old enough to be worth a freshness refresh (read-only recommendations).
+export function useFreshnessQueue(businessId: number | null) {
+  return useApiQuery<FreshnessQueue>(["freshness-queue", businessId], base(businessId, "/freshness-queue"));
 }
 export function useMomentum(businessId: number | null) {
   return useApiQuery<Json>(["momentum", businessId], base(businessId, "/citations/momentum"));

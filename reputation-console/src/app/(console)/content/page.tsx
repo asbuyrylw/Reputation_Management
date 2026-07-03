@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useProductionBriefs, useTopicalAuthority } from "@/lib/hooks";
+import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
@@ -25,6 +25,7 @@ export default function ContentOverviewPage() {
   const { data: drafts } = useContentDrafts(businessId);
   const { data: briefs } = useProductionBriefs(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
+  const { data: freshness } = useFreshnessQueue(businessId);
 
   if (loading) return <Spinner />;
   if (businesses.length === 0) {
@@ -108,6 +109,23 @@ export default function ContentOverviewPage() {
         </div>
         <Link href="/content/outreach" className="inline-flex h-9 shrink-0 items-center rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white hover:bg-indigo-strong">Open outreach</Link>
       </Card>
+
+      {/* freshness queue — published pieces due for a refresh (Phase-5 freshness lever) */}
+      {freshness && freshness.count > 0 && (
+        <Card className="mt-5">
+          <SecHead title="Due for a refresh" note={`published over ${freshness.threshold_months} months ago`} link={{ label: "Published", href: "/content/finalized" }} />
+          <p className="mb-3 text-[13px] text-ink-3"><b className="font-semibold text-ink-2">{freshness.count}</b> piece{freshness.count === 1 ? "" : "s"} could use a refresh — a visible &ldquo;last updated&rdquo; edit keeps AI &amp; Google freshness signals warm.</p>
+          <div className="space-y-1.5">
+            {freshness.items.slice(0, 5).map((f) => (
+              <div key={f.asset_id} className="flex items-center gap-3 border-b border-line py-2 last:border-0">
+                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{f.title || f.published_url}</span>
+                <span className="shrink-0 rounded-full bg-amber-bg px-2 py-0.5 font-mono text-[11px] font-semibold text-amber">{f.age_months} mo old</span>
+                <a href={f.published_url} target="_blank" rel="noreferrer" className="shrink-0 text-[12px] font-semibold text-indigo hover:text-indigo-strong">Open →</a>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

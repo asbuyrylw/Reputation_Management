@@ -158,6 +158,26 @@ def our_content_impact(business_id: int = Depends(authorize_business), conn=Depe
                        "our_content_sessions": sum(a["ga_sessions"] for a in out_assets)}}
 
 
+@router.get("/freshness-queue")
+def freshness_queue(months: int = 12, business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Published pieces old enough to be worth refreshing (Phase-5 freshness lever): live assets whose
+    publish date is older than `months` (default 12), oldest first. Read-only recommendations — a
+    visible 'Last updated' refresh keeps AI/Google freshness signals warm. Never auto-edits anything."""
+    months = max(1, min(60, int(months or 12)))
+    rows = conn.execute(
+        "SELECT id, title, published_url, published_at, "
+        "  EXTRACT(DAY FROM (now() - published_at))::int AS age_days "
+        "FROM assets WHERE business_id=%s AND published_status='live' AND published_at IS NOT NULL "
+        "  AND published_at < now() - make_interval(months => %s) "
+        "ORDER BY published_at ASC LIMIT 50",
+        (business_id, months)).fetchall()
+    items = [{"asset_id": r["id"], "title": r["title"], "published_url": r["published_url"],
+              "published_at": r["published_at"].isoformat() if r["published_at"] else None,
+              "age_days": int(r["age_days"] or 0), "age_months": round((r["age_days"] or 0) / 30.4)}
+             for r in rows]
+    return {"threshold_months": months, "count": len(items), "items": items}
+
+
 @router.get("/keyword-intent")
 def keyword_intent(business_id: int = Depends(authorize_business)):
     """Keywords mapped by search intent + which intents lack owned content (Wave 5, item 19)."""
