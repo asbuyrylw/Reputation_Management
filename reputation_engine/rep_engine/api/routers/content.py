@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import date
 from typing import Optional
 
@@ -598,6 +599,52 @@ def atomize_draft_ep(
     if not res.get("ok"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "could not atomize this draft")
     return res
+
+
+def _shopia():
+    try:
+        from ... import shopia as _sh
+    except ImportError:  # pragma: no cover
+        import shopia as _sh  # type: ignore
+    return _sh
+
+
+@router.get("/shopia-status")
+def shopia_status(business_id: int = Depends(authorize_business)):
+    """Whether Shopia (secondary quality-check provider) is connected + which checks have a
+    workflow ref configured. Drives whether the UI shows the 'second opinion' controls."""
+    return _shopia().status()
+
+
+@router.post("/content-drafts/{draft_id}/shopia-check")
+def shopia_check(
+    draft_id: int,
+    kind: str,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Run a Shopia secondary check (kind -> SHOPIA_WF_<KIND> automation) on a draft's body, on
+    demand. Persists the result onto quality_notes.shopia_<kind> and returns it. 422 when the key
+    or the kind's workflow ref isn't configured, so nothing runs (and no credits burn) by accident."""
+    _assert_draft_in_business(conn, draft_id, business_id)
+    sh = _shopia()
+    if not sh.configured():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Shopia isn't connected (no SHOPIA_API_KEY).")
+    if not sh.workflow_ref(kind):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"No Shopia automation configured for '{kind}' (set SHOPIA_WF_{kind.upper()}).")
+    row = conn.execute("SELECT body FROM content_drafts WHERE id=%s AND business_id=%s",
+                       (draft_id, business_id)).fetchone()
+    body = ((row or {}).get("body") or "")[:8000]
+    res = sh.check(kind, text=body)
+    if res.get("skipped"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("reason") or "shopia check skipped")
+    if res.get("error"):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, res.get("error"))
+    conn.execute("UPDATE content_drafts SET quality_notes = quality_notes || %s::jsonb, updated_at=now() "
+                 "WHERE id=%s", (json.dumps({f"shopia_{kind}": res.get("outputs") or res}), draft_id))
+    conn.commit()
+    return {"ok": True, "kind": kind, "result": res.get("outputs") or res}
 
 
 @router.post("/work-orders/{wo_id}/status")
