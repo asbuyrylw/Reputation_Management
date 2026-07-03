@@ -7,7 +7,11 @@ GET /businesses/{id}/dashboard -> the full dashboard bundle (reuses report_gener
 
 from __future__ import annotations
 
+import json
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 from .. import auth
 from ..deps import authorize_business, get_conn, get_current_user, require_admin, require_business_editor
@@ -62,6 +66,58 @@ def get_business(business_id: int = Depends(authorize_business), conn=Depends(ge
         "FROM locations WHERE business_id=%s ORDER BY is_primary DESC, id", (business_id,),
     ).fetchall()]
     return out
+
+
+class BusinessProfileUpdate(BaseModel):
+    """The owner-editable business profile — the same fields onboarding captures. Every field is
+    optional; only the ones sent are changed (a partial update)."""
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    services: Optional[str] = None
+    industry: Optional[str] = None
+    goal: Optional[str] = None
+    contested_terms: Optional[str] = None
+    geo: Optional[str] = None
+    firm_type: Optional[str] = None   # merged into regulatory_profile jsonb (drives compliance checks)
+
+
+_PROFILE_COLS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo")
+
+
+@router.patch("/{business_id}")
+def update_business_profile(body: BusinessProfileUpdate,
+                           business_id: int = Depends(require_business_editor),
+                           conn=Depends(get_conn)):
+    """Owner-safe business-profile editor: lets an EDITOR (owner/operator) update the profile fields
+    captured at onboarding — geo, services, industry, goal, contested terms, firm type — without the
+    admin-only `/admin/businesses` surface. Tenancy + editor role are enforced by require_business_editor.
+    Partial update: only the fields provided change; name can't be blanked."""
+    sets, params = [], []
+    for col in _PROFILE_COLS:
+        v = getattr(body, col)
+        if v is not None:
+            v = v.strip()
+            if col == "name" and not v:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Business name can't be empty")
+            sets.append(f"{col}=%s")
+            params.append(v)
+    # firm_type lives inside the regulatory_profile jsonb (it drives which compliance screen runs);
+    # merge it in without clobbering the rest of the object.
+    if body.firm_type is not None:
+        sets.append("regulatory_profile = COALESCE(regulatory_profile,'{}'::jsonb) || %s::jsonb")
+        params.append(json.dumps({"firm_type": body.firm_type.strip()}))
+    if not sets:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No profile fields to update")
+    params.append(business_id)
+    row = conn.execute(
+        f"UPDATE businesses SET {', '.join(sets)} WHERE id=%s "
+        "RETURNING id, name, domain, services, industry, goal, contested_terms, geo, regulatory_profile",
+        params,
+    ).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found")
+    conn.commit()
+    return dict(row)
 
 
 @router.get("/{business_id}/export")

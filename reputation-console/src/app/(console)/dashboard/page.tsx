@@ -79,7 +79,10 @@ function ProfileTrackingCard({ biz }: { biz?: Business }) {
     <Card>
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold tracking-tight text-slate-900">What we&apos;re tracking for you</h3>
-        <span className="text-xs text-slate-400">{setupPct}% set up</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400">{setupPct}% set up</span>
+          <Link href="/account" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">Edit →</Link>
+        </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {filled.map((f) => <span key={f.label} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">✓ {f.label}</span>)}
@@ -87,7 +90,7 @@ function ProfileTrackingCard({ biz }: { biz?: Business }) {
       {empty.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-xs text-slate-500">
           {empty.map((f) => (
-            <li key={f.label}>⚠ <span className="font-medium text-slate-600">{f.label}</span> not set — add it during setup to enable {f.enables}.</li>
+            <li key={f.label}>⚠ <Link href="/account" className="font-medium text-indigo-600 hover:underline">{f.label}</Link> not set — add it to enable {f.enables}.</li>
           ))}
         </ul>
       )}

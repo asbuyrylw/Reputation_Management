@@ -300,6 +300,31 @@ export function useSetupBusiness() {
   });
 }
 
+// The owner-editable business profile (geo/services/goal/contested_terms/industry/firm_type) — the
+// same fields onboarding captured, editable AFTER setup without needing admin. PATCH /businesses/{id};
+// invalidates the business list + dashboard so the new profile flows everywhere.
+export interface BusinessProfilePatch {
+  name?: string;
+  domain?: string;
+  services?: string;
+  industry?: string;
+  goal?: string;
+  contested_terms?: string;
+  geo?: string;
+  firm_type?: string;
+}
+export function useUpdateBusinessProfile(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: BusinessProfilePatch) =>
+      apiFetch(`/businesses/${businessId}`, { method: "PATCH", body: patch }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["businesses"] });
+      qc.invalidateQueries({ queryKey: ["dashboard", businessId] });
+    },
+  });
+}
+
 export function useApproveDraft(businessId: number | null) {
   return useApiMutation<{ draftId: number; override_reason?: string }>(
     ({ draftId }) => `/businesses/${businessId}/content-drafts/${draftId}/approve`,

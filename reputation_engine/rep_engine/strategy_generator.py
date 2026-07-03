@@ -301,8 +301,12 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
 
-    def add(title, capability, instruction, week, deps=None, *, gap_source="", why="",
+    def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
             source="audited gap", area=None, platform="", source_query=""):
+        # Foundational Phase-0 tasks (AI-visibility baseline, GBP claim, review sequence) legitimately
+        # trace to no single gap, so they default to gap_source='baseline setup' -> the console shows
+        # "From: baseline setup" instead of a blank "why". Gap-derived add() calls pass gap_source
+        # explicitly and override this default (audit report Low-19).
         nonlocal n
         n += 1
         tool = best_tool(capability)

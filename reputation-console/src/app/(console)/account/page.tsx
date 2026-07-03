@@ -15,10 +15,80 @@ import {
   useSetBranding,
   useShareLink,
   useLeads,
+  useUpdateBusinessProfile,
 } from "@/lib/hooks";
 import { apiDownload, ApiError } from "@/lib/api";
 import { Card, PageHeader, Button, Input, Chip } from "@/components/ui";
-import type { IntegrationSettings } from "@/lib/types";
+import type { IntegrationSettings, Business } from "@/lib/types";
+
+// Owner-safe business-profile editor (closes the gap: onboarding was create-only + editing was
+// admin-only). Lets an editor keep geo/services/goal/contested-terms/industry/firm-type current —
+// the fields that drive local rankings, keyword targeting, the goal framing, narrative defense, and
+// which compliance screen runs. Keyed by businessId at the call site so it re-inits on a switch.
+const FIRM_TYPES: { v: string; label: string }[] = [
+  { v: "", label: "— not set —" },
+  { v: "non_financial", label: "Non-financial" },
+  { v: "ria", label: "Registered Investment Adviser (RIA)" },
+  { v: "broker_dealer", label: "Broker-Dealer" },
+  { v: "insurance", label: "Insurance" },
+  { v: "other", label: "Other" },
+];
+
+function BusinessProfileCard({ biz, businessId, canEdit }: { biz?: Business; businessId: number | null; canEdit: boolean }) {
+  const update = useUpdateBusinessProfile(businessId);
+  const [form, setForm] = useState({
+    name: biz?.name ?? "",
+    domain: biz?.domain ?? "",
+    industry: biz?.industry ?? "",
+    geo: biz?.geo ?? "",
+    services: biz?.services ?? "",
+    goal: biz?.goal ?? "",
+    contested_terms: biz?.contested_terms ?? "",
+    firm_type: biz?.regulatory_profile?.firm_type ?? "",
+  });
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+  const inputCls = "w-full rounded-lg border border-line-2 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-indigo";
+  const labelCls = "block text-xs font-medium text-ink-2";
+  const save = () => {
+    if (!form.name.trim()) return;
+    update.mutate({ ...form, name: form.name.trim() });
+  };
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-ink">Business profile</h3>
+        {update.isSuccess && <span className="text-xs text-good">Saved ✓</span>}
+      </div>
+      <p className="mt-1 text-sm text-ink-3">
+        What we track for <span className="font-medium">{biz?.name ?? "this business"}</span>. Keeping these current sharpens
+        your local rankings, keyword targeting, goal framing, narrative defense, and compliance checks.
+      </p>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><label className={labelCls}>Business name</label><input className={`${inputCls} mt-1`} value={form.name} onChange={set("name")} disabled={!canEdit} /></div>
+        <div><label className={labelCls}>Website</label><input className={`${inputCls} mt-1`} value={form.domain} onChange={set("domain")} disabled={!canEdit} placeholder="example.com" /></div>
+        <div><label className={labelCls}>Industry</label><input className={`${inputCls} mt-1`} value={form.industry} onChange={set("industry")} disabled={!canEdit} placeholder="e.g. Financial services" /></div>
+        <div><label className={labelCls}>Areas served</label><input className={`${inputCls} mt-1`} value={form.geo} onChange={set("geo")} disabled={!canEdit} placeholder="e.g. Cincinnati, OH" /></div>
+        <div className="sm:col-span-2"><label className={labelCls}>Services / keywords</label><input className={`${inputCls} mt-1`} value={form.services} onChange={set("services")} disabled={!canEdit} placeholder="comma-separated" /></div>
+        <div className="sm:col-span-2"><label className={labelCls}>Goal — how should AI describe you?</label><textarea className={`${inputCls} mt-1 min-h-16 resize-y`} value={form.goal} onChange={set("goal")} disabled={!canEdit} /></div>
+        <div className="sm:col-span-2"><label className={labelCls}>Working against (contested terms / narratives)</label><textarea className={`${inputCls} mt-1 min-h-16 resize-y`} value={form.contested_terms} onChange={set("contested_terms")} disabled={!canEdit} /></div>
+        <div><label className={labelCls}>Firm type (compliance)</label>
+          <select className={`${inputCls} mt-1`} value={form.firm_type} onChange={set("firm_type")} disabled={!canEdit}>
+            {FIRM_TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
+          </select>
+        </div>
+      </div>
+      {canEdit ? (
+        <div className="mt-3 flex items-center gap-2">
+          <Button onClick={save} disabled={update.isPending || !form.name.trim()}>{update.isPending ? "Saving…" : "Save profile"}</Button>
+          {update.isError && <span className="text-xs text-alert">{(update.error as Error)?.message ?? "Couldn’t save."}</span>}
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-ink-4">Only editors can change the profile.</p>
+      )}
+    </Card>
+  );
+}
 
 // Platform owner (super-admin) only: the billing master switch. The whole billing system is
 // wired but dormant until this is flipped on.
@@ -405,6 +475,9 @@ export default function AccountPage() {
       <div className="space-y-4">
         {/* platform owner only: the billing master switch */}
         {user?.is_super_admin && <PlatformCard />}
+
+        {/* owner-editable business profile (was create-only at onboarding / admin-only to edit) */}
+        <BusinessProfileCard key={businessId} biz={biz} businessId={businessId} canEdit={canEdit} />
 
         {/* per-business automation / auto-post settings */}
         <AutomationCard businessId={businessId} canEdit={canEdit} />
