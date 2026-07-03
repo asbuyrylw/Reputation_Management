@@ -373,7 +373,7 @@ export default function BriefsPage() {
           why="Content to produce is built from the gaps an audit + plan find."
           produces="Once a plan runs, each content piece appears here with its status and a one-click “Generate draft.”"
           timing="An audit + plan takes a few minutes."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run an audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-6">

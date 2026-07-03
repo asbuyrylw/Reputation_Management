@@ -1632,20 +1632,32 @@ _COVERAGE_DIMENSIONS = [
 ]
 
 
-def _gap_critic_refine(draft: dict, first_party_signals: dict) -> dict:
+def _gap_critic_refine(draft: dict, first_party_signals: dict,
+                       business_id: Optional[int] = None, run_id: Optional[int] = None) -> dict:
     """Run ONE completeness-critic + refine pass over the draft gap model. Fail-safe: a critic
     failure (or any non-improvement) keeps the draft. Flag-gated via GAP_CRITIC_ENABLED (default on).
     Cheap relative to the first pass -- it sees the draft + the compact first-party signals, not the
-    full fenced answer set."""
+    full fenced answer set. business_id/run_id (optional) let the pass ledger its own spend (rec 10b)."""
     import os as _os
     if _os.getenv("GAP_CRITIC_ENABLED", "1").strip().lower() not in ("1", "true", "yes", "on"):
         return draft
     try:
+        crit_user = json.dumps({"draft_plan": draft, "first_party_signals": first_party_signals,
+                                "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str)
         crit = orchestrator_json(
-            GAP_CRITIC_SYSTEM,
-            json.dumps({"draft_plan": draft, "first_party_signals": first_party_signals,
-                        "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str),
+            GAP_CRITIC_SYSTEM, crit_user,
             tier=GAP_MODEL_TIER, max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
+        # Ledger the critic pass spend too (rec 10b) -- best-effort, never breaks the refine.
+        if business_id is not None:
+            try:
+                _cm, _ = _model_for(GAP_MODEL_TIER) if ORCHESTRATOR == "anthropic" else (None, None)
+                if _cm is None:
+                    _, _cm = _model_for(GAP_MODEL_TIER)
+                cost.record(business_id, run_id, ORCHESTRATOR, "gap_critic", _cm,
+                            cost.approx_tokens(GAP_CRITIC_SYSTEM + crit_user),
+                            cost.approx_tokens(json.dumps(crit, default=str) if isinstance(crit, dict) else ""))
+            except Exception:  # noqa: BLE001 -- cost logging must never break the critic
+                pass
         if isinstance(crit, dict) and crit.get("summary"):
             log.info("gap critic pass refined the plan")
             return crit
@@ -1700,6 +1712,15 @@ def build_gap_model(business_id: int) -> dict:
         ).fetchone()
         if not run:
             raise SystemExit("Run a completed audit first.")
+        # Budget guard (rec 10b): gap-model synthesis is a large, expensive LLM pass (two ~12k-token
+        # calls). Refuse to start it when the business is already at/over its monthly cap -- mirroring
+        # the audit guard. The cap is the runaway backstop; raise a resumable error so the job retries
+        # once the budget is raised, rather than silently spending past the ceiling.
+        if cost.over_budget(business_id):
+            raise SystemExit(
+                f"Business {business_id} is at/over its monthly budget "
+                f"(${cost.month_spend(business_id):.2f} / ${cost.budget_for(business_id):.2f}); "
+                f"gap-model synthesis skipped. Raise monthly_budget_usd in business_config to proceed.")
         answers = conn.execute(
             "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
             "mentions_contested, surfaces_owned, awareness, entity_confusion, key_sources, missing "
@@ -1854,6 +1875,16 @@ def build_gap_model(business_id: int) -> dict:
         # mid-object and the synthesis is discarded as unparseable.
         model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
                                   max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
+        # Ledger the synthesis spend (rec 10b) so the gap model's cost is visible in COGS and counts
+        # against the monthly cap, like audit answers do. Recorded even on a failed/empty synthesis:
+        # we still paid for the input tokens, and honest budgeting must not omit that. Estimated
+        # tokens (the orchestrator returns parsed JSON, not provider usage) -- cost.py is an estimate.
+        _gm_model, _ = _model_for(GAP_MODEL_TIER) if ORCHESTRATOR == "anthropic" else (None, None)
+        if _gm_model is None:
+            _, _gm_model = _model_for(GAP_MODEL_TIER)
+        cost.record(business_id, run["id"], ORCHESTRATOR, "gap_model", _gm_model,
+                    cost.approx_tokens(GAP_SYSTEM + payload),
+                    cost.approx_tokens(json.dumps(model) if isinstance(model, dict) else ""))
         # A failed/empty synthesis must NOT overwrite the last good gap model.
         # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
         # completion, unparseable JSON, missing key). Persisting that empty model would
@@ -1885,7 +1916,7 @@ def build_gap_model(business_id: int) -> dict:
                 "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
                 "social_presence": social_presence,
                 "external_signal_types": [s.get("signal_type") for s in external_signals],
-            })
+            }, business_id=business_id, run_id=run["id"])
         else:
             log.info("gap model: first pass addressed all coverage dimensions; skipping critic pass")
         _hb()  # critic pass done (or skipped)

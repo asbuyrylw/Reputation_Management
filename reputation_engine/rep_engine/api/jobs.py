@@ -458,7 +458,59 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
         return None, (active["id"] if active else None)
 
 
-def _annotate_budget(business_id: int, status: str, result):
+# Rec 12: job types whose whole point is to PRODUCE something (rows, drafts, keywords, a plan...).
+# For these, "complete" must imply "produced something" -- a 0-output run should NOT read as a clean
+# green. We derive a produced_count from the handler's structured return and flag empty runs so the
+# UI/logs can distinguish "ran and did work" from "ran and produced nothing". This is an
+# observability signal only -- some 0-output runs (e.g. nothing new to do) are legitimately empty, so
+# we never flip status to failed here.
+_OUTPUT_PRODUCING_JOBS = frozenset({
+    "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "keyword_research",
+    "production_briefs", "citation_analyze", "benchmark", "local_rank",
+})
+
+# Keys a handler's return dict commonly uses to report how many items it produced. First hit wins.
+_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored")
+
+
+def _derive_produced_count(result) -> Optional[int]:
+    """Best-effort produced_count from a handler's structured return. Returns an int when derivable,
+    else None (meaning 'unknown', not zero). Prefers explicit count keys; falls back to the length of
+    the first list-valued field. Never raises -- observability must not break job recording."""
+    if not isinstance(result, dict):
+        return None
+    try:
+        for k in _PRODUCED_COUNT_KEYS:
+            if k in result:
+                v = result[k]
+                if isinstance(v, bool):  # bools are ints in Python; a flag isn't a count
+                    continue
+                if isinstance(v, (int, float)):
+                    return int(v)
+                if isinstance(v, (list, tuple, set, dict)):
+                    return len(v)
+        for v in result.values():
+            if isinstance(v, (list, tuple)):
+                return len(v)
+    except Exception:  # noqa: BLE001 -- never let count derivation break recording
+        return None
+    return None
+
+
+def _annotate_produced(job_type: str, status: str, result):
+    """Rec 12: for OUTPUT-PRODUCING job types, attach produced_count and flag 0-output runs.
+    Only acts when the job completed (a 'failed' run already reads red). Best-effort."""
+    if status != "complete" or job_type not in _OUTPUT_PRODUCING_JOBS:
+        return result
+    produced = _derive_produced_count(result)
+    # None/empty return, or a derivable count of exactly 0, means the producing job made nothing.
+    empty = (result is None) or (isinstance(result, dict) and not result) or (produced == 0)
+    if produced is not None and isinstance(result, dict):
+        result = {**result, "produced_count": produced}
+    if empty:
+        base = result if isinstance(result, dict) else {}
+        result = {**base, "complete_empty": True}
+    return result
     """If the business is over its monthly budget, tag the job result with {budget_exhausted,
     spent, cap} and fire a once-a-month 'budget_exhausted' notification. Best-effort: never let
     a budget check break job recording."""
@@ -507,6 +559,13 @@ def run_job(job_id: int) -> Optional[str]:
         # {rows, queries}) so a job that did nothing reportable doesn't read as a bare "complete".
         if isinstance(ret, dict):
             result = ret
+        # Rec 12: "complete must imply produced-something." For output-producing job types, attach a
+        # produced_count and flag a 0-output run so it stops reading as a clean green. Status stays
+        # 'complete' (some empty runs are legitimate) -- this is an observability signal + WARNING.
+        result = _annotate_produced(job["job_type"], status, result)
+        if isinstance(result, dict) and result.get("complete_empty"):
+            log.warning("job %s completed but produced nothing (business %s)",
+                        job["job_type"], job["business_id"])
     except Exception as e:  # noqa: BLE001 -- record failure, never crash the runner
         status, err = "failed", str(e)[:2000]
         log.warning("job %s (%s) failed: %s", job_id, job["job_type"], e)

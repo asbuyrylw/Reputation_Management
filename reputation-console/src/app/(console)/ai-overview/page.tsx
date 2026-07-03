@@ -124,7 +124,7 @@ export default function AiOverviewPage() {
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
       {!latest ? (
-        <EmptyState title="No audit has run yet" why="An audit checks what ChatGPT, Claude, Perplexity, and Gemini say about your business." produces="Your score, per-engine breakdown, the worst answers, and the signals appear here once it finishes." cta={{ label: "Go to Run jobs", href: "/admin/jobs" }} />
+        <EmptyState title="No audit has run yet" why="An audit checks what ChatGPT, Claude, Perplexity, and Gemini say about your business." produces="Your score, per-engine breakdown, the worst answers, and the signals appear here once it finishes." cta={{ label: "Run an audit", href: "/runs" }} />
       ) : (
         <div className="space-y-2">
           {/* HERO flipped — score (big) beside "what it means" */}

@@ -32,10 +32,37 @@ log = logging.getLogger("rep_engine.scheduler")
 DEFAULT_CADENCES = {
     "cycle": 720,          # full monthly cycle ~ every 30 days (the expensive full audit)
     "light_sweep": 168,    # weekly cheap refresh (socials + citations + mentions + alerts; #3d)
+    "alert_check": 24,     # daily proactive alerts (score drop, new incidents, answer changes)
     "mentions_scan": 24,   # daily mention sweep
     "incident_scan": 24,   # daily incident triage
     "citation_analyze": 168,  # weekly
 }
+
+
+def seed_default_schedules(business_id: int) -> int:
+    """Turn on the monitoring/alerting spine for a newly-created business by inserting the
+    DEFAULT_CADENCES recurring schedules for it. Idempotent: only inserts job_types that don't
+    already have a schedule for this business (ON CONFLICT DO NOTHING on the
+    UNIQUE (business_id, job_type) index), so re-running it -- or calling it for a business that
+    already has hand-tuned schedules -- never resets an existing row's interval or next_run_at.
+    Each job's first run is staggered (spread across its interval window) so a batch of freshly
+    onboarded tenants don't all fire the same expensive job at the same instant. Returns the
+    number of schedules newly inserted."""
+    inserted = 0
+    with db() as conn:
+        for job_type, hours in DEFAULT_CADENCES.items():
+            interval_hours = max(1, int(hours))
+            row = conn.execute(
+                "INSERT INTO schedules (business_id, job_type, interval_hours, enabled, next_run_at) "
+                "VALUES (%s,%s,%s,TRUE, now() + make_interval(hours => %s)) "
+                "ON CONFLICT (business_id, job_type) DO NOTHING "
+                "RETURNING id",
+                (business_id, job_type, interval_hours, interval_hours),
+            ).fetchone()
+            if row:
+                inserted += 1
+        conn.commit()
+    return inserted
 
 
 def list_schedules(business_id: int) -> list[dict]:

@@ -136,7 +136,7 @@ export default function AuditsPage() {
           why="An audit checks what the AI assistants say about your business and turns it into a 0–100 score."
           produces="You'll see your latest score, the worst answers, and how each engine answers — right here."
           timing="An audit takes a few minutes."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run an audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-6">

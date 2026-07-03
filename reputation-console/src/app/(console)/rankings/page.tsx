@@ -82,7 +82,7 @@ export default function RankingsPage() {
           why="We build this from the websites AI cited in your audit answers."
           produces="You'll see which share is your own content vs. neutral vs. critical sources."
           timing="Runs with each audit."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run an audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-4">

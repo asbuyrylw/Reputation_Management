@@ -29,7 +29,7 @@ export default function GapsPage() {
           why="Your gaps are worked out from an audit of what AI assistants say about you."
           produces="Once an audit runs, you'll see the questions AI gets wrong, the pages to create, and the order to do them."
           timing="An audit takes a few minutes."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run an audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-6">

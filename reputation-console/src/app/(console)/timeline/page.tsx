@@ -32,7 +32,7 @@ export default function TimelinePage() {
           why="We project your finish date from your audit history and how much accurate content is shipping."
           produces="After your first audit you'll see a projected date; it sharpens with each additional audit."
           timing="Run an audit to begin."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run an audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-6">

@@ -21,11 +21,14 @@ import { WorstAnswers } from "@/components/WorstAnswers";
 import { EngineScoreStrip } from "@/components/EngineScoreStrip";
 import OnboardingCard from "@/components/OnboardingCard";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { RunPipelineButton } from "@/components/RunPipelineButton";
+import { FreshnessChip } from "@/components/FreshnessChip";
+import { PipelinePrecheckBanner } from "@/components/PipelinePrecheckBanner";
 import VisibilityTrendChart from "@/components/VisibilityTrendChart";
 import { Card, PageHeader, SectionCard, Spinner } from "@/components/ui";
 import { EmptyState, ToneLegend, DataSection } from "@/components/primitives";
 import { repScore, dashboardScore } from "@/lib/repScore";
-import type { SeriesPoint, WorkOrder, Business } from "@/lib/types";
+import type { SeriesPoint, Business } from "@/lib/types";
 
 type Json = Record<string, unknown>;
 type WeakQuery = { prompt?: string; engine?: string; problem?: string; fix?: string; addressed_by?: string };
@@ -84,65 +87,11 @@ function ProfileTrackingCard({ biz }: { biz?: Business }) {
       {empty.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-xs text-slate-500">
           {empty.map((f) => (
-            <li key={f.label}>⚠ Add <Link href="/admin/businesses" className="font-medium text-indigo-600 hover:underline">{f.label}</Link> to enable {f.enables}.</li>
+            <li key={f.label}>⚠ <span className="font-medium text-slate-600">{f.label}</span> not set — add it during setup to enable {f.enables}.</li>
           ))}
         </ul>
       )}
     </Card>
-  );
-}
-
-// --- Approval queue summary — small, lives inside the "Do this next" section ---
-function ApprovalWidget({ businessId }: { businessId: number | null }) {
-  const { data } = useApprovalQueue(businessId);
-  const n = data?.items?.length ?? 0;
-  return (
-    <Link
-      href="/approvals"
-      className={`mt-3 flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-medium transition ${
-        n > 0 ? "border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100" : "border-slate-100 bg-slate-50 text-slate-500 hover:bg-slate-100"
-      }`}
-    >
-      <span>{n > 0 ? `🕒 ${n} item${n === 1 ? "" : "s"} waiting to approve & post` : "✓ Nothing waiting for your approval"}</span>
-      {n > 0 && <span>Review →</span>}
-    </Link>
-  );
-}
-
-// --- Do this next: the top open work items + the approval summary ---
-function DoThisNext({ workOrders, businessId }: { workOrders: WorkOrder[] | undefined; businessId: number | null }) {
-  const open = (workOrders ?? []).filter((w) => w.status !== "done" && w.status !== "verified");
-  const ranked = [...open].sort((a, b) => (a.execution === "auto" ? 1 : 0) - (b.execution === "auto" ? 1 : 0));
-  const top = ranked.slice(0, 3);
-  return (
-    <SectionCard title="Do this next" subtitle="The highest-impact moves to raise your score." accent="info" action={{ label: "View full plan", href: "/content/work-orders" }}>
-      {top.length === 0 ? (
-        <p className="text-sm text-slate-500">No open tasks yet. Run an audit to generate your action plan.</p>
-      ) : (
-        <ol className="space-y-3.5">
-          {top.map((w, i) => (
-            <li key={w.id} className="flex gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white shadow-sm">{i + 1}</span>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-bold text-slate-900">{w.title ?? w.wo_code}</div>
-                {w.instruction && (
-                  <div className="mt-1 flex gap-2 text-sm leading-relaxed text-slate-600">
-                    <span className="select-none text-slate-300" aria-hidden>–</span><span>{w.instruction}</span>
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
-      {/* approval queue — what's waiting to approve & post */}
-      <ApprovalWidget businessId={businessId} />
-      {open.length > 0 && (
-        <div className="mt-3 border-t border-slate-100 pt-3 text-xs font-medium text-slate-400">
-          {open.length} open task{open.length === 1 ? "" : "s"} in your plan
-        </div>
-      )}
-    </SectionCard>
   );
 }
 
@@ -325,7 +274,7 @@ function ThisMonthPanel({ businessId }: { businessId: number | null }) {
 }
 
 export default function DashboardPage() {
-  const { businessId, businesses, loading: bizLoading } = useBusiness();
+  const { businessId, businesses, loading: bizLoading, canEdit } = useBusiness();
   const { user } = useAuth();
   const [workView, setWorkView] = useState(false);
   const { data, isLoading, error } = useDashboard(businessId);
@@ -456,13 +405,23 @@ export default function DashboardPage() {
           Open your work queue →
         </button>
       )}
-      <PageHeader
-        eyebrow="Overview"
-        title={`Dashboard — ${data.business.name}`}
-        subtitle="Where you stand with AI assistants, what to do next, and when it'll improve."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader
+          eyebrow="Overview"
+          title={`Dashboard — ${data.business.name}`}
+          subtitle="Where you stand with AI assistants, what to do next, and when it'll improve."
+        />
+        {/* Always-on freshness + owner-safe one-click refresh (never sends owners to /admin). */}
+        <div className="flex shrink-0 items-center gap-2 pt-1">
+          <FreshnessChip asOf={latest?.date} />
+          {canEdit && <RunPipelineButton businessId={businessId} />}
+        </div>
+      </div>
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      {/* Connect-your-data nudge before spending on a run (self-hides once connected). */}
+      {canEdit && <PipelinePrecheckBanner businessId={businessId} />}
 
       {notifs && notifs.unread > 0 && (
         <Link href="/notifications" className="mb-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm hover:bg-amber-100">
@@ -479,7 +438,7 @@ export default function DashboardPage() {
           why="An audit checks what ChatGPT, Claude, Perplexity, and Gemini say about your business."
           produces="Once it finishes, your reputation score, your biggest gaps, and your action plan appear here."
           timing="An audit takes a few minutes."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run your first audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-6">
@@ -587,11 +546,9 @@ export default function DashboardPage() {
                 </section>
               )}
 
-              {/* task detail beside biggest gaps */}
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <DoThisNext workOrders={workOrders} businessId={businessId} />
-                <BiggestGaps gap={data.gap} />
-              </div>
+              {/* biggest gaps — the single "do this next" action center lives up top (DoNextV2);
+                  this detail block stays focused on the worst gaps, not a second task list. */}
+              <BiggestGaps gap={data.gap} />
 
               {/* per-engine AI scores */}
               <section className="space-y-2">

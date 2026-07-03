@@ -120,7 +120,7 @@ export default function OnboardingPage() {
           </div>
 
           <div className="mt-4 flex flex-wrap gap-3">
-            <Link href="/admin/jobs" className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
+            <Link href="/runs" className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
               Watch progress
             </Link>
             <Link href="/dashboard" className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50">

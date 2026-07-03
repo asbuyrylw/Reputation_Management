@@ -791,6 +791,21 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
              json.dumps(highlighted), json.dumps(placeholders), content_hash),
         ).fetchone()
         conn.commit()
+    # Ledger the estimated LLM spend for this draft (rec 10b) so content generation shows up in COGS
+    # and counts against the monthly cap -- previously every drafting call was invisible to the ledger.
+    # The passes (outline + draft + 1+revisions full generations + eval/compliance) don't surface
+    # provider usage, so this is an estimate (cost.py is explicitly estimate-grade for budgeting).
+    try:
+        _cm, _ = llm._model_for("mid") if llm.ORCHESTRATOR == "anthropic" else (None, None)
+        if _cm is None:
+            _, _cm = llm._model_for("mid")
+        _passes = 1 + revisions
+        _in = llm.cost.approx_tokens(json.dumps(grounding, default=str)) + \
+            llm.cost.approx_tokens(outline or topic)
+        _out = llm.cost.approx_tokens(body) * _passes + 800  # +eval/compliance/keyword overhead
+        llm.cost.record(business_id, None, llm.ORCHESTRATOR, "content_draft", _cm, _in, _out)
+    except Exception as e:  # noqa: BLE001 -- cost logging must never break generation
+        log.debug("content cost record skipped: %s", e)
     log.info("Draft %d for '%s' (type=%s, score=%.2f, rev=%d, compliance=%s, status=%s, placeholders=%d)",
              row["id"], topic, asset_type, score, revisions, comp_pass, status, len(placeholders))
     return row["id"]
@@ -825,8 +840,17 @@ def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
                 p = plan["plan"] if isinstance(plan["plan"], dict) else json.loads(plan["plan"])
                 wos = p.get("work_orders", [])
     biz = dict(biz)
+    # Budget guard (rec 10b): drafting a batch is a multi-call LLM spend per work order (outline +
+    # draft + eval + revisions + compliance). Refuse to start when the business is already at/over its
+    # monthly cap, mirroring the audit + gap-model guards. The cap is the runaway backstop.
+    if llm.cost.over_budget(business_id):
+        raise SystemExit(
+            f"Business {business_id} is at/over its monthly budget "
+            f"(${llm.cost.month_spend(business_id):.2f} / ${llm.cost.budget_for(business_id):.2f}); "
+            f"draft generation skipped. Raise monthly_budget_usd in business_config to proceed.")
     created = []
     eligible = 0   # WOs that are a generatable content type + auto/semi (i.e. we actually try them)
+    budget_stopped = False
     for wo in wos:
         if only_wo and wo.get("_db_id") != only_wo:
             continue
@@ -835,6 +859,14 @@ def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
             continue
         if not _asset_type_for(wo):
             continue  # not a generatable content type (schema-only manual tasks, etc.)
+        # Re-check the cap between work orders so a long batch STOPS the moment it crosses the
+        # ceiling instead of draining the whole month's budget in one run.
+        if llm.cost.over_budget(business_id):
+            log.warning("Budget cap reached mid-batch for business %d after %d draft(s); stopping "
+                        "generation (remaining work orders will be picked up next run).",
+                        business_id, len(created))
+            budget_stopped = True
+            break
         eligible += 1
         did = generate_for_wo(business_id, wo, biz)
         if did:
@@ -843,8 +875,9 @@ def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
              len(created), business_id, eligible)
     # Silent-failure guard: eligible content WOs but ZERO drafts produced is a real failure
     # (orchestrator LLM unavailable/misconfigured, or every target already published) -- NOT a
-    # success. Raise so the job is marked failed instead of a misleading "complete".
-    if eligible and not created:
+    # success. Raise so the job is marked failed instead of a misleading "complete". A budget-driven
+    # stop is NOT a failure (it's the cap doing its job), so it never trips this guard.
+    if eligible and not created and not budget_stopped:
         raise RuntimeError(
             f"generate_drafts produced 0 drafts from {eligible} eligible content work order(s) for "
             f"business {business_id}: generation failed (check the orchestrator LLM key/availability) "
@@ -869,6 +902,22 @@ def list_drafts(business_id: int) -> None:
               f"{r['asset_type']}: {r['title']}")
     if not rows:
         print("  (no drafts yet)")
+
+
+def _publish_channels_for(asset_type: Optional[str], surface: Optional[str]) -> list[str]:
+    """Map an approved asset to the publish channel(s) create_targets should attempt at approve
+    time. Owned long-form (article / owned page on the own site) -> the WordPress blog; a GBP post
+    -> gbp_post; a generic social post -> the connected social networks (create_targets skips any
+    channel without a healthy connection, so listing several is safe -- unconnected ones are no-ops).
+    An unrecognized type returns [] and the asset simply stays manual (paste-the-URL) as before."""
+    at = (asset_type or "").strip().lower()
+    if at in ("article", "owned_page", "own_page", "blog", "long_form", "landing_page", "page"):
+        return ["wp_blog"]
+    if at in ("gbp_post", "gbp", "google_business_post", "google_business"):
+        return ["gbp_post"]
+    if at.startswith("social"):
+        return ["social_fb_page", "social_ig", "social_li_org", "social_x"]
+    return []
 
 
 def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None) -> None:
@@ -933,10 +982,13 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None)
         body_hash = hashlib.sha256((d.get("body") or "").encode("utf-8")).hexdigest()
         # Copy the draft's compliance verdict onto the asset: the publish runner re-checks
         # assets.compliance_pass IS TRUE before any auto-post (Integrations Phase 2).
+        # published_at is set EXPLICITLY (not left to the column DEFAULT) so an approved owned asset
+        # reliably carries a produced-on timestamp the score/activity queries count -- the dashboard
+        # "published this period" rollup, the freshness sweep, and traffic attribution all read it.
         asset = conn.execute(
             """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta,
-                                   summary, published_status, compliance_pass, body_hash)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s) RETURNING id""",
+                                   summary, published_status, compliance_pass, body_hash, published_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s, now()) RETURNING id""",
             (d["business_id"], d["work_order_id"], d["asset_type"], d["title"],
              "own_site", json.dumps({"from_draft": draft_id}), summary, d.get("compliance_pass"), body_hash),
         ).fetchone()
@@ -964,6 +1016,26 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None)
         )
         conn.commit()
     log.info("Draft %d approved by %s -> asset %d", draft_id, reviewer, asset["id"])
+    # Real publish path (Integrations Phase 2): best-effort enqueue of one publish target per channel
+    # that HAS a healthy connection -- so "Approve" on a connected tenant actually queues the post,
+    # not just mints a manual asset. Called AFTER commit so the asset row (the target's FK parent) is
+    # visible to create_targets' own connection. Fail-safe by contract: create_targets does no network
+    # I/O and skips unconnected channels, and any error here is swallowed so it can never fail approve
+    # -- the asset is already durably approved. The drain (worker) does the actual posting later.
+    try:
+        channels = _publish_channels_for(d["asset_type"], "own_site")
+        if channels:
+            try:
+                from .publishing import runner as _pub_runner
+            except ImportError:  # pragma: no cover -- loose-script fallback
+                from publishing import runner as _pub_runner  # type: ignore
+            res = _pub_runner.create_targets(
+                d["business_id"], asset["id"], channels, work_order_id=d["work_order_id"])
+            if res.get("created"):
+                log.info("approve: queued %d publish target(s) for asset %d (%s)",
+                         len(res["created"]), asset["id"], ", ".join(channels))
+    except Exception as e:  # noqa: BLE001 -- publishing is best-effort; approve already committed
+        log.warning("approve: create_targets skipped for asset %d: %s", asset["id"], e)
 
 
 def reject(draft_id: int, reviewer: str, notes: Optional[str]) -> None:

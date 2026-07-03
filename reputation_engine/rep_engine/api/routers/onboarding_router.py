@@ -9,6 +9,7 @@ are added. The raw token is emailed; only its hash is stored.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover
     import email_service as _email  # type: ignore
 
 router = APIRouter(tags=["onboarding"])
+log = logging.getLogger("rep_engine.api.onboarding")
 
 INVITE_TTL_HOURS = 168   # 7 days
 RESET_TTL_HOURS = 2
@@ -164,6 +166,15 @@ def onboarding_setup(body: OnboardingSetupRequest, user: dict = Depends(require_
     ).fetchone()
     business_id = row["id"]
     conn.commit()
+
+    # Turn on the monitoring/alerting spine for this tenant: seed default recurring schedules
+    # (monthly cycle + weekly light sweep + daily alerts/mentions/incidents). Fail-safe --
+    # seeding must never break business creation, so any error is logged and swallowed.
+    try:
+        from ... import scheduler as _sched
+        _sched.seed_default_schedules(business_id)
+    except Exception as e:  # noqa: BLE001 -- monitoring seed is best-effort, never fatal
+        log.warning("default schedule seeding failed for business %s: %s", business_id, e)
 
     from ... import competitor as _c, mention_monitor as _mm
 

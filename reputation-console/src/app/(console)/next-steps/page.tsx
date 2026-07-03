@@ -232,7 +232,7 @@ export default function NextStepsPage() {
           why="Your action list is built from an audit of what AI says about you."
           produces="After an audit, your prioritized tasks across content, SEO, social, and outreach appear here."
           timing="An audit takes a few minutes."
-          cta={{ label: "Go to Run jobs", href: "/admin/jobs" }}
+          cta={{ label: "Run an audit", href: "/runs" }}
         />
       ) : (
         <div className="space-y-4">

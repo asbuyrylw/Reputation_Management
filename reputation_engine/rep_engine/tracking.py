@@ -62,12 +62,23 @@ def _norm_title(t: str | None) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", (t or "").lower())).strip()
 
 
-def _task_key(capability: str | None, title: str | None) -> str:
-    """Stable identity for a task (capability + normalized title). Computed the same way for a
-    plan item and for an existing row, so the merge recognizes 'the same task' across
-    regenerations -- and, because it's stored at creation, even survives a human renaming the
-    displayed title."""
-    return f"{(capability or '').lower()}|{_norm_title(title)}"
+def _task_key(capability: str | None, title: str | None,
+              gap_source: str | None = None, source_query: str | None = None) -> str:
+    """Stable identity for a task. Computed the same way for a plan item and for an existing row,
+    so the merge recognizes 'the same task' across regenerations.
+
+    Prefer a GAP-ANCHORED identity when the task carries a gap linkage: (capability + gap_source +
+    source_query) is stable across LLM plan regenerations, whereas the free-text TITLE gets reworded
+    every revision -- which used to archive the live work order and spawn a duplicate (the root of
+    the superseded-row churn). Fall back to (capability + normalized title) for items with no gap
+    linkage, preserving the prior behavior. Because task_key is stored at creation, a gap-anchored
+    key also survives a human renaming the displayed title."""
+    cap = (capability or "").lower()
+    gs = (gap_source or "").strip().lower()
+    sq = (source_query or "").strip().lower()
+    if gs and sq:
+        return f"{cap}|gap|{gs}|{sq}"
+    return f"{cap}|{_norm_title(title)}"
 
 
 def sync_plan(business_id: int) -> dict:
@@ -99,18 +110,30 @@ def sync_plan(business_id: int) -> dict:
             "FROM work_orders w WHERE w.business_id=%s",
             (business_id,),
         ).fetchall()
-        # index existing by stable key (fall back to a computed key for pre-task_key rows)
+        # Compute the stable (gap-anchored) key for an EXISTING row from its stored columns.
+        # This is the NEW scheme; we always recompute (never trust the stored task_key here) so
+        # rows whose task_key was minted under the old title-based scheme migrate cleanly. The row
+        # already SELECTs gap_source + gap_specifics, so gap linkage is available fail-safe.
+        def _existing_key(e) -> str:
+            src_q = (e.get("gap_specifics") or {}).get("source_query") if isinstance(
+                e.get("gap_specifics"), dict) else None
+            return _task_key(e["capability"], e["title"], e.get("gap_source"), src_q)
+
+        # index existing by stable key
         by_key: dict = {}
         for e in existing:
-            k = e["task_key"] or _task_key(e["capability"], e["title"])
-            by_key.setdefault(k, e)
+            by_key.setdefault(_existing_key(e), e)
 
         plan_keys: set = set()
         created = 0
         revived = 0
         carried = {"done": 0, "drafted": 0, "open": 0}
         for w in wos:
-            key = _task_key(w.get("capability"), w.get("title"))
+            key = _task_key(
+                w.get("capability"), w.get("title"),
+                (w.get("rationale") or {}).get("gap_source"),
+                (w.get("gap_specifics") or {}).get("source_query"),
+            )
             plan_keys.add(key)
             match = by_key.get(key)
             if match:
@@ -169,11 +192,14 @@ def sync_plan(business_id: int) -> dict:
             created += 1
 
         # Retire: plan-generated, not-yet-started tasks the new plan dropped (preserve done/
-        # in-progress/manual). Backfill task_key on existing rows so the comparison is stable.
+        # in-progress/manual). RECOMPUTE each row's task_key to the NEW gap-anchored scheme and
+        # persist the re-key when it changed -- a ONE-TIME migration so old title-based keys move to
+        # gap-based keys and matching stays stable on the next run (not perpetual churn). Comparison
+        # uses the recomputed key so it lines up with plan_keys computed under the same scheme.
         retired = 0
         for e in existing:
-            k = e["task_key"] or _task_key(e["capability"], e["title"])
-            if e["task_key"] is None:
+            k = _existing_key(e)
+            if e["task_key"] != k:
                 conn.execute("UPDATE work_orders SET task_key=%s WHERE id=%s", (k, e["id"]))
             if (e["plan_id"] is not None and e["status"] == "pending"
                     and not e["superseded"] and k not in plan_keys):
