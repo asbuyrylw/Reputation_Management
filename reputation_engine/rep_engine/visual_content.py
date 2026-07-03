@@ -361,15 +361,31 @@ def generate_video_brief(business_id: int, topic: str, *, work_order_id: Optiona
 # ---------------------------------------------------------------------------
 # Queue management
 # ---------------------------------------------------------------------------
-def list_visuals(business_id: int, status: Optional[str] = None) -> list[dict]:
-    where = "business_id=%s" + (" AND status=%s" if status else "")
-    params = (business_id, status) if status else (business_id,)
+def list_visuals(business_id: int, status: Optional[str] = None,
+                 draft_id: Optional[int] = None) -> list[dict]:
+    where = "business_id=%s"
+    params: list = [business_id]
+    if status:
+        where += " AND status=%s"
+        params.append(status)
+    if draft_id is not None:
+        where += " AND draft_id=%s"
+        params.append(draft_id)
     with db() as conn:
         rows = conn.execute(
             "SELECT id, work_order_id, draft_id, kind, provider, model, prompt, file_path, url, "
             "width, height, status, compliance_note, reviewer, reviewed_at, meta, created_at "
-            f"FROM visual_assets WHERE {where} ORDER BY id DESC", params).fetchall()
+            f"FROM visual_assets WHERE {where} ORDER BY id DESC", tuple(params)).fetchall()
     return [dict(r) for r in rows]
+
+
+def visual_file_path(visual_id: int, business_id: int) -> Optional[str]:
+    """The stored file path for a visual, scoped to the owning business (tenancy). None if the
+    visual doesn't exist, isn't this business's, or has no local file (URL-only)."""
+    with db() as conn:
+        r = conn.execute("SELECT file_path FROM visual_assets WHERE id=%s AND business_id=%s",
+                         (visual_id, business_id)).fetchone()
+    return (r or {}).get("file_path") if r else None
 
 
 def set_visual_status(visual_id: int, status: str, reviewer: str, business_id: int) -> bool:

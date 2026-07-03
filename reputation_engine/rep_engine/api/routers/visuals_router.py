@@ -7,9 +7,11 @@ without an image key the job returns {skipped} and nothing breaks; quote-cards a
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ..deps import authorize_business, get_current_user, require_business_editor
@@ -22,6 +24,7 @@ except ImportError:  # pragma: no cover
 router = APIRouter(prefix="/businesses/{business_id}", tags=["visuals"])
 
 _KINDS = {"image", "quote_card", "meme", "video_brief"}
+_IMG_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
 
 class VisualRequest(BaseModel):
@@ -39,9 +42,24 @@ def _actor(user: dict) -> str:
 
 
 @router.get("/visuals")
-def visuals(status: Optional[str] = None, business_id: int = Depends(authorize_business)):
+def visuals(status: Optional[str] = None, draft_id: Optional[int] = None,
+            business_id: int = Depends(authorize_business)):
     return {"image_configured": _vc.image_configured(), "video_configured": _vc.video_configured(),
-            "visuals": _vc.list_visuals(business_id, status)}
+            "visuals": _vc.list_visuals(business_id, status, draft_id)}
+
+
+@router.get("/visuals/{visual_id}/file")
+def visual_file(visual_id: int, business_id: int = Depends(authorize_business)):
+    """Serve a generated visual's image bytes (tenancy-checked, no path traversal)."""
+    fp = _vc.visual_file_path(visual_id, business_id)
+    if not fp:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "visual not found")
+    base = os.path.realpath(_vc._OUTPUT_DIR)
+    path = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(os.getcwd(), fp))
+    if not (path == base or path.startswith(base + os.sep)) or not os.path.isfile(path):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "file not found")
+    media = _IMG_MIME.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media)
 
 
 @router.post("/visuals/generate")

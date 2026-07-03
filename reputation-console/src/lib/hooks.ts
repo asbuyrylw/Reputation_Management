@@ -1176,8 +1176,23 @@ export function useVisuals(businessId: number | null, status?: string, poll = fa
   });
 }
 
+// Generated visuals for a single draft (from its ![alt](IMAGE:…) markers). Polls while any is
+// pending so a freshly-queued image appears when its job finishes.
+export function useDraftVisuals(businessId: number | null, draftId: number | null) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["draft-visuals", businessId, draftId],
+    queryFn: () => apiFetch<VisualsResponse>(`/businesses/${businessId}/visuals?draft_id=${draftId}`),
+    enabled: !!user && !!businessId && !!draftId,
+    refetchInterval: (q) => {
+      const visuals = (q.state.data as VisualsResponse | undefined)?.visuals ?? [];
+      return visuals.some((v) => v.status === "pending") ? 4000 : false;
+    },
+  });
+}
+
 // Enqueue a visual-generation job (quote card / AI image / video brief). Invalidates jobs
-// so the progress banner picks it up + the visuals list so it shows once the job finishes.
+// so the progress banner picks it up + the visuals lists so it shows once the job finishes.
 export function useGenerateVisual(businessId: number | null) {
   return useApiMutation<{
     kind: "image" | "quote_card" | "video_brief";
@@ -1186,6 +1201,7 @@ export function useGenerateVisual(businessId: number | null) {
     attribution?: string;
     topic?: string;
     work_order_id?: number;
+    draft_id?: number;
   }>(
     () => `/businesses/${businessId}/visuals/generate`,
     (v) => ({
@@ -1195,8 +1211,9 @@ export function useGenerateVisual(businessId: number | null) {
       attribution: v.attribution ?? null,
       topic: v.topic ?? null,
       work_order_id: v.work_order_id ?? null,
+      draft_id: v.draft_id ?? null,
     }),
-    [["visuals", businessId], ["jobs", businessId]],
+    [["visuals", businessId], ["draft-visuals", businessId], ["jobs", businessId]],
   );
 }
 
@@ -1205,7 +1222,10 @@ export function useApproveVisual(businessId: number | null) {
   return useMutation({
     mutationFn: (visualId: number) =>
       apiFetch<{ ok: true }>(`/businesses/${businessId}/visuals/${visualId}/approve`, { method: "POST", body: {} }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["visuals", businessId] });
+      qc.invalidateQueries({ queryKey: ["draft-visuals", businessId] });
+    },
   });
 }
 
@@ -1214,7 +1234,10 @@ export function useRejectVisual(businessId: number | null) {
   return useMutation({
     mutationFn: (visualId: number) =>
       apiFetch<{ ok: true }>(`/businesses/${businessId}/visuals/${visualId}/reject`, { method: "POST", body: {} }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["visuals", businessId] });
+      qc.invalidateQueries({ queryKey: ["draft-visuals", businessId] });
+    },
   });
 }
 
