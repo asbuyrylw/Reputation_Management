@@ -591,17 +591,37 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
 # ----------------------------------------------------------------------------
 # Orchestrated generation for a work order
 # ----------------------------------------------------------------------------
-def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
+def generate_for_wo(business_id: int, wo: dict, biz: dict,
+                    content_type: Optional[str] = None, batch_id: Optional[int] = None) -> Optional[int]:
     asset_type = _asset_type_for(wo)
     if not asset_type:
         log.info("WO %s not a generatable content type; skipping.", wo.get("wo_code") or wo.get("wo_id"))
         return None
+    # content_type is the richer label used for GEO weighting + impact grouping (blog / white_paper /
+    # landing_page / local_page / social ...). Falls back to the wo's own content_type, then asset_type.
+    content_type = content_type or wo.get("content_type") or asset_type
     topic = wo.get("title", "")
     if _already_covered(business_id, topic):
         log.info("WO '%s' already covered (pgvector); skipping.", topic)
         return None
 
     grounding = _grounding_context(business_id)
+    # SERP-competitor benchmark (Phase 3): the shared terms + word-count target from the pages
+    # actually ranking for this query, so the draft can be graded "vs. the competition" rather than
+    # absolute. Dormant-safe: {skipped} with no SERPER_API_KEY, and never raises.
+    serp_bench = None
+    try:
+        from . import serp_benchmark as _sb
+        _tq = wo.get("target_query") or topic
+        if _tq:
+            b = _sb.benchmark(_tq)
+            if b and not b.get("skipped"):
+                serp_bench = b
+                grounding["serp_terms"] = b.get("terms", [])[:30]
+                grounding["serp_questions"] = b.get("questions", [])[:8]
+                grounding["serp_target_words"] = b.get("avg_word_count")
+    except Exception as e:  # noqa: BLE001 -- benchmark is best-effort, never blocks generation
+        log.debug("serp benchmark skipped: %s", e)
     # Content-optimization layer (NeuronWriter): pull the SERP+NLP term/entity recommendations for
     # the target keyword and ground the writer in them so the draft covers what the ranking pages
     # cover. Dormant-safe -- a no-op with no NEURONWRITER_API_KEY. The analysis takes ~60s; this is
@@ -729,9 +749,18 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
             body, target_query=wo.get("target_query") or "", keywords=_kw,
             site_summary=_site, with_fact_check=True, neuron_terms=_nterms or None,
             business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
-            geo=(biz.get("geo") if isinstance(biz, dict) else "") or ""))
+            geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
+            content_type=content_type, asset_type=asset_type, serp_benchmark=serp_bench))
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
         log.debug("draft quality analysis skipped: %s", e)
+    # Denormalize the GEO grade for cheap querying/sorting (the batch/impact views read it).
+    geo_val = None
+    try:
+        _g = quality_notes.get("geo")
+        if isinstance(_g, dict) and isinstance(_g.get("score"), (int, float)):
+            geo_val = float(_g["score"])
+    except Exception:  # noqa: BLE001
+        geo_val = None
 
     # Phase-3 portfolio grades: where this draft sits in the topic clusters, and concrete in-draft
     # internal-link suggestions to existing owned/site pages. Best-effort -- never blocks generation.
@@ -783,12 +812,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
             """INSERT INTO content_drafts
                (business_id, work_order_id, asset_type, title, body, target_query,
                 quality_score, quality_notes, revision_count, compliance_pass,
-                compliance_flags, status, highlighted_sections, placeholders_pending, content_hash)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                compliance_flags, status, highlighted_sections, placeholders_pending, content_hash,
+                batch_id, content_type, geo_score)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, wo.get("_db_id"), asset_type, topic, body,
              wo.get("target_query"), round(score, 2), json.dumps(quality_notes),
              revisions, comp_pass, json.dumps(comp_flags), status,
-             json.dumps(highlighted), json.dumps(placeholders), content_hash),
+             json.dumps(highlighted), json.dumps(placeholders), content_hash,
+             batch_id, content_type, geo_val),
         ).fetchone()
         conn.commit()
     # Ledger the estimated LLM spend for this draft (rec 10b) so content generation shows up in COGS

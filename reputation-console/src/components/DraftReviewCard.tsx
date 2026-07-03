@@ -46,9 +46,12 @@ const G_CHIP: Record<"good" | "amber" | "alert", string> = {
 // keyword density, and search-intent shape. A scannable chip strip that expands to the detail +
 // the specific fixes, so a reviewer can grade a draft the way NeuronWriter grades a page.
 function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> }) {
-  const { structure, aeo, readability, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
-  if (!structure && !aeo && !readability && !term && !intent) return null;
+  const { structure, aeo, geo, serp, readability, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
+  if (!structure && !aeo && !geo && !serp && !readability && !term && !intent) return null;
+  const geoWeak = (geo?.checks ?? []).filter((c) => !c.ok);
   const chips = [
+    geo && typeof geo.score === "number" && { k: "GEO", v: `${geo.score}/100`, tone: gTone(geo.score) },
+    !serp?.skipped && typeof serp?.score === "number" && { k: "vs SERP", v: `${serp.score}/100`, tone: gTone(serp.score) },
     structure && { k: "Structure", v: `${structure.score}/100`, tone: gTone(structure.score) },
     aeo && { k: "AEO", v: `${aeo.score}/100`, tone: gTone(aeo.score) },
     readability?.grade != null && { k: "Readability", v: `grade ${readability.grade}`, tone: (readability.grade <= 10 ? "good" : readability.grade <= 12 ? "amber" : "alert") as "good" | "amber" | "alert" },
@@ -63,9 +66,49 @@ function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> })
         {chips.map((c) => (
           <span key={c.k} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${G_CHIP[c.tone]}`}>{c.k} {c.v}</span>
         ))}
+        {geo?.content_type && <span className="rounded-full bg-line/60 px-2 py-0.5 text-[10px] font-semibold uppercase text-ink-3">{geo.content_type.replace(/_/g, " ")}</span>}
         {intent && <span className="rounded-full bg-indigo-050 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-strong">{intent.intent}</span>}
       </summary>
       <div className="mt-2.5 space-y-3">
+        {/* GEO — the citability grade (weighted for this content type) + the top fixes */}
+        {geo && typeof geo.score === "number" && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">
+              GEO citability · {geo.score}/100 · {geo.band}{geo.suggested_schema ? ` · schema ${geo.suggested_schema}` : ""}
+            </div>
+            {geo.note ? (
+              <div className="text-ink-3">{geo.note}</div>
+            ) : geoWeak.length > 0 ? (
+              <div className="space-y-1">
+                {geoWeak.slice(0, 5).map((c) => (
+                  <div key={c.label} className="flex items-start gap-2">
+                    <span className="grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full bg-line-2 text-[9px] text-ink-4">○</span>
+                    <span className="flex-1 text-ink-3">{c.fix || c.label}</span>
+                    <span className="font-mono text-ink-4">{c.points}/{c.max}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="text-good">All citability checks pass ✓</div>}
+          </div>
+        )}
+        {/* SERP benchmark — how the draft stacks up against the pages actually ranking */}
+        {serp && !serp.skipped && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">
+              vs. ranking pages · {serp.covered_pct ?? "—"}% term coverage · {serp.our_words} words{serp.target_words ? ` (target ~${serp.target_words})` : ""}{serp.in_range === false ? " · thin ✗" : ""}
+            </div>
+            {(serp.terms_missing?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {serp.terms_missing!.slice(0, 14).map((t) => (
+                  <span key={t} className="rounded-full bg-alert-bg px-1.5 py-0.5 text-[10px] text-alert">✗ {t}</span>
+                ))}
+              </div>
+            )}
+            {(serp.competitors?.length ?? 0) > 0 && (
+              <div className="mt-1.5 text-ink-4">Ranking: {serp.competitors!.slice(0, 3).map((c) => `${(c.title || c.link || "").slice(0, 32)}${c.words ? ` (${c.words}w)` : ""}`).join(" · ")}</div>
+            )}
+          </div>
+        )}
         {/* AEO — will an AI quote this? per-pillar */}
         {aeo && aeo.pillars.length > 0 && (
           <div>
@@ -411,6 +454,18 @@ export function DraftReviewCard({
       <DraftImageGallery businessId={businessId} draftId={draft.id} markers={draft.quality_notes?.image_markers ?? []} canEdit={canEdit} />
 
       {whyHelps && <p className="mt-2 text-xs text-ink-3">💡 {whyHelps}</p>}
+      {/* Phase 1 — the specific gap this piece traces back to, so a reviewer sees WHAT it fixes. */}
+      {(draft.gap_specifics?.source_query || draft.gap_source || draft.why_helps_ai_rep || draft.why_helps_seo) && (
+        <div className="mt-2 rounded-[10px] border border-line bg-paper/60 px-2.5 py-1.5 text-[11px] text-ink-3">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">Closes gap</span>
+          {draft.gap_specifics?.source_query && <> · fixes the answer to <b className="text-ink-2">“{draft.gap_specifics.source_query}”</b></>}
+          {draft.gap_source && <> · from <span className="text-ink-2">{draft.gap_source}</span></>}
+          <div className="mt-0.5 flex flex-wrap gap-x-3">
+            {draft.why_helps_ai_rep && <span>🤖 {draft.why_helps_ai_rep}</span>}
+            {draft.why_helps_seo && <span>🔍 {draft.why_helps_seo}</span>}
+          </div>
+        </div>
+      )}
 
       {/* Phase-5 atomization — turn this long-form piece into per-platform social posts (human-gated) */}
       {canEdit && atomizable && (

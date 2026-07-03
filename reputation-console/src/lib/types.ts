@@ -264,6 +264,15 @@ export interface ContentDraft {
   highlighted_sections?: { type?: string; note?: string }[] | null;
   placeholders_pending?: string[] | null;
   wo_instruction?: string | null;
+  // richer content typing + denormalized GEO grade + batch grouping (content-program)
+  content_type?: string | null;   // blog | article | white_paper | landing_page | local_page | social_post
+  geo_score?: number | null;
+  batch_id?: number | null;
+  // Phase 1 — the gap this draft traces back to (joined from its work order)
+  gap_source?: string | null;
+  why_helps_ai_rep?: string | null;
+  why_helps_seo?: string | null;
+  gap_specifics?: { source_query?: string } | null;
   quality_notes?:
     | ({
         keyword_coverage?: KeywordCoverage;
@@ -275,6 +284,8 @@ export interface ContentDraft {
         keyword_density?: DraftKeywordDensity;
         readability?: DraftReadability;
         aeo?: DraftAeo;
+        geo?: DraftGeo;
+        serp?: DraftSerp;
         term_coverage?: DraftTermCoverage;
         intent_serp?: DraftIntentSerp;
         topic_coverage?: DraftTopicCoverage;
@@ -282,6 +293,77 @@ export interface ContentDraft {
         image_markers?: DraftImageMarker[];
       } & Record<string, unknown>)
     | null;
+}
+
+// GEO/citability grade (0–100), weighted for the content type. Social posts use their own rubric.
+export interface DraftGeo {
+  score: number | null;
+  band?: string;              // strong | solid | weak | n/a
+  content_type?: string;
+  profile?: string;
+  suggested_schema?: string | null;
+  checks?: { label: string; ok: boolean; points: number; max: number; fix?: string }[];
+  note?: string;
+}
+
+// SERP-competitor benchmark grade: term coverage + word-count-in-range vs the ranking pages.
+export interface DraftSerp {
+  skipped?: boolean;
+  reason?: string;
+  score?: number | null;
+  covered_pct?: number | null;
+  terms_covered?: string[];
+  terms_missing?: string[];
+  our_words?: number;
+  target_words?: number | null;
+  in_range?: boolean;
+  competitors?: { title?: string; link?: string; words?: number | null }[];
+  questions?: string[];
+}
+
+// One gap-driven content batch (multiple types) + its measured impact.
+export interface ContentBatch {
+  id: number;
+  gap_key: string;
+  gap_source: string;
+  label: string;
+  target_topic: string;
+  target_prompts: string[];
+  content_types: string[];
+  baseline: Record<string, unknown>;
+  status: string;             // planned | generating | drafted | published | measured | failed
+  created_at: string;
+  pieces: { id: number; content_type: string | null; asset_type: string | null; title: string | null; status: string; geo_score: number | null; quality_score: number | null; published_asset_id: number | null }[];
+  impact: ContentImpactRow | null;
+}
+
+export interface ContentImpactRow {
+  baseline_sov: number | null;
+  measured_sov: number | null;
+  sov_delta: number | null;
+  baseline_alignment: number | null;
+  measured_alignment: number | null;
+  alignment_delta: number | null;
+  gap_pct_closed: number | null;
+  per_type?: Record<string, { pieces: number; approved: number; published: number }>;
+  notes?: string;
+  run_before?: number | null;
+  run_after?: number | null;
+  measured_at?: string;
+  target_topic?: string;
+  label?: string;
+}
+
+export interface GapCompletion {
+  gap_key: string;
+  topic: string;
+  gap_source: string;
+  target_prompts: string[];
+  batch_id: number | null;
+  batch_status: string | null;
+  pieces_drafted: number;
+  pieces_published: number;
+  impact: { gap_pct_closed: number | null; alignment_delta: number | null; sov_delta: number | null } | null;
 }
 
 // NeuronWriter SERP content-optimization score for a draft — how well its term coverage

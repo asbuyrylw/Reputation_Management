@@ -30,6 +30,12 @@ def _run_audit(business_id: int, args: dict) -> None:
         import ai_state_audit as m  # type: ignore
     m.audit(business_id)
     _persist_audit_rollups(business_id)
+    # A fresh full audit is new evidence: re-measure how far each content batch moved its gap
+    # (SoV + alignment delta, % gap closed). DB-only + best-effort; never breaks the audit.
+    try:
+        _imp("content_impact").measure_all(business_id)
+    except Exception as e:  # noqa: BLE001 -- impact refresh is best-effort
+        log.debug("content impact measure skipped: %s", e)
 
 
 def _run_fast_audit(business_id: int, args: dict) -> None:
@@ -154,6 +160,27 @@ def _run_generate_drafts(business_id: int, args: dict):
     # so a returned list is always non-empty, giving observability without a false 'empty' flag.
     created = _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"))
     return {"created": created or []}
+
+
+def _run_generate_content_batches(business_id: int, args: dict):
+    """Gap-driven BATCH content: for each open content gap, produce MULTIPLE types (blog, article,
+    white paper, social) at once and snapshot the gap's baseline Share-of-Voice for later impact
+    measurement. args.gap_key generates one gap's batch; args.max_gaps caps the sweep."""
+    cb = _imp("content_batch")
+    if args.get("gap_key"):
+        gap = next((g for g in cb.gaps_for_business(business_id) if g["gap_key"] == args["gap_key"]), None)
+        if not gap:
+            return {"batches": [], "pieces": 0, "reason": f"gap {args['gap_key']} not found"}
+        res = cb.generate_batch(business_id, gap, content_types=args.get("content_types"))
+        return {"batches": [{"batch_id": res["batch_id"], "pieces": len(res["produced"])}],
+                "pieces": len(res["produced"])}
+    return cb.generate_all_gaps(business_id, max_gaps=args.get("max_gaps"))
+
+
+def _run_measure_content_impact(business_id: int, args: dict):
+    """Measure how far each content batch moved the gap it targets (SoV + alignment delta, % gap
+    closed) against the latest audit. DB-only; safe to run after every audit."""
+    return _imp("content_impact").measure_all(business_id)
 
 
 def _run_report(business_id: int, args: dict) -> None:
@@ -330,6 +357,8 @@ JOB_DISPATCH = {
     "plan": _run_plan,
     "sync_plan": _run_sync_plan,
     "generate_drafts": _run_generate_drafts,
+    "generate_content_batches": _run_generate_content_batches,   # multi-type content per gap
+    "measure_content_impact": _run_measure_content_impact,       # did the content move the gap?
     "report": _run_report,
     "cycle": _run_cycle,
     # monitoring + outreach + learning
@@ -397,6 +426,7 @@ def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
 # re-trigger EXPENSIVE (LLM/search-spending) work over time, so a stuck finger can't run up spend.
 _JOB_RATE_LIMITS = {
     "audit": (4, 3600), "fast_audit": (6, 3600), "cycle": (3, 3600), "benchmark": (6, 3600), "report": (6, 3600),
+    "generate_content_batches": (4, 3600), "measure_content_impact": (12, 3600),
     "discovery": (8, 3600), "enrich_outreach": (6, 3600), "social_verify": (6, 3600),
     "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
@@ -487,11 +517,11 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
 # we never flip status to failed here.
 _OUTPUT_PRODUCING_JOBS = frozenset({
     "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "keyword_research",
-    "production_briefs", "citation_analyze", "benchmark", "local_rank",
+    "production_briefs", "citation_analyze", "benchmark", "local_rank", "generate_content_batches",
 })
 
 # Keys a handler's return dict commonly uses to report how many items it produced. First hit wins.
-_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored")
+_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored", "pieces")
 
 
 def _derive_produced_count(result) -> Optional[int]:

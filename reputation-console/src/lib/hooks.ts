@@ -26,6 +26,9 @@ import type {
   VisibilityTrend,
   Competitor,
   ContentDraft,
+  ContentBatch,
+  ContentImpactRow,
+  GapCompletion,
   ContentOptimizationStatus,
   Dashboard,
   DiscoveryTarget,
@@ -219,6 +222,30 @@ export function useTeam(businessId: number | null) {
 
 export function useContentDrafts(businessId: number | null) {
   return useApiQuery<ContentDraft[]>(["content-drafts", businessId], businessId ? `/businesses/${businessId}/content-drafts` : null);
+}
+
+// Gap-driven content batches (multiple types per gap) + their measured impact.
+export function useContentBatches(businessId: number | null) {
+  return useApiQuery<ContentBatch[]>(["content-batches", businessId], businessId ? `/businesses/${businessId}/content-batches` : null);
+}
+export function useGapCompletion(businessId: number | null) {
+  return useApiQuery<GapCompletion[]>(["gap-completion", businessId], businessId ? `/businesses/${businessId}/gap-completion` : null);
+}
+export function useContentImpact(businessId: number | null) {
+  return useApiQuery<ContentImpactRow[]>(["content-impact", businessId], businessId ? `/businesses/${businessId}/content-impact` : null);
+}
+// Kick off multi-type content generation for a gap (or every open gap). Invalidates batches + jobs.
+export function useGenerateContentBatch(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { gap_key?: string; max_gaps?: number; content_types?: string[] }) =>
+      apiFetch(`/businesses/${businessId}/content-batches/generate`, { method: "POST", body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["content-batches", businessId] });
+      qc.invalidateQueries({ queryKey: ["gap-completion", businessId] });
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+    },
+  });
 }
 
 // Is NeuronWriter content-optimization wired up for this business? `configured` means a key

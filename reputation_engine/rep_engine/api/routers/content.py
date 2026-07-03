@@ -130,12 +130,113 @@ def content_drafts(business_id: int = Depends(authorize_business), conn=Depends(
         "SELECT d.id, d.work_order_id, d.asset_type, d.title, d.body, d.target_query, "
         "d.quality_score, d.quality_notes, d.compliance_pass, d.compliance_flags, d.status, "
         "d.revision_count, d.reviewer, d.reviewed_at, d.created_at, "
-        "d.highlighted_sections, d.placeholders_pending, w.instruction AS wo_instruction "
+        "d.highlighted_sections, d.placeholders_pending, d.batch_id, d.content_type, d.geo_score, "
+        "w.instruction AS wo_instruction, "
+        # Phase 1 -- surface the gap linkage on the draft so the reviewer sees WHAT it fixes:
+        "w.gap_source, w.why_helps_ai_rep, w.why_helps_seo, w.gap_specifics "
         "FROM content_drafts d LEFT JOIN work_orders w ON w.id = d.work_order_id "
         "WHERE d.business_id=%s ORDER BY d.id DESC",
         (business_id,),
     ).fetchall()
-    return [_to_float(dict(r), "quality_score") for r in rows]
+    out = []
+    for r in rows:
+        d = _to_float(dict(r), "quality_score")
+        d = _to_float(d, "geo_score")
+        out.append(d)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Gap-driven content BATCHES + measured impact (content-program Phase 4)
+# ---------------------------------------------------------------------------------------------
+class BatchGenerateRequest(BaseModel):
+    gap_key: Optional[str] = None            # one gap; omit to sweep all open content gaps
+    max_gaps: Optional[int] = None
+    content_types: Optional[list[str]] = None
+
+
+@router.get("/content-batches")
+def content_batches(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Every gap-driven content batch: its pieces (per type, with grade + status) and the latest
+    measured impact on the gap it targets."""
+    batches = conn.execute(
+        "SELECT id, gap_key, gap_source, label, target_topic, target_prompts, content_types, "
+        "baseline, status, created_at, updated_at FROM content_batches "
+        "WHERE business_id=%s ORDER BY id DESC", (business_id,)).fetchall()
+    out = []
+    for b in batches:
+        bd = dict(b)
+        bd["pieces"] = [dict(r) for r in conn.execute(
+            "SELECT id, content_type, asset_type, title, status, geo_score, quality_score, "
+            "published_asset_id FROM content_drafts WHERE batch_id=%s ORDER BY id", (b["id"],)).fetchall()]
+        imp = conn.execute(
+            "SELECT baseline_sov, measured_sov, sov_delta, baseline_alignment, measured_alignment, "
+            "alignment_delta, gap_pct_closed, per_type, notes, run_before, run_after, measured_at "
+            "FROM content_impact WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
+        bd["impact"] = dict(imp) if imp else None
+        out.append(bd)
+    return out
+
+
+@router.post("/content-batches/generate", status_code=202)
+def generate_content_batches(payload: BatchGenerateRequest, background: BackgroundTasks,
+                             business_id: int = Depends(require_business_editor),
+                             user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Kick off multi-type content generation for a gap (or every open gap). Enqueues the job so the
+    ~minutes of LLM work runs off the request path; the worker (or inline dev mode) runs it."""
+    args = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not _jobs.rate_ok(business_id, "generate_content_batches"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're starting content batches too often — give it a little while.")
+    job_id, active = _jobs.enqueue(business_id, "generate_content_batches", args=args,
+                                   requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a content batch job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
+
+
+@router.get("/content-impact")
+def content_impact(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Measured impact rows across all batches (the ROI ledger): what each batch moved on its gap."""
+    rows = conn.execute(
+        "SELECT ci.*, cb.target_topic, cb.label FROM content_impact ci "
+        "JOIN content_batches cb ON cb.id = ci.batch_id "
+        "WHERE ci.business_id=%s ORDER BY ci.id DESC LIMIT 100", (business_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.get("/gap-completion")
+def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Per content-gap: how much content has been drafted/published for it and how far it's moved —
+    the completion meter that ties content back to the strategy/goal."""
+    try:
+        from ... import content_batch as _cb
+    except ImportError:  # pragma: no cover
+        import content_batch as _cb  # type: ignore
+    gaps = _cb.gaps_for_business(business_id)
+    out = []
+    for g in gaps:
+        b = conn.execute(
+            "SELECT id, status FROM content_batches WHERE business_id=%s AND gap_key=%s "
+            "ORDER BY id DESC LIMIT 1", (business_id, g["gap_key"])).fetchone()
+        drafted = published = 0
+        impact = None
+        if b:
+            cnt = conn.execute(
+                "SELECT COUNT(*) drafted, COUNT(published_asset_id) published "
+                "FROM content_drafts WHERE batch_id=%s", (b["id"],)).fetchone()
+            drafted, published = cnt["drafted"], cnt["published"]
+            imp = conn.execute(
+                "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "
+                "WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
+            impact = dict(imp) if imp else None
+        out.append({"gap_key": g["gap_key"], "topic": g["topic"], "gap_source": g["gap_source"],
+                    "target_prompts": g["target_prompts"], "batch_id": b["id"] if b else None,
+                    "batch_status": b["status"] if b else None, "pieces_drafted": drafted,
+                    "pieces_published": published, "impact": impact})
+    return out
 
 
 @router.get("/production-briefs")
