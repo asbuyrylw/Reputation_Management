@@ -17,8 +17,11 @@ the gap model's site_technical_gaps.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Optional
+
+log = logging.getLogger("content_quality")
 
 # --- markdown/text parsing helpers ----------------------------------------------------------
 _H1 = re.compile(r"^\s{0,3}#\s+\S", re.M)
@@ -143,10 +146,13 @@ def fact_check(body: str, site_summary: Optional[dict] = None) -> dict:
     {skipped} without an LLM. The caller surfaces 'unverifiable'/'contradicted' before approval."""
     if not (body or "").strip():
         return {"claims": [], "unverified": 0}
+    # The orchestrator LLM lives in ai_state_audit (imported as `llm` across the engine). The old
+    # `from . import llm` referenced a module that doesn't exist -> ModuleNotFoundError, which (via
+    # analyze_draft's single-return) silently discarded EVERY grade on every generated draft.
     try:
-        from . import llm
+        from . import ai_state_audit as llm
     except ImportError:  # pragma: no cover
-        import llm  # type: ignore
+        import ai_state_audit as llm  # type: ignore
     import json as _json
     payload = _json.dumps({"draft": body[:6000], "known_facts": site_summary or {}}, default=str)
     res = llm.orchestrator_json(_FACTCHECK_SYSTEM, payload, tier="cheap")
@@ -330,17 +336,27 @@ def analyze_draft(body: str, *, target_query: str = "", keywords: Optional[list[
     """Run every scorer -> a dict suitable for content_drafts.quality_notes. All deterministic +
     keyless except the optional fact_check LLM pass; new callers can pass neuron_terms / business_name
     / geo / keyword_intent for the richer term-coverage, entity, and intent grades."""
+    # Per-scorer isolation: ONE scorer failing (esp. the LLM fact_check) must never discard the other
+    # deterministic grades. Previously analyze_draft built + returned a single dict, so a fact_check
+    # ImportError wiped on_page/citation_ready/aeo/structure/readability from EVERY draft's quality_notes.
+    def _safe(name, fn):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 -- a failed scorer degrades to {skipped}, never sinks the grade
+            log.warning("content grade scorer %s failed: %s", name, e)
+            return {"skipped": True, "error": str(e)[:200]}
+
     out = {
-        "on_page": on_page_score(body, target_query, keywords),
-        "citation_ready": citation_ready(body, target_query),
-        "structure": structure_score(body),
-        "keyword_density": keyword_density_check(body, keywords),
-        "readability": readability_score(body),
-        "aeo": aeo_score(body, target_query, business_name, geo),
-        "intent_serp": intent_and_serp(target_query, keyword_intent),
+        "on_page": _safe("on_page", lambda: on_page_score(body, target_query, keywords)),
+        "citation_ready": _safe("citation_ready", lambda: citation_ready(body, target_query)),
+        "structure": _safe("structure", lambda: structure_score(body)),
+        "keyword_density": _safe("keyword_density", lambda: keyword_density_check(body, keywords)),
+        "readability": _safe("readability", lambda: readability_score(body)),
+        "aeo": _safe("aeo", lambda: aeo_score(body, target_query, business_name, geo)),
+        "intent_serp": _safe("intent_serp", lambda: intent_and_serp(target_query, keyword_intent)),
     }
     if neuron_terms:
-        out["term_coverage"] = term_coverage(body, neuron_terms)
+        out["term_coverage"] = _safe("term_coverage", lambda: term_coverage(body, neuron_terms))
     if with_fact_check:
-        out["fact_check"] = fact_check(body, site_summary)
+        out["fact_check"] = _safe("fact_check", lambda: fact_check(body, site_summary))
     return out
