@@ -285,6 +285,9 @@ def track(business_id: int, quiet: bool = False) -> dict:
         # reputation audit. Every "latest AI audit" query filters `finished_at IS NOT NULL`, so
         # leaving it NULL (plus kind='local_rank') keeps these runs out of the AI score/report/
         # timeline paths. local_seo.latest() reads its own local_rankings rows, not this flag.
+        # Mark the run 'complete' (not the default 'in_progress') so it reaches a terminal status;
+        # finished_at stays NULL so it never enters the ai_audit finished-run selectors.
+        conn.execute("UPDATE audit_runs SET status='complete' WHERE id=%s", (run_id,))
         conn.commit()
     if not quiet:
         log.info("Local rank run %d complete (%d rows across %d queries).",

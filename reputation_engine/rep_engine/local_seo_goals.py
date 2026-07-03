@@ -27,6 +27,11 @@ LOCAL_SEO_MONTHS_CAP = float(os.getenv("LOCAL_SEO_MONTHS_CAP", "18"))
 # normal cold-start path now uses the grounded _coldstart_months() model instead of this flat guess.
 _BASE_MONTHLY_GAIN = float(os.getenv("LOCAL_SEO_BASE_GAIN", "0.06"))
 
+# gain_basis emitted only when EVERY grounded cold-start signal was unavailable (the legacy flat
+# guess). A stored goal carrying this basis predates the grounded cold-start model and is stale --
+# the read-path uses it to self-heal (recompute + re-persist) on the next read.
+LEGACY_GAIN_BASIS = "baseline model (no measured local velocity yet)"
+
 _DISCLAIMER = (
     "This is a PROJECTION, not a guarantee. It estimates when you'll rank on Google's first "
     "page for most of your local category searches. Confidence is low until your own measured "
@@ -83,6 +88,10 @@ def _coldstart_months(business_id: int, summ: dict, cur: float, target: float) -
     except Exception:  # noqa: BLE001 -- difficulty is optional
         kd = None
     difficulty_mult = 1.0 if kd is None else _clamp(0.75 + (kd / 100.0) * 0.9, 0.75, 1.65)
+    # Be honest when there's no metrics provider: a null difficulty means UNMEASURED, not "easy".
+    # We still apply a neutral 1.0x, but say so plainly instead of implying we measured it.
+    difficulty_txt = ("keyword difficulty (not available)" if kd is None
+                      else f"keyword difficulty (×{difficulty_mult:.2f})")
 
     # 3) Google Business Profile strength (the primary local ranking factor; complete + reviewed = faster)
     gbp_mult = 1.0
@@ -107,7 +116,7 @@ def _coldstart_months(business_id: int, summ: dict, cur: float, target: float) -
 
     months = _clamp(base * difficulty_mult * gbp_mult, 1.0, LOCAL_SEO_MONTHS_CAP)
     rank_txt = f"~#{round(float(avg_rank))}" if avg_rank is not None else "not yet ranking"
-    basis = (f"your current local rank ({rank_txt}), keyword difficulty (×{difficulty_mult:.2f}) "
+    basis = (f"your current local rank ({rank_txt}), {difficulty_txt} "
              f"and Google Business Profile strength (×{gbp_mult:.2f}), anchored to typical local-SEO "
              f"ranking timelines")
     return months, basis
@@ -165,7 +174,7 @@ def estimate(business_id: int, quiet: bool = False, persist: bool = False) -> di
             monthly_gain = max(remaining / cs_months, 1e-4) if remaining > 0 else _BASE_MONTHLY_GAIN
         except Exception:  # noqa: BLE001 -- never let optional-signal reads break the projection
             monthly_gain = _BASE_MONTHLY_GAIN
-            basis = "baseline model (no measured local velocity yet)"
+            basis = LEGACY_GAIN_BASIS
         confidence = "low"
 
     expected_months = 0.0 if remaining <= 0 else remaining / monthly_gain

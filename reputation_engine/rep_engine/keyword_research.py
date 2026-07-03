@@ -45,9 +45,16 @@ log = logging.getLogger("keyword_research")
 
 SERPER_BASE = os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
 
-# Priority by kind (higher = more important to rank for). Local + primary lead because this
+# Priority by kind (higher = more important to rank for). reputation_defense leads: for a
+# business whose #1 problem is a negative narrative ("is <business> a scam / pyramid scheme"),
+# owning its own branded legitimacy queries IS the SEO job. Local + primary follow because this
 # is a local lead-gen business; question keywords feed FAQ/AEO content AI loves to cite.
-_KIND_PRIORITY = {"primary": 100, "local": 90, "question": 70, "secondary": 60, "long_tail": 40}
+_KIND_PRIORITY = {"reputation_defense": 110, "primary": 100, "local": 90, "question": 70,
+                  "secondary": 60, "long_tail": 40}
+_VALID_KINDS = frozenset(_KIND_PRIORITY)
+# Cap the long_tail share so Serper's relatedSearches/autocomplete (which classify as long_tail)
+# can't crowd out primary/local/question/reputation_defense terms in the stored set.
+_MAX_LONG_TAIL = 10
 _MAX_SEEDS_TO_EXPAND = 6     # bound Serper spend
 _MAX_STORED = 45             # keep the set focused
 
@@ -58,7 +65,7 @@ def _ensure() -> None:
             id BIGSERIAL PRIMARY KEY,
             business_id BIGINT REFERENCES businesses(id) ON DELETE CASCADE,
             keyword TEXT NOT NULL,
-            kind TEXT,            -- primary|secondary|long_tail|local|question
+            kind TEXT,            -- reputation_defense|primary|secondary|long_tail|local|question
             source TEXT,          -- llm_seed|serper_related|serper_paa|serper_autocomplete
             intent TEXT,          -- informational|commercial|local|navigational
             priority INT,
@@ -195,12 +202,19 @@ def _is_offtopic(keyword: str, blocked: list[str], client_tokens: set[str]) -> b
     n = _norm(keyword)
     if not n:
         return True
-    # names another company (a competitor or a confusion entity)
-    for b in blocked:
-        if b and b in n:
-            return True
+    # A query that ALSO names THIS business is a query ABOUT this business -- e.g. a branded
+    # reputation-defense term like "is <business> <parent company> legit" -- NOT an off-brand
+    # query about a different company. Keep it even if it shares a contested/parent-company token.
+    # (Before this guard, "is Team Unstoppable Primerica legit" was dropped because "primerica"
+    # was a contested term, stripping the client's own #1 legitimacy queries.)
+    names_client = bool(client_tokens & _name_tokens(n))
+    if not names_client:
+        # names another company (a competitor or a confusion entity) and NOT this business
+        for b in blocked:
+            if b and b in n:
+                return True
     # employer-reputation / job-seeker / corporate-profile query about someone OTHER than the client
-    if _EMPLOYER_RE.search(n) and not (client_tokens & _name_tokens(n)):
+    if _EMPLOYER_RE.search(n) and not names_client:
         return True
     return False
 
@@ -213,8 +227,12 @@ _RELEVANCE_SYSTEM = (
     "(e.g. 'is <other company> a good place to work', 'careers', 'glassdoor', 'salary'), or terms "
     "off-topic for this business's services and customers. KEEP everything relevant to THIS "
     "business — its own services, category, questions, location, and (if it recruits) its own "
-    "careers/opportunity. Only remove keywords that reference a DIFFERENT company or are clearly "
-    "off-topic. If nothing should be removed, return {\"drop\":[]}."
+    "careers/opportunity. CRITICALLY, KEEP branded reputation-defense queries that name THIS "
+    "business (or its own parent company/brand): 'is <this business> legitimate / a scam / a "
+    "pyramid scheme', '<this business> reviews / complaints', '<this business> <parent company> "
+    "legit' — the business MUST own these, so NEVER drop a query that names this business. Only "
+    "remove keywords that reference a DIFFERENT company or are clearly off-topic. If nothing "
+    "should be removed, return {\"drop\":[]}."
 )
 
 
@@ -279,17 +297,27 @@ def _expand_with_serper(seed: str, location: str) -> list[dict]:
 # LLM seeding (breadth + intent, grounded in profile + site + competitors)
 # ---------------------------------------------------------------------------
 _SEED_SYSTEM = (
-    "You are a local-SEO keyword strategist. Given a business profile, what its own website "
-    "already covers (and is MISSING), and its competitors, propose the SEO keywords it should "
-    "target to rank on Google locally AND to be understood/cited by AI assistants. Return STRICT "
-    "JSON only: {\"keywords\":[{\"keyword\":str,\"kind\":\"primary|secondary|local|question\","
-    "\"intent\":\"commercial|informational|local|navigational\",\"rationale\":str}]}. Include: "
+    "You are a local-SEO AND reputation-defense keyword strategist. Given a business profile, what "
+    "its own website already covers (and is MISSING), its competitors, and (if provided) the WORST "
+    "queries AI assistants currently answer badly about it, propose the SEO keywords it should "
+    "target to rank on Google locally, to DEFEND its reputation, AND to be understood/cited by AI "
+    "assistants. Return STRICT JSON only: {\"keywords\":[{\"keyword\":str,\"kind\":\"reputation_defense"
+    "|primary|secondary|local|question\",\"intent\":\"commercial|informational|local|navigational\","
+    "\"rationale\":str}]}. Include: "
+    "3-6 reputation_defense terms -- branded legitimacy/trust queries about THIS business BY NAME "
+    "(and, if it operates under a parent company/brand, that name too), e.g. 'is <business> "
+    "legitimate', 'is <business> a scam', 'is <business> a pyramid scheme', '<business> reviews', "
+    "'<business> complaints', 'is <business> <parent company> legit', '<business> <parent company> "
+    "reviews'. These are the queries people search when deciding whether to trust the business, so "
+    "the business MUST own them -- ALWAYS include several even if the profile looks positive; "
     "2-4 primary service terms; several local terms (service + city, 'near me'); and 4-8 question "
     "keywords real customers ask (what they'd type or ask an AI). Keep them realistic and specific "
     "to this business + its area. Do NOT include OTHER companies' or competitors' brand names, or "
     "queries ABOUT another company (e.g. 'is <another company> a good place to work', a competitor's "
-    "reviews / glassdoor / stock price). Keywords about THIS business's own services — and, if it "
-    "recruits, its own careers/opportunity — are welcome. 10-18 keywords."
+    "reviews / glassdoor / stock price). IMPORTANT: legitimacy/scam/reviews/complaints queries that "
+    "name THIS business (or its own parent company/brand) are the POINT here -- INCLUDE them, do not "
+    "treat them as off-brand. Keywords about THIS business's own services -- and, if it recruits, "
+    "its own careers/opportunity -- are welcome. 12-20 keywords."
 )
 
 
@@ -302,9 +330,12 @@ def _seed_llm(ctx: dict) -> list[dict]:
         kw = (it.get("keyword") or "").strip() if isinstance(it, dict) else ""
         if not kw:
             continue
+        kind = (it.get("kind") or "secondary").strip().lower()
+        if kind not in _VALID_KINDS:
+            kind = "secondary"
         out.append({
             "keyword": kw,
-            "kind": (it.get("kind") or "secondary"),
+            "kind": kind,
             "source": "llm_seed",
             "intent": (it.get("intent") or "commercial"),
             "rationale": (it.get("rationale") or "")[:240],
@@ -315,6 +346,41 @@ def _seed_llm(ctx: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Context loading
 # ---------------------------------------------------------------------------
+def _weak_queries(conn, business_id: int) -> list[str]:
+    """The prompts AI assistants currently answer badly about this business (gap model's
+    weak_queries). These are the real questions reputation-defense keywords must cover, so we
+    ground the seeder with them. Best-effort: returns [] if no gap model / column exists yet."""
+    try:
+        row = conn.execute(
+            "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+            (business_id,)).fetchone()
+    except Exception:  # noqa: BLE001 -- gap model is optional grounding
+        return []
+    model = row["model"] if row else None
+    if isinstance(model, str):
+        try:
+            model = json.loads(model)
+        except Exception:  # noqa: BLE001
+            model = None
+    if not isinstance(model, dict):
+        return []
+    out: list[str] = []
+    for wq in (model.get("weak_queries") or []):
+        p = (wq.get("prompt") if isinstance(wq, dict) else wq) or ""
+        p = p.strip()
+        if p:
+            out.append(p)
+    # de-dup, preserve order, bound the payload
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for p in out:
+        k = p.lower()
+        if k not in seen:
+            seen.add(k)
+            uniq.append(p)
+    return uniq[:12]
+
+
 def _load_context(business_id: int) -> dict:
     with db() as conn:
         b = conn.execute(
@@ -325,6 +391,7 @@ def _load_context(business_id: int) -> dict:
             (business_id,)).fetchone()
         comps = conn.execute(
             "SELECT name FROM competitors WHERE business_id=%s LIMIT 8", (business_id,)).fetchall()
+        weak = _weak_queries(conn, business_id)
     if not b:
         return {}
     missing: list = []
@@ -342,6 +409,7 @@ def _load_context(business_id: int) -> dict:
         "geo": b.get("geo"), "goal": b.get("goal"), "contested_terms": b.get("contested_terms"),
         "site_missing_topics": sorted(set(missing))[:12],
         "competitors": [c["name"] for c in comps],
+        "weak_ai_queries": weak,
     }
 
 
@@ -390,9 +458,19 @@ def research(business_id: int) -> dict:
             kept = after
     candidates = kept
 
-    # Rank + cap.
-    ranked = sorted(candidates.values(),
-                    key=lambda x: _KIND_PRIORITY.get(x.get("kind", ""), 0), reverse=True)[:_MAX_STORED]
+    # Rank, then cap the long_tail share so Serper's relatedSearches/autocomplete (all classified
+    # long_tail) can't crowd out the primary/local/question/reputation_defense terms that matter.
+    ordered = sorted(candidates.values(),
+                     key=lambda x: _KIND_PRIORITY.get(x.get("kind", ""), 0), reverse=True)
+    ranked, long_tail_kept = [], 0
+    for it in ordered:
+        if it.get("kind") == "long_tail":
+            if long_tail_kept >= _MAX_LONG_TAIL:
+                continue
+            long_tail_kept += 1
+        ranked.append(it)
+        if len(ranked) >= _MAX_STORED:
+            break
 
     # CI-5: enrich with real search volume / difficulty when a provider key is set (dormant otherwise).
     vol = _enrich_volume([it["keyword"] for it in ranked], location)
@@ -415,6 +493,8 @@ def research(business_id: int) -> dict:
             )
         conn.commit()
     out = {"seeds": len(seeds), "serper_candidates": expanded_n, "stored": len(ranked),
+           "reputation_defense": sum(1 for it in ranked if it.get("kind") == "reputation_defense"),
+           "long_tail": long_tail_kept, "weak_queries_grounded": len(ctx.get("weak_ai_queries") or []),
            "dropped_offbrand": dropped_det, "dropped_llm": len(drop_norm),
            "serper_used": bool(os.getenv("SERPER_API_KEY")), "volume_enriched": len(vol)}
     log.info("keyword research biz %d: %s", business_id, out)

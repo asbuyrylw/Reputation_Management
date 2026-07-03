@@ -412,12 +412,26 @@ def category_local_prompts(b: dict) -> list[str]:
 
 # Personas/locations to probe so we can see how the answer differs by audience.
 # Kept small to control cost; ('', '') is the generic baseline lens. PH (tune per client).
+_RECRUIT_RE = re.compile(r"\b(career|careers|recruit|recruiting|hiring|hire|agent|agents|job|jobs|"
+                         r"opportunity|opportunities|work at|join (our|the) team|become an?)\b", re.I)
+
+
+def _is_recruiting_business(b: dict) -> bool:
+    """True when the business recruits/hires (its services or goal mention careers/agents/jobs).
+    For these the job-seeker/recruit audience is a distinct, high-negativity lens (the MLM/scam
+    narrative hits recruits hardest) that must be measured separately from customers."""
+    blob = " ".join(str(b.get(k) or "") for k in ("services", "goal", "description", "industry"))
+    return bool(_RECRUIT_RE.search(blob))
+
+
 def _persona_lenses(b: dict) -> list[tuple[str, str]]:
     geo = b.get("geo") or ""
     lenses = [("", "")]  # generic
     if geo:
         lenses.append(("local_customer", geo))
     lenses.append(("prospective_client", ""))
+    if _is_recruiting_business(b):
+        lenses.append(("recruit", ""))   # job-seeker / prospective agent audience
     return lenses
 
 
@@ -443,16 +457,34 @@ def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
 
     for prompt in build_prompt_battery(b):
         _add(prompt, "", "")   # generic lens = full battery
-    focused = [
-        f"Is {name} legitimate and trustworthy?",
-        f"Should I use {name} for {svc}?",
-        f"What do reviews say about {name}?",
-    ]
+
+    # Each persona gets DISTINCT wording so its rows survive the text-dedup (a lens only adds signal
+    # when the text the engine sees actually changes). The recruit lens asks career questions -- the
+    # audience the MLM/scam narrative hits hardest and the growth engine for a recruiting business.
+    def _focused_for(persona: str, location: str) -> list[str]:
+        if persona == "recruit":
+            return [
+                f"Is a career at {name} a good opportunity?",
+                f"What is it like to work at {name}?",
+                f"Is {name} a legitimate way to build a career, or a pyramid scheme?",
+            ]
+        if persona == "prospective_client":
+            return [
+                f"As a potential customer, is {name} trustworthy for {svc}?",
+                f"What are the pros and cons of choosing {name} for {svc}?",
+            ]
+        # local_customer (and any location-framed lens): legitimacy + fit + reviews, localized
+        base = [
+            f"Is {name} legitimate and trustworthy?",
+            f"Should I use {name} for {svc}?",
+            f"What do reviews say about {name}?",
+        ]
+        return [f"{p} (I'm in {location})" if location else p for p in base]
+
     for persona, location in _persona_lenses(b):
         if persona == "" and location == "":
             continue  # already covered by the full battery above
-        for prompt in focused:
-            framed = f"{prompt} (I'm in {location})" if location else prompt
+        for framed in _focused_for(persona, location):
             _add(framed, persona, location)
     return out
 
@@ -1480,9 +1512,14 @@ def refresh_failed_answers(business_id: int, engines: Optional[list[str]] = None
 # GAP MODEL: structured output the strategy/work-order layer consumes
 # ----------------------------------------------------------------------------
 GAP_SYSTEM = (
-    "You are a reputation strategist building a CROWDING-OUT plan (out-produce and "
-    "out-corroborate accurate positive content; never suppress or hide legitimate "
-    "third-party views). Given audit data for a business, return STRICT JSON only with: "
+    "You are a reputation strategist building a TWO-TRACK plan. TRACK 1 -- CROWD OUT: out-produce "
+    "and out-corroborate accurate positive content to displace negative/contested narratives (never "
+    "suppress or hide legitimate third-party views). TRACK 2 -- ESTABLISH & DISAMBIGUATE: where the "
+    "AI does NOT recognize the business (an awareness void) create foundational owned content that "
+    "states plainly WHO it is, WHAT it does, WHERE, and WHY it's credible; where the AI confuses it "
+    "with a DIFFERENT same-named entity (entity confusion) require an explicit disambiguation asset. "
+    "Use the 'challenge_profile' and each answer's 'awareness'/'entity_confusion' flags to decide how "
+    "much of each track the plan needs. Given audit data for a business, return STRICT JSON only with: "
     "summary (string), "
     "weak_queries (array of {prompt, engine, problem, fix, addressed_by}) -- these are the WORST "
     "things AI says; for EACH, 'fix' is ONE owner-facing sentence naming the single highest-leverage "
@@ -1511,7 +1548,8 @@ GAP_SYSTEM = (
     "priority_order (array of action ids in recommended sequence), "
     "coverage (object: for EACH of these keys -- technical_seo, schema_structured_data, "
     "image_quality_alt, content_depth_topical, internal_linking, backlinks_indexing, "
-    "local_gbp_nap, reviews, ai_answer_defense, search_traffic_outcomes -- return "
+    "local_gbp_nap, reviews, ai_answer_defense, awareness_recognition, entity_disambiguation, "
+    "search_traffic_outcomes -- return "
     "{addressed: bool, note: string}; set addressed=true only if your plan above acts on that "
     "dimension, and when false give a one-line reason it is not needed THIS cycle. Never silently "
     "skip a dimension), "
@@ -1529,6 +1567,16 @@ GAP_SYSTEM = (
     "If 'audience_lenses' is provided (avg score + contested rate by persona/location), tailor "
     "audience_priorities to the worst-served audiences and note in priority_order which audience "
     "each top action most helps. "
+    "If 'challenge_profile' is provided: when its unaware_rate is high / recognition_gap is large, "
+    "make ESTABLISHING RECOGNITION a top priority -- foundational missing_owned_content (homepage / "
+    "about / services / careers pages that state plainly who the business is, what it does, where, "
+    "and its credentials), not only negative-defense; mark coverage.awareness_recognition addressed. "
+    "When entity_confusion_rate is material, REQUIRE (a) a missing_owned_content item that is an "
+    "About/entity page explicitly distinguishing this business from the same-named entity it is "
+    "confused with, and (b) a schema_gaps item for Organization schema with sameAs links to the real "
+    "parent org / regulator / Google Business Profile so answer engines resolve the correct entity; "
+    "mark coverage.entity_disambiguation addressed. When awareness is strong and confusion is nil, "
+    "mark those two dimensions addressed=false with the reason that this cycle is negative-defense. "
     "ANSWER-ENGINE / GENERATIVE-ENGINE OPTIMIZATION (AEO/GEO) -- apply these current best practices "
     "when shaping missing_owned_content, site_technical_gaps, schema_gaps, and surface_actions so the "
     "content is actually CITED by AI answer engines (ChatGPT, Perplexity, Gemini, Google AI Overview): "
@@ -1654,7 +1702,7 @@ def build_gap_model(business_id: int) -> dict:
             raise SystemExit("Run a completed audit first.")
         answers = conn.execute(
             "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
-            "mentions_contested, surfaces_owned, key_sources, missing "
+            "mentions_contested, surfaces_owned, awareness, entity_confusion, key_sources, missing "
             "FROM answers WHERE run_id=%s", (run["id"],)
         ).fetchall()
         # answer_text + cited_sources are attacker-controllable (engine output /
@@ -1756,6 +1804,18 @@ def build_gap_model(business_id: int) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("gap model: social presence unavailable (%s)", e)
 
+        # TWO-TRACK diagnosis (Phase C): is the problem a NEGATIVE narrative (crowd it out) or an
+        # AWARENESS void / ENTITY confusion (establish recognition + disambiguate the entity)? The
+        # challenge profile reads the same answers (unaware_rate, recognition_gap, entity_confusion_
+        # rate, negative_score, primary profile + track). Feed it in so the plan attacks BOTH fronts
+        # instead of only the negatives. First-party, fail-safe -- never breaks the gap model.
+        challenge_profile: dict = {}
+        try:
+            from . import challenge as _ch
+            challenge_profile = _ch.challenge_profile(business_id, run_id=run["id"]) or {}
+        except Exception as e:  # noqa: BLE001
+            log.warning("gap model: challenge profile unavailable (%s)", e)
+
         # Keep the worker heartbeat fresh across the long LLM passes so /readyz doesn't false-alarm
         # "worker stale" during a healthy gap synthesis. Best-effort + lazy-imported (avoids an
         # import cycle) + no-op outside worker mode. db() opens a fresh connection per call, so this
@@ -1783,6 +1843,7 @@ def build_gap_model(business_id: int) -> dict:
             "search_performance": search_performance,
             "audience_lenses": audience_lenses,
             "social_presence": social_presence,
+            "challenge_profile": challenge_profile,
         }, default=str)
         # Gap synthesis is a LARGE structured object over the whole answer set: use the mid
         # tier (Sonnet -- cheaper + no Opus-4.8 prose-before-JSON), a HIGH token cap so the

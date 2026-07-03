@@ -43,9 +43,44 @@ def timeline(business_id: int = Depends(authorize_business)):
 
 
 @router.get("/local-seo-goal")
-def local_seo_goal(business_id: int = Depends(authorize_business)):
-    """Projected time to reach page 1 of Google for the local category searches (read-only)."""
-    return _lsg.estimate(business_id, quiet=True, persist=False)
+def local_seo_goal(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Projected time to reach page 1 of Google for the local category searches (read-only).
+
+    Self-heal: if the latest STORED goal predates the grounded cold-start model (its gain_basis
+    is the legacy flat-guess string), opportunistically recompute + re-persist so a model change
+    heals on read instead of waiting for the next local_rank job. Guarded so it fires only on a
+    legacy-basis row -- after one re-persist the stored basis is no longer legacy, so a hot read
+    loop never recomputes repeatedly.
+    """
+    stale = False
+    try:
+        row = conn.execute(
+            "SELECT goal FROM local_seo_goals WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+            (business_id,),
+        ).fetchone()
+        if row and row["goal"]:
+            goal = row["goal"]
+            if isinstance(goal, str):
+                import json as _json
+                goal = _json.loads(goal)
+            # gain_basis lives at the top level of the stored goal; also check a nested
+            # projection.gain_basis in case an older writer stored it there.
+            basis = goal.get("gain_basis")
+            if basis is None:
+                basis = (goal.get("projection") or {}).get("gain_basis")
+            stale = basis == _lsg.LEGACY_GAIN_BASIS
+    except Exception:  # noqa: BLE001 -- self-heal detection must never break the read
+        stale = False
+
+    result = _lsg.estimate(business_id, quiet=True, persist=False)
+    # Self-heal ONCE: only re-persist when the stored row is legacy AND the fresh recompute is
+    # genuinely non-legacy (the grounded model produced a real basis). This makes the write a
+    # true progression -- after it lands, the stored basis is no longer legacy, so the next read
+    # sees stale=False and never recomputes/rewrites in a loop. If the recompute is still legacy
+    # (e.g. every grounded signal is unavailable), we skip the write so it can't hot-loop.
+    if stale and result.get("gain_basis") != _lsg.LEGACY_GAIN_BASIS:
+        _lsg.estimate(business_id, quiet=True, persist=True)
+    return result
 
 
 @router.get("/challenge")

@@ -157,6 +157,9 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
         # Leave finished_at NULL: a competitor benchmark is not an AI reputation audit, and the
         # "latest AI audit" queries all filter `finished_at IS NOT NULL`. compare()/trend() read
         # competitor_answers (by run_id), not this flag, so they're unaffected. (kind='competitor'.)
+        # Mark the run 'complete' (not the default 'in_progress') so it reaches a terminal status;
+        # finished_at stays NULL so it never enters the ai_audit finished-run selectors.
+        conn.execute("UPDATE audit_runs SET status='complete' WHERE id=%s", (run_id,))
         conn.commit()
     if not quiet:
         log.info("Benchmark run %d complete (%d competitor-answer rows).", run_id, recorded)

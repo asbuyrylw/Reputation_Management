@@ -245,21 +245,73 @@ def _amplification(channel: str, platform: str | None) -> dict:
     }
 
 
+def _norm(s) -> str:
+    """Lowercase + strip non-alphanumerics to whitespace, for tolerant matching."""
+    return " ".join("".join(c if c.isalnum() else " " for c in str(s or "")).lower().split())
+
+
+def _match_work_orders(target_query: str, work_orders: list) -> list:
+    """Best-effort content lineage: return the work_order id(s) whose
+    gap_specifics->>'source_query' (strongest signal) or title best matches the
+    brief's target_query. Returns [] when nothing matches -- a brief may exist
+    for a query no work order tracks."""
+    tq = _norm(target_query)
+    if not tq or not work_orders:
+        return []
+    tq_tokens = set(tq.split())
+    # 1) Exact / substring match on the work order's source_query -- the precise link.
+    #    ids returned as str to match the TEXT[] column exactly.
+    exact = []
+    for w in work_orders:
+        src = _norm((w.get("gap_specifics") or {}).get("source_query"))
+        if src and (src == tq or src in tq or tq in src):
+            exact.append(str(w["id"]))
+    if exact:
+        return exact
+    # 2) Fall back to best title-token overlap (Jaccard); require a real overlap so
+    #    unrelated tasks are not linked. Ties keep all top scorers.
+    best_score = 0.0
+    best_ids: list = []
+    for w in work_orders:
+        wt_tokens = set(_norm(w.get("title")).split())
+        if not wt_tokens:
+            continue
+        inter = tq_tokens & wt_tokens
+        if not inter:
+            continue
+        score = len(inter) / len(tq_tokens | wt_tokens)
+        if score > best_score:
+            best_score, best_ids = score, [str(w["id"])]
+        elif score == best_score:
+            best_ids.append(str(w["id"]))
+    # Require a modest overlap so a single incidental shared word (e.g. "the") does
+    # not create a spurious lineage link.
+    return best_ids if best_score >= 0.2 else []
+
+
 def _persist(business_id: int, briefs: list) -> None:
     with db() as conn:
         # A fresh batch supersedes the prior OPEN set so the report's "to_produce"
         # list is always the latest plan, never an unbounded pile across cycles.
         conn.execute("UPDATE production_briefs SET status='superseded' "
                      "WHERE business_id=%s AND status='to_produce'", (business_id,))
+        # Content lineage: link each brief to the work order(s) it produces content
+        # for, matched on the work order's tracked source_query / title. Loaded once.
+        work_orders = conn.execute(
+            "SELECT id, title, gap_specifics FROM work_orders "
+            "WHERE business_id=%s AND NOT superseded",
+            (business_id,)).fetchall()
         for b in briefs:
             amp = _amplification(b["channel"], b.get("platform"))
+            related = _match_work_orders(b.get("target_query"), work_orders)
             conn.execute(
                 "INSERT INTO production_briefs (business_id, channel, platform, title, "
-                "target_query, brief, status, amplification_playbook, why_helps_ai_rep, why_helps_seo) "
-                "VALUES (%s,%s,%s,%s,%s,%s,'to_produce',%s,%s,%s)",
+                "target_query, brief, status, amplification_playbook, why_helps_ai_rep, "
+                "why_helps_seo, related_work_orders) "
+                "VALUES (%s,%s,%s,%s,%s,%s,'to_produce',%s,%s,%s,%s)",
                 (business_id, b["channel"], b.get("platform"), b.get("title"),
                  b.get("target_query"), json.dumps(b), json.dumps(amp),
-                 amp["why_helps_ai_rep"], amp["why_helps_seo"]))
+                 amp["why_helps_ai_rep"], amp["why_helps_seo"], related))
         conn.commit()
 
 

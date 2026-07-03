@@ -524,29 +524,84 @@ def _render_brief(body, bullet, row):
         bullet(f"Call to action: {cta[:200]}")
 
 
-def _section_production_briefs(heading, body, bullet, business_id):
-    """Surface the video + social PRODUCTION BRIEFS (production_brief.plan) -- the
-    specs for content the client/team produces OFF-platform. Read-only and a NO-OP
-    when there are no open briefs (so the report is unchanged unless that step ran)."""
+def _render_owned_draft(body, bullet, row):
+    """Render one owned-website-page draft (content_drafts row) as a headline deliverable.
+    Shape-robust like _render_brief: a schema-drifted / partially-populated row never raises."""
+    title = str(row.get("title") or "(untitled page)")[:180]
+    asset_type = str(row.get("asset_type") or "").strip().lower()
+    _TYPE_LABEL = {"article": "Article", "faq": "FAQ page", "schema": "Structured-data / schema"}
+    kind = _TYPE_LABEL.get(asset_type, asset_type.replace("_", " ").title() or "Page")
+    status = str(row.get("status") or "").strip()
+    _STATUS_LABEL = {"pending_review": "ready for your review",
+                     "needs_fix": "needs a quick fix before it ships"}
+    status_label = _STATUS_LABEL.get(status, status.replace("_", " ") or "drafted")
+    meta = " · ".join(x for x in (kind, status_label) if x)
+    body(title + (f"  ({meta})" if meta else ""), bold=True)
+    tq = str(row.get("target_query") or "")
+    if tq:
+        bullet(f"Targets the query: {tq[:200]}")
+
+
+def _section_production_briefs(heading, body, bullet, business_id, gap=None):
+    """Surface the "Content to Produce" work for the period. The HEADLINE deliverable is the
+    owned WEBSITE PAGES we've drafted (content_drafts: article/faq/schema awaiting review) --
+    these are what actually move AI/search visibility. Beneath them, the video + social
+    PRODUCTION BRIEFS (production_briefs.plan) are shown as amplification: specs for off-platform
+    content the client/team produces. Read-only; each source is independently resilient so the
+    section renders whatever exists and is a NO-OP when both tables are empty (report unchanged
+    unless the content/brief steps ran). `gap` is the latest gap model, used only to flag a
+    plan-adequacy gap when the model wants owned content but none has been drafted yet."""
+    # --- Owned website pages (the headline deliverable) ---
+    drafts = []
     try:
         with db() as conn:
-            rows = conn.execute(
+            drafts = conn.execute(
+                "SELECT title, asset_type, target_query, status FROM content_drafts "
+                "WHERE business_id=%s AND asset_type IN ('article','faq','schema') "
+                "AND status IN ('pending_review','needs_fix') ORDER BY id DESC LIMIT 12",
+                (business_id,)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
+        log.warning("report: content-drafts unavailable for Content-to-Produce (%s)", e)
+        drafts = []
+
+    # --- Off-platform production briefs (amplification beneath the headline) ---
+    briefs = []
+    try:
+        with db() as conn:
+            briefs = conn.execute(
                 "SELECT channel, platform, title, target_query, brief FROM production_briefs "
                 "WHERE business_id=%s AND status='to_produce' ORDER BY channel, id",
                 (business_id,)).fetchall()
     except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
-        log.warning("report: production-briefs section unavailable (%s)", e)
+        log.warning("report: production-briefs unavailable (%s)", e)
+        briefs = []
+
+    vids = [r for r in briefs if r.get("channel") == "video"][:8]
+    socs = [r for r in briefs if r.get("channel") == "social"][:8]
+
+    # Plan-adequacy: the gap model wants owned content but nothing has been drafted yet.
+    moc = (gap or {}).get("missing_owned_content") if isinstance(gap, dict) else None
+    n_missing = len(moc) if isinstance(moc, list) else 0
+    plan_gap = n_missing > 0 and not drafts
+
+    # NO-OP when there is nothing to say at all (keeps the report unchanged unless a step ran).
+    if not drafts and not vids and not socs and not plan_gap:
         return
-    if not rows:
-        return
-    vids = [r for r in rows if r.get("channel") == "video"][:8]
-    socs = [r for r in rows if r.get("channel") == "social"][:8]
-    if not vids and not socs:
-        return
+
     heading("Content to Produce This Period")
-    body("Specs for video and social content to create off-platform. Each item lists the "
-         "AI/search query it targets, the keywords to hit, the length and format, the hook, "
-         "and the call to action — everything a producer needs to make it.", italic=True)
+    body("The pages below are the owned content we draft for your own website — the primary lever "
+         "that moves how AI assistants and search describe you. Video and social specs beneath them "
+         "amplify that content off-platform. Each item lists the AI/search query it targets.", italic=True)
+
+    if drafts:
+        heading("Website Pages Drafted (Review & Publish)", size=12)
+        for r in drafts:
+            _render_owned_draft(body, bullet, r)
+    if plan_gap:
+        body(f"⚠ Plan gap: the gap model identifies {n_missing} owned page(s) worth producing, but "
+             f"none have been drafted yet this period. Generating these owned pages is the highest-"
+             f"leverage next step.", italic=True, color=RUST)
+
     if vids:
         heading("Videos to Produce", size=12)
         for r in vids:
@@ -751,7 +806,7 @@ def generate(business_id: int) -> str:
             bullet(w.get("title", ""))
 
     _section_root_cause_and_incidents(heading, body, bullet, business_id)
-    _section_production_briefs(heading, body, bullet, business_id)
+    _section_production_briefs(heading, body, bullet, business_id, gap)
 
     heading("How These Results Are Achieved", size=12, color=GOLD)
     body("This program works by out-producing and out-corroborating accurate, positive content so "
