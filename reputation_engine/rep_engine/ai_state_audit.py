@@ -1954,9 +1954,11 @@ def build_gap_model(business_id: int) -> dict:
 # ----------------------------------------------------------------------------
 def diff(business_id: int) -> dict:
     with db() as conn:
+        # Compare full-audit runs only: a 'fast' first-look run (rec 9) has a reduced, unlensed
+        # battery, so diffing it against a full run would report a bogus progress delta.
         runs = conn.execute(
             "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-            "ORDER BY id DESC LIMIT 2", (business_id,)
+            "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2", (business_id,)
         ).fetchall()
         if len(runs) < 2:
             log.info("Need two completed runs to diff.")

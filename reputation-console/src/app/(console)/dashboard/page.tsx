@@ -414,7 +414,7 @@ export default function DashboardPage() {
         {/* Always-on freshness + owner-safe one-click refresh (never sends owners to /admin). */}
         <div className="flex shrink-0 items-center gap-2 pt-1">
           <FreshnessChip asOf={latest?.date} />
-          {canEdit && <RunPipelineButton businessId={businessId} />}
+          {canEdit && <RunPipelineButton key={businessId} businessId={businessId} />}
         </div>
       </div>
 

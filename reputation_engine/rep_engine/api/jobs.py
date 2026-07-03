@@ -147,10 +147,13 @@ def _run_sync_plan(business_id: int, args: dict) -> None:
     _imp("tracking").sync_plan(business_id)
 
 
-def _run_generate_drafts(business_id: int, args: dict) -> None:
+def _run_generate_drafts(business_id: int, args: dict):
     # args.only_wo lets the UI generate a draft for a SINGLE content work order (the per-item
-    # "Generate draft" button) instead of the whole batch.
-    _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"))
+    # "Generate draft" button) instead of the whole batch. Return the created draft ids so the
+    # produced_count convention (rec 12) sees a real count -- generate() raises on a 0-draft batch,
+    # so a returned list is always non-empty, giving observability without a false 'empty' flag.
+    created = _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"))
+    return {"created": created or []}
 
 
 def _run_report(business_id: int, args: dict) -> None:
@@ -521,14 +524,20 @@ def _annotate_produced(job_type: str, status: str, result):
     if status != "complete" or job_type not in _OUTPUT_PRODUCING_JOBS:
         return result
     produced = _derive_produced_count(result)
-    # None/empty return, or a derivable count of exactly 0, means the producing job made nothing.
-    empty = (result is None) or (isinstance(result, dict) and not result) or (produced == 0)
+    # POSITIVELY empty only: an empty dict, or a derivable count of exactly 0. A None/unknown return
+    # is NOT treated as empty -- several core handlers (audit, gap_model, plan, sync_plan) return None
+    # on success, so flagging None as empty would false-positive EVERY successful run (the inversion
+    # QA caught). We only flag when we can affirmatively see zero output.
+    empty = (isinstance(result, dict) and not result) or (produced == 0)
     if produced is not None and isinstance(result, dict):
         result = {**result, "produced_count": produced}
     if empty:
         base = result if isinstance(result, dict) else {}
         result = {**base, "complete_empty": True}
     return result
+
+
+def _annotate_budget(business_id: int, status: str, result):
     """If the business is over its monthly budget, tag the job result with {budget_exhausted,
     spent, cap} and fire a once-a-month 'budget_exhausted' notification. Best-effort: never let
     a budget check break job recording."""

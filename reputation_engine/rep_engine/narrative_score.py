@@ -83,8 +83,11 @@ def compute(business_id: int, run_id: int | None = None, persist: bool = True, q
     """Compute (and persist) the Narrative Crowding-Out Score for a run (latest completed if None)."""
     with db() as conn:
         if run_id is None:
+            # Exclude the 'fast' first-look tier (rec 9) from the auto-latest pick, so a thin fast run
+            # never becomes a durable Narrative-Score trend point that later deltas compare against.
             r = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
-                             "AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+                             "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' "
+                             "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             if not r:
                 return {"run_id": None, "score": None, "n_answers": 0}
             run_id = r["id"]
@@ -94,7 +97,11 @@ def compute(business_id: int, run_id: int | None = None, persist: bool = True, q
         ).fetchall()
         out = _score_rows([dict(r) for r in rows])
         out["run_id"] = run_id
-        if persist and out["score"] is not None:
+        # Also guard an explicitly-passed fast run_id: never persist a fast run into the durable trend.
+        _m = conn.execute("SELECT COALESCE(mode,'full') AS mode FROM audit_runs WHERE id=%s",
+                          (run_id,)).fetchone()
+        _is_fast = bool(_m and _m["mode"] == "fast")
+        if persist and out["score"] is not None and not _is_fast:
             conn.execute(
                 """INSERT INTO narrative_scores
                    (business_id, run_id, score, desired_pct, contested_pct, neutral_pct, n_answers, by_engine)

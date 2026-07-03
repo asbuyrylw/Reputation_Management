@@ -46,8 +46,16 @@ def _compute(conn, run_id: int):
 
 
 def persist(business_id: int, run_id: int) -> Optional[int]:
-    """Compute + upsert the rollup for one run. Returns the run_id, or None if it has no scored answers."""
+    """Compute + upsert the rollup for one run. Returns the run_id, or None if it has no scored answers.
+    Single choke point for both persist_latest and trend()'s lazy back-fill."""
     with db() as conn:
+        # Skip the 'fast' first-look tier (rec 9): its reduced, unlensed battery is not comparable to
+        # a full audit, so it must never enter the durable per-run trend/rollup the metrics chart reads
+        # (guarding here covers both persist_latest AND trend's back-fill in one place).
+        m = conn.execute("SELECT COALESCE(mode,'full') AS mode FROM audit_runs WHERE id=%s",
+                         (run_id,)).fetchone()
+        if m and m["mode"] == "fast":
+            return None
         o, per_engine = _compute(conn, run_id)
         if not o or o["ga"] is None:
             return None

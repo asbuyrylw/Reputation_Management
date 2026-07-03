@@ -43,7 +43,9 @@ export function RunPipelineButton({
         <button
           type="button"
           disabled={!businessId || runAll.isPending}
-          onClick={() => (runAll.isSuccess ? go() : setConfirm(true))}
+          // Always route through the spend confirm — never fire go() directly. (A stale isSuccess
+          // must not let a click, e.g. after switching businesses, start an unconfirmed ~$8-12 run.)
+          onClick={() => setConfirm(true)}
           title="Re-run the full pipeline for the latest picture (uses API credits; once per day)"
           className={`inline-flex items-center gap-2 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition disabled:opacity-50 ${base} ${className}`}
         >
