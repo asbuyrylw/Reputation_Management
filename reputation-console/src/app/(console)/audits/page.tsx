@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBusiness } from "@/lib/business";
-import { useAuditRuns, usePerEngine, useRunAnswers, useDashboard, useTriggerJob, useCostBreakdown } from "@/lib/hooks";
+import { useAuditRuns, usePerEngine, useRunAnswers, useDashboard, useTriggerJob, useCostBreakdown, useSetBudget } from "@/lib/hooks";
 import type { AuditRun } from "@/lib/types";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { StatusBadge } from "@/components/SentimentBadge";
@@ -62,38 +63,87 @@ function RetryFailed({ businessId, run, canEdit }: { businessId: number | null; 
 // obvious. Estimates, not invoiced amounts.
 function CostPanel({ businessId }: { businessId: number | null }) {
   const { data } = useCostBreakdown(businessId);
-  if (!data || !data.run_id || data.items.length === 0) return null;
-  const max = Math.max(...data.items.map((i) => i.cost), 0.0001);
+  const setBudget = useSetBudget(businessId);
+  const [editing, setEditing] = useState(false);
+  const [capInput, setCapInput] = useState("");
+  if (!data) return null;
   const fmt = (n: number) => `$${n.toFixed(2)}`;
+  const cap = data.monthly_budget_usd;
+  const spendPctRaw = data.budget_pct ?? (cap > 0 ? data.month_total / cap : 0);
+  const spendPct = Math.min(100, Math.round(spendPctRaw * 100));
+  const barTone = data.over_budget ? "bg-rose-500" : spendPct >= 80 ? "bg-amber-500" : "bg-emerald-500";
+  const max = Math.max(...data.items.map((i) => i.cost), 0.0001);
+  const saveCap = () => {
+    const v = parseFloat(capInput);
+    if (!Number.isFinite(v) || v < 0) return;
+    setBudget.mutate({ monthly_budget_usd: v }, { onSuccess: () => setEditing(false) });
+  };
   return (
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold tracking-tight text-slate-900">Audit cost (estimated)</h3>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Cost &amp; monthly budget</h3>
           <p className="mt-0.5 max-w-md text-xs text-slate-500">
-            Our provider COGS for the latest audit — estimated from token counts × list prices, not invoiced amounts.
+            Our provider COGS — estimated from token counts × list prices, not invoiced amounts. The
+            monthly cap is the runaway guard: audits, gap analysis and drafting stop when it&apos;s hit.
           </p>
         </div>
-        <div className="text-right">
-          <div className="text-2xl font-bold leading-none text-slate-900">{fmt(data.run_total)}</div>
-          <div className="mt-0.5 text-xs text-slate-500">this audit · {fmt(data.month_total)} this month</div>
-        </div>
-      </div>
-      <div className="mt-3 space-y-2">
-        {data.items.map((i) => (
-          <div key={i.provider + i.operation}>
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-medium text-slate-700">
-                {i.provider} · {i.operation} <span className="text-slate-400">({i.calls} calls)</span>
-              </span>
-              <span className="font-semibold tabular-nums text-slate-900">{fmt(i.cost)}</span>
-            </div>
-            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.round((i.cost / max) * 100)}%` }} />
-            </div>
+        {data.run_id && (
+          <div className="text-right">
+            <div className="text-2xl font-bold leading-none text-slate-900">{fmt(data.run_total)}</div>
+            <div className="mt-0.5 text-xs text-slate-500">latest audit</div>
           </div>
-        ))}
+        )}
       </div>
+
+      {/* Budget bar: MTD spend vs the editable cap (rec 8) */}
+      <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-slate-700">
+            This month: <span className="tabular-nums">{fmt(data.month_total)}</span>
+            <span className="font-normal text-slate-400"> of </span>
+            <span className="tabular-nums">{fmt(cap)}</span> cap
+            {data.over_budget && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">over budget — spend paused</span>}
+          </span>
+          {!editing ? (
+            <button onClick={() => { setCapInput(String(cap)); setEditing(true); }}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-700">Edit cap</button>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-400">$</span>
+              <input type="number" min={0} step={5} value={capInput} onChange={(e) => setCapInput(e.target.value)}
+                className="w-24 rounded-md border border-slate-300 px-2 py-1 text-xs tabular-nums focus:border-indigo-500 focus:outline-none" />
+              <button onClick={saveCap} disabled={setBudget.isPending}
+                className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
+                {setBudget.isPending ? "Saving…" : "Save"}</button>
+              <button onClick={() => setEditing(false)} className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
+            </span>
+          )}
+        </div>
+        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className={`h-full rounded-full ${barTone} transition-all`} style={{ width: `${spendPct}%` }} />
+        </div>
+        <div className="mt-1 text-[11px] text-slate-400">{spendPct}% of cap used this month{setBudget.isError && <span className="ml-2 text-rose-600">Couldn’t save — try again.</span>}</div>
+      </div>
+
+      {/* Per-operation breakdown for the latest audit */}
+      {data.run_id && data.items.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {data.items.map((i) => (
+            <div key={i.provider + i.operation}>
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium text-slate-700">
+                  {i.provider} · {i.operation} <span className="text-slate-400">({i.calls} calls)</span>
+                </span>
+                <span className="font-semibold tabular-nums text-slate-900">{fmt(i.cost)}</span>
+              </div>
+              <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.round((i.cost / max) * 100)}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

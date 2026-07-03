@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from ..deps import authorize_business, get_conn, require_admin
 
@@ -116,8 +117,37 @@ def cost_breakdown(business_id: int = Depends(authorize_business),
         "SELECT COALESCE(SUM(est_cost_usd),0) AS s FROM cost_ledger WHERE business_id=%s "
         "AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC')", (business_id,),
     ).fetchone()
+    month_total = round(float(month["s"]), 4)
+    # The monthly budget CAP (the runaway guard that build_gap_model/generate/audit now enforce).
+    # Surfaced here so the cap is VISIBLE + the operator can see how close MTD spend is to it,
+    # instead of the cap living only in SQL (rec 8). Default matches cost.budget_for (50.0).
+    cap_row = conn.execute(
+        "SELECT monthly_budget_usd FROM business_config WHERE business_id=%s", (business_id,)
+    ).fetchone()
+    cap = float(cap_row["monthly_budget_usd"]) if cap_row and cap_row["monthly_budget_usd"] is not None else 50.0
     return {"run_id": run_id, "items": items, "run_total": round(run_total, 4),
-            "month_total": round(float(month["s"]), 4), "estimated": True}
+            "month_total": month_total, "monthly_budget_usd": round(cap, 2),
+            "budget_pct": round(month_total / cap, 4) if cap > 0 else None,
+            "over_budget": month_total >= cap, "estimated": True}
+
+
+class BudgetUpdate(BaseModel):
+    monthly_budget_usd: float = Field(ge=0, le=100000)
+
+
+@router.patch("/budget")
+def set_budget(body: BudgetUpdate, business_id: int = Depends(authorize_business),
+               _: dict = Depends(require_admin), conn=Depends(get_conn)):
+    """Set the per-business monthly spend CAP (business_config.monthly_budget_usd) -- the runaway
+    guard audit/gap-model/content generation enforce. ADMIN-ONLY (it governs OUR provider COGS, like
+    the cost breakdown). Upsert so a business with no config row gets one. (rec 8)"""
+    val = round(float(body.monthly_budget_usd), 2)
+    conn.execute(
+        "INSERT INTO business_config (business_id, monthly_budget_usd) VALUES (%s,%s) "
+        "ON CONFLICT (business_id) DO UPDATE SET monthly_budget_usd=EXCLUDED.monthly_budget_usd, "
+        "updated_at=now()", (business_id, val))
+    conn.commit()
+    return {"business_id": business_id, "monthly_budget_usd": val}
 
 
 @router.get("/audit-runs")

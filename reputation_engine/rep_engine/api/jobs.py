@@ -29,6 +29,23 @@ def _run_audit(business_id: int, args: dict) -> None:
     except ImportError:  # pragma: no cover
         import ai_state_audit as m  # type: ignore
     m.audit(business_id)
+    _persist_audit_rollups(business_id)
+
+
+def _run_fast_audit(business_id: int, args: dict) -> None:
+    """Rec 9 -- the 'fast first look' tier: a reduced-battery audit that yields a real score cheaply
+    (~a few min) so a new tenant sees something before the full ~30-50 min pipeline. Persists the
+    same score rollups so it shows on the dashboard, but does NOT trigger the heavy gap/plan cascade
+    (that's what the full audit + enqueue_downstream do). The full pipeline can run afterward."""
+    try:
+        from .. import ai_state_audit as m
+    except ImportError:  # pragma: no cover
+        import ai_state_audit as m  # type: ignore
+    m.audit(business_id, fast=True)
+    _persist_audit_rollups(business_id)
+
+
+def _persist_audit_rollups(business_id: int) -> None:
     # Persist a durable per-run metric rollup so per-engine trends survive answer pruning.
     try:
         _imp("run_metrics").persist_latest(business_id)
@@ -303,6 +320,7 @@ def _run_generate_visual(business_id: int, args: dict):
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
+    "fast_audit": _run_fast_audit,   # rec 9: reduced-battery 'first look' (score fast, no cascade)
     "site_crawl": _run_site_crawl,
     "audit_socials": _run_audit_socials,
     "gap_model": _run_gap_model,
@@ -375,7 +393,7 @@ def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
 # dedup already prevents two of the same job running at once; these cap how fast a client can
 # re-trigger EXPENSIVE (LLM/search-spending) work over time, so a stuck finger can't run up spend.
 _JOB_RATE_LIMITS = {
-    "audit": (4, 3600), "cycle": (3, 3600), "benchmark": (6, 3600), "report": (6, 3600),
+    "audit": (4, 3600), "fast_audit": (6, 3600), "cycle": (3, 3600), "benchmark": (6, 3600), "report": (6, 3600),
     "discovery": (8, 3600), "enrich_outreach": (6, 3600), "social_verify": (6, 3600),
     "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),

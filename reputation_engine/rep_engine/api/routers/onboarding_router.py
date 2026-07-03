@@ -136,6 +136,10 @@ class OnboardingSetupRequest(BaseModel):
     competitors: list[CompetitorIn] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     run_pipeline: bool = True
+    # 'full' = the whole first-run pipeline (~30-50 min, ~$8-12); 'fast' = a first-look audit only
+    # (rec 9): a real score in a few minutes for ~$2, so the user sees something before committing to
+    # the full run. The full pipeline can be launched afterward from the dashboard ("Refresh data").
+    mode: str = "full"
 
 
 # The full first-run pipeline + its prerequisites live in job_deps so the onboarding wizard,
@@ -194,12 +198,20 @@ def onboarding_setup(body: OnboardingSetupRequest, user: dict = Depends(require_
 
     jobs_enqueued = []
     if body.run_pipeline:
-        jobs_enqueued = _job_deps.enqueue_pipeline(business_id, requested_by=user["id"])
+        if (body.mode or "full").strip().lower() == "fast":
+            # Fast first-look tier (rec 9): enqueue ONLY the reduced-battery audit -- a quick score,
+            # no expensive gap/plan/content cascade. The worker runs it; the dashboard shows progress.
+            from .. import jobs as _jobs
+            jid, _active = _jobs.enqueue(business_id, "fast_audit", requested_by=user["id"])
+            jobs_enqueued = [{"job_type": "fast_audit", "job_id": jid}] if jid else []
+        else:
+            jobs_enqueued = _job_deps.enqueue_pipeline(business_id, requested_by=user["id"])
 
     return {
         "business_id": business_id,
         "name": name,
         "competitors_added": competitors_added,
         "keywords_added": keywords_added,
+        "mode": (body.mode or "full").strip().lower(),
         "jobs": jobs_enqueued,
     }

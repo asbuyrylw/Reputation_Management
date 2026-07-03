@@ -129,6 +129,17 @@ export function useCostBreakdown(businessId: number | null) {
   return useApiQuery<CostBreakdown>(["cost-breakdown", businessId], businessId ? `/businesses/${businessId}/cost-breakdown` : null);
 }
 
+// Admin-only: set the monthly spend CAP (the runaway guard). Invalidates the cost breakdown so the
+// budget bar + over/under state refresh immediately after an edit. (rec 8)
+export function useSetBudget(businessId: number | null) {
+  return useApiMutation<{ monthly_budget_usd: number }>(
+    () => `/businesses/${businessId}/budget`,
+    (vars) => vars,
+    [["cost-breakdown", businessId]],
+    "PATCH",
+  );
+}
+
 export function useAuditRuns(businessId: number | null) {
   return useApiQuery<AuditRun[]>(["audit-runs", businessId], businessId ? `/businesses/${businessId}/audit-runs` : null);
 }
@@ -270,12 +281,14 @@ export interface SetupBusinessVars {
   competitors?: { name: string; domain?: string }[];
   keywords?: string[];
   run_pipeline?: boolean;
+  mode?: "full" | "fast";   // 'fast' = the reduced first-look audit only (rec 9)
 }
 export interface SetupBusinessResult {
   business_id: number;
   name: string;
   competitors_added: number;
   keywords_added: number;
+  mode?: "full" | "fast";   // which tier launched (rec 9)
   jobs: { job_type: string; job_id: number | null; already_running?: boolean; error?: string }[];
 }
 export function useSetupBusiness() {

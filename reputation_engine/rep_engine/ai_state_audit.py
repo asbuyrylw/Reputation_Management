@@ -341,6 +341,11 @@ def init_db() -> None:
         # from every downstream metric (all gate on finished_at IS NOT NULL).
         conn.execute("ALTER TABLE audit_runs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'in_progress'")
         conn.execute("UPDATE audit_runs SET status='complete' WHERE finished_at IS NOT NULL AND status='in_progress'")
+        # mode distinguishes a FULL audit from a 'fast' first-look tier (a reduced battery + 1 sample,
+        # rec 9): a real score cheaply, so a new tenant sees something before the ~30-50 min pipeline.
+        # A fast run is still kind='ai_audit' (shows on the dashboard/trend) but is NOT allowed to seed
+        # the strategy plan (build_gap_model prefers a full run) since its answer sample is thin.
+        conn.execute("ALTER TABLE audit_runs ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'full'")
         conn.commit()
     log.info("Schema ensured.")
 
@@ -1257,11 +1262,16 @@ def _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans, score,
     )
 
 
-def audit(business_id: int) -> int:
+def audit(business_id: int, fast: bool = False) -> int:
     """Run the prompt battery across engines with multi-sampling, per-call cost
     tracking, and a per-business monthly budget cap. Each (prompt, engine, sample)
     is a row in `answers` (sample_idx distinguishes repeats); the gap model and
-    diff average across samples automatically."""
+    diff average across samples automatically.
+
+    fast=True runs the 'first look' tier (rec 9): a REDUCED battery (the top generic prompts, no
+    persona/location lenses) at 1 sample -- a real score for a fraction of the cost/time, so a new
+    tenant sees something quickly. The run is tagged mode='fast' (build_gap_model skips it for plan
+    synthesis; it still appears in the dashboard score/trend)."""
     init_db()
     _audit_check_budget_or_exit(business_id)
     preflight_engines()   # fail/warn loudly on misconfig BEFORE spending on a paid audit
@@ -1277,7 +1287,8 @@ def audit(business_id: int) -> int:
         if not b:
             raise SystemExit(f"No business id {business_id}")
         run = conn.execute(
-            "INSERT INTO audit_runs (business_id) VALUES (%s) RETURNING id", (business_id,)
+            "INSERT INTO audit_runs (business_id, mode) VALUES (%s,%s) RETURNING id",
+            (business_id, "fast" if fast else "full"),
         ).fetchone()
         run_id = run["id"]
         # Make the run row durable up-front so a mid-run crash leaves a visible 'failed'
@@ -1286,11 +1297,17 @@ def audit(business_id: int) -> int:
         # commit does not release it.
         conn.commit()
         try:
-            battery = build_prompt_battery_lensed(b)
+            if fast:
+                # First-look tier: top N generic prompts (no persona/location lenses), 1 sample.
+                cap = max(1, int(os.getenv("FAST_AUDIT_PROMPTS", "5")))
+                battery = [(p, "", "") for p in build_prompt_battery(b)[:cap]]
+                samples = 1
+            else:
+                battery = build_prompt_battery_lensed(b)
+                samples = _samples_per_prompt(conn, business_id)
             engines = active_engines()
-            samples = _samples_per_prompt(conn, business_id)
-            log.info("Auditing '%s': %d prompt-lenses x %d engines x %d samples",
-                     b["name"], len(battery), len(engines), samples)
+            log.info("Auditing '%s' (%s): %d prompt-lenses x %d engines x %d samples",
+                     b["name"], "fast" if fast else "full", len(battery), len(engines), samples)
             # Per-engine circuit breaker for THIS run. After _AUDIT_CIRCUIT_TRIP consecutive
             # failures a provider is skipped for every remaining prompt (recorded as refreshable
             # 'failed' rows) so a dead/slow engine can't add hours. Top it up later with
@@ -1705,13 +1722,15 @@ def build_gap_model(business_id: int) -> dict:
         # finished_at NULL (and status != 'complete'); building a strategy from a partial,
         # biased sample of the prompt battery would violate the same invariant diff(),
         # tracking, reports and learning all enforce (line ~959). Mirror that filter here.
+        # Also SKIP a 'fast' first-look run (rec 9): its reduced battery is too thin a sample to
+        # synthesize a full strategy plan from -- wait for a full audit.
         run = conn.execute(
             "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-            "AND status='complete' ORDER BY id DESC LIMIT 1",
+            "AND status='complete' AND COALESCE(mode,'full') <> 'fast' ORDER BY id DESC LIMIT 1",
             (business_id,),
         ).fetchone()
         if not run:
-            raise SystemExit("Run a completed audit first.")
+            raise SystemExit("Run a completed (full) audit first.")
         # Budget guard (rec 10b): gap-model synthesis is a large, expensive LLM pass (two ~12k-token
         # calls). Refuse to start it when the business is already at/over its monthly cap -- mirroring
         # the audit guard. The cap is the runaway backstop; raise a resumable error so the job retries

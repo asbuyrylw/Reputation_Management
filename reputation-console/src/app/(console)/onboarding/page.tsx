@@ -32,6 +32,7 @@ export default function OnboardingPage() {
   const [compName, setCompName] = useState("");
   const [compDomain, setCompDomain] = useState("");
   const [kw, setKw] = useState("");
+  const [mode, setMode] = useState<"full" | "fast">("full");   // rec 9: fast first-look vs full pipeline
 
   const addCompetitor = () => {
     if (!compName.trim()) return;
@@ -60,6 +61,7 @@ export default function OnboardingPage() {
       competitors,
       keywords,
       run_pipeline: true,
+      mode,
     };
     setup.mutate(vars, {
       onSuccess: (res) => setBusinessId(res.business_id),
@@ -70,6 +72,7 @@ export default function OnboardingPage() {
   if (setup.isSuccess && setup.data) {
     const res = setup.data;
     const queued = res.jobs.filter((j) => j.job_id && !j.error);
+    const isFast = res.mode === "fast";
     return (
       <div className="mx-auto max-w-3xl">
         <PageHeader eyebrow="Setup" title="You're all set" />
@@ -82,7 +85,7 @@ export default function OnboardingPage() {
               <h3 className="text-lg font-bold tracking-tight text-slate-900">{res.name} is ready</h3>
               <p className="mt-1 text-sm text-slate-600">
                 We saved your profile{res.competitors_added > 0 ? `, ${res.competitors_added} competitor${res.competitors_added === 1 ? "" : "s"}` : ""}
-                {res.keywords_added > 0 ? ` and ${res.keywords_added} keyword${res.keywords_added === 1 ? "" : "s"}` : ""}, and kicked off the full pipeline.
+                {res.keywords_added > 0 ? ` and ${res.keywords_added} keyword${res.keywords_added === 1 ? "" : "s"}` : ""}, and {isFast ? "started your fast first look." : "kicked off the full pipeline."}
               </p>
             </div>
           </div>
@@ -101,22 +104,35 @@ export default function OnboardingPage() {
               )}
             </div>
             <p className="mt-3 text-xs leading-relaxed text-slate-500">
-              We&apos;re running the full board once — audit, SEO crawl, gaps, improvement plan, AI citations,
-              competitor benchmark, local rankings, mentions, outreach and content briefs, then your report. It
-              runs in the background (~30–50 min); every section fills in as each step finishes.
+              {isFast ? (
+                <>We&apos;re running a <span className="font-medium text-slate-600">quick AI audit</span> across the assistants — your score and worst answers. It finishes in a few minutes. When you&apos;re ready, run the full analysis (audit, SEO, gaps, plan, competitors, content &amp; report) from the dashboard&apos;s <span className="font-medium text-slate-600">Refresh data</span> button.</>
+              ) : (
+                <>We&apos;re running the full board once — audit, SEO crawl, gaps, improvement plan, AI citations,
+                competitor benchmark, local rankings, mentions, outreach and content briefs, then your report. It
+                runs in the background (~30–50 min); every section fills in as each step finishes.</>
+              )}
             </p>
           </div>
 
           <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">In ~30 minutes you&apos;ll be able to see</div>
-            <ul className="mt-2 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
-              <li>📊 Your <Link href="/dashboard" className="font-medium text-indigo-600 hover:underline">score vs your goal</Link></li>
-              <li>🎯 Your <Link href="/gaps" className="font-medium text-indigo-600 hover:underline">3 biggest gaps</Link> to fix</li>
-              <li>⚔ <Link href="/competitors" className="font-medium text-indigo-600 hover:underline">You vs competitors</Link> in AI answers</li>
-              <li>📍 Your <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">Google map-pack standing</Link> + rating</li>
-              <li>🔑 The <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">keywords to rank for</Link></li>
-              <li>✅ A <Link href="/next-steps" className="font-medium text-indigo-600 hover:underline">prioritized action plan</Link></li>
-            </ul>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">{isFast ? "In a few minutes you'll be able to see" : "In ~30 minutes you'll be able to see"}</div>
+            {isFast ? (
+              <ul className="mt-2 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
+                <li>📊 Your <Link href="/dashboard" className="font-medium text-indigo-600 hover:underline">reputation score</Link></li>
+                <li>💬 The <Link href="/audits" className="font-medium text-indigo-600 hover:underline">worst answers</Link> AI gives about you</li>
+                <li>🤖 How each <Link href="/ai-overview" className="font-medium text-indigo-600 hover:underline">AI assistant</Link> answers</li>
+                <li>▶ Then run the <span className="font-medium text-slate-700">full analysis</span> for gaps, plan &amp; competitors</li>
+              </ul>
+            ) : (
+              <ul className="mt-2 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
+                <li>📊 Your <Link href="/dashboard" className="font-medium text-indigo-600 hover:underline">score vs your goal</Link></li>
+                <li>🎯 Your <Link href="/gaps" className="font-medium text-indigo-600 hover:underline">3 biggest gaps</Link> to fix</li>
+                <li>⚔ <Link href="/competitors" className="font-medium text-indigo-600 hover:underline">You vs competitors</Link> in AI answers</li>
+                <li>📍 Your <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">Google map-pack standing</Link> + rating</li>
+                <li>🔑 The <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">keywords to rank for</Link></li>
+                <li>✅ A <Link href="/next-steps" className="font-medium text-indigo-600 hover:underline">prioritized action plan</Link></li>
+              </ul>
+            )}
           </div>
 
           <div className="mt-4 flex flex-wrap gap-3">
@@ -289,8 +305,33 @@ export default function OnboardingPage() {
                 </div>
               ))}
             </dl>
-            <div className="rounded-xl bg-indigo-50/60 p-3.5 text-sm text-slate-700 ring-1 ring-inset ring-indigo-100">
-              On launch we&apos;ll run the <span className="font-semibold text-slate-900">full pipeline once</span> — audit → SEO crawl → gaps → improvement plan → AI citations → competitor benchmark → local rankings → mentions → outreach → content briefs → report. It runs in the background (~30–50 min) so every section is populated.
+            {/* Rec 9 — choose the fast first-look tier or the full pipeline. */}
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-800">How do you want to start?</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setMode("fast")}
+                  className={`rounded-xl border p-3.5 text-left transition ${mode === "fast" ? "border-indigo-500 bg-indigo-50/70 ring-1 ring-inset ring-indigo-200" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-900">⚡ Fast first look</span>
+                    <span className="text-xs font-medium text-slate-500">~5–10 min</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">A quick AI audit across the assistants — your score and worst answers, fast and cheap. Run the full analysis whenever you&apos;re ready.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("full")}
+                  className={`rounded-xl border p-3.5 text-left transition ${mode === "full" ? "border-indigo-500 bg-indigo-50/70 ring-1 ring-inset ring-indigo-200" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-900">🔬 Full setup</span>
+                    <span className="text-xs font-medium text-slate-500">~30–50 min</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">The whole pipeline once — audit, SEO crawl, gaps, plan, citations, competitors, rankings, mentions, outreach, content briefs &amp; report. Every section populated.</p>
+                </button>
+              </div>
             </div>
             {setup.isError && (
               <p className="text-sm font-medium text-rose-600">
@@ -326,7 +367,7 @@ export default function OnboardingPage() {
               disabled={setup.isPending || !name.trim()}
               className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
             >
-              {setup.isPending ? "Setting up…" : "Launch full setup"}
+              {setup.isPending ? "Setting up…" : mode === "fast" ? "Start fast look" : "Launch full setup"}
             </button>
           )}
         </div>

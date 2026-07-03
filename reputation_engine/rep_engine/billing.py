@@ -125,10 +125,12 @@ def is_active(sub: Optional[dict]) -> bool:
 # Usage metering + quota gate
 # ---------------------------------------------------------------------------
 def audits_used(conn, org_id: int) -> int:
-    """Audit runs started this calendar month across all of the org's businesses."""
+    """FULL audit runs started this calendar month across all of the org's businesses. Excludes the
+    'fast' first-look tier (rec 9) -- a cheap teaser must not consume the paid monthly audit quota."""
     row = conn.execute(
         "SELECT COUNT(*) n FROM audit_runs ar JOIN businesses b ON b.id = ar.business_id "
-        "WHERE b.org_id=%s AND ar.started_at >= date_trunc('month', now() AT TIME ZONE 'UTC')",
+        "WHERE b.org_id=%s AND ar.started_at >= date_trunc('month', now() AT TIME ZONE 'UTC') "
+        "AND COALESCE(ar.mode,'full') <> 'fast'",
         (org_id,),
     ).fetchone()
     return int(row["n"])

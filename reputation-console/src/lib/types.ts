@@ -578,6 +578,9 @@ export interface CostBreakdown {
   items: CostItem[];
   run_total: number;
   month_total: number;
+  monthly_budget_usd: number;   // the monthly spend cap (runaway guard); editable by admins
+  budget_pct: number | null;    // month_total / cap
+  over_budget: boolean;
   estimated: boolean;
 }
 

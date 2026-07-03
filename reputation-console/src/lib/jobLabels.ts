@@ -17,6 +17,8 @@ export const JOB_LABELS: Record<string, JobMeta> = {
   // AI Visibility
   audit: { type: "audit", label: "Run AI visibility audit", navGroup: "AI Visibility", secs: 180,
     hint: "Ask the AI assistants about you and score every answer." },
+  fast_audit: { type: "fast_audit", label: "Fast first look", navGroup: "AI Visibility", secs: 90,
+    hint: "A quick, cheap AI audit — your score and worst answers in a few minutes." },
   refresh_failed: { type: "refresh_failed", label: "Retry failed audit engines", navGroup: "AI Visibility", secs: 120,
     hint: "Re-run only the answers that failed in the latest audit.", internal: true },
   citation_analyze: { type: "citation_analyze", label: "Refresh AI citations", navGroup: "AI Visibility", secs: 45,
