@@ -1,14 +1,66 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useAssets, usePatchAsset, useAssetPlacements, useAddPlacement, useUpdatePlacement, useComplianceLedger } from "@/lib/hooks";
+import { useAssets, usePatchAsset, useAssetPlacements, useAddPlacement, useUpdatePlacement, useComplianceLedger, useOurContentImpact, useGscSummary } from "@/lib/hooks";
 import { Card, PageHeader, Spinner, Chip, Input, Button } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
+import { SecHead } from "@/components/DashboardV2";
 import { AssetPublishPanel } from "@/components/AssetPublishPanel";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { TableContainer, Th, Td } from "@/components/content/TableContainer";
+import { ComplianceNotice } from "@/components/content/ComplianceNotice";
 import type { Asset } from "@/lib/types";
+
+const host = (u: string) => { try { return new URL(u).pathname || u; } catch { return u; } };
+
+// Per-piece Google Search Console traffic for the content we published — the causal proof loop
+// (did our content start earning clicks?). Reads /our-content-impact (assets ↔ latest gsc_page_stats).
+function SearchTrafficSection({ businessId }: { businessId: number | null }) {
+  const { data } = useOurContentImpact(businessId);
+  const { data: gsc } = useGscSummary(businessId);
+  const rows = (data?.assets ?? []).slice().sort((a, b) => b.gsc_clicks - a.gsc_clicks);
+  if (rows.length === 0) return null; // nothing published-live with a URL yet
+  const connected = !!(gsc?.has_data || gsc?.collecting);
+  const t = data?.totals;
+  return (
+    <section>
+      <SecHead title="Search traffic" note="the Google clicks each published piece earns" link={{ label: "Search Console", href: "/search-performance" }} />
+      {!connected ? (
+        <ComplianceNotice tone="info" title="Connect Google Search Console to see real traffic">
+          Once connected, each published piece shows the clicks, impressions, and CTR it earns on Google — not zeros. <Link href="/integrations" className="font-semibold text-indigo hover:text-indigo-strong">Connect →</Link>
+        </ComplianceNotice>
+      ) : (
+        <>
+          {t && (
+            <div className="mb-2 text-[13px] text-ink-3">
+              <b className="font-semibold text-good">{t.assets_with_traffic} of {t.assets_published}</b> published piece{t.assets_published === 1 ? "" : "s"} earning search traffic
+              {t.our_content_clicks > 0 ? <> · <b className="font-semibold text-ink-2">{t.our_content_clicks.toLocaleString()}</b> Google clicks so far</> : null}
+            </div>
+          )}
+          <TableContainer>
+            <thead>
+              <tr><Th className="w-[42%]">Piece</Th><Th>Destination</Th><Th>Published</Th><Th>Clicks</Th><Th>Impressions</Th><Th>CTR</Th></tr>
+            </thead>
+            <tbody>
+              {rows.map((a) => (
+                <tr key={a.asset_id}>
+                  <Td><span className="font-semibold text-ink">{a.title || "Untitled piece"}</span></Td>
+                  <Td><a href={a.published_url} target="_blank" rel="noreferrer" className="font-mono text-[11px] text-indigo hover:underline">{host(a.published_url)}</a></Td>
+                  <Td className="whitespace-nowrap text-ink-3">{fmtDate(a.published_at)}</Td>
+                  <Td><span className={`font-mono font-semibold ${a.gsc_clicks > 0 ? "text-good" : "text-ink-4"}`}>{a.gsc_clicks.toLocaleString()}</span></Td>
+                  <Td className="font-mono text-ink-3">{a.gsc_impressions.toLocaleString()}</Td>
+                  <Td className="font-mono text-ink-3">{a.gsc_ctr != null ? `${(a.gsc_ctr * 100).toFixed(1)}%` : "—"}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </TableContainer>
+        </>
+      )}
+    </section>
+  );
+}
 
 function fmtDate(d?: string | null): string {
   if (!d) return "";
@@ -179,10 +231,13 @@ export default function FinalizedContentPage() {
           cta={{ label: "Review drafts", href: "/content/drafts" }}
         />
       ) : (
-        <div className="space-y-3">
-          {data.map((a) => (
-            <AssetRow key={a.id} a={a} businessId={businessId} canEdit={canEdit} />
-          ))}
+        <div className="space-y-6">
+          <SearchTrafficSection businessId={businessId} />
+          <div className="space-y-3">
+            {data.map((a) => (
+              <AssetRow key={a.id} a={a} businessId={businessId} canEdit={canEdit} />
+            ))}
+          </div>
         </div>
       )}
       <ComplianceLedger businessId={businessId} />

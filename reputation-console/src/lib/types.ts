@@ -1322,6 +1322,8 @@ export interface OurContentAsset {
   published_url: string;
   published_at: string | null;
   gsc_clicks: number;
+  gsc_impressions: number;
+  gsc_ctr: number | null;
   ga_sessions: number;
   has_traffic: boolean;
 }

@@ -126,6 +126,7 @@ def our_content_impact(business_id: int = Depends(authorize_business), conn=Depe
             return {}
 
     gsc_clicks = _latest_map("gsc_page_stats", "clicks")
+    gsc_impr = _latest_map("gsc_page_stats", "impressions")
     ga_sessions = _latest_map("ga_top_pages", "sessions")
     # owned citation share from the latest citation_momentum run
     owned_share = 0.0
@@ -143,10 +144,13 @@ def our_content_impact(business_id: int = Depends(authorize_business), conn=Depe
     out_assets = []
     for a in assets:
         clk = int(gsc_clicks.get(a["id"]) or 0)
+        imp = int(gsc_impr.get(a["id"]) or 0)
+        ctr = round(clk / imp, 4) if imp else None
         ses = int(ga_sessions.get(a["id"]) or 0)
         out_assets.append({"asset_id": a["id"], "title": a["title"], "published_url": a["published_url"],
                            "published_at": a["published_at"].isoformat() if a["published_at"] else None,
-                           "gsc_clicks": clk, "ga_sessions": ses, "has_traffic": (clk + ses) > 0})
+                           "gsc_clicks": clk, "gsc_impressions": imp, "gsc_ctr": ctr,
+                           "ga_sessions": ses, "has_traffic": (clk + ses) > 0})
     with_traffic = sum(1 for a in out_assets if a["has_traffic"])
     return {"assets": out_assets, "owned_citation_share": owned_share,
             "totals": {"assets_published": len(out_assets), "assets_with_traffic": with_traffic,
