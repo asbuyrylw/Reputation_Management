@@ -53,8 +53,8 @@ RUST = "8A3B2E"
 
 def _run_series(conn, business_id: int) -> list:
     runs = conn.execute(
-        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-        "ORDER BY id ASC", (business_id,),
+        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+        "AND finished_at IS NOT NULL ORDER BY id ASC", (business_id,),
     ).fetchall()
     series = []
     for r in runs:

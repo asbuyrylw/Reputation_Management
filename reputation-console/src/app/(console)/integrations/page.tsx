@@ -76,7 +76,9 @@ function statusTone(status: string): { tone: Tone; label: string } {
     case "error":
       return { tone: "bad", label: "Error" };
     case "revoked":
-      return { tone: "neutral", label: "Revoked" };
+      // A revoked connection means data collection has STOPPED — surface it as needing attention,
+      // not a benign grey, so the owner knows to reconnect (OAuth access was withdrawn/expired).
+      return { tone: "bad", label: "Disconnected — reconnect" };
     case "expired":
       return { tone: "bad", label: "Expired" };
     case "needs_reconnect":

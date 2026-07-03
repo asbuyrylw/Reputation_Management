@@ -826,16 +826,30 @@ def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
                 wos = p.get("work_orders", [])
     biz = dict(biz)
     created = []
+    eligible = 0   # WOs that are a generatable content type + auto/semi (i.e. we actually try them)
     for wo in wos:
         if only_wo and wo.get("_db_id") != only_wo:
             continue
         # only attempt auto-executable content work orders
         if (wo.get("execution") or "auto") not in ("auto", "semi"):
             continue
+        if not _asset_type_for(wo):
+            continue  # not a generatable content type (schema-only manual tasks, etc.)
+        eligible += 1
         did = generate_for_wo(business_id, wo, biz)
         if did:
             created.append(did)
-    log.info("Generated %d draft(s) for business %d", len(created), business_id)
+    log.info("Generated %d draft(s) for business %d (%d eligible content WO(s))",
+             len(created), business_id, eligible)
+    # Silent-failure guard: eligible content WOs but ZERO drafts produced is a real failure
+    # (orchestrator LLM unavailable/misconfigured, or every target already published) -- NOT a
+    # success. Raise so the job is marked failed instead of a misleading "complete".
+    if eligible and not created:
+        raise RuntimeError(
+            f"generate_drafts produced 0 drafts from {eligible} eligible content work order(s) for "
+            f"business {business_id}: generation failed (check the orchestrator LLM key/availability) "
+            f"or every target is already published. Not marking this run successful."
+        )
     return created
 
 

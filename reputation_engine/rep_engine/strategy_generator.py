@@ -347,22 +347,25 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
-            f"can cleanly extract facts.", 4)
+            f"can cleanly extract facts.", 4, gap_source="audited gap: schema", source_query=str(sg))
 
     # --- Phase 2: corroboration (press, media list, partner, link) ---
     if gap.get("thin_corroboration"):
         add("Build local media list", "media_list_building",
             "Assemble a Cincinnati-area finance/local-business journalist + outlet list "
-            "with angles (veteran-owned, financial literacy, community workshops).", 5)
+            "with angles (veteran-owned, financial literacy, community workshops).", 5,
+            gap_source="audited gap: thin corroboration")
         for i, claim in enumerate(gap.get("thin_corroboration", [])):
             c = claim.get("claim", f"claim {i+1}")
             where = claim.get("where_to_get_it", "")
             add(f"Corroborate: {c}", "press_outreach",
                 f"Secure third-party coverage/mention supporting '{c}'. Source: {where}. "
-                f"Draft pitch; route via outreach tool; human approves before send.", 6)
+                f"Draft pitch; route via outreach tool; human approves before send.", 6,
+                gap_source="audited gap: thin corroboration", why=c, source_query=c)
     add("Book local/finance podcast appearances", "press_outreach",
         "Identify 3-5 relevant local/finance podcasts; pitch the principal as guest; "
-        "each episode yields an indexed third-party positive page.", 7)
+        "each episode yields an indexed third-party positive page.", 7,
+        gap_source="audited gap: thin corroboration")
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
     # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks

@@ -495,7 +495,14 @@ def run_job(job_id: int) -> Optional[str]:
         return None
     status, err, result = "complete", None, None
     try:
-        ret = JOB_DISPATCH[job["job_type"]](job["business_id"], job.get("args") or {})
+        handler = JOB_DISPATCH.get(job["job_type"])
+        if handler is None:
+            # A bare KeyError here means a long-lived worker cached its dispatch table before a
+            # deploy that added this job type -- self-explain instead of an opaque "'job_type'".
+            raise RuntimeError(
+                f"unknown job_type {job['job_type']!r} -- the worker is likely running stale code "
+                f"(known types: {len(JOB_DISPATCH)}); redeploy/restart the worker service.")
+        ret = handler(job["business_id"], job.get("args") or {})
         # Persist the dispatch fn's structured return (e.g. local_rank's {skipped, reason} or
         # {rows, queries}) so a job that did nothing reportable doesn't read as a bare "complete".
         if isinstance(ret, dict):

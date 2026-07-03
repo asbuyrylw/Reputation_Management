@@ -83,8 +83,8 @@ def compute(business_id: int, run_id: int | None = None, persist: bool = True, q
     """Compute (and persist) the Narrative Crowding-Out Score for a run (latest completed if None)."""
     with db() as conn:
         if run_id is None:
-            r = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                             "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+            r = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+                             "AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             if not r:
                 return {"run_id": None, "score": None, "n_answers": 0}
             run_id = r["id"]
