@@ -319,6 +319,15 @@ export function useRejectDraft(businessId: number | null) {
   );
 }
 
+// Atomize a long-form draft into per-platform social posts (stored as human-gated drafts).
+export function useAtomizeDraft(businessId: number | null) {
+  return useApiMutation<{ draftId: number }>(
+    ({ draftId }) => `/businesses/${businessId}/content-drafts/${draftId}/atomize`,
+    () => ({}),
+    [["content-drafts", businessId]],
+  );
+}
+
 export function useAddWorkOrder(businessId: number | null) {
   return useApiMutation<{ title: string; instruction?: string; recommended_tool?: string; target_date?: string }>(
     () => `/businesses/${businessId}/work-orders`,

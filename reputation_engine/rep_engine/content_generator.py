@@ -963,6 +963,68 @@ def reject(draft_id: int, reviewer: str, notes: Optional[str]) -> None:
     log.info("Draft %d rejected by %s", draft_id, reviewer)
 
 
+# ----------------------------------------------------------------------------
+# Social atomization (Phase 5) -- turn one long-form piece into per-platform posts
+# ----------------------------------------------------------------------------
+ATOMIZE_SYSTEM = (
+    "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
+    "social posts, ONE per platform: LinkedIn, X (Twitter), Facebook, Instagram. GROUND every claim in "
+    "the article -- NEVER add facts, statistics, offers, credentials, or claims not present in it. Match "
+    "each platform: LinkedIn = professional, 1-2 short paragraphs + a takeaway; X = one punchy post under "
+    "280 characters; Facebook = warm + conversational, 2-3 sentences; Instagram = a hook-led caption with "
+    "3-5 relevant hashtags. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
+    '{"atoms":[{"surface":"linkedin","text":"..."},{"surface":"x","text":"..."},'
+    '{"surface":"facebook","text":"..."},{"surface":"instagram","text":"..."}]}'
+)
+_SURFACE_LABEL = {"linkedin": "LinkedIn", "x": "X/Twitter", "twitter": "X/Twitter",
+                  "facebook": "Facebook", "instagram": "Instagram"}
+
+
+def atomize_draft(business_id: int, draft_id: int) -> dict:
+    """Derive human-gated social posts from a long-form draft (Phase-5 atomization): one grounded
+    post per platform, stored as pending_review drafts (compliance UNscreened -> a principal must
+    sign off to approve). NEVER auto-posts -- AUTOPOST_GLOBAL_ENABLED still governs any posting."""
+    _ensure_table()
+    with db() as conn:
+        d = conn.execute("SELECT id, work_order_id, title, body, target_query FROM content_drafts "
+                         "WHERE id=%s AND business_id=%s", (draft_id, business_id)).fetchone()
+    if not d:
+        return {"ok": False, "error": "draft not found"}
+    body = (d.get("body") or "").strip()
+    if len(body) < 120:
+        return {"ok": False, "error": "draft is too short to atomize into social posts"}
+    payload = json.dumps({"title": d.get("title") or "", "article": body[:6000]})
+    res = llm.orchestrator_json(ATOMIZE_SYSTEM, payload, tier="mid") or {}
+    atoms = res.get("atoms") if isinstance(res, dict) else None
+    if not isinstance(atoms, list) or not atoms:
+        return {"ok": False, "error": "could not generate social posts (content LLM unavailable)"}
+    created: list[int] = []
+    with db() as conn:
+        for a in atoms[:6]:
+            if not isinstance(a, dict):
+                continue
+            surface = str(a.get("surface") or "social").lower().strip()
+            text = (a.get("text") or "").strip()
+            if not text:
+                continue
+            label = _SURFACE_LABEL.get(surface, surface.title() or "Social")
+            row = conn.execute(
+                """INSERT INTO content_drafts
+                   (business_id, work_order_id, asset_type, title, body, target_query,
+                    quality_score, quality_notes, revision_count, compliance_pass,
+                    compliance_flags, status, highlighted_sections, placeholders_pending, content_hash)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (business_id, d.get("work_order_id"), f"{surface}_post",
+                 f"{d.get('title') or 'Post'} — {label}", text, d.get("target_query"),
+                 None, json.dumps({"atomized_from": draft_id, "surface": surface}), 0, None,
+                 json.dumps([]), "pending_review", json.dumps([]), json.dumps([]),
+                 hashlib.sha256(text.encode("utf-8")).hexdigest())).fetchone()
+            created.append(int(row["id"]))
+        conn.commit()
+    log.info("Atomized draft %d -> %d social posts", draft_id, len(created))
+    return {"ok": True, "created": len(created), "draft_ids": created, "source_draft_id": draft_id}
+
+
 def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[str] = None,
                  business_id: Optional[int] = None) -> bool:
     """Edit a draft's title/body BEFORE approval -- the human can fix a fact or adjust tone,

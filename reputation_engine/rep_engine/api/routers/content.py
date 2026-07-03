@@ -585,6 +585,21 @@ def reject_draft(
     return {"ok": True, "draft_id": draft_id, "status": "rejected"}
 
 
+@router.post("/content-drafts/{draft_id}/atomize", status_code=201)
+def atomize_draft_ep(
+    draft_id: int,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Turn a long-form draft into per-platform social posts (Phase-5 atomization). The posts are
+    stored as human-gated pending_review drafts — they are NEVER auto-posted."""
+    _assert_draft_in_business(conn, draft_id, business_id)
+    res = _cg.atomize_draft(business_id, draft_id)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "could not atomize this draft")
+    return res
+
+
 @router.post("/work-orders/{wo_id}/status")
 def set_work_order_status(
     wo_id: int,

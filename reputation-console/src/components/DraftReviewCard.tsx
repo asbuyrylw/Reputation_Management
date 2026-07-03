@@ -5,7 +5,7 @@ import { Card, Badge, Input } from "./ui";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { ComplianceNotice } from "@/components/content/ComplianceNotice";
 import { DraftImageGallery } from "@/components/content/DraftImageGallery";
-import { useApproveDraft, useEditDraft, useRejectDraft } from "@/lib/hooks";
+import { useApproveDraft, useEditDraft, useRejectDraft, useAtomizeDraft } from "@/lib/hooks";
 import type { BadgeTone } from "./ui";
 import type { ContentDraft, DraftNeuron } from "@/lib/types";
 
@@ -194,9 +194,12 @@ export function DraftReviewCard({
   const approve = useApproveDraft(businessId);
   const reject = useRejectDraft(businessId);
   const edit = useEditDraft(businessId);
+  const atomize = useAtomizeDraft(businessId);
   const body = draft.body || "";
   const long = body.length > 400;
   const pending = draft.status === "pending_review" || draft.status === "needs_fix";
+  // Long-form pieces (not already a social post) can be atomized into per-platform social drafts.
+  const atomizable = long && !(draft.asset_type || "").endsWith("_post");
   const flags = Array.isArray(draft.compliance_flags) ? draft.compliance_flags : [];
   const q = quality(draft.quality_score);
   const added = Array.isArray(draft.highlighted_sections) ? draft.highlighted_sections : [];
@@ -408,6 +411,25 @@ export function DraftReviewCard({
       <DraftImageGallery businessId={businessId} draftId={draft.id} markers={draft.quality_notes?.image_markers ?? []} canEdit={canEdit} />
 
       {whyHelps && <p className="mt-2 text-xs text-ink-3">💡 {whyHelps}</p>}
+
+      {/* Phase-5 atomization — turn this long-form piece into per-platform social posts (human-gated) */}
+      {canEdit && atomizable && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={atomize.isPending}
+            onClick={() => atomize.mutate({ draftId: draft.id })}
+            className="inline-flex items-center gap-1.5 rounded-md border border-line-2 px-2.5 py-1 text-xs font-semibold text-ink-2 hover:bg-line/60 disabled:opacity-50"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5 text-indigo"><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></svg>
+            {atomize.isPending ? "Creating…" : "Create social posts"}
+          </button>
+          {atomize.isSuccess && (
+            <span className="text-xs text-good">Created {(atomize.data as { created?: number } | undefined)?.created ?? 0} social draft(s) — review them in Drafts.</span>
+          )}
+          {atomize.isError && <span className="text-xs text-alert">Couldn&apos;t create posts — try again.</span>}
+        </div>
+      )}
 
       {/* unscreened draft (compliance not confirmed) needs a principal sign-off reason to approve */}
       {canEdit && pending && draft.compliance_pass == null && !editing && (
