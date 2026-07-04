@@ -47,6 +47,16 @@ function AddTaskButton({ businessId, payload }: { businessId: number | null; pay
   );
 }
 
+// A section-group header so the gaps read as two aligned areas: AI visibility vs Search & SEO.
+function GroupHead({ title, note }: { title: string; note?: string }) {
+  return (
+    <div className="mt-7 mb-1 flex flex-wrap items-baseline gap-x-2 border-b border-slate-200 pb-1">
+      <h3 className="text-[13px] font-bold uppercase tracking-wide text-slate-700">{title}</h3>
+      {note && <span className="text-[11px] text-slate-400">{note}</span>}
+    </div>
+  );
+}
+
 // Split prose that embeds "(1) … (2) …" (or "1. … 2. …") into a lead sentence + the
 // numbered items, so a wall of text becomes an indented list.
 function splitNumbered(text: string): { lead: string; items: string[] } {
@@ -139,6 +149,7 @@ export function GapsView({
         </p>
       </Card>
 
+      <GroupHead title="AI Visibility gaps" note="how AI assistants answer about you" />
       {/* questions AI fails */}
       <div id="gap-weak" className="scroll-mt-24">
       <DataSection
@@ -232,6 +243,33 @@ export function GapsView({
       </DataSection>
       </div>
 
+      {/* questions where a competitor appears and you don't (AI visibility) */}
+      {compDef.length > 0 && (
+        <div id="gap-competitor" className="scroll-mt-24">
+        <DataSection
+          title="Questions your rivals win"
+          severity={compDef.length > 3 ? "high" : "med"}
+          headline={`${compDef.length} questions where a competitor shows up in AI answers and you don't. Close these to take back the conversation.`}
+          highlights={[{ label: "Questions", value: String(compDef.length), tone: "bad" }]}
+          action={{ label: "Open task board", href: "/content/work-orders" }}
+          detailsLabel="See the questions + how to compete"
+        >
+          <ul className="space-y-3">
+            {compDef.map((g, i) => (
+              <li key={i} className="rounded-lg border border-slate-100 p-3">
+                <div className="text-sm font-semibold text-slate-800">“{g.query}”</div>
+                {g.competitor && <div className="text-xs text-rose-600">A rival wins here: {g.competitor}</div>}
+                {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
+                {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+                {addBtn({ title: `Compete for '${g.query}'`, instruction: `${g.recommendation || ""} A competitor (${g.competitor || "a rival"}) appears here and you don't.`.trim(), capability: "content_writing", gap_source: "competitor analysis", source_query: g.query, area: "content", why_helps_ai_rep: g.why })}
+              </li>
+            ))}
+          </ul>
+        </DataSection>
+        </div>
+      )}
+
+      <GroupHead title="Search & SEO gaps" note="where you land on Google" />
       {/* local searches not on page 1 (from live Google rankings) */}
       {localSeo.length > 0 && (
         <div id="gap-local" className="scroll-mt-24">
@@ -251,32 +289,6 @@ export function GapsView({
                 {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
                 {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
                 {addBtn({ title: `Reach page 1 for '${g.query}'`, instruction: `${g.recommendation || ""} Current position: ${g.current_rank != null ? String(g.current_rank) : "off page 1"}.`.trim(), capability: "local_content_creation", gap_source: "local search ranking", source_query: g.query, area: "local", why_helps_seo: g.why })}
-              </li>
-            ))}
-          </ul>
-        </DataSection>
-        </div>
-      )}
-
-      {/* questions where a competitor appears and you don't */}
-      {compDef.length > 0 && (
-        <div id="gap-competitor" className="scroll-mt-24">
-        <DataSection
-          title="Questions your rivals win"
-          severity={compDef.length > 3 ? "high" : "med"}
-          headline={`${compDef.length} questions where a competitor shows up in AI answers and you don't. Close these to take back the conversation.`}
-          highlights={[{ label: "Questions", value: String(compDef.length), tone: "bad" }]}
-          action={{ label: "Open task board", href: "/content/work-orders" }}
-          detailsLabel="See the questions + how to compete"
-        >
-          <ul className="space-y-3">
-            {compDef.map((g, i) => (
-              <li key={i} className="rounded-lg border border-slate-100 p-3">
-                <div className="text-sm font-semibold text-slate-800">“{g.query}”</div>
-                {g.competitor && <div className="text-xs text-rose-600">A rival wins here: {g.competitor}</div>}
-                {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
-                {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
-                {addBtn({ title: `Compete for '${g.query}'`, instruction: `${g.recommendation || ""} A competitor (${g.competitor || "a rival"}) appears here and you don't.`.trim(), capability: "content_writing", gap_source: "competitor analysis", source_query: g.query, area: "content", why_helps_ai_rep: g.why })}
               </li>
             ))}
           </ul>
