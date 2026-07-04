@@ -674,7 +674,11 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         log.info("WO '%s' already covered (pgvector); skipping.", topic)
         return None
 
-    grounding = _grounding_context(business_id, target_query=wo.get("target_query"))
+    # Scope keywords to this piece. Batch pieces set target_query; plan work orders don't, so fall
+    # back to their gap query / title so single-draft pieces also get on-topic keywords, not the
+    # business-wide top-15.
+    _scope_q = wo.get("target_query") or (wo.get("gap_specifics") or {}).get("source_query") or wo.get("title")
+    grounding = _grounding_context(business_id, target_query=_scope_q)
     # SERP-competitor benchmark (Phase 3): the shared terms + word-count target from the pages
     # actually ranking for this query, so the draft can be graded "vs. the competition" rather than
     # absolute. Dormant-safe: {skipped} with no SERPER_API_KEY, and never raises.
