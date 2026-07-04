@@ -58,6 +58,7 @@ export default function StrategyOverviewPage() {
   if (dashLoading) return <Spinner />;
 
   const model = (gm?.model ?? {}) as Json;
+  const summary = (model.summary as string) || "";
   const cats = [
     { n: arr(model.weak_queries).length, label: "questions AI gets wrong", tone: "bad" as const },
     { n: arr(model.missing_owned_content).length, label: "pages to create", tone: "info" as const },
@@ -92,6 +93,14 @@ export default function StrategyOverviewPage() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
         </Link>
       </div>
+
+      {summary && (
+        <div className="mb-5 rounded-[14px] border border-indigo-100 bg-indigo-050/60 p-4 text-sm leading-relaxed text-slate-700">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-strong">The situation &amp; strategy</div>
+          <p>{summary}</p>
+          <Link href="/gaps" className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-indigo hover:text-indigo-strong">See the full gap analysis →</Link>
+        </div>
+      )}
 
       {/* KPI tiles */}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">

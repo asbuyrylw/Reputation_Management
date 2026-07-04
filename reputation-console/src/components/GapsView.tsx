@@ -124,19 +124,15 @@ export function GapsView({
           {siteTech.length > 0 && <Chip n={siteTech.length} label="website fixes" tone="neutral" targetId="gap-site" />}
         </div>
         {summary && (
-          <details className="mt-3">
-            <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-800">
-              ▸ Read the full summary
-            </summary>
-            <div className="mt-2 text-sm leading-relaxed text-slate-700">
-              {sum.lead && <p>{sum.lead}{sum.items.length ? ":" : ""}</p>}
-              {sum.items.length > 0 && (
-                <ol className="mt-1 list-decimal space-y-1 pl-6">
-                  {sum.items.map((it, i) => <li key={i}>{it}</li>)}
-                </ol>
-              )}
-            </div>
-          </details>
+          <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-050/60 p-3.5 text-sm leading-relaxed text-slate-700">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-strong">The situation</div>
+            {sum.lead && <p>{sum.lead}{sum.items.length ? ":" : ""}</p>}
+            {sum.items.length > 0 && (
+              <ol className="mt-1 list-decimal space-y-1 pl-6">
+                {sum.items.map((it, i) => <li key={i}>{it}</li>)}
+              </ol>
+            )}
+          </div>
         )}
         <p className="mt-3 text-xs text-slate-400">
           Each item below links to the work it creates. {asOf ? `Based on the audit from ${asOf}.` : ""} Recheck after your next audit.

@@ -35,11 +35,16 @@ export const HUBS: Hub[] = [
       { href: "/seo", label: "Site health" },
     ],
   },
+  // Gap Analysis and Strategy are DISTINCT but aligned: the gap analysis is "what's wrong, where,
+  // impact" (analysis only); the strategy is "what we'll do about it -> tasks". Two hubs, no route
+  // moves -- /gaps and /strategy already exist.
   {
-    key: "plan", label: "Your problems & plan", opLabel: "Strategy & Plan", href: "/strategy",
+    key: "gaps", label: "Your gaps", opLabel: "Gap Analysis", href: "/gaps", tabs: [],
+  },
+  {
+    key: "plan", label: "Your strategy & plan", opLabel: "Strategy", href: "/strategy",
     tabs: [
       { href: "/strategy", label: "Overview" },
-      { href: "/gaps", label: "What's hurting you", opLabel: "Gaps" },
       { href: "/content/work-orders", label: "Improvement tasks", opLabel: "Tasks" },
       { href: "/next-steps", label: "Recommendations" },
       { href: "/timeline", label: "Time to goal" },
