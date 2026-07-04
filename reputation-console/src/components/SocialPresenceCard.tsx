@@ -50,6 +50,9 @@ function PlatformRow({ a, canEdit, onSave, saving }: {
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">✗ not found</span>
           )}
           {confirmed && <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">✓ you confirmed</span>}
+          {a.exists && !confirmed && a.confidence === "ambiguous" && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700" title="Two same-name profiles looked equally likely — confirm the right one below.">⚠ is this you?</span>
+          )}
           {note && <span className="text-[11px] text-slate-400">{note}</span>}
         </div>
         <div className="flex items-center gap-2.5">
