@@ -54,6 +54,11 @@ class DiscoveryTargetUpdate(BaseModel):
 class TargetStatusRequest(BaseModel):
     status: str
 
+
+class SocialProfileUpdate(BaseModel):
+    profile_url: str = ""
+    exists: bool = True
+
 try:
     from ... import content_generator as _cg
     from ... import tracking as _tracking
@@ -396,6 +401,29 @@ def social_audit(business_id: int = Depends(authorize_business), conn=Depends(ge
         d["completeness"] = float(d["completeness"]) if d["completeness"] is not None else None
         out.append(d)
     return out
+
+
+@router.patch("/social-audit/{platform}")
+def set_social_profile(platform: str, payload: SocialProfileUpdate,
+                       business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Manually set / correct the owned profile for a platform -- the owner pasting the RIGHT URL when
+    auto-discovery picked a wrong same-name page (e.g. facebook.com/TheTeamUnstoppable ->
+    /realteamunstoppable). Marks it source='manual', confidence='confirmed' so the discovery
+    no-downgrade guard never overwrites it on a later audit."""
+    plat = (platform or "").strip().lower()
+    if not plat:
+        raise HTTPException(status_code=400, detail="platform required")
+    url = (payload.profile_url or "").strip() or None
+    exists = bool(url) and payload.exists
+    conn.execute(
+        'INSERT INTO social_presence (business_id, platform, "exists", profile_url, '
+        "confidence, source, last_checked_at) VALUES (%s,%s,%s,%s,'confirmed','manual',now()) "
+        "ON CONFLICT (business_id, platform) DO UPDATE SET "
+        '"exists"=EXCLUDED."exists", profile_url=EXCLUDED.profile_url, '
+        "confidence='confirmed', source='manual', last_checked_at=now()",
+        (business_id, plat, exists, url))
+    conn.commit()
+    return {"ok": True, "platform": plat, "profile_url": url, "source": "manual", "confidence": "confirmed"}
 
 
 @router.get("/task-impact")

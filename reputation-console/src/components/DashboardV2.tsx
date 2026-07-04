@@ -6,8 +6,24 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { Answer, LocalSeoGoal, CompareResult, LocalRankSummary } from "@/lib/types";
+import type { Answer, LocalSeoGoal, CompareResult, LocalRankSummary, ShareOfVoice, WorkOrder } from "@/lib/types";
 import { repBand, repScore } from "@/lib/repScore";
+
+type WeakQ = { prompt?: string; addressed_by?: string };
+const _norm = (s?: string | null) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+// The task that fixes a given bad answer — matched by the query it targets, or the topic that
+// addresses it — so "Fix this" deep-links to the exact task instead of the generic plan page.
+export function fixHrefForAnswer(a: Answer, workOrders?: WorkOrder[], weak?: WeakQ[]): string {
+  const wos = workOrders ?? [];
+  const p = _norm(a.prompt);
+  const sq = (w: WorkOrder) => _norm((w.gap_specifics as { source_query?: string } | undefined)?.source_query);
+  let wo = wos.find((w) => p && sq(w) === p);
+  if (!wo && weak?.length) {
+    const topic = _norm(weak.find((w) => _norm(w.prompt) === p)?.addressed_by);
+    if (topic) wo = wos.find((w) => sq(w) === topic || _norm(w.title).includes(topic));
+  }
+  return wo ? `/content/work-orders#wo-${wo.id}` : "/gaps";
+}
 import { engineLabel } from "@/lib/engines";
 
 const fmtDate = (d?: string | null) => {
@@ -121,7 +137,7 @@ export function ScorePanel({ score, delta, goalScore, aiDate, aiMonths, eyebrow 
 }
 
 // Worst-answers list — the loudest damaging answers. Reused by the dashboard hero + AI overview.
-export function WorstAnswersPanel({ worst, limit = 2 }: { worst: Answer[]; limit?: number }) {
+export function WorstAnswersPanel({ worst, limit = 2, workOrders, weak }: { worst: Answer[]; limit?: number; workOrders?: WorkOrder[]; weak?: WeakQ[] }) {
   return (
     <div className="flex flex-col rounded-[18px] border border-line bg-card p-[22px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
       <div className="mb-[3px] font-mono text-[11px] uppercase tracking-[0.14em] text-alert">Needs attention · loudest now</div>
@@ -141,25 +157,26 @@ export function WorstAnswersPanel({ worst, limit = 2 }: { worst: Answer[]; limit
               </div>
               <div className="mb-1.5 text-[14px] font-semibold leading-snug text-ink">“{a.prompt}”</div>
               {snip && <div className="relative pl-[22px] text-[13.5px] italic leading-relaxed text-ink-2 before:absolute before:left-1.5 before:top-0 before:font-semibold before:not-italic before:text-ink-4 before:content-['~']">“{snip}…”</div>}
+              <Link href={fixHrefForAnswer(a, workOrders, weak)} className="mt-2 inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-indigo hover:text-indigo-strong">Fix this →</Link>
             </div>
           );
         })
       )}
       <div className="mt-3.5">
-        <Link href="/next-steps" className="flex h-[34px] w-full items-center justify-center gap-1.5 rounded-[10px] bg-indigo px-[13px] text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong">Fix these in the plan</Link>
+        <Link href="/gaps" className="flex h-[34px] w-full items-center justify-center gap-1.5 rounded-[10px] bg-indigo px-[13px] text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong">See all gaps &amp; fixes</Link>
       </div>
     </div>
   );
 }
 
-export function ScoreHero({ score, delta, goalScore, aiDate, aiMonths, worst }: {
+export function ScoreHero({ score, delta, goalScore, aiDate, aiMonths, worst, workOrders, weak }: {
   score: number | null; delta?: number | null; goalScore: number | null;
-  aiDate?: string | null; aiMonths?: number | null; worst: Answer[];
+  aiDate?: string | null; aiMonths?: number | null; worst: Answer[]; workOrders?: WorkOrder[]; weak?: WeakQ[];
 }) {
   return (
     <section className="mb-5 grid grid-cols-1 gap-5 lg:grid-cols-[1.55fr_1fr]">
       <ScorePanel score={score} delta={delta} goalScore={goalScore} aiDate={aiDate} aiMonths={aiMonths} />
-      <WorstAnswersPanel worst={worst} />
+      <WorstAnswersPanel worst={worst} workOrders={workOrders} weak={weak} />
     </section>
   );
 }
@@ -250,17 +267,17 @@ const ROW_TONE: Record<"good" | "trend" | "alert" | "next", { cls: string; icon:
   good: { cls: "bg-good-bg text-good", icon: <path d="M20 6L9 17l-5-5" /> },
   trend: { cls: "bg-indigo-050 text-indigo", icon: <><path d="M3 17l6-6 4 4 8-8" /><path d="M21 7v5h-5" /></> },
   alert: { cls: "bg-alert-bg text-alert", icon: <><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></> },
-  next: { cls: "bg-score-bg text-score", icon: <path d="M13 2L3 14h9l-1 8 10-12h-9z" /> },
+  next: { cls: "bg-indigo-050 text-indigo", icon: <path d="M13 2L3 14h9l-1 8 10-12h-9z" /> },
 };
 
 export type FrontRow = { tone: "good" | "trend" | "alert" | "next"; k: string; v: ReactNode };
-export type FrontData = { icon: ReactNode; title: string; sub: string; score: number | null; rows: FrontRow[]; href: string; linkLabel: string };
+export type FrontData = { icon: ReactNode; iconCls?: string; title: string; sub: string; score: number | null; rows: FrontRow[]; href: string; linkLabel: string };
 
 function FrontCard({ d }: { d: FrontData }) {
   return (
     <div className="rounded-[18px] border border-line bg-card p-5 px-6 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
       <div className="mb-3 flex items-center gap-3 border-b border-line pb-3.5">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[11px] bg-score-bg text-score">{d.icon}</div>
+        <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-[11px] ${d.iconCls ?? "bg-indigo-050 text-indigo"}`}>{d.icon}</div>
         <div className="min-w-0 flex-1">
           <b className="block text-[15px] font-semibold text-ink">{d.title}</b>
           <span className="text-[12.5px] text-ink-3">{d.sub}</span>
@@ -302,17 +319,24 @@ export function TwoFronts({ ai, seo }: { ai: FrontData; seo: FrontData }) {
   );
 }
 
-export type ActionItem = { rank: number; impact: number | null; title: string; desc: string; cat: string };
+export type ActionItem = { rank: number; impact: number | null; title: string; desc: string; cat: string; href?: string };
 
 export function DoThisNext({ actions, approvalsCount, openTasksCount }: {
   actions: ActionItem[]; approvalsCount: number; openTasksCount: number;
 }) {
   return (
     <>
-      <SecHead title="Do this next" note="highest-impact moves to raise your score" link={{ label: "View recommendations", href: "/next-steps" }} />
+      <SecHead title="Do this next" note="highest-impact moves to raise your score" link={{ label: "All tasks", href: "/content/work-orders" }} />
+      {actions.length === 0 ? (
+        <div className="rounded-[16px] border border-line bg-card p-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="text-[14.5px] font-semibold text-ink">No tasks in your plan yet</div>
+          <div className="mx-auto mt-1 max-w-md text-[13px] text-ink-3">Turn a gap into a task and it&apos;ll show up here as your daily focus.</div>
+          <Link href="/gaps" className="mt-3 inline-flex items-center gap-1 rounded-[10px] bg-indigo px-4 py-2 text-[13px] font-semibold text-white hover:bg-indigo-strong">See your gaps →</Link>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {actions.map((a) => (
-          <div key={a.rank} className="flex flex-col rounded-[16px] border border-line bg-card p-[18px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)] transition-all hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,23,42,0.05),0_12px_32px_-10px_rgba(15,23,42,0.14)]">
+          <Link key={a.rank} href={a.href ?? "/content/work-orders"} className="flex flex-col rounded-[16px] border border-line bg-card p-[18px] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)] transition-all hover:-translate-y-0.5 hover:border-indigo hover:shadow-[0_2px_4px_rgba(15,23,42,0.05),0_12px_32px_-10px_rgba(15,23,42,0.14)]">
             <div className="mb-2.5 flex items-center justify-between">
               <div className="grid h-6 w-6 place-items-center rounded-lg bg-ink font-mono text-[12px] font-semibold text-white">{a.rank}</div>
               {a.impact != null && <span className="rounded-full bg-good-bg px-2 py-0.5 font-mono text-[11px] font-semibold text-good">≈ +{a.impact.toFixed(1)} pts</span>}
@@ -320,9 +344,10 @@ export function DoThisNext({ actions, approvalsCount, openTasksCount }: {
             <h3 className="mb-1.5 text-[15px] font-semibold leading-snug tracking-[-0.01em] text-ink">{a.title}</h3>
             <p className="mb-3 text-[13px] leading-relaxed text-ink-3">{a.desc}</p>
             <div className="mt-auto flex items-center gap-1.5 border-t border-line pt-2.5 font-mono text-[11px] uppercase tracking-[0.05em] text-ink-4">{a.cat}</div>
-          </div>
+          </Link>
         ))}
       </div>
+      )}
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-[16px] bg-linear-to-br from-ink to-[#1E293B] px-5 py-4 text-slate-200 shadow-[0_2px_4px_rgba(15,23,42,0.05),0_12px_32px_-10px_rgba(15,23,42,0.14)]">
         <div className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-white/10 text-sky-300">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[17px] w-[17px]"><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
@@ -354,12 +379,17 @@ function Panel({ title, desc, link, children }: { title: string; desc: string; l
   );
 }
 
-export function StandingAtAGlance({ ownedRate, contestedRate, compare, local, gscConnected }: {
-  ownedRate: number | null; contestedRate: number | null; compare?: CompareResult; local?: LocalRankSummary | null; gscConnected: boolean;
+export function StandingAtAGlance({ sov, compare, local, gscConnected }: {
+  sov?: ShareOfVoice | null; compare?: CompareResult; local?: LocalRankSummary | null; gscConnected: boolean;
 }) {
-  const owned = ownedRate != null ? Math.round(ownedRate * 100) : null;
-  const contested = contestedRate != null ? Math.round(contestedRate * 100) : null;
-  const neutral = owned != null && contested != null ? Math.max(0, 100 - owned - contested) : null;
+  // Citation share-of-voice (owned/neutral/contested sum to 100) — the SAME source as the /rankings
+  // detail this card links to, not the answer-level rates that can't be a valid pie.
+  const _cls = sov?.by_classification;
+  const owned = _cls?.owned?.share != null ? Math.round(_cls.owned.share * 100) : null;
+  const contested = _cls?.contested?.share != null ? Math.round(_cls.contested.share * 100) : null;
+  const neutral = _cls?.neutral?.share != null
+    ? Math.round(_cls.neutral.share * 100)
+    : (owned != null && contested != null ? Math.max(0, 100 - owned - contested) : null);
   const standings = (compare?.standings ?? []).slice().sort((a, b) => b.appearance_rate - a.appearance_rate);
   const maxRate = standings.length ? Math.max(...standings.map((s) => s.appearance_rate)) : 1;
   const rank = compare?.subject_rank ?? null;

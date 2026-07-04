@@ -204,6 +204,17 @@ export function useAuditSocials(businessId: number | null) {
   });
 }
 
+// Manually set / correct an owned social profile URL. The server marks it source='manual' so a
+// later re-audit never overwrites it. Invalidates the social audit so the row updates immediately.
+export function useSetSocialProfile(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ platform, profile_url }: { platform: string; profile_url: string }) =>
+      apiFetch(`/businesses/${businessId}/social-audit/${encodeURIComponent(platform)}`, { method: "PATCH", body: { profile_url } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["social-audit", businessId] }),
+  });
+}
+
 // ---- content / work ----
 export function useWorkOrders(businessId: number | null) {
   return useApiQuery<WorkOrder[]>(["work-orders", businessId], businessId ? `/businesses/${businessId}/work-orders` : null);

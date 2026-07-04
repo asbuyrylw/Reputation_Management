@@ -62,6 +62,9 @@ MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "2"))                # PH
 # Capabilities that this module knows how to generate (others stay manual).
 GENERATABLE = {
     "content_writing": "article",
+    # A local page-1 goal's anchor piece: a geo landing page. (Was un-generatable, so the
+    # "Generate draft" button on local work orders silently produced nothing and failed the job.)
+    "local_content_creation": "local_page",
     "schema_markup": "schema",
     "review_generation": "review_request",
 }

@@ -346,6 +346,11 @@ def run(business_id: int, quiet: bool = False) -> dict:
             'SELECT platform, "exists" AS exists, profile_url, source, confidence FROM '
             "social_presence WHERE business_id=%s", (business_id,)).fetchall()}
         for platform, d in discovered.items():
+            # A user-CONFIRMED profile (source='manual') is authoritative: never let auto-discovery
+            # overwrite it. Without this, re-running the audit deterministically re-picks the same
+            # wrong same-name page and clobbers the owner's correction.
+            if (prior.get(platform) or {}).get("source") == "manual":
+                continue
             if not d.get("exists") and d.get("source") == "none":
                 p = prior.get(platform)
                 if p and p.get("exists"):

@@ -8,7 +8,7 @@ import { OperatorHome } from "@/components/OperatorHome";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
   useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
-  useCompare, useSiteHealthTrend,
+  useCompare, useSiteHealthTrend, useShareOfVoice,
 } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
 import { GoalBanner, ScoreHero, TwoFronts, TwoGoals, DoThisNext as DoNextV2, StandingAtAGlance, SecHead } from "@/components/DashboardV2";
@@ -294,6 +294,7 @@ export default function DashboardPage() {
   const { data: approvals } = useApprovalQueue(businessId);
   const { data: gsc } = useGscSummary(businessId);
   const { data: siteHealth } = useSiteHealthTrend(businessId);
+  const { data: sov } = useShareOfVoice(businessId);
 
   if (bizLoading) return <Spinner />;
   if (businesses.length === 0) {
@@ -344,9 +345,11 @@ export default function DashboardPage() {
     title: w.title ?? "Untitled task",
     desc: (w.why_helps_ai_rep || w.why_helps_seo || w.instruction || "A prioritized move in your plan.").slice(0, 130),
     cat: [w.area, w.why_helps_ai_rep ? "AI" : w.why_helps_seo ? "SEO" : null].filter(Boolean).join(" · ") || "Task",
+    href: `/content/work-orders#wo-${w.id}`,
   }));
   const aiTopWO = openWOs.find((w) => w.why_helps_ai_rep) ?? openWOs[0];
-  const seoTopWO = openWOs.find((w) => w.why_helps_seo || (w.area && /website|seo|local|schema|blog/i.test(w.area)));
+  // Exclude the AI top task so the two fronts' "Do next" never show the identical task.
+  const seoTopWO = openWOs.find((w) => w.id !== aiTopWO?.id && (w.why_helps_seo || (w.area && /website|seo|local|schema|blog/i.test(w.area))));
   const approvalsCount = approvals?.items?.length ?? 0;
   const openTasksCount = openWOs.length;
   const gscConnected = !!(gsc?.has_data || gsc?.collecting);
@@ -356,6 +359,7 @@ export default function DashboardPage() {
 
   const aiFront: FrontData = {
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" /></svg>,
+    iconCls: "bg-indigo-050 text-indigo",
     title: "AI Visibility",
     sub: "How AI assistants answer about you",
     score,
@@ -371,6 +375,7 @@ export default function DashboardPage() {
   };
   const seoFront: FrontData = {
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>,
+    iconCls: "bg-sky-50 text-sky-600",
     title: "Search & SEO",
     sub: "AI-crawler readiness of your site",
     score: siteReadiness,
@@ -378,7 +383,10 @@ export default function DashboardPage() {
       siteReadiness != null && siteReadinessFirst != null && siteReadiness > siteReadinessFirst
         ? { tone: "good", k: "What's working", v: <>Crawler readiness <b>up +{Math.round(siteReadiness - siteReadinessFirst)}</b> since first crawl.</> }
         : { tone: "good", k: "What's working", v: "Your site is discovered and being parsed." },
-      { tone: "alert", k: "Biggest gap", v: <>You rank page 1 for <b>{localSum ? pct(localSum.page_one_rate) : "—"}</b> of local searches.</> },
+      // Only flag red when page-1 rate is genuinely low; otherwise it's informational, not an alarm.
+      localSum && localSum.page_one_rate >= 0.5
+        ? { tone: "trend", k: "Local search", v: <>You rank page 1 for <b>{pct(localSum.page_one_rate)}</b> of local searches.</> }
+        : { tone: "alert", k: "Biggest gap", v: <>You rank page 1 for <b>{localSum ? pct(localSum.page_one_rate) : "—"}</b> of local searches.</> },
       { tone: "next", k: "Do next", v: seoTopWO?.title ?? "Add LocalBusiness + Organization schema, then connect Search Console." },
     ],
     href: "/seo-overview",
@@ -454,6 +462,8 @@ export default function DashboardPage() {
             aiDate={aiDate}
             aiMonths={aiMonths}
             worst={worstAnswers}
+            workOrders={workOrders}
+            weak={data.gap?.weak_queries as WeakQuery[] | undefined}
           />
 
           {/* live monitor — incidents + mentions at a glance */}
@@ -470,8 +480,7 @@ export default function DashboardPage() {
 
           {/* v2 — your standing at a glance: share of voice, rivals, local search. */}
           <StandingAtAGlance
-            ownedRate={latest.owned_rate}
-            contestedRate={latest.contested_rate}
+            sov={sov}
             compare={compare}
             local={localSum}
             gscConnected={gscConnected}

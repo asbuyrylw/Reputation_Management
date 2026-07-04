@@ -141,7 +141,7 @@ export default function StrategyOverviewPage() {
           <tbody>
             {todaysFocus.map((w) => (
               <tr key={w.id}>
-                <Td><span className="font-semibold text-ink">{w.title || "Untitled task"}</span></Td>
+                <Td><Link href={`/content/work-orders#wo-${w.id}`} className="font-semibold text-ink hover:text-indigo hover:underline">{w.title || "Untitled task"}</Link></Td>
                 <Td>{w.area ? <span className="rounded-[5px] border border-line-2 bg-paper px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink-2">{w.area}</span> : "—"}</Td>
                 <Td>{w.predicted_ai_points != null ? <span className="font-mono font-semibold text-good">+{w.predicted_ai_points.toFixed(1)}</span> : "—"}</Td>
                 <Td className="text-ink-3">{focusLabel(w)}</Td>

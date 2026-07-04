@@ -31,6 +31,8 @@ function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset })
 
 // Capabilities whose work the AI can draft for you (the per-item "Generate draft" button).
 const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
+// Copy we draft IN-APP — point these at OUR pipeline (Generate draft → Drafts), not external tools.
+const IN_APP_CONTENT = new Set(["content_writing", "local_content_creation"]);
 
 const COLUMNS = ["pending", "in_progress", "done", "verified", "blocked", "skipped"];
 const LABEL: Record<string, string> = {
@@ -249,9 +251,11 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
         )
       )}
 
-      {/* tool type + examples */}
+      {/* tool type — content we draft in-app points at OUR pipeline, not external writing tools */}
       <div className="mt-1.5 text-[11px] text-slate-500">
-        {tool ? (
+        {IN_APP_CONTENT.has(wo.capability ?? "") ? (
+          <span><span className="font-medium text-slate-600">Created in your console</span> — use <span className="font-semibold text-indigo-600">✨ Generate draft</span> below, then review in <Link href="/content/drafts" className="font-medium text-indigo-600 hover:underline">Content → Drafts</Link>.</span>
+        ) : tool ? (
           <span><span className="font-medium text-slate-600">{tool.type}</span> — e.g. {tool.examples.join(", ")}</span>
         ) : wo.recommended_tool ? (
           <span><span className="font-medium text-slate-600">Tool:</span> {wo.recommended_tool}</span>
