@@ -230,6 +230,51 @@ def _grounding_context(business_id: int, target_query: str | None = None) -> dic
     return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords}
 
 
+_BRIEF_WORDS = {"white_paper": 1500, "blog": 800, "article": 700, "faq": 600, "local_page": 650,
+                "landing_page": 500, "gbp_post": 120, "social_post": 100, "bio": 350, "video_script": 400}
+_BRIEF_READ = {"white_paper": "Grade 10-12 (authoritative)", "gbp_post": "Grade 6-8 (very plain)",
+               "social_post": "Grade 6-8 (very plain)", "video_script": "Grade 6-8 (spoken)"}
+_BRIEF_STRUCT = {
+    "faq": "6-10 Q&A pairs; each heading phrased as the exact question a buyer asks.",
+    "article": "Answer-first 40-60 word intro; H2/H3 headings phrased as questions; one quotable stat per section; short FAQ near the end.",
+    "blog": "Answer-first intro; scannable H2 sections; a takeaway per section; internal links; short FAQ.",
+    "local_page": "Geo landing page: city + service in the H1; local proof (reviews/NAP); embedded map; a local FAQ.",
+    "white_paper": "Executive summary; data-backed sections with citations; conclusion + CTA.",
+    "landing_page": "Clear value-prop H1; benefits; proof; one strong CTA.",
+    "video_script": "Hook (0-3s); 3-5 talking points; on-screen text cues; CTA + shot list.",
+    "social_post": "One idea; hook first line; a link back to the owned page.",
+}
+
+
+def piece_brief(business_id: int, wo: dict) -> dict:
+    """A DETERMINISTIC, no-LLM content SPEC for a to-produce piece, surfaced BEFORE drafting so the
+    owner sees what it must contain: scoped keywords, a length + readability target, the structure,
+    and the exact AI gap it closes. (The full grounding + outline are still computed at draft time.)"""
+    at = _asset_type_for(wo) or "article"
+    ct = wo.get("content_type") or at
+    tq = wo.get("target_query") or (wo.get("gap_specifics") or {}).get("source_query") or wo.get("title") or ""
+    keywords: list = []
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT keyword, kind, priority FROM target_keywords WHERE business_id=%s "
+                "ORDER BY priority DESC NULLS LAST, keyword LIMIT 60", (business_id,)).fetchall()
+        allkw = [{"keyword": r["keyword"], "kind": r.get("kind"), "priority": r.get("priority")} for r in rows]
+        keywords = [k["keyword"] for k in _scope_keywords(allkw, tq, limit=8) if k.get("keyword")]
+    except Exception:  # noqa: BLE001 -- best-effort: no keyword table -> empty
+        keywords = []
+    return {
+        "asset_type": at, "content_type": ct,
+        "primary_keyword": keywords[0] if keywords else None,
+        "keywords": keywords,
+        "word_count_target": _BRIEF_WORDS.get(ct, _BRIEF_WORDS.get(at, 700)),
+        "readability_target": _BRIEF_READ.get(ct, _BRIEF_READ.get(at, "Grade 8-10 (plain, scannable)")),
+        "structure": _BRIEF_STRUCT.get(ct, _BRIEF_STRUCT.get(at, "Answer-first; clear H2/H3 headings; a short FAQ.")),
+        "closes_gap": (wo.get("gap_specifics") or {}).get("source_query"),
+        "gap_source": wo.get("gap_source"),
+    }
+
+
 def _asset_type_for(wo: dict) -> Optional[str]:
     cap = (wo.get("capability") or "").lower()
     if cap in GENERATABLE:

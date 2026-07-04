@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
@@ -216,6 +216,8 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   wo: WorkOrder; draft?: ContentDraft; asset?: Asset; businessId: number | null; canEdit: boolean;
 }) {
   const gen = useGenerateDraftForWo(businessId);
+  const [showSpec, setShowSpec] = useState(false);
+  const brief = useContentBrief(businessId, showSpec ? wo.id : null);
   const stage = stageOf(draft, asset);
   const target = draft?.target_query ?? asset?.target_query ?? null;
   const published = asset && (asset.published_status === "live" || asset.published_url);
@@ -239,6 +241,32 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
         <div className="mt-1 space-y-0.5 text-[11px]">
           {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo">AI reputation:</span> {wo.why_helps_ai_rep}</div>}
           {wo.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {wo.why_helps_seo}</div>}
+        </div>
+      )}
+      {CONTENT_CAPS.has(wo.capability ?? "") && !published && (
+        <div className="mt-1.5">
+          <button type="button" onClick={() => setShowSpec((s) => !s)} className="text-[11px] font-medium text-indigo hover:underline">
+            {showSpec ? "▾ What this piece needs" : "▸ What this piece needs (keywords, length, structure)"}
+          </button>
+          {showSpec && (
+            brief.isLoading ? (
+              <div className="mt-1 text-[11px] text-ink-4">Loading spec…</div>
+            ) : brief.data ? (
+              <div className="mt-1 space-y-1 rounded-lg border border-line bg-paper px-3 py-2 text-[11.5px] text-ink-2">
+                {brief.data.keywords.length > 0 && (
+                  <div><span className="font-semibold text-ink-3">Target keywords:</span> {brief.data.keywords.join(", ")}</div>
+                )}
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                  <span><span className="font-semibold text-ink-3">Length:</span> ~{brief.data.word_count_target} words</span>
+                  <span><span className="font-semibold text-ink-3">Readability:</span> {brief.data.readability_target}</span>
+                </div>
+                <div><span className="font-semibold text-ink-3">Structure:</span> {brief.data.structure}</div>
+                {brief.data.closes_gap && <div><span className="font-semibold text-rose-600">Closes the AI gap:</span> “{brief.data.closes_gap}”</div>}
+              </div>
+            ) : (
+              <div className="mt-1 text-[11px] text-ink-4">Spec unavailable.</div>
+            )
+          )}
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">

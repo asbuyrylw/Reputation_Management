@@ -145,6 +145,19 @@ def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_
     return {"id": wid}
 
 
+@router.get("/work-orders/{wo_id}/brief")
+def work_order_brief(wo_id: int, business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """The deterministic content SPEC for a to-produce piece (scoped keywords, length + readability
+    target, structure, and the AI gap it closes) -- surfaced before drafting so "what to produce" is
+    a reviewable spec, not just a title."""
+    row = conn.execute(
+        "SELECT id, title, capability, gap_source, gap_specifics FROM work_orders "
+        "WHERE id=%s AND business_id=%s", (wo_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work order not found")
+    return _cg.piece_brief(business_id, dict(row))
+
+
 @router.get("/team")
 def team(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """People who can be assigned tasks on this business (org members + business-access editors +

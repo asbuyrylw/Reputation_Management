@@ -10,6 +10,7 @@ import type {
   AdminUser,
   Asset,
   AuditRun,
+  ContentBrief,
   Answer,
   BillingPlan,
   SubscriptionSummary,
@@ -422,6 +423,13 @@ export function useAddWorkOrder(businessId: number | null) {
     [["work-orders", businessId], ["dashboard", businessId]],
   );
 }
+// The deterministic content SPEC for a to-produce piece (keywords/length/readability/structure/gap),
+// shown before drafting. woId null -> not fetched (lazy, on expand).
+export function useContentBrief(businessId: number | null, woId: number | null) {
+  return useApiQuery<ContentBrief>(["content-brief", businessId, woId],
+    businessId && woId ? `/businesses/${businessId}/work-orders/${woId}/brief` : null);
+}
+
 export function useSetWorkOrderStatus(businessId: number | null) {
   return useApiMutation<{ woId: number; status: string; assignee?: string; notes?: string; completed_on?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/status`,

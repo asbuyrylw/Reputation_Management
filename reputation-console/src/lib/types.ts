@@ -430,6 +430,19 @@ export interface SocialAudit {
   last_checked_at: string | null;
 }
 
+// The deterministic content spec for a to-produce piece, shown before drafting.
+export interface ContentBrief {
+  asset_type: string;
+  content_type: string;
+  primary_keyword: string | null;
+  keywords: string[];
+  word_count_target: number;
+  readability_target: string;
+  structure: string;
+  closes_gap: string | null;
+  gap_source: string | null;
+}
+
 export interface DiscoveryTarget {
   id: number;
   channel: string | null;
