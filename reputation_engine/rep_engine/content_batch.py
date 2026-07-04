@@ -29,7 +29,7 @@ log = logging.getLogger("content_batch")
 
 # A sensible default multi-type spread per gap. Tailored by gap intent in _types_for_gap().
 _DEFAULT_TYPES = ["blog", "article", "white_paper", "social_post"]
-_LOCAL_TYPES = ["local_page", "blog", "social_post"]
+_LOCAL_TYPES = ["local_page", "blog", "faq", "social_post"]
 _COMMERCIAL_TYPES = ["landing_page", "article", "social_post"]
 # A video gap can't be auto-published as a finished video (Veo is paid/dormant), so we produce the
 # generatable, honest deliverable -- a shootable VIDEO SCRIPT -- plus a supporting blog + social,
@@ -139,24 +139,47 @@ def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
 
 
 def gaps_for_business(business_id: int) -> list[dict]:
-    """Enumerate the content-fillable gaps: each missing_owned_content topic + the weak AI answers
-    (prompts) that name it via weak_query.addressed_by. Returns [{gap_key, topic, asset_type,
-    gap_source, why, target_prompts}]."""
+    """Enumerate the content-fillable gaps -- each becomes a MULTI-PIECE program, not one draft:
+      - missing_owned_content topics (the primary owned-content gaps),
+      - local_seo_gaps (a page-1 GOAL fans into a geo cluster: local page + blog + FAQ + social),
+      - competitor_defense (a rival-won question fans into competing owned content).
+    Returns [{gap_key, topic, asset_type, gap_source, why, target_prompts}]. target_prompts are the
+    weak AI answers the gap should move (token-matched); [] falls back to the whole run."""
     with db() as conn:
         gm = _latest_gap_model(conn, business_id)
-    moc = gm.get("missing_owned_content") or []
     weak = gm.get("weak_queries") or []
     out = []
-    for i, item in enumerate(moc):
+    for i, item in enumerate(gm.get("missing_owned_content") or []):
         topic = (item.get("topic") or f"topic {i+1}").strip()
-        prompts = _match_prompts(topic, weak)
         out.append({
             "gap_key": f"moc:{topic.lower()}",
             "topic": topic,
             "asset_type": (item.get("asset_type") or "article").lower(),
             "gap_source": "audited gap: missing_owned_content",
             "why": item.get("why") or "",
-            "target_prompts": prompts,
+            "target_prompts": _match_prompts(topic, weak),
+        })
+    # Local page-1 GOALS -> a geo content program (not one draftable item).
+    for i, item in enumerate(gm.get("local_seo_gaps") or []):
+        q = (item.get("query") or f"local query {i+1}").strip()
+        out.append({
+            "gap_key": f"local:{q.lower()}",
+            "topic": q,
+            "asset_type": "local_page",
+            "gap_source": "local search ranking",
+            "why": item.get("recommendation") or item.get("why") or "",
+            "target_prompts": _match_prompts(q, weak),
+        })
+    # Questions a rival wins -> competing owned content.
+    for i, item in enumerate(gm.get("competitor_defense") or []):
+        q = (item.get("query") or f"competitor query {i+1}").strip()
+        out.append({
+            "gap_key": f"comp:{q.lower()}",
+            "topic": q,
+            "asset_type": "article",
+            "gap_source": "competitor analysis",
+            "why": item.get("recommendation") or item.get("why") or "",
+            "target_prompts": _match_prompts(q, weak),
         })
     return out
 

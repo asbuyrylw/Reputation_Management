@@ -219,7 +219,10 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   const stage = stageOf(draft, asset);
   const target = draft?.target_query ?? asset?.target_query ?? null;
   const published = asset && (asset.published_status === "live" || asset.published_url);
-  const canDraft = canEdit && DRAFTABLE.has(wo.capability ?? "") && !draft && !asset;
+  // A local page-1 GOAL isn't one draftable piece — it needs a program (geo page + blogs + FAQ +
+  // social). Route it to the batch flow instead of a single "Generate draft".
+  const isLocalGoal = wo.capability === "local_content_creation";
+  const canDraft = canEdit && DRAFTABLE.has(wo.capability ?? "") && !isLocalGoal && !draft && !asset;
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
@@ -231,6 +234,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
       </div>
       <div className="mt-1.5 text-sm font-semibold text-ink">{wo.title}</div>
       {target && <div className="mt-0.5 text-xs text-ink-3">Targets the search: “{target}”</div>}
+      {isLocalGoal && !draft && !asset && <div className="mt-0.5 text-[11px] text-ink-4">A page-1 goal needs several pieces (geo page + blogs + FAQ + social) — produce them as a program.</div>}
       {(wo.why_helps_ai_rep || wo.why_helps_seo) && (
         <div className="mt-1 space-y-0.5 text-[11px]">
           {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo">AI reputation:</span> {wo.why_helps_ai_rep}</div>}
@@ -246,6 +250,9 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
           >
             {gen.isPending ? "Generating draft…" : gen.isSuccess ? "Draft queued ✓" : "✨ Generate draft"}
           </Button>
+        )}
+        {canEdit && isLocalGoal && !draft && !asset && (
+          <Link href="/content/batches" className="inline-flex items-center rounded-md bg-indigo px-2.5 py-1 font-semibold text-white hover:bg-indigo-strong">Produce content program →</Link>
         )}
         {draft && !published && (
           <Link href="/content/drafts" className="font-medium text-indigo hover:underline">Review draft →</Link>
