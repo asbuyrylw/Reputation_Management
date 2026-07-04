@@ -5,6 +5,7 @@ import { Card, Badge, Input } from "./ui";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { ComplianceNotice } from "@/components/content/ComplianceNotice";
 import { DraftImageGallery } from "@/components/content/DraftImageGallery";
+import { MarkdownBody } from "./MarkdownBody";
 import { useApproveDraft, useEditDraft, useRejectDraft, useAtomizeDraft } from "@/lib/hooks";
 import type { BadgeTone } from "./ui";
 import type { ContentDraft, DraftNeuron } from "@/lib/types";
@@ -325,9 +326,11 @@ export function DraftReviewCard({
           {draft.target_query && (
             <div className="text-xs text-ink-3">Answers the question: “{draft.target_query}”</div>
           )}
-          <p className="mt-1 whitespace-pre-wrap text-sm text-ink-2">
-            {open || !long ? body : body.slice(0, 400) + "…"}
-          </p>
+          {open || !long ? (
+            <MarkdownBody text={body} className="mt-1 text-sm text-ink-2" />
+          ) : (
+            <p className="mt-1 whitespace-pre-wrap text-sm text-ink-2">{body.slice(0, 400) + "…"}</p>
+          )}
           {long && (
             <button onClick={() => setOpen((o) => !o)} className="mt-1 text-xs text-indigo hover:underline">
               {open ? "Show less" : "Show full draft"}
