@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue } from "@/lib/hooks";
+import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue, useAddWorkOrder } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
@@ -17,11 +17,35 @@ function Tile({ k, value, sub, color }: { k: string; value: string; sub: string;
   );
 }
 
+// A recommended topic -> a real content task (so "needs content" actually produces content):
+// adds it to the board, where it shows up on the briefs page with Generate + its spec.
+function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_keywords?: number; why?: string }; businessId: number | null; canEdit: boolean }) {
+  const add = useAddWorkOrder(businessId);
+  return (
+    <div className="flex items-center gap-3 border-b border-indigo-100 py-2.5 last:border-0">
+      <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={r.why}>{r.topic}</span>
+      <span className="shrink-0 font-mono text-[11px] text-ink-4">{r.covers_keywords} kw</span>
+      {!canEdit ? null : add.isSuccess ? (
+        <Link href="/content/briefs" className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-good hover:bg-indigo-050">✓ Added — produce →</Link>
+      ) : (
+        <button
+          type="button"
+          onClick={() => add.mutate({ title: `Create content: ${r.topic}`, capability: "content_writing", gap_source: "topic authority", source_query: r.topic, area: "content", instruction: r.why, why_helps_ai_rep: r.why })}
+          disabled={add.isPending}
+          className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo hover:bg-indigo-050 disabled:opacity-50"
+        >
+          {add.isPending ? "Adding…" : "+ Add as task"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Content hub landing — "everything content, in one view": what to produce, what's in draft,
 // what's published, and the topic-authority recommendations not yet on the board, plus the
 // outreach that pulls the timeline forward. All read-only; row actions deep-link into the tabs.
 export default function ContentOverviewPage() {
-  const { businessId, businesses, loading } = useBusiness();
+  const { businessId, businesses, loading, canEdit } = useBusiness();
   const { data: drafts } = useContentDrafts(businessId);
   const { data: briefs } = useProductionBriefs(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
@@ -84,18 +108,14 @@ export default function ContentOverviewPage() {
         </Card>
 
         <div className="rounded-[18px] border border-indigo-100 bg-indigo-050 p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
-          <SecHead title="Recommended content" link={{ label: "All", href: "/gaps" }} />
-          <p className="mb-3 text-[13px] text-indigo-strong/85">From your topic authority — add any to your tasks to start producing it.</p>
+          <SecHead title="Recommended content" link={{ label: "All", href: "/content/briefs" }} />
+          <p className="mb-3 text-[13px] text-indigo-strong/85">From your topic authority — add any as a content task and it&apos;s ready to produce on the briefs page.</p>
           {recommended.length === 0 ? (
             <p className="text-[13px] text-ink-4">No recommendations yet — run keyword research to build your topic map.</p>
           ) : (
             <div>
               {recommended.slice(0, 5).map((r) => (
-                <div key={r.topic} className="flex items-center gap-3 border-b border-indigo-100 py-2.5 last:border-0">
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={r.why}>{r.topic}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-ink-4">{r.covers_keywords} kw</span>
-                  <Link href="/gaps" className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo hover:bg-indigo-050">+ Add</Link>
-                </div>
+                <RecommendRow key={r.topic} r={r} businessId={businessId} canEdit={canEdit} />
               ))}
             </div>
           )}
