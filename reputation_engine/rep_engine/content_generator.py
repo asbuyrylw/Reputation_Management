@@ -168,7 +168,25 @@ GEN_SYSTEM = (
 )
 
 
-def _grounding_context(business_id: int) -> dict:
+def _scope_keywords(allkw: list, target_query: str | None, limit: int = 12) -> list:
+    """Rank the business's keyword set by relevance to THIS piece (token overlap with its target
+    query/topic) so two different pieces get different, on-topic keywords instead of the same
+    business-wide top-15 on every draft. reputation_defense terms are always kept (they matter on
+    every piece). No target query -> fall back to top-priority."""
+    if not target_query:
+        return allkw[:15]
+    qtoks = set(re.findall(r"[a-z0-9]{3,}", (target_query or "").lower()))
+    scored = []
+    for k in allkw:
+        kt = set(re.findall(r"[a-z0-9]{3,}", str(k.get("keyword") or "").lower()))
+        scored.append((len(qtoks & kt), 1 if k.get("kind") == "reputation_defense" else 0,
+                       k.get("priority") or 0, k))
+    scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    relevant = [t for t in scored if t[0] > 0 or t[1] == 1]
+    return [t[3] for t in (relevant if relevant else scored)[:limit]]
+
+
+def _grounding_context(business_id: int, target_query: str | None = None) -> dict:
     """Pull the REAL grounding for content generation, so the writer works from facts and the
     right language instead of generic filler:
       - site_facts: what the business's own website actually says (latest crawl summary),
@@ -201,9 +219,12 @@ def _grounding_context(business_id: int) -> dict:
         with db() as conn:
             rows = conn.execute(
                 "SELECT keyword, kind, intent, priority FROM target_keywords WHERE business_id=%s "
-                "ORDER BY priority DESC NULLS LAST, keyword LIMIT 15", (business_id,)).fetchall()
-            keywords = [{"keyword": r["keyword"], "kind": r.get("kind"),
-                         "intent": r.get("intent"), "priority": r.get("priority")} for r in rows]
+                "ORDER BY priority DESC NULLS LAST, keyword LIMIT 60", (business_id,)).fetchall()
+            allkw = [{"keyword": r["keyword"], "kind": r.get("kind"),
+                      "intent": r.get("intent"), "priority": r.get("priority")} for r in rows]
+            # Scope to THIS piece's target query so each draft targets its own keywords, not the
+            # same business-wide top-15 on every piece.
+            keywords = _scope_keywords(allkw, target_query)
     except Exception:  # noqa: BLE001 -- best-effort: missing table or empty result degrades to no keywords
         keywords = []
     return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords}
@@ -608,7 +629,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         log.info("WO '%s' already covered (pgvector); skipping.", topic)
         return None
 
-    grounding = _grounding_context(business_id)
+    grounding = _grounding_context(business_id, target_query=wo.get("target_query"))
     # SERP-competitor benchmark (Phase 3): the shared terms + word-count target from the pages
     # actually ranking for this query, so the draft can be graded "vs. the competition" rather than
     # absolute. Dormant-safe: {skipped} with no SERPER_API_KEY, and never raises.
