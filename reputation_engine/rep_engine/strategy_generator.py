@@ -297,9 +297,13 @@ def _phase_for_week(week: int) -> str:
     return PHASES[-1][0]
 
 
-def build_work_orders(gap: dict) -> list[WorkOrder]:
+def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
+    # Media/press angles must reflect THIS business's geo + industry, never a hardcoded example.
+    biz = business or {}
+    geo = (biz.get("geo") or "").strip() or "your local area"
+    industry = (biz.get("industry") or "").strip() or "local-business"
 
     def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
             source="audited gap", area=None, platform="", source_query=""):
@@ -356,9 +360,10 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     # --- Phase 2: corroboration (press, media list, partner, link) ---
     if gap.get("thin_corroboration"):
         add("Build local media list", "media_list_building",
-            "Assemble a Cincinnati-area finance/local-business journalist + outlet list "
-            "with angles (veteran-owned, financial literacy, community workshops).", 5,
-            gap_source="audited gap: thin corroboration")
+            f"Assemble a {geo} {industry} journalist + local-outlet list, with pitch angles drawn "
+            f"from this business's real differentiators and community involvement (what makes it "
+            f"credible and locally newsworthy).", 5,
+            gap_source="audited gap: thin corroboration", source_query="local media list")
         for i, claim in enumerate(gap.get("thin_corroboration", [])):
             c = claim.get("claim", f"claim {i+1}")
             where = claim.get("where_to_get_it", "")
@@ -366,10 +371,10 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
                 f"Secure third-party coverage/mention supporting '{c}'. Source: {where}. "
                 f"Draft pitch; route via outreach tool; human approves before send.", 6,
                 gap_source="audited gap: thin corroboration", why=c, source_query=c)
-    add("Book local/finance podcast appearances", "press_outreach",
-        "Identify 3-5 relevant local/finance podcasts; pitch the principal as guest; "
-        "each episode yields an indexed third-party positive page.", 7,
-        gap_source="audited gap: thin corroboration")
+    add(f"Book relevant podcast appearances ({industry})", "press_outreach",
+        f"Identify 3-5 relevant {geo} / {industry} podcasts; pitch the principal as guest; "
+        f"each episode yields an indexed third-party positive page.", 7,
+        gap_source="audited gap: thin corroboration", source_query="podcast appearances")
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
     # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks
@@ -439,7 +444,7 @@ METRICS = [
 
 
 def assemble_plan(business: dict, gap: dict, start: date) -> dict:
-    wos = build_work_orders(gap)
+    wos = build_work_orders(gap, business)
     bid = business.get("id")
     for w in wos:
         w_start = start + timedelta(weeks=w.week)
@@ -466,6 +471,19 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
         }
     auto = [w for w in wos if w.execution == "auto"]
     human = [w for w in wos if w.execution in ("manual", "semi")]
+    # Silent-success guard: build_work_orders always emits baseline boilerplate (Phase-0, the monthly
+    # monitor, and a standing podcast-outreach task), so a plan built from an EMPTY or failed gap
+    # model still looks complete while carrying zero gap-derived work. Detect that from the gap model
+    # itself -- every gap-CONTENT array empty -- rather than from work-order counts (some baseline
+    # tasks carry a gap-like source), so the console/report can show "plan is degraded -- re-run the
+    # gap model" instead of presenting boilerplate as a finished strategy.
+    _GAP_CONTENT_KEYS = ("missing_owned_content", "schema_gaps", "thin_corroboration",
+                         "surface_actions", "local_seo_gaps", "competitor_defense", "site_technical_gaps")
+    gap_derived = [w for w in wos if (w.rationale or {}).get("gap_source", "baseline setup") != "baseline setup"]
+    degraded = not any(gap.get(k) for k in _GAP_CONTENT_KEYS)
+    if degraded:
+        log.warning("assemble_plan business=%s: gap model produced NO gap-derived work orders "
+                    "(baseline boilerplate only) -- gap synthesis is likely empty or failed.", bid)
     return {
         "business": {k: business.get(k) for k in ("name", "domain", "goal", "geo")},
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -480,7 +498,9 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
         "phases": phases,
         "metrics": METRICS,
         "monitoring_cadence": "Monthly Module 1 audit + diff -> client progress report.",
-        "counts": {"total": len(wos), "auto": len(auto), "human": len(human)},
+        "counts": {"total": len(wos), "auto": len(auto), "human": len(human),
+                   "gap_derived": len(gap_derived)},
+        "degraded": degraded,
         "work_orders": [w.__dict__ for w in wos],
     }
 

@@ -57,7 +57,8 @@ def build(business_id: int) -> dict:
     with db() as conn:
         runs = conn.execute(
             "SELECT id, finished_at, to_char(finished_at,'YYYY-MM-DD') d FROM audit_runs "
-            "WHERE business_id=%s AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 2", (business_id,),
+            "WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2", (business_id,),
         ).fetchall()
         if len(runs) < 2:
             return {"ready": False, "reason": "Need at least two completed audits to show movement.",

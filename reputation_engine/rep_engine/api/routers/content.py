@@ -265,9 +265,14 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
         drafted = published = 0
         impact = None
         if b:
+            # "published" means the asset is actually LIVE (published_status='live') -- the same
+            # definition content_impact uses -- not merely approved (which sets published_asset_id).
+            # Counting approved-but-not-live pieces here made the meter contradict the impact panel.
             cnt = conn.execute(
-                "SELECT COUNT(*) drafted, COUNT(published_asset_id) published "
-                "FROM content_drafts WHERE batch_id=%s", (b["id"],)).fetchone()
+                "SELECT COUNT(*) drafted, "
+                "COUNT(*) FILTER (WHERE a.published_status='live') published "
+                "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
+                "WHERE d.batch_id=%s", (b["id"],)).fetchone()
             drafted, published = cnt["drafted"], cnt["published"]
             imp = conn.execute(
                 "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "

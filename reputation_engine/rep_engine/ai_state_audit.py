@@ -1725,7 +1725,7 @@ def build_gap_model(business_id: int) -> dict:
         # Also SKIP a 'fast' first-look run (rec 9): its reduced battery is too thin a sample to
         # synthesize a full strategy plan from -- wait for a full audit.
         run = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
             "AND status='complete' AND COALESCE(mode,'full') <> 'fast' ORDER BY id DESC LIMIT 1",
             (business_id,),
         ).fetchone()
@@ -1743,7 +1743,7 @@ def build_gap_model(business_id: int) -> dict:
         answers = conn.execute(
             "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
             "mentions_contested, surfaces_owned, awareness, entity_confusion, key_sources, missing "
-            "FROM answers WHERE run_id=%s", (run["id"],)
+            "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (run["id"],)
         ).fetchall()
         # answer_text + cited_sources are attacker-controllable (engine output /
         # cited pages). key_sources + missing are the SCORER LLM's free-text
@@ -1957,7 +1957,7 @@ def diff(business_id: int) -> dict:
         # Compare full-audit runs only: a 'fast' first-look run (rec 9) has a reduced, unlensed
         # battery, so diffing it against a full run would report a bogus progress delta.
         runs = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
             "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2", (business_id,)
         ).fetchall()
         if len(runs) < 2:
@@ -2064,7 +2064,7 @@ def per_engine_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
     with db() as conn:
         if run_id is None:
             run = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)
             ).fetchone()
             if not run:
@@ -2117,7 +2117,7 @@ def per_prompt_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
     with db() as conn:
         if run_id is None:
             run = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)
             ).fetchone()
             if not run:

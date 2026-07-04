@@ -449,7 +449,8 @@ def attribute(business_id: int) -> dict:
     with db() as conn:
         runs = conn.execute(
             "SELECT id, started_at, finished_at FROM audit_runs "
-            "WHERE business_id=%s AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 2",
+            "WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2",
             (business_id,),
         ).fetchall()
         if len(runs) < 2:
@@ -510,8 +511,8 @@ def check_alert(business_id: int) -> dict:
         ).fetchone()
         threshold = float(cfg["alert_threshold"]) if cfg else 0.15
         runs = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-            "ORDER BY id DESC LIMIT 2", (business_id,),
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2", (business_id,),
         ).fetchall()
         if len(runs) < 2:
             return {"alert": False, "reason": "insufficient_runs"}

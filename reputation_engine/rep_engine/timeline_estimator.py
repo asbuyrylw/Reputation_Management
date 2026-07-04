@@ -136,7 +136,8 @@ def _observed_velocity(conn, business_id: int) -> dict:
     None until there are >=2 completed runs. This is the strongest predictor once
     available and should dominate the estimate."""
     runs = conn.execute(
-        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+        "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' "
         "ORDER BY id ASC", (business_id,),
     ).fetchall()
     if len(runs) < 2:

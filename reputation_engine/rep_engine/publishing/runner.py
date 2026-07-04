@@ -122,10 +122,13 @@ def _claim(business_id: int) -> Optional[dict]:
 
 def _process(business_id: int, target: dict) -> str:
     tid = target["id"]
-    # Idempotency short-circuit: already posted -> mark live, don't double-post.
+    # Idempotency short-circuit: already posted -> mark live, don't double-post. Pass asset_id so the
+    # asset flips live too (a platform-scheduled target lands here on re-claim and its asset must
+    # count as published), and is_article so a social re-claim never overwrites the canonical URL.
     if target.get("external_id"):
         _finalize(tid, business_id, "live", external_url=target.get("external_url"),
-                  external_id=target.get("external_id"))
+                  external_id=target.get("external_id"), asset_id=target.get("asset_id"),
+                  is_article=not _is_social_target(target))
         return "skipped"
 
     payload, asset = _load_payload(business_id, target)
@@ -175,7 +178,8 @@ def _process(business_id: int, target: dict) -> str:
 
     if result.status in ("live", "scheduled"):
         _finalize(tid, business_id, result.status, external_url=result.external_url,
-                  external_id=result.external_id, asset_id=target["asset_id"])
+                  external_id=result.external_id, asset_id=target["asset_id"],
+                  is_article=not _is_social_target(target))
         return result.status
     # Failure branches
     if result.auth_failed:
@@ -243,8 +247,14 @@ def _to_connection(creds: dict, channel: str) -> Connection:
                       refresh_token=creds.get("refresh_token"), config=cfg)
 
 
+def _is_social_target(target: dict) -> bool:
+    """A social/GBP target amplifies an article; it never owns the asset's canonical published_url."""
+    return (target.get("payload_kind") or "article") == "social" or \
+        registry.is_social(target.get("channel") or "")
+
+
 def _finalize(tid: int, business_id: int, status: str, *, external_url=None, external_id=None,
-              asset_id: Optional[int] = None, error: Optional[str] = None) -> None:
+              asset_id: Optional[int] = None, is_article: bool = True, error: Optional[str] = None) -> None:
     with db() as conn:
         conn.execute(
             "UPDATE publish_targets SET status=%s, external_url=COALESCE(%s, external_url), "
@@ -252,11 +262,26 @@ def _finalize(tid: int, business_id: int, status: str, *, external_url=None, ext
             "ELSE published_at END, last_error=%s, next_attempt_at=NULL, updated_at=now() "
             "WHERE id=%s AND business_id=%s",
             (status, external_url, external_id, status, _redact(error), tid, business_id))
-        # Write the canonical live URL back onto the asset (article target only).
-        if status == "live" and asset_id and external_url:
-            conn.execute(
-                "UPDATE assets SET published_url=%s, published_status='live', published_at=now() "
-                "WHERE id=%s AND business_id=%s", (external_url, asset_id, business_id))
+        # Flip the asset live whenever a live target lands, so content_impact counts it -- even when
+        # the channel returned no URL (a WordPress 'live' with a missing link used to leave the asset
+        # 'pending' forever). URL rules: an ARTICLE target owns the canonical published_url and may
+        # (re)write it; a SOCIAL/GBP target only fills a URL that is still empty, so an article's
+        # canonical URL is never clobbered by a social post URL.
+        if status == "live" and asset_id:
+            if external_url and is_article:
+                conn.execute(
+                    "UPDATE assets SET published_url=%s, published_status='live', published_at=now() "
+                    "WHERE id=%s AND business_id=%s", (external_url, asset_id, business_id))
+            elif external_url:
+                conn.execute(
+                    "UPDATE assets SET published_url=COALESCE(published_url,%s), "
+                    "published_status='live', published_at=COALESCE(published_at, now()) "
+                    "WHERE id=%s AND business_id=%s", (external_url, asset_id, business_id))
+            else:
+                conn.execute(
+                    "UPDATE assets SET published_status='live', "
+                    "published_at=COALESCE(published_at, now()) WHERE id=%s AND business_id=%s",
+                    (asset_id, business_id))
         conn.commit()
     # Instant re-crawl (IndexNow): ping search engines the moment an owned URL goes live, so the
     # fix is seen in minutes. Dormant-safe (no-op without INDEXNOW_KEY); never blocks publishing.

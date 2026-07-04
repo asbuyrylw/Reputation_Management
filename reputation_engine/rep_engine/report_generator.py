@@ -54,7 +54,7 @@ RUST = "8A3B2E"
 def _run_series(conn, business_id: int) -> list:
     runs = conn.execute(
         "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
-        "AND finished_at IS NOT NULL ORDER BY id ASC", (business_id,),
+        "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' ORDER BY id ASC", (business_id,),
     ).fetchall()
     series = []
     for r in runs:
@@ -76,7 +76,8 @@ def _run_series(conn, business_id: int) -> list:
 
 def _before_after(conn, business_id: int, limit: int = 4) -> list:
     runs = conn.execute(
-        "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL ORDER BY id",
+        "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+        "AND COALESCE(mode,'full')<>'fast' ORDER BY id",
         (business_id,),
     ).fetchall()
     if len(runs) < 2:

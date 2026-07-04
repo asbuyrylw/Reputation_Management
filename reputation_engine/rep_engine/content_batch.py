@@ -31,6 +31,10 @@ log = logging.getLogger("content_batch")
 _DEFAULT_TYPES = ["blog", "article", "white_paper", "social_post"]
 _LOCAL_TYPES = ["local_page", "blog", "social_post"]
 _COMMERCIAL_TYPES = ["landing_page", "article", "social_post"]
+# A video gap can't be auto-published as a finished video (Veo is paid/dormant), so we produce the
+# generatable, honest deliverable -- a shootable VIDEO SCRIPT -- plus a supporting blog + social,
+# instead of silently masquerading the gap as a plain blog (the gap's asset_type used to be ignored).
+_VIDEO_TYPES = ["video_script", "blog", "social_post"]
 
 # How each content type frames the same gap topic (title lens + capability).
 _TYPE_FRAME = {
@@ -40,6 +44,7 @@ _TYPE_FRAME = {
     "landing_page": ("{t} — overview page", "content_writing"),
     "local_page":   ("{t} in {geo}", "content_writing"),
     "faq":          ("{t}: frequently asked questions", "content_writing"),
+    "video_script": ("Video script: {t} — a shootable script + shot list", "content_writing"),
     "social_post":  ("{t}", "social_publishing"),
 }
 
@@ -159,6 +164,9 @@ def gaps_for_business(business_id: int) -> list[dict]:
 def _types_for_gap(gap: dict) -> list[str]:
     at = (gap.get("asset_type") or "").lower()
     topic = (gap.get("topic") or "").lower()
+    # Video is an explicit asset intent -> a shootable script spread, not a text article.
+    if "video" in at or "video" in topic:
+        return _VIDEO_TYPES
     if "local" in at or "local" in topic:
         return _LOCAL_TYPES
     if at in ("landing_page", "comparison") or "landing" in topic or any(k in topic for k in ("best", "vs", "compare", "top ")):
@@ -226,6 +234,35 @@ def _grade_social(business_id: int, draft_ids: list[int]) -> None:
             log.debug("social grade skipped for draft %s: %s", sid, e)
 
 
+def _match_content_wo(business_id: int, topic: str, source_query: str) -> Optional[int]:
+    """The open CONTENT work order this gap's batch fills, so the drafts link back to the plan:
+    approve() then advances the work order, and the work order is prune-protected while a draft
+    exists. Before this, batch drafts had work_order_id=NULL -- so plan progress never moved and a
+    still-pending work order could be hard-deleted despite shipped content. Returns a work-order id,
+    or None when the plan tracks no matching content task (the batch still generates; it just isn't
+    plan-linked). Matches on the work order's source_query, else title overlap (reuses the brief
+    lineage matcher)."""
+    try:
+        from . import production_brief as _pb
+    except ImportError:  # pragma: no cover
+        import production_brief as _pb  # type: ignore
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, title, capability, gap_specifics FROM work_orders "
+            "WHERE business_id=%s AND NOT superseded", (business_id,)).fetchall()
+    cands = []
+    for r in rows:
+        if (r["capability"] or "").lower() not in ("content_writing", "content_creation"):
+            continue
+        gs = r["gap_specifics"]
+        gs = gs if isinstance(gs, dict) else (json.loads(gs) if gs else {})
+        cands.append({"id": r["id"], "title": r["title"], "gap_specifics": gs})
+    if not cands:
+        return None
+    ids = _pb._match_work_orders(source_query or topic, cands) or _pb._match_work_orders(topic, cands)
+    return int(ids[0]) if ids else None
+
+
 def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str]] = None,
                    created_by: Optional[int] = None) -> dict:
     """Create a content batch for one gap and generate a piece per content type. Fail-loud: raises
@@ -255,6 +292,9 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
         conn.commit()
 
     geo_val = (biz.get("geo") if isinstance(biz, dict) else "") or ""
+    # Link this gap's pieces to the content work order that tracks it, so approve() advances the plan
+    # and the work order is prune-protected once a draft exists. None -> unlinked (still generates).
+    matched_wo = _match_content_wo(business_id, topic, prompts[0] if prompts else topic)
     made, errors = [], []
     # Long-form pieces are generated directly; social posts are ATOMIZED from the primary long-form
     # piece (social_publishing isn't a generatable content capability -- social derives from a page).
@@ -264,7 +304,7 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
         frame, _cap = _TYPE_FRAME.get(ct, ("{t}", "content_writing"))
         title = frame.format(t=topic, geo=geo_val or "your area")
         wo = {"title": title, "capability": "content_writing", "execution": "auto",
-              "target_query": topic, "content_type": ct,
+              "target_query": topic, "content_type": ct, "_db_id": matched_wo,
               "instruction": f"{gap.get('why') or ''} (content type: {ct})".strip(),
               # carry the gap linkage so the draft traces back to the weak answer it fixes
               "gap_specifics": {"source_query": (prompts[0] if prompts else topic)}}
