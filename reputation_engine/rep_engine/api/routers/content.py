@@ -118,16 +118,28 @@ class WorkOrderCreate(BaseModel):
     instruction: Optional[str] = None
     recommended_tool: Optional[str] = None
     target_date: Optional[str] = None
+    # Gap lineage (carried when a gap item is turned into a task, so it links to content + shows why).
+    capability: Optional[str] = None
+    gap_source: Optional[str] = None
+    source_query: Optional[str] = None
+    area: Optional[str] = None
+    why_helps_ai_rep: Optional[str] = None
+    why_helps_seo: Optional[str] = None
 
 
 @router.post("/work-orders", status_code=201)
 def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_business_editor)):
-    """Manually add an ad-hoc task to the work queue (outside the generated plan)."""
+    """Add a task to the work queue -- either an ad-hoc one, or a gap item "turned into a task"
+    (carrying its gap lineage). Idempotent on title, so it links to an existing task rather than
+    duplicating one the plan already created."""
     from ... import tracking as _t
     try:
         wid = _t.create_work_order(business_id, payload.title, instruction=payload.instruction,
                                    recommended_tool=payload.recommended_tool,
-                                   target_date=payload.target_date)
+                                   target_date=payload.target_date, capability=payload.capability,
+                                   gap_source=payload.gap_source, source_query=payload.source_query,
+                                   area=payload.area, why_helps_ai_rep=payload.why_helps_ai_rep,
+                                   why_helps_seo=payload.why_helps_seo)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return {"id": wid}

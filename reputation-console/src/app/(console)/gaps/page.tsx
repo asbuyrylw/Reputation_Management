@@ -61,6 +61,8 @@ export default function GapsPage() {
           <GapsView
             model={data.model}
             asOf={new Date(data.created_at).toLocaleDateString()}
+            businessId={businessId}
+            canEdit={canEdit}
             verifyButton={
               canEdit ? <RunJobButton businessId={businessId} jobType="social_verify" label="Audit socials" variant="secondary" /> : null
             }

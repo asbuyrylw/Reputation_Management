@@ -405,13 +405,19 @@ export function useAtomizeDraft(businessId: number | null) {
 }
 
 export function useAddWorkOrder(businessId: number | null) {
-  return useApiMutation<{ title: string; instruction?: string; recommended_tool?: string; target_date?: string }>(
+  return useApiMutation<{ title: string; instruction?: string; recommended_tool?: string; target_date?: string; capability?: string; gap_source?: string; source_query?: string; area?: string; why_helps_ai_rep?: string; why_helps_seo?: string }>(
     () => `/businesses/${businessId}/work-orders`,
     (v) => ({
       title: v.title,
       instruction: v.instruction ?? null,
       recommended_tool: v.recommended_tool ?? null,
       target_date: v.target_date ?? null,
+      capability: v.capability ?? null,
+      gap_source: v.gap_source ?? null,
+      source_query: v.source_query ?? null,
+      area: v.area ?? null,
+      why_helps_ai_rep: v.why_helps_ai_rep ?? null,
+      why_helps_seo: v.why_helps_seo ?? null,
     }),
     [["work-orders", businessId], ["dashboard", businessId]],
   );

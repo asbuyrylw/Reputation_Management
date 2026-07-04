@@ -11,6 +11,7 @@ import { Card } from "./ui";
 import { DataSection } from "./primitives";
 import { Term } from "./Term";
 import { engineLabel } from "@/lib/engines";
+import { useAddWorkOrder } from "@/lib/hooks";
 
 type Json = Record<string, unknown>;
 type WeakQuery = { prompt?: string; engine?: string; problem?: string; fix?: string; addressed_by?: string };
@@ -22,6 +23,28 @@ type SiteGap = { issue?: string; recommendation?: string; why?: string };
 
 function arr<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
+}
+
+type WoPayload = {
+  title: string; instruction?: string; capability?: string; gap_source?: string;
+  source_query?: string; area?: string; why_helps_ai_rep?: string; why_helps_seo?: string;
+};
+
+// A real "turn this gap item into a task" button. Idempotent server-side (links to a task the plan
+// already made instead of duplicating it) and carries the gap lineage so the task knows why it
+// exists and can wire to the content it produces.
+function AddTaskButton({ businessId, payload }: { businessId: number | null; payload: WoPayload }) {
+  const add = useAddWorkOrder(businessId);
+  return (
+    <button
+      type="button"
+      onClick={() => add.mutate(payload)}
+      disabled={add.isPending || add.isSuccess}
+      className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-60"
+    >
+      {add.isSuccess ? "✓ On your task board" : add.isPending ? "Adding…" : "+ Add as task"}
+    </button>
+  );
 }
 
 // Split prose that embeds "(1) … (2) …" (or "1. … 2. …") into a lead sentence + the
@@ -62,11 +85,17 @@ export function GapsView({
   model,
   asOf,
   verifyButton,
+  businessId,
+  canEdit,
 }: {
   model: Json;
   asOf?: string;
   verifyButton?: ReactNode;
+  businessId?: number | null;
+  canEdit?: boolean;
 }) {
+  const addBtn = (payload: WoPayload) =>
+    canEdit && businessId != null ? <AddTaskButton businessId={businessId} payload={payload} /> : null;
   const summary = (model.summary as string) || "";
   const weak = arr<WeakQuery>(model.weak_queries);
   const missing = arr<Missing>(model.missing_owned_content);
@@ -144,6 +173,7 @@ export function GapsView({
                 </div>
               )}
               {w.engine && <div className="mt-0.5 pl-6 text-xs text-slate-400">Seen on {engineLabel(w.engine)}</div>}
+              <div className="ml-6">{addBtn({ title: `Improve AI answer: "${(w.prompt || "").slice(0, 70)}"`, instruction: w.fix || w.problem, capability: "content_writing", gap_source: "audited gap: weak answer", source_query: w.prompt, why_helps_ai_rep: w.fix })}</div>
             </li>
           ))}
         </ul>
@@ -157,7 +187,7 @@ export function GapsView({
         severity={missing.length > 0 ? "med" : "good"}
         headline={`${missing.length} pages on your own site would give AI accurate facts to quote about you. Each note below says exactly what to put in it.`}
         highlights={[{ label: "Pages", value: String(missing.length) }]}
-        action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+        action={{ label: "Open task board", href: "/content/work-orders" }}
         detailsLabel="See the pages + what goes in them"
       >
         <ul className="space-y-3">
@@ -166,6 +196,7 @@ export function GapsView({
               <div className="text-sm font-semibold text-slate-800">{m.topic}</div>
               {m.asset_type && <div className="text-xs text-slate-400">{m.asset_type}</div>}
               {m.why && <div className="mt-1 text-sm text-slate-600"><span className="font-medium">What goes in it: </span>{m.why}</div>}
+              {addBtn({ title: `Create owned asset: ${m.topic}`, instruction: `Produce a ${m.asset_type || "article"} on '${m.topic}'. ${m.why || ""}`.trim(), capability: (m.asset_type || "").toLowerCase().includes("video") ? "video_creation" : "content_writing", gap_source: "audited gap: missing owned content", source_query: m.topic, area: "content", why_helps_ai_rep: m.why })}
             </li>
           ))}
         </ul>
@@ -197,6 +228,7 @@ export function GapsView({
                     </ul>
                   </div>
                 )}
+                {addBtn({ title: `Corroborate: ${t.claim}`, instruction: `Secure third-party coverage supporting '${t.claim}'. Source: ${t.where_to_get_it || ""}`.trim(), capability: "press_outreach", gap_source: "audited gap: thin corroboration", source_query: t.claim })}
               </li>
             );
           })}
@@ -212,7 +244,7 @@ export function GapsView({
           severity="med"
           headline={`${localSeo.length} local searches your neighbors type where you're not yet on Google's first page. Each becomes a local-SEO task.`}
           highlights={[{ label: "Searches", value: String(localSeo.length) }]}
-          action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+          action={{ label: "Open task board", href: "/content/work-orders" }}
           detailsLabel="See the searches + what to do"
         >
           <ul className="space-y-3">
@@ -222,6 +254,7 @@ export function GapsView({
                 {g.current_rank != null && <div className="text-xs text-slate-400">Current position: {String(g.current_rank)}</div>}
                 {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
                 {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+                {addBtn({ title: `Reach page 1 for '${g.query}'`, instruction: `${g.recommendation || ""} Current position: ${g.current_rank != null ? String(g.current_rank) : "off page 1"}.`.trim(), capability: "local_content_creation", gap_source: "local search ranking", source_query: g.query, area: "local", why_helps_seo: g.why })}
               </li>
             ))}
           </ul>
@@ -237,7 +270,7 @@ export function GapsView({
           severity={compDef.length > 3 ? "high" : "med"}
           headline={`${compDef.length} questions where a competitor shows up in AI answers and you don't. Close these to take back the conversation.`}
           highlights={[{ label: "Questions", value: String(compDef.length), tone: "bad" }]}
-          action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+          action={{ label: "Open task board", href: "/content/work-orders" }}
           detailsLabel="See the questions + how to compete"
         >
           <ul className="space-y-3">
@@ -247,6 +280,7 @@ export function GapsView({
                 {g.competitor && <div className="text-xs text-rose-600">A rival wins here: {g.competitor}</div>}
                 {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
                 {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+                {addBtn({ title: `Compete for '${g.query}'`, instruction: `${g.recommendation || ""} A competitor (${g.competitor || "a rival"}) appears here and you don't.`.trim(), capability: "content_writing", gap_source: "competitor analysis", source_query: g.query, area: "content", why_helps_ai_rep: g.why })}
               </li>
             ))}
           </ul>
@@ -262,7 +296,7 @@ export function GapsView({
           severity="med"
           headline={`${siteTech.length} fixes on your own site that would help AI read and trust your facts (thin/missing pages, schema, weak coverage).`}
           highlights={[{ label: "Fixes", value: String(siteTech.length) }]}
-          action={{ label: "Turn into tasks", href: "/content/work-orders" }}
+          action={{ label: "Open task board", href: "/content/work-orders" }}
           detailsLabel="See the fixes"
         >
           <ul className="space-y-3">
@@ -271,6 +305,7 @@ export function GapsView({
                 <div className="text-sm font-semibold text-slate-800">{g.issue}</div>
                 {g.recommendation && <div className="mt-1 text-sm text-slate-600">{g.recommendation}</div>}
                 {g.why && <div className="mt-0.5 text-xs text-slate-500">{g.why}</div>}
+                {addBtn({ title: `Fix site: ${g.issue}`, instruction: g.recommendation, capability: /schema/i.test(`${g.issue} ${g.recommendation || ""}`) ? "schema_markup" : "content_writing", gap_source: "site crawl", area: "website", why_helps_seo: g.why })}
               </li>
             ))}
           </ul>
@@ -316,8 +351,10 @@ export function GapsView({
           official name, reviews, and FAQs so AI reads them correctly. These {schema.length} are missing —
           a developer task.
         </p>
-        <ul className="list-disc space-y-1 pl-6 text-sm text-slate-600">
-          {schema.map((g, i) => <li key={i}>{g}</li>)}
+        <ul className="list-disc space-y-1.5 pl-6 text-sm text-slate-600">
+          {schema.map((g, i) => (
+            <li key={i}>{g} {addBtn({ title: `Add schema: ${g}`, instruction: `Generate and deploy JSON-LD (${g}) on the relevant pages so answer engines can cleanly extract your facts.`, capability: "schema_markup", gap_source: "audited gap: schema", source_query: g, area: "website" })}</li>
+          ))}
         </ul>
       </DataSection>
 
