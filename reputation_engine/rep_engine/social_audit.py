@@ -189,12 +189,12 @@ def _harvest_audit_citations(business_id: int, name_tokens: list) -> dict:
     real profiles (e.g. facebook.com/TheTeamUnstoppable) and avoids false 'create a profile you
     already have' tasks. Same profile/content/handle filtering; best (cleanest) URL per platform."""
     with db() as conn:
-        run = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                           "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
-        if not run:
+        from . import audit_runs
+        rid = audit_runs.latest_display_run(conn, business_id)
+        if rid is None:
             return {}
         rows = conn.execute("SELECT cited_sources FROM answers WHERE run_id=%s "
-                            "AND cited_sources IS NOT NULL", (run["id"],)).fetchall()
+                            "AND cited_sources IS NOT NULL", (rid,)).fetchall()
     best: dict = {}
     for row in rows:
         for c in (row["cited_sources"] or []):

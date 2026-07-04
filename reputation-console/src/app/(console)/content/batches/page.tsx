@@ -14,6 +14,13 @@ const pct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round
 const gTone = (s: number | null | undefined) => (s == null ? "text-ink-4" : s >= 75 ? "text-good" : s >= 55 ? "text-amber" : "text-alert");
 const signed = (v: number | null | undefined, digits = 2) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(digits)}`);
 
+// Human labels for content-type tokens (so a video batch reads "Video script", not "video_script").
+const TYPE_LABEL: Record<string, string> = {
+  video_script: "Video script", white_paper: "White paper", social_post: "Social post",
+  landing_page: "Landing page", local_page: "Local page", blog: "Blog", article: "Article", faq: "FAQ",
+};
+const typeLabel = (t: string | null | undefined) => (t ? TYPE_LABEL[t] ?? t.replace(/_/g, " ") : "");
+
 // The measured effect of a batch on the gap it targets — the wedge no standalone writing tool has.
 function ImpactStrip({ impact }: { impact: ContentImpactRow | null }) {
   if (!impact) {
@@ -41,7 +48,7 @@ function BatchCard({ batch, businessId }: { batch: ContentBatch; businessId: num
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-[14.5px] font-semibold text-ink">{batch.target_topic || batch.label}</div>
-          <div className="mt-0.5 text-[11.5px] text-ink-4">{batch.gap_source} · {(batch.content_types || []).join(", ")} · {published}/{batch.pieces?.length ?? 0} published</div>
+          <div className="mt-0.5 text-[11.5px] text-ink-4">{batch.gap_source} · {(batch.content_types || []).map(typeLabel).join(", ")} · {published}/{batch.pieces?.length ?? 0} published</div>
         </div>
         <StatusBadge status={batch.status} />
       </div>
@@ -49,7 +56,7 @@ function BatchCard({ batch, businessId }: { batch: ContentBatch; businessId: num
       <div className="mt-2.5 space-y-1">
         {(batch.pieces || []).map((p) => (
           <div key={p.id} className="flex items-center gap-2 text-[12.5px]">
-            <span className="w-24 shrink-0 rounded bg-line/60 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-ink-3">{(p.content_type || p.asset_type || "").replace(/_/g, " ")}</span>
+            <span className="w-24 shrink-0 rounded bg-line/60 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-ink-3">{typeLabel(p.content_type || p.asset_type)}</span>
             <span className="min-w-0 flex-1 truncate text-ink-2">{p.title}</span>
             {p.geo_score != null && <span className={`font-mono text-[11px] ${gTone(p.geo_score)}`}>GEO {Math.round(p.geo_score)}</span>}
             <StatusBadge status={p.status} />
@@ -132,7 +139,7 @@ export default function BatchesPage() {
       <PageHeader
         eyebrow="Content · Batches & impact"
         title="Fill gaps with batches — and measure what moved"
-        subtitle="Each gap gets multiple content types (blog, article, white paper, social) at once. After the next audit, we measure how far the batch moved the AI answers it targeted."
+        subtitle="Each gap gets multiple content types (blog, article, white paper, video script, social) at once. After the next audit, we measure how far the batch moved the AI answers it targeted."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
 

@@ -40,7 +40,11 @@ export default function ContentOverviewPage() {
   const toProduce = briefs ?? [];
   const recommended = topical?.next_to_write ?? [];
   const inDraft = (drafts ?? []).filter((d) => d.status === "pending_review" || d.status === "needs_fix");
-  const published = (drafts ?? []).filter((d) => ["approved", "published", "live"].includes((d.status || "").toLowerCase()));
+  // "Published" = actually LIVE (matches the backend's live-only definition in gap_completion /
+  // content_impact). An approved draft that hasn't gone live yet is surfaced separately, not counted
+  // as published — approved is not the same as live-and-earning-traffic.
+  const published = (drafts ?? []).filter((d) => ["published", "live"].includes((d.status || "").toLowerCase()));
+  const approvedNotLive = (drafts ?? []).filter((d) => (d.status || "").toLowerCase() === "approved");
 
   return (
     <div>
@@ -57,7 +61,7 @@ export default function ContentOverviewPage() {
         <Tile k="To produce" value={String(toProduce.length)} sub="Added from your tasks" />
         <Tile k="Recommended" value={String(recommended.length)} sub="Not yet on your board" color="var(--indigo)" />
         <Tile k="In draft" value={String(inDraft.length)} sub="Awaiting review" />
-        <Tile k="Published" value={String(published.length)} sub="Live & earning traffic" color="var(--good)" />
+        <Tile k="Published" value={String(published.length)} sub={approvedNotLive.length ? `Live · ${approvedNotLive.length} approved awaiting go-live` : "Live & earning traffic"} color="var(--good)" />
       </div>
 
       {/* two columns: from your tasks (produce next) + recommended content */}

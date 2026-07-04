@@ -263,7 +263,7 @@ def investigate(business_id: int, run_id: Optional[int] = None) -> dict:
             raise SystemExit(f"No business id {business_id}")
         if run_id is None:
             r = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             run_id = r["id"] if r else None
     if not run_id:

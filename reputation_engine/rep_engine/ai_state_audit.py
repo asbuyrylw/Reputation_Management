@@ -945,6 +945,28 @@ def _anthropic_system(system: str):
     return system
 
 
+# Anthropic ephemeral-cache READ multiplier: a cache-eligible prefix (see _anthropic_system) bills
+# at ~0.1x base input on repeat calls. The per-answer SCORING_SYSTEM is re-sent hundreds of times
+# per audit and is cache-eligible, so counting it at full input price every call OVERSTATES COGS
+# (and could trip the monthly budget cap on phantom spend). orchestrator_json doesn't surface the
+# real cached/uncached split, so we price the cacheable prefix at cache-read rate and only the
+# variable answer text at full price. Output is the compact ScoreResult JSON, so a small fixed
+# estimate is honest. (When the scoring path later surfaces provider usage, prefer that.)
+_CACHE_READ_MULT = 0.1
+_SCORE_OUTPUT_TOKENS = 200  # compact fixed-schema score JSON
+
+
+def _score_cost_tokens(answer_text: str) -> tuple[int, int]:
+    """(input, output) token estimate for one cheap-tier score call, pricing the cache-eligible
+    SCORING_SYSTEM prefix at cache-read rate rather than full price (Anthropic + large prompt only;
+    other orchestrators / short prompts fall back to full price)."""
+    prefix = cost.approx_tokens(SCORING_SYSTEM)
+    variable = cost.approx_tokens(answer_text or "")
+    cacheable = ORCHESTRATOR == "anthropic" and len(SCORING_SYSTEM) >= _CACHE_MIN_CHARS
+    prefix_billed = int(prefix * _CACHE_READ_MULT) if cacheable else prefix
+    return max(1, prefix_billed + variable), _SCORE_OUTPUT_TOKENS
+
+
 def _anthropic_headers() -> dict:
     # prompt-caching beta header is harmless where caching is GA; required on older api versions.
     return {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
@@ -1372,8 +1394,9 @@ def audit(business_id: int, fast: bool = False) -> int:
                                     else (None, None)
                                 if _score_model is None:
                                     _, _score_model = _model_for("cheap")
+                                _si, _so = _score_cost_tokens(ans.get("text", ""))
                                 cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model,
-                                            cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")), 200)
+                                            _si, _so)
 
                         if skipped:
                             drop.add(eng.name)   # key not configured -> don't store, stop querying it
@@ -1502,8 +1525,8 @@ def refresh_failed_answers(business_id: int, engines: Optional[list[str]] = None
                         _u["input"] if _u else cost.approx_tokens(r["prompt"]),
                         _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
             _, _score_model = _model_for("cheap")
-            cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model,
-                        cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")), 200)
+            _si, _so = _score_cost_tokens(ans.get("text", ""))
+            cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model, _si, _so)
             # Replace the failed row via the canonical persist path (delete + re-insert) so the
             # metric columns are written exactly as a fresh audit would. Aggregates (score,
             # contested/owned rates) are computed on read, so they pick this up automatically.
@@ -1713,6 +1736,56 @@ def _search_perf_for_gap(business_id: int) -> dict:
     except Exception as e:  # noqa: BLE001
         log.warning("gap model: GA signals unavailable (%s)", e)
     return out
+
+
+_ADDRESSED_STOPW = {"and", "with", "the", "for", "your", "our", "page", "overview", "detail",
+                    "case", "studies", "story", "stories", "about", "what", "where", "which",
+                    "business", "company"}
+
+
+def _addressed_toks(s: str) -> set:
+    return {w for w in re.findall(r"[a-z]{4,}", (s or "").lower()) if w not in _ADDRESSED_STOPW}
+
+
+def _link_weak_queries(model: dict) -> None:
+    """In place: for each weak_queries item WITHOUT an addressed_by, set it to the exact topic/query
+    string of the best token-overlap plan item (missing_owned_content.topic first, then
+    local_seo_gaps.query / competitor_defense.query). No match -> left as-is. Deterministic; safe on
+    partial/missing sections. Stores the worst-answer -> fixing-task link so content_batch doesn't
+    have to rediscover it via its fuzzy fallback."""
+    if not isinstance(model, dict):
+        return
+    weak = model.get("weak_queries")
+    if not isinstance(weak, list):
+        return
+    candidates = []  # (label, token-set) in priority order
+    for it in (model.get("missing_owned_content") or []):
+        t = (it.get("topic") if isinstance(it, dict) else None) or ""
+        if t.strip():
+            candidates.append((t.strip(), _addressed_toks(t)))
+    for key in ("local_seo_gaps", "competitor_defense"):
+        for it in (model.get(key) or []):
+            q = (it.get("query") if isinstance(it, dict) else None) or ""
+            if q.strip():
+                candidates.append((q.strip(), _addressed_toks(q)))
+    if not candidates:
+        return
+    for w in weak:
+        if not isinstance(w, dict) or (w.get("addressed_by") or "").strip():
+            continue  # keep an LLM-provided link
+        wtoks = _addressed_toks((w.get("prompt") or "") + " " + (w.get("problem") or "")
+                                + " " + (w.get("fix") or ""))
+        if not wtoks:
+            continue
+        best_label, best_overlap = None, 0
+        for label, ctoks in candidates:
+            overlap = len(wtoks & ctoks)
+            # require a real overlap (>=2 and >= a third of the candidate's tokens) so a single
+            # shared word can't create a spurious link -- same bar as content_batch._match_prompts.
+            if ctoks and overlap >= max(2, len(ctoks) // 3) and overlap > best_overlap:
+                best_label, best_overlap = label, overlap
+        if best_label:
+            w["addressed_by"] = best_label
 
 
 def build_gap_model(business_id: int) -> dict:
@@ -1939,6 +2012,10 @@ def build_gap_model(business_id: int) -> dict:
         else:
             log.info("gap model: first pass addressed all coverage dimensions; skipping critic pass")
         _hb()  # critic pass done (or skipped)
+        # Deterministic gap->content link: fill any NULL weak_query.addressed_by from the synthesized
+        # plan items so the worst-answer -> fixing-task link is stored, not left to the fuzzy fallback
+        # in content_batch._match_prompts. Applied to the FINAL (post-critic) model before persistence.
+        _link_weak_queries(model)
         conn.execute(
             "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
             (business_id, run["id"], json.dumps(model)),

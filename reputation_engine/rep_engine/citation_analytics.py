@@ -259,13 +259,12 @@ def analyze(business_id: int, quiet: bool = False) -> dict:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
             raise SystemExit(f"No business id {business_id}")
-        run = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                           "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
-        if not run:
+        from . import audit_runs
+        rid = audit_runs.latest_display_run(conn, business_id)
+        if rid is None:
             if not quiet:
                 log.info("No completed run to analyze.")
             return {}
-        rid = run["id"]
         cites = _citations_for_run(conn, rid, dict(biz))
 
         # share-of-voice by classification
@@ -315,8 +314,8 @@ def momentum(business_id: int, quiet: bool = False) -> dict:
     _ensure()
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
-        runs = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                            "ORDER BY id DESC LIMIT 2", (business_id,)).fetchall()
+        from . import audit_runs
+        runs = audit_runs.recent_full_runs(conn, business_id, limit=2)
         if len(runs) < 2:
             if not quiet:
                 log.info("Need two completed runs for momentum.")
@@ -364,11 +363,10 @@ def personas(business_id: int, quiet: bool = False) -> dict:
     _ensure()
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
-        run = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                           "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
-        if not run:
+        from . import audit_runs
+        rid = audit_runs.latest_display_run(conn, business_id)
+        if rid is None:
             return {}
-        rid = run["id"]
         combos = conn.execute(
             "SELECT DISTINCT persona, location FROM answers WHERE run_id=%s", (rid,)
         ).fetchall()

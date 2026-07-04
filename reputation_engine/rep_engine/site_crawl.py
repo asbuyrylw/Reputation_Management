@@ -556,8 +556,8 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
     most recent gap_model's schema_gaps / missing_owned_content."""
     with db() as conn:
         run = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s ORDER BY id DESC LIMIT 1",
-            (business_id,),
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1", (business_id,),
         ).fetchone()
         biz = conn.execute("SELECT contested_terms FROM businesses WHERE id=%s",
                            (business_id,)).fetchone()

@@ -134,9 +134,8 @@ def check_and_notify(business_id: int, quiet: bool = True) -> dict:
                "competitor_surge": 0}
 
     with db() as conn:
-        runs = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-            "ORDER BY id DESC LIMIT 2", (business_id,)).fetchall()
+        from . import audit_runs
+        runs = audit_runs.recent_full_runs(conn, business_id, limit=2)
         # latest completed run's provider-failure info (an AI provider was down/erroring)
         degraded = conn.execute(
             "SELECT id, failed_count, failed_engines FROM audit_runs WHERE business_id=%s "

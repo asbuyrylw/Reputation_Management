@@ -269,7 +269,7 @@ export function DraftReviewCard({
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-ink px-1.5 py-0.5 text-xs font-medium text-white">{draft.asset_type}</span>
+        <span className="rounded bg-ink px-1.5 py-0.5 text-xs font-medium text-white">{(draft.asset_type ?? "").replace(/_/g, " ")}</span>
         <StatusBadge status={draft.status} />
         {q && <span className={`text-xs font-medium ${q.cls}`}>Quality: {q.label}</span>}
         {neuron && <NeuronGauge neuron={neuron} />}

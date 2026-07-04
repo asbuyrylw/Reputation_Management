@@ -98,7 +98,55 @@ def drain(business_id: int) -> dict:
         scheduled += outcome == "scheduled"
         failed += outcome == "failed"
         skipped += outcome == "skipped"
-    return {"published": published, "scheduled": scheduled, "failed": failed, "skipped": skipped}
+    reconciled = _reconcile_scheduled(business_id)
+    return {"published": published, "scheduled": scheduled, "failed": failed,
+            "skipped": skipped, "reconciled": reconciled}
+
+
+def _reconcile_scheduled(business_id: int) -> int:
+    """Flip PAST-DUE platform-parked scheduled targets (and their assets) to live. A target with
+    status='scheduled' AND attempts>0 was accepted + parked by the platform (the adapter returned
+    'scheduled'); once scheduled_for passes it IS live there, but the drain no longer re-claims it
+    (see _claim) precisely so a parked post is never double-sent. This closes the loop WITHOUT any
+    network call, so a double-post is impossible.
+
+    Exactly-once: the flip is a single status-guarded UPDATE (WHERE status='scheduled' ... RETURNING),
+    so each past-due target transitions to 'live' exactly once; a racing drain/reconciler that lost
+    the race matches no row. No adapter.publish() is ever called here. attempts>0 excludes an
+    owner-scheduled target that has not yet been sent (attempts=0 -- the drain still owns that one),
+    and scheduled_for IS NOT NULL/<=now() excludes anything not actually due."""
+    n = 0
+    with db() as conn:
+        rows = conn.execute(
+            "UPDATE publish_targets SET status='live', "
+            "published_at=COALESCE(published_at, now()), next_attempt_at=NULL, updated_at=now() "
+            "WHERE business_id=%s AND status='scheduled' AND attempts>0 "
+            "  AND scheduled_for IS NOT NULL AND scheduled_for <= now() "
+            "RETURNING id, asset_id, external_url, payload_kind, channel",
+            (business_id,)).fetchall()
+        for r in rows:
+            n += 1
+            is_article = not _is_social_target(dict(r))
+            ext = r.get("external_url")
+            if ext and is_article:
+                conn.execute(
+                    "UPDATE assets SET published_url=%s, published_status='live', "
+                    "published_at=COALESCE(published_at, now()) WHERE id=%s AND business_id=%s",
+                    (ext, r["asset_id"], business_id))
+            elif ext:
+                conn.execute(
+                    "UPDATE assets SET published_url=COALESCE(published_url,%s), "
+                    "published_status='live', published_at=COALESCE(published_at, now()) "
+                    "WHERE id=%s AND business_id=%s", (ext, r["asset_id"], business_id))
+            else:
+                conn.execute(
+                    "UPDATE assets SET published_status='live', "
+                    "published_at=COALESCE(published_at, now()) WHERE id=%s AND business_id=%s",
+                    (r["asset_id"], business_id))
+        conn.commit()
+    if n:
+        log.info("reconciled %d past-due scheduled target(s) -> live (business %d)", n, business_id)
+    return n
 
 
 def _claim(business_id: int) -> Optional[dict]:
@@ -109,7 +157,11 @@ def _claim(business_id: int) -> Optional[dict]:
             "UPDATE publish_targets SET status='publishing', attempts=attempts+1, updated_at=now() "
             "WHERE id = ("
             "  SELECT pt.id FROM publish_targets pt "
-            "  WHERE pt.business_id=%s AND pt.status IN ('queued','failed','scheduled') "
+            # Claim a 'scheduled' target only on its FIRST send (attempts=0 = owner-scheduled, not yet
+            # sent to the platform). Once attempts>0 the platform has accepted+parked it, so never
+            # re-claim it (that would re-post) -- _reconcile_scheduled flips it live when it comes due.
+            "  WHERE pt.business_id=%s AND (pt.status IN ('queued','failed') "
+            "        OR (pt.status='scheduled' AND pt.attempts=0)) "
             "    AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= now()) "
             "    AND pt.connection_id IN (SELECT id FROM platform_connections "
             "                             WHERE business_id=%s AND status='active') "

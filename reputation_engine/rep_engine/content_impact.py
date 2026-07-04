@@ -147,7 +147,7 @@ def measure_all(business_id: int) -> dict:
     with db() as conn:
         batches = conn.execute(
             "SELECT id FROM content_batches WHERE business_id=%s AND status IN "
-            "('drafted','published','measured') ORDER BY id", (business_id,)).fetchall()
+            "('drafted','measured') ORDER BY id", (business_id,)).fetchall()
     measured, pending, errors = [], [], []
     for b in batches:
         try:
