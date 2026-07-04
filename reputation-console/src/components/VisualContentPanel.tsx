@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useVisuals, useGenerateVisual, useApproveVisual, useRejectVisual } from "@/lib/hooks";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiBase } from "@/lib/api";
 import { Pill } from "@/components/ui";
 import type { VisualAsset } from "@/lib/types";
 
@@ -35,6 +35,9 @@ function VisualRow({
   const approve = useApproveVisual(businessId);
   const reject = useRejectVisual(businessId);
   const pending = v.status === "pending";
+  const [imgOk, setImgOk] = useState(true);
+  const hasImage = !!v.file_path && (v.kind === "image" || v.kind === "quote_card" || v.kind === "meme");
+  const imgSrc = hasImage && businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : null;
   return (
     <div className="rounded-md border border-slate-200 bg-white p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -63,11 +66,15 @@ function VisualRow({
           </div>
         )}
       </div>
-      {v.file_path && (
-        <div className="mt-1 truncate text-[11px] text-slate-400" title={v.file_path}>
-          {v.file_path}
-        </div>
-      )}
+      {/* render the actual generated image; fall back to the path text if it can't be served */}
+      {imgSrc && imgOk ? (
+        <a href={imgSrc} target="_blank" rel="noreferrer" className="mt-1.5 block">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imgSrc} alt={kindLabel(v.kind)} onError={() => setImgOk(false)} loading="lazy" className="max-h-56 w-auto rounded border border-slate-200" />
+        </a>
+      ) : v.file_path ? (
+        <div className="mt-1 truncate text-[11px] text-slate-400" title={v.file_path}>{v.file_path}</div>
+      ) : null}
       {v.compliance_note && (
         <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
           {v.compliance_note}
