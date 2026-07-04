@@ -122,7 +122,7 @@ function fmtDate(d?: string | null): string {
 // Break a long instruction into bullets on sentence / semicolon boundaries.
 function bulletize(text: string): string[] | null {
   const t = (text || "").trim();
-  if (t.length <= 140) return null;
+  if (t.length <= 90) return null;
   const parts = t.split(/(?:;\s+|\.\s+(?=[A-Z]))/).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean);
   return parts.length > 1 ? parts : null;
 }
@@ -240,15 +240,18 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
       {/* bold to-do heading */}
       <div className="mt-1.5 text-sm font-bold text-slate-900">{wo.title}</div>
 
-      {/* instruction — bulleted when long */}
+      {/* what to do — the instruction in a labeled, shaded zone so it reads as steps, not a wall */}
       {wo.instruction && (
-        bullets ? (
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-slate-600">
-            {bullets.map((b, i) => <li key={i}>{b}</li>)}
-          </ul>
-        ) : (
-          <div className="mt-1 text-xs text-slate-600">{wo.instruction}</div>
-        )
+        <div className="mt-2 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">What to do</div>
+          {bullets ? (
+            <ul className="list-disc space-y-1 pl-4 text-[13px] leading-relaxed text-slate-700">
+              {bullets.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+          ) : (
+            <div className="text-[13px] leading-relaxed text-slate-700">{wo.instruction}</div>
+          )}
+        </div>
       )}
 
       {/* tool type — content we draft in-app points at OUR pipeline, not external writing tools */}
