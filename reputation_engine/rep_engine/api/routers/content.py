@@ -20,6 +20,11 @@ from pydantic import BaseModel
 
 from .. import jobs as _jobs
 from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
+
+try:
+    from ... import billing as _billing
+except ImportError:  # pragma: no cover
+    import billing as _billing  # type: ignore
 from ..schemas import RejectRequest, StatusRequest
 from ..settings import api_settings
 
@@ -68,6 +73,19 @@ def _to_float(d: dict, *keys: str) -> dict:
         if d.get(k) is not None:
             d[k] = float(d[k])
     return d
+
+
+def _floats_deep(x):
+    """Recursively coerce Decimal (psycopg NUMERIC) -> float so responses don't depend on the JSON
+    encoder's Decimal handling (an ORJSONResponse swap would otherwise 500 on the content-program reads)."""
+    from decimal import Decimal
+    if isinstance(x, Decimal):
+        return float(x)
+    if isinstance(x, dict):
+        return {k: _floats_deep(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_floats_deep(v) for v in x]
+    return x
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +193,7 @@ def content_batches(business_id: int = Depends(authorize_business), conn=Depends
             "FROM content_impact WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
         bd["impact"] = dict(imp) if imp else None
         out.append(bd)
-    return out
+    return _floats_deep(out)
 
 
 @router.post("/content-batches/generate", status_code=202)
@@ -184,14 +202,37 @@ def generate_content_batches(payload: BatchGenerateRequest, background: Backgrou
                              user: dict = Depends(get_current_user), conn=Depends(get_conn)):
     """Kick off multi-type content generation for a gap (or every open gap). Enqueues the job so the
     ~minutes of LLM work runs off the request path; the worker (or inline dev mode) runs it."""
-    args = {k: v for k, v in payload.model_dump().items() if v is not None}
+    # Billing/quota gate: block LLM-spending content work when the org's subscription is inactive
+    # (the audit trigger path gates the same way). No org / no subscription => unmetered (legacy).
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "generate_content_batches")
+    if not ok:
+        raise HTTPException(code, reason)
     if not _jobs.rate_ok(business_id, "generate_content_batches"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "You're starting content batches too often — give it a little while.")
+    # requested_by is forwarded through args so content_batches.created_by is attributed.
+    args = {k: v for k, v in payload.model_dump().items() if v is not None}
+    args["requested_by"] = user["id"]
     job_id, active = _jobs.enqueue(business_id, "generate_content_batches", args=args,
                                    requested_by=user["id"])
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a content batch job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
+
+
+@router.post("/content-impact/measure", status_code=202)
+def measure_content_impact(background: BackgroundTasks,
+                           business_id: int = Depends(require_business_editor),
+                           user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Manually re-measure every batch's impact against the latest audit (impact also refreshes
+    automatically after each full audit). Makes the measure_content_impact job reachable on demand."""
+    if not _jobs.rate_ok(business_id, "measure_content_impact"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Re-measuring too often — try again shortly.")
+    job_id, active = _jobs.enqueue(business_id, "measure_content_impact", requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a measure job is already running (#{active})")
     if api_settings().job_worker == "inline":
         background.add_task(_jobs.run_job, job_id)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
@@ -204,7 +245,7 @@ def content_impact(business_id: int = Depends(authorize_business), conn=Depends(
         "SELECT ci.*, cb.target_topic, cb.label FROM content_impact ci "
         "JOIN content_batches cb ON cb.id = ci.batch_id "
         "WHERE ci.business_id=%s ORDER BY ci.id DESC LIMIT 100", (business_id,)).fetchall()
-    return [dict(r) for r in rows]
+    return _floats_deep([dict(r) for r in rows])
 
 
 @router.get("/gap-completion")
@@ -236,7 +277,7 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
                     "target_prompts": g["target_prompts"], "batch_id": b["id"] if b else None,
                     "batch_status": b["status"] if b else None, "pieces_drafted": drafted,
                     "pieces_published": published, "impact": impact})
-    return out
+    return _floats_deep(out)
 
 
 @router.get("/production-briefs")

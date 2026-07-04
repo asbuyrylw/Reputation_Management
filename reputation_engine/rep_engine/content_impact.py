@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
 try:
@@ -26,18 +27,14 @@ log = logging.getLogger("content_impact")
 # Below this fraction of the gap closed, a published batch that didn't move the number gets an
 # "adjust: produce more / different content" recommendation (the closed-loop signal).
 _LOW_MOVEMENT = 0.15
+# The goal_alignment level that counts as "goal reached" for % gap closed. Set high enough that a
+# still-negative/neutral business isn't reported as already-closed. Configurable; NOT the businesses
+# table (which has no such column) nor the SoV-unit dominance_target (a different metric).
+_TARGET_ALIGNMENT = max(-1.0, min(1.0, float(os.getenv("CONTENT_IMPACT_TARGET_ALIGNMENT", "0.5"))))
 
 
 def _target_alignment(biz: dict) -> float:
-    """The alignment level that counts as 'goal reached' for % gap closed. Uses the dominance target
-    if present, else a sensible net-positive default."""
-    try:
-        dt = (biz or {}).get("dominance_target")
-        if dt is not None:
-            return max(-1.0, min(1.0, float(dt)))
-    except Exception:  # noqa: BLE001
-        pass
-    return 0.4  # net-positive alignment
+    return _TARGET_ALIGNMENT
 
 
 def _clamp01(x) -> Optional[float]:
@@ -78,6 +75,15 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
             "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
             "WHERE d.batch_id=%s", (batch_id,)).fetchall()
 
+    # Guard against an UNMATCHED cluster: if the baseline OR measured run matched 0 answers for this
+    # gap's prompts, there's nothing comparable — return pending WITHOUT writing an all-null impact
+    # row or flipping the batch to 'measured', so a later good run can still measure it. (Only fires
+    # for a specific prompt cluster; the whole-run fallback always has n>0.)
+    if baseline.get("n", 0) == 0 or measured.get("n", 0) == 0:
+        return {"pending": True, "batch_id": batch_id, "run_after": run["id"],
+                "reason": "gap prompt cluster matched no answers to compare (baseline "
+                          f"n={baseline.get('n', 0)}, measured n={measured.get('n', 0)})"}
+
     per_type: dict = {}
     for r in rows:
         ct = r["content_type"] or "unknown"
@@ -99,10 +105,16 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
     if base_al is not None and meas_al is not None:
         denom = tgt - base_al
         gap_pct = _clamp01((meas_al - base_al) / denom) if denom > 0.02 else (1.0 if meas_al >= tgt else 0.0)
+    # Don't ATTRIBUTE movement to a batch that never went live -- organic audit drift isn't its doing.
+    # (Raw sov_delta/alignment_delta stay as run-to-run context; the attributed % is nulled.)
+    if published_total == 0:
+        gap_pct = None
 
-    # the adjust signal
+    # the adjust signal (closed-loop: keep producing / adjust / hold)
     if published_total == 0:
         rec = "Not measurable yet — approve & publish the batch, then the next audit will show its lift."
+    elif al_delta is not None and al_delta < -0.02:
+        rec = "Regressed since publishing — the AI answers for this gap got WORSE. Revisit the content/claims, add authoritative citations + clearer entity disambiguation."
     elif gap_pct is not None and gap_pct < _LOW_MOVEMENT:
         rec = "Published but the gap barely moved — produce more/different content for this gap or strengthen citations/entity clarity."
     elif gap_pct is not None and gap_pct >= 0.75:
@@ -136,11 +148,12 @@ def measure_all(business_id: int) -> dict:
         batches = conn.execute(
             "SELECT id FROM content_batches WHERE business_id=%s AND status IN "
             "('drafted','published','measured') ORDER BY id", (business_id,)).fetchall()
-    measured, pending = [], []
+    measured, pending, errors = [], [], []
     for b in batches:
         try:
             res = measure_batch(business_id, b["id"])
             (pending if res.get("pending") else measured).append(b["id"])
         except Exception as e:  # noqa: BLE001 -- one batch must not abort the sweep
             log.warning("impact measure failed for batch %d: %s", b["id"], e)
-    return {"measured": measured, "pending": pending, "batches": len(batches)}
+            errors.append({"batch_id": b["id"], "error": str(e)[:200]})
+    return {"measured": measured, "pending": pending, "errors": errors, "batches": len(batches)}

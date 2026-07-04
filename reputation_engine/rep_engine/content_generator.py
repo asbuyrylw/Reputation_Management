@@ -1097,10 +1097,12 @@ _SURFACE_LABEL = {"linkedin": "LinkedIn", "x": "X/Twitter", "twitter": "X/Twitte
                   "facebook": "Facebook", "instagram": "Instagram"}
 
 
-def atomize_draft(business_id: int, draft_id: int) -> dict:
+def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = None) -> dict:
     """Derive human-gated social posts from a long-form draft (Phase-5 atomization): one grounded
     post per platform, stored as pending_review drafts (compliance UNscreened -> a principal must
-    sign off to approve). NEVER auto-posts -- AUTOPOST_GLOBAL_ENABLED still governs any posting."""
+    sign off to approve). NEVER auto-posts -- AUTOPOST_GLOBAL_ENABLED still governs any posting.
+    batch_id links the posts into a content batch ATOMICALLY at insert (so a later grading failure
+    can't orphan them from the batch)."""
     _ensure_table()
     with db() as conn:
         d = conn.execute("SELECT id, work_order_id, title, body, target_query FROM content_drafts "
@@ -1129,13 +1131,14 @@ def atomize_draft(business_id: int, draft_id: int) -> dict:
                 """INSERT INTO content_drafts
                    (business_id, work_order_id, asset_type, title, body, target_query,
                     quality_score, quality_notes, revision_count, compliance_pass,
-                    compliance_flags, status, highlighted_sections, placeholders_pending, content_hash)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                    compliance_flags, status, highlighted_sections, placeholders_pending, content_hash,
+                    batch_id, content_type)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'social_post') RETURNING id""",
                 (business_id, d.get("work_order_id"), f"{surface}_post",
                  f"{d.get('title') or 'Post'} — {label}", text, d.get("target_query"),
                  None, json.dumps({"atomized_from": draft_id, "surface": surface}), 0, None,
                  json.dumps([]), "pending_review", json.dumps([]), json.dumps([]),
-                 hashlib.sha256(text.encode("utf-8")).hexdigest())).fetchone()
+                 hashlib.sha256(text.encode("utf-8")).hexdigest(), batch_id)).fetchone()
             created.append(int(row["id"]))
         conn.commit()
     log.info("Atomized draft %d -> %d social posts", draft_id, len(created))

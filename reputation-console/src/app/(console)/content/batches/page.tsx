@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useContentBatches, useGapCompletion, useGenerateContentBatch } from "@/lib/hooks";
+import { useContentBatches, useGapCompletion, useGenerateContentBatch, useContentImpact } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { StatusBadge } from "@/components/content/StatusBadge";
@@ -96,10 +96,33 @@ function GapMeter({ gaps }: { gaps: GapCompletion[] }) {
   );
 }
 
+// Chronological ROI log — every measurement, newest first (wires the /content-impact ledger).
+function ImpactLedger({ rows }: { rows: ContentImpactRow[] }) {
+  if (!rows.length) return null;
+  return (
+    <div className="mt-6">
+      <SecHead title="Impact log" note="what each measurement moved, most recent first" />
+      <Card>
+        <div className="space-y-1.5">
+          {rows.slice(0, 20).map((r, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-line/50 pb-1.5 text-[12.5px] last:border-0">
+              <span className="min-w-0 flex-1 truncate text-ink-2">{r.target_topic || r.label}</span>
+              <span className="font-mono text-[11px] text-ink-4">{r.measured_at ? new Date(r.measured_at).toLocaleDateString() : ""}</span>
+              <span className={(r.gap_pct_closed ?? 0) >= 0.15 ? "text-good" : "text-ink-3"}>{r.gap_pct_closed == null ? "—" : `${Math.round(r.gap_pct_closed * 100)}% closed`}</span>
+              <span className={(r.alignment_delta ?? 0) >= 0 ? "text-good" : "text-alert"}>{r.alignment_delta == null ? "" : `align ${r.alignment_delta >= 0 ? "+" : ""}${r.alignment_delta.toFixed(2)}`}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export default function BatchesPage() {
   const { businessId, canEdit, loading } = useBusiness();
   const { data: batches, isLoading } = useContentBatches(businessId);
   const { data: gaps } = useGapCompletion(businessId);
+  const { data: ledger } = useContentImpact(businessId);
   const genAll = useGenerateContentBatch(businessId);
   const [confirmAll, setConfirmAll] = useState(false);
 
@@ -157,6 +180,8 @@ export default function BatchesPage() {
           {batches.map((b) => <BatchCard key={b.id} batch={b} businessId={businessId} />)}
         </div>
       )}
+
+      {ledger && ledger.length > 0 && <ImpactLedger rows={ledger} />}
     </div>
   );
 }

@@ -167,14 +167,16 @@ def _run_generate_content_batches(business_id: int, args: dict):
     white paper, social) at once and snapshot the gap's baseline Share-of-Voice for later impact
     measurement. args.gap_key generates one gap's batch; args.max_gaps caps the sweep."""
     cb = _imp("content_batch")
+    created_by = args.get("requested_by")   # forwarded so content_batches.created_by isn't dropped
     if args.get("gap_key"):
         gap = next((g for g in cb.gaps_for_business(business_id) if g["gap_key"] == args["gap_key"]), None)
         if not gap:
             return {"batches": [], "pieces": 0, "reason": f"gap {args['gap_key']} not found"}
-        res = cb.generate_batch(business_id, gap, content_types=args.get("content_types"))
+        res = cb.generate_batch(business_id, gap, content_types=args.get("content_types"),
+                                created_by=created_by)
         return {"batches": [{"batch_id": res["batch_id"], "pieces": len(res["produced"])}],
                 "pieces": len(res["produced"])}
-    return cb.generate_all_gaps(business_id, max_gaps=args.get("max_gaps"))
+    return cb.generate_all_gaps(business_id, max_gaps=args.get("max_gaps"), created_by=created_by)
 
 
 def _run_measure_content_impact(business_id: int, args: dict):

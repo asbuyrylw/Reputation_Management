@@ -82,6 +82,57 @@ def _match_prompts(topic: str, weak: list[dict]) -> list[str]:
     return ded
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).strip()
+
+
+def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
+    """Snap gap-model prompt strings (LLM-authored, often paraphrased) to the ACTUAL battery prompt
+    text stored in `answers`, so the cluster query (`prompt = ANY`) matches instead of silently
+    hitting 0 rows. Exact-normalized match first, then best token-set (Jaccard >= 0.5) fallback.
+    Unresolvable candidates are dropped; if NONE resolve, returns [] so the caller falls back to
+    whole-run (a coarser but valid collective measure) rather than a silent empty cluster."""
+    prompts = [p for p in (prompts or []) if p]
+    if not prompts:
+        return []
+    with db() as conn:
+        run = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND status='complete' AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 1",
+            (business_id,)).fetchone()
+        if not run:
+            return []
+        battery = [r["prompt"] for r in conn.execute(
+            "SELECT DISTINCT prompt FROM answers WHERE run_id=%s AND prompt IS NOT NULL", (run["id"],)).fetchall()]
+    bnorm = [(_norm(p), p) for p in battery]
+    resolved: list[str] = []
+    for cand in prompts:
+        cn = _norm(cand)
+        if not cn:
+            continue
+        exact = next((p for n, p in bnorm if n == cn), None)
+        if exact:
+            resolved.append(exact)
+            continue
+        ctoks = set(cn.split())
+        best, best_j = None, 0.0
+        for n, p in bnorm:
+            ptoks = set(n.split())
+            if not ptoks:
+                continue
+            j = len(ctoks & ptoks) / len(ctoks | ptoks)
+            if j > best_j:
+                best, best_j = p, j
+        if best and best_j >= 0.5:
+            resolved.append(best)
+    seen, out = set(), []
+    for p in resolved:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 def gaps_for_business(business_id: int) -> list[dict]:
     """Enumerate the content-fillable gaps: each missing_owned_content topic + the weak AI answers
     (prompts) that name it via weak_query.addressed_by. Returns [{gap_key, topic, asset_type,
@@ -108,9 +159,9 @@ def gaps_for_business(business_id: int) -> list[dict]:
 def _types_for_gap(gap: dict) -> list[str]:
     at = (gap.get("asset_type") or "").lower()
     topic = (gap.get("topic") or "").lower()
-    if "local" in at or "local" in topic or "landing" in topic and "cincinnati" in topic:
+    if "local" in at or "local" in topic:
         return _LOCAL_TYPES
-    if at in ("landing_page", "comparison") or any(k in topic for k in ("best", "vs", "compare", "top ")):
+    if at in ("landing_page", "comparison") or "landing" in topic or any(k in topic for k in ("best", "vs", "compare", "top ")):
         return _COMMERCIAL_TYPES
     return _DEFAULT_TYPES
 
@@ -151,42 +202,48 @@ def _cluster_metrics(conn, business_id: int, run_id: int, prompts: list[str]) ->
             "contested_rate": contested, "n": int(row["n"]) if row else 0}
 
 
-def _grade_social(business_id: int, draft_ids: list[int], batch_id: int) -> None:
-    """Tag atomized social posts into the batch + give each its social GEO grade (atomize_draft
-    doesn't run the grader). Best-effort."""
+def _grade_social(business_id: int, draft_ids: list[int]) -> None:
+    """Give each atomized social post its social GEO grade (atomize_draft doesn't run the grader).
+    Linkage (batch_id/content_type) is already set atomically at insert, so a failure here only loses
+    the grade, never the batch membership. Best-effort per post."""
     try:
         from . import content_quality as _cq
     except ImportError:  # pragma: no cover
         import content_quality as _cq  # type: ignore
-    with db() as conn:
-        for sid in draft_ids:
-            row = conn.execute("SELECT body, quality_notes FROM content_drafts WHERE id=%s", (sid,)).fetchone()
-            if not row:
-                continue
-            qn = row["quality_notes"] if isinstance(row["quality_notes"], dict) else json.loads(row["quality_notes"] or "{}")
-            geo = None
-            try:
+    for sid in draft_ids:
+        try:
+            with db() as conn:
+                row = conn.execute("SELECT body, quality_notes FROM content_drafts WHERE id=%s", (sid,)).fetchone()
+                if not row:
+                    continue
+                qn = row["quality_notes"] if isinstance(row["quality_notes"], dict) else json.loads(row["quality_notes"] or "{}")
                 g = _cq.geo_score(row["body"] or "", content_type="social_post")
                 qn["geo"] = g
-                geo = g.get("score")
-            except Exception:  # noqa: BLE001
-                pass
-            conn.execute("UPDATE content_drafts SET batch_id=%s, content_type='social_post', "
-                         "geo_score=%s, quality_notes=%s WHERE id=%s",
-                         (batch_id, geo, json.dumps(qn), sid))
-        conn.commit()
+                conn.execute("UPDATE content_drafts SET geo_score=%s, quality_notes=%s WHERE id=%s",
+                             (g.get("score"), json.dumps(qn), sid))
+                conn.commit()
+        except Exception as e:  # noqa: BLE001 -- one post's grade must not abort the rest
+            log.debug("social grade skipped for draft %s: %s", sid, e)
 
 
 def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str]] = None,
                    created_by: Optional[int] = None) -> dict:
     """Create a content batch for one gap and generate a piece per content type. Fail-loud: raises
     if EVERY piece failed (so the job is marked failed, never a silent 'complete')."""
+    # Budget guard: the batch path calls generate_for_wo directly (bypassing generate()'s guard), so
+    # enforce the monthly cap here or a batch could run past it. The cap is the runaway backstop.
+    _budget_or_raise(business_id)
     types = content_types or _types_for_gap(gap)
     topic = gap.get("topic") or ""
-    prompts = gap.get("target_prompts") or []
+    # Resolve LLM-authored gap prompts to the actual battery prompt text so impact measures a real
+    # cluster (not a silent 0-row match). Empty -> whole-run fallback (coarser but valid).
+    prompts = resolve_prompts(business_id, gap.get("target_prompts") or [])
     baseline = capture_baseline(business_id, prompts)
     with db() as conn:
-        biz = dict(conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone())
+        biz_row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not biz_row:
+            raise SystemExit(f"No business id {business_id}")
+        biz = dict(biz_row)
         b = conn.execute(
             "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
             "target_prompts, content_types, baseline, status, created_by) "
@@ -225,10 +282,11 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
     if want_social and made:
         try:
             src = made[0]["draft_id"]
-            res = _cg.atomize_draft(business_id, src) or {}
+            # batch_id is set atomically at insert -> a grading hiccup can't orphan the posts.
+            res = _cg.atomize_draft(business_id, src, batch_id=batch_id) or {}
             sids = res.get("draft_ids") or []
             if sids:
-                _grade_social(business_id, sids, batch_id)
+                _grade_social(business_id, sids)   # grading only; linkage already done
                 for sid in sids:
                     made.append({"draft_id": sid, "content_type": "social_post"})
             else:
@@ -252,35 +310,51 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
             "errors": errors, "baseline": baseline}
 
 
-def generate_all_gaps(business_id: int, max_gaps: Optional[int] = None,
-                      created_by: Optional[int] = None) -> dict:
-    """Batch-produce content for every open content gap (the 'fill the plan' button). Budget-guarded
-    via the same monthly cap generate() honors (each generate_for_wo checks nothing itself, so we
-    check here up front). Returns a summary; raises if nothing at all was produced."""
+def _over_budget(business_id: int) -> bool:
     try:
         from . import ai_state_audit as _llm
-        if _llm.cost.over_budget(business_id):
-            raise SystemExit(
-                f"Business {business_id} is at/over its monthly budget; batch content skipped. "
-                f"Raise monthly_budget_usd to proceed.")
-    except SystemExit:
-        raise
-    except Exception:  # noqa: BLE001 -- budget check best-effort
-        pass
+        return bool(_llm.cost.over_budget(business_id))
+    except Exception:  # noqa: BLE001 -- budget check best-effort; don't block on a check failure
+        return False
+
+
+def _budget_or_raise(business_id: int) -> None:
+    if _over_budget(business_id):
+        raise SystemExit(
+            f"Business {business_id} is at/over its monthly budget; batch content skipped. "
+            f"Raise monthly_budget_usd in business_config to proceed.")
+
+
+def generate_all_gaps(business_id: int, max_gaps: Optional[int] = None,
+                      created_by: Optional[int] = None) -> dict:
+    """Batch-produce content for every open content gap (the 'fill the plan' button). Budget-guarded:
+    the cap is re-checked BEFORE EACH gap so a multi-gap sweep stops the moment it crosses the ceiling
+    (each gap is several LLM-heavy pieces). Returns a summary; raises if nothing at all was produced."""
+    _budget_or_raise(business_id)
     gaps = gaps_for_business(business_id)
     if max_gaps:
         gaps = gaps[:max_gaps]
-    batches, total_pieces = [], 0
+    batches, total_pieces, budget_stopped = [], 0, False
     for gap in gaps:
+        # stop cleanly the moment the batch spend crosses the monthly cap
+        if _over_budget(business_id):
+            log.warning("Budget cap reached mid-sweep for business %d after %d pieces; stopping.",
+                        business_id, total_pieces)
+            budget_stopped = True
+            break
         try:
             res = generate_batch(business_id, gap, created_by=created_by)
             batches.append({"batch_id": res["batch_id"], "topic": res["topic"],
                             "pieces": len(res["produced"])})
             total_pieces += len(res["produced"])
+        except SystemExit:  # budget hit inside generate_batch -> stop the sweep
+            budget_stopped = True
+            break
         except Exception as e:  # noqa: BLE001 -- one gap failing must not abort the rest
             log.warning("gap batch failed for '%s': %s", gap.get("topic"), e)
             batches.append({"topic": gap.get("topic"), "pieces": 0, "error": str(e)[:200]})
-    if gaps and total_pieces == 0:
+    # A budget-driven stop is NOT a failure (the cap did its job), so it doesn't trip the 0-piece guard.
+    if gaps and total_pieces == 0 and not budget_stopped:
         raise RuntimeError(f"batch content produced 0 pieces across {len(gaps)} gap(s); check the "
                            "orchestrator LLM key/budget. Not marking successful.")
-    return {"gaps": len(gaps), "batches": batches, "pieces": total_pieces}
+    return {"gaps": len(gaps), "batches": batches, "pieces": total_pieces, "budget_stopped": budget_stopped}

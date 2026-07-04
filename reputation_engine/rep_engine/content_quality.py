@@ -29,8 +29,9 @@ _H2 = re.compile(r"^\s{0,3}##\s+\S", re.M)
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+)$", re.M)
 _IMG = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")          # ![alt](url)
 _LINK = re.compile(r"(?<!\!)\[([^\]]+)\]\(([^)]+)\)")   # [text](url)
-_STAT = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s?(?:%|percent|million|billion|k\b|years?|clients?|"
-                   r"customers?|reviews?|\$)", re.I)
+_STAT = re.compile(r"(?:\$\d[\d,]*(?:\.\d+)?(?:\s?(?:k|m|b|million|billion))?)"   # leading currency: $50, $2.3M
+                   r"|(?:\b\d[\d,]*(?:\.\d+)?\s?(?:%|percent|million|billion|k\b|years?|clients?|"
+                   r"customers?|reviews?|\$))", re.I)
 _SENT = re.compile(r"[.!?]+\s")
 _HEADING_LVL = re.compile(r"^(\s{0,3})(#{1,6})\s+(.+)$", re.M)
 _FRESH = re.compile(r"(last[-\s]?updated|updated on|as of|reviewed on)\b", re.I)
@@ -317,7 +318,7 @@ _AUTH = re.compile(r"https?://[^)\s]*\.(gov|edu|org|ac\.[a-z]{2})\b", re.I)
 _COMPARE = re.compile(r"\b(vs\.?|versus|compare(d)?|best|top \d|pros? and cons?|alternative)\b", re.I)
 _REVIEW = re.compile(r"\b(review|rating|stars?|testimonial|\d(\.\d)?\s?/\s?5)\b", re.I)
 
-# Per-content-type weight profiles (each sums to 100). Keys must exist in _GEO_SIGNAL_FNS below.
+# Per-content-type weight profiles (each sums to 100). Keys must exist in _geo_signal_score() below.
 _GEO_PROFILES: dict[str, dict[str, int]] = {
     "blog":        {"answer_first": 18, "question_headings": 14, "stat_density": 14, "citation_density": 16, "schema": 8, "entity": 12, "freshness": 8, "chunkability": 10},
     "article":     {"answer_first": 18, "question_headings": 14, "stat_density": 14, "citation_density": 16, "schema": 8, "entity": 12, "freshness": 8, "chunkability": 10},
@@ -465,10 +466,12 @@ def serp_grade(body: str, benchmark: Optional[dict], keywords: Optional[list[str
     target = benchmark.get("avg_word_count")
     # "in range" = within 25% under the ranking pages' average (over is fine)
     in_range = (target is None) or (our_words >= target * 0.75)
-    # score: term coverage is the dominant signal; dock if well short of the competitor word count
-    score = covered_pct if covered_pct is not None else None
-    if score is not None and not in_range:
-        score = max(0, score - 15)
+    # score: term coverage is the dominant signal (85%) plus a 15% credit for being in the ranking
+    # pages' word-count range, so a well-scoped draft that covers the topic isn't scored purely on
+    # verbatim term echo.
+    score = None
+    if covered_pct is not None:
+        score = round(0.85 * covered_pct + (15 if in_range else 0))
     return {"score": score, "covered_pct": covered_pct,
             "terms_covered": covered[:60], "terms_missing": missing[:60],
             "our_words": our_words, "target_words": target, "in_range": in_range,

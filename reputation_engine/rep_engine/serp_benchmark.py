@@ -53,18 +53,20 @@ def _significant_terms(texts: list[str], min_docs: int = 2, top: int = 40) -> li
     def docs_with(term, kind):
         docs = doc_bi if kind == "bi" else doc_uni
         return sum(1 for d in docs if term in d)
-    cands: list[tuple[str, int, int]] = []
+    cands: list[tuple[str, int, int, int]] = []
     for term in set().union(*doc_bi) if doc_bi else set():
         d = docs_with(term, "bi")
         if d >= min_docs:
-            cands.append((term, d, 2))          # prefer multi-word terms
+            # bigram frequency isn't tracked; approximate by the rarer constituent word's frequency
+            bf = min((freq.get(w, 0) for w in term.split()), default=0)
+            cands.append((term, d, 2, bf))          # prefer multi-word terms
     for term, f in freq.most_common(300):
         d = docs_with(term, "uni")
         if d >= min_docs:
-            cands.append((term, d, 1))
+            cands.append((term, d, 1, f))
     # rank by (docs-covered, is-bigram, frequency); dedup keeping first
     seen, out = set(), []
-    for term, d, kind in sorted(cands, key=lambda x: (x[1], x[2]), reverse=True):
+    for term, d, kind, f in sorted(cands, key=lambda x: (x[1], x[2], x[3]), reverse=True):
         if term in seen:
             continue
         seen.add(term)
