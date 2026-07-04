@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap, useSetSubtasks } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { useAuth } from "@/lib/auth";
 import { Card, PageHeader, Spinner } from "@/components/ui";
@@ -184,6 +184,17 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
   const tool = TOOL_GUIDE[wo.capability ?? ""];
   const bullets = bulletize(wo.instruction || "");
   const gen = useGenerateDraftForWo(businessId);
+  const setSubs = useSetSubtasks(businessId);
+  const [localSubs, setLocalSubs] = useState<{ text: string; done: boolean }[] | null>(null);
+  // Per-step checklist: persisted subtasks if any, else derived from the instruction bullets.
+  const subs = localSubs ?? (wo.subtasks && wo.subtasks.length
+    ? wo.subtasks
+    : (bullets ? bullets.map((t) => ({ text: t, done: false })) : []));
+  const toggleSub = (idx: number) => {
+    const next = subs.map((s, i) => (i === idx ? { ...s, done: !s.done } : s));
+    setLocalSubs(next);
+    setSubs.mutate({ woId: wo.id, subtasks: next });
+  };
   const edit = useEditWorkOrder(businessId);
   const { data: team } = useTeam(businessId);
   const hasTeam = (team?.length ?? 0) > 0;
@@ -240,11 +251,25 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
       {/* bold to-do heading */}
       <div className="mt-1.5 text-sm font-bold text-slate-900">{wo.title}</div>
 
-      {/* what to do — the instruction in a labeled, shaded zone so it reads as steps, not a wall */}
+      {/* what to do — the instruction as a labeled, shaded, CHECKABLE step list (not a wall) */}
       {wo.instruction && (
         <div className="mt-2 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">What to do</div>
-          {bullets ? (
+          <div className="mb-1 flex items-center justify-between">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">What to do</div>
+            {canEdit && bullets && subs.length > 0 && (
+              <div className="font-mono text-[10px] text-slate-400">{subs.filter((s) => s.done).length}/{subs.length} done</div>
+            )}
+          </div>
+          {canEdit && bullets ? (
+            <ul className="space-y-1 text-[13px] leading-relaxed text-slate-700">
+              {subs.map((s, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <input type="checkbox" checked={s.done} onChange={() => toggleSub(i)} className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+                  <span className={s.done ? "text-slate-400 line-through" : ""}>{s.text}</span>
+                </li>
+              ))}
+            </ul>
+          ) : bullets ? (
             <ul className="list-disc space-y-1 pl-4 text-[13px] leading-relaxed text-slate-700">
               {bullets.map((b, i) => <li key={i}>{b}</li>)}
             </ul>

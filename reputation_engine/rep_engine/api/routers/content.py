@@ -59,6 +59,10 @@ class SocialProfileUpdate(BaseModel):
     profile_url: str = ""
     exists: bool = True
 
+
+class SubtasksUpdate(BaseModel):
+    subtasks: list = []
+
 try:
     from ... import content_generator as _cg
     from ... import tracking as _tracking
@@ -106,7 +110,8 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "completed_at, "
         "COALESCE(superseded, false) AS superseded, "
         "COALESCE(planned, false) AS planned, promoted_at, assignee_user_id, "
-        "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes "
+        "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes, "
+        "COALESCE(subtasks, '[]'::jsonb) AS subtasks "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
@@ -143,6 +148,22 @@ def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return {"id": wid}
+
+
+@router.patch("/work-orders/{wo_id}/subtasks")
+def set_subtasks(wo_id: int, payload: SubtasksUpdate,
+                 business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Persist the per-step checklist state for a task -- a JSONB array of {text, done}, so the owner
+    can tick off individual steps of a multi-step task."""
+    clean = [{"text": str(s.get("text", ""))[:400], "done": bool(s.get("done"))}
+             for s in (payload.subtasks or []) if isinstance(s, dict) and s.get("text")]
+    row = conn.execute(
+        "UPDATE work_orders SET subtasks=%s, updated_at=now() WHERE id=%s AND business_id=%s RETURNING id",
+        (json.dumps(clean), wo_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work order not found")
+    conn.commit()
+    return {"ok": True, "wo_id": wo_id, "subtasks": clean}
 
 
 @router.get("/work-orders/{wo_id}/brief")

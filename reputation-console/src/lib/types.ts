@@ -151,6 +151,7 @@ export interface WorkOrder {
   planned?: boolean | null;
   promoted_at?: string | null;
   progress_notes?: ProgressNote[] | null;
+  subtasks?: { text: string; done: boolean }[] | null;
   assignee_user_id?: number | null;
   area?: string | null; // website | blog | outreach | social | local | reviews | tracking | content | other
   platform?: string | null; // linkedin | facebook | instagram | x | youtube | tiktok | pinterest | reddit | gbp

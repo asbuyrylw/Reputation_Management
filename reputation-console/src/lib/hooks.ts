@@ -490,6 +490,16 @@ export function useAddWorkOrderNote(businessId: number | null) {
   );
 }
 
+// Persist a task's per-step checklist (array of {text, done}) — the owner ticking off sub-steps.
+export function useSetSubtasks(businessId: number | null) {
+  return useApiMutation<{ woId: number; subtasks: { text: string; done: boolean }[] }>(
+    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/subtasks`,
+    ({ subtasks }) => ({ subtasks }),
+    [["work-orders", businessId]],
+    "PATCH",
+  );
+}
+
 // The log of completed actions (work orders marked done/verified + briefs marked produced),
 // newest-first per the server. Feeds the "Work completed" readout.
 export function useActionsTaken(businessId: number | null) {
