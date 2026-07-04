@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Card, Badge, Input } from "./ui";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { ComplianceNotice } from "@/components/content/ComplianceNotice";
 import { DraftImageGallery } from "@/components/content/DraftImageGallery";
 import { MarkdownBody } from "./MarkdownBody";
-import { useApproveDraft, useEditDraft, useRejectDraft, useAtomizeDraft } from "@/lib/hooks";
+import { useApproveDraft, useEditDraft, useRejectDraft, useAtomizeDraft, usePublishChannels } from "@/lib/hooks";
 import type { BadgeTone } from "./ui";
 import type { ContentDraft, DraftNeuron } from "@/lib/types";
 
@@ -236,6 +237,9 @@ export function DraftReviewCard({
   const [editTitle, setEditTitle] = useState(draft.title || "");
   const [editBody, setEditBody] = useState(draft.body || "");
   const approve = useApproveDraft(businessId);
+  const { data: channels } = usePublishChannels(businessId);
+  const pubConnected = (channels ?? []).filter((c) => c.connected);
+  const pubUnconnected = (channels ?? []).filter((c) => !c.connected);
   const reject = useRejectDraft(businessId);
   const edit = useEditDraft(businessId);
   const atomize = useAtomizeDraft(businessId);
@@ -524,6 +528,17 @@ export function DraftReviewCard({
             Send back
           </button>
           <span className="text-xs text-ink-4">Approving adds it to your published content.</span>
+        </div>
+      )}
+      {canEdit && pending && !rejecting && !editing && channels && channels.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="font-medium text-ink-3">Publishes to:</span>
+          {pubConnected.length > 0 ? pubConnected.map((c) => (
+            <span key={c.channel} className="rounded bg-good-bg px-1.5 py-0.5 font-medium text-good">✓ {c.label}</span>
+          )) : <span className="text-ink-4">no channels connected yet</span>}
+          {pubUnconnected.map((c) => (
+            <Link key={c.channel} href="/integrations" className="rounded bg-line/60 px-1.5 py-0.5 text-ink-4 hover:text-indigo hover:underline">{c.label} — connect</Link>
+          ))}
         </div>
       )}
       {canEdit && pending && rejecting && !editing && (
