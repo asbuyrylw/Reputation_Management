@@ -59,6 +59,7 @@ import type {
   TaskImpact,
   WorkOrder,
   Roadmap,
+  StrategyView,
   SocialAudit,
   ConnectionsResponse,
   ZerniaSetup,
@@ -175,6 +176,12 @@ export function useSiteAudit(businessId: number | null) {
 
 export function useGapModel(businessId: number | null) {
   return useApiQuery<GapModel | null>(["gap-model", businessId], businessId ? `/businesses/${businessId}/gap-model` : null);
+}
+
+// The detailed strategy view (3 sections, per-gap approach + tasks + content specs) rendered by
+// the Strategy page. Assembled server-side from the gap model + work orders + piece briefs.
+export function useStrategy(businessId: number | null) {
+  return useApiQuery<StrategyView>(["strategy", businessId], businessId ? `/businesses/${businessId}/strategy` : null);
 }
 
 export function useSocialPresence(businessId: number | null) {
@@ -475,20 +482,6 @@ export function useGenerateDraftForWo(businessId: number | null) {
 
 // Promote a recommendation ("Do this next") onto the managed "Improvement tasks" board,
 // capturing owner + start/due dates + an optional first progress note.
-export function usePromoteWorkOrder(businessId: number | null) {
-  return useApiMutation<{ woId: number; assignee?: string; assignee_user_id?: number | null; start_date?: string; target_date?: string; note?: string }>(
-    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/promote`,
-    ({ assignee, assignee_user_id, start_date, target_date, note }) => ({
-      assignee: assignee ?? null,
-      assignee_user_id: assignee_user_id ?? null,
-      start_date: start_date ?? null,
-      target_date: target_date ?? null,
-      note: note ?? null,
-    }),
-    [["work-orders", businessId], ["dashboard", businessId]],
-  );
-}
-
 // Append a progress note to a managed task's timeline.
 export function useAddWorkOrderNote(businessId: number | null) {
   return useApiMutation<{ woId: number; text: string }>(

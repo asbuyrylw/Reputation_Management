@@ -464,7 +464,7 @@ export default function SeoOverviewPage() {
                 </div>
               ))}
             </div>
-            <Link href="/next-steps" className="mt-3 inline-flex items-center gap-1 text-[13px] font-semibold text-indigo hover:text-indigo-strong">Full plan<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg></Link>
+            <Link href="/content/work-orders" className="mt-3 inline-flex items-center gap-1 text-[13px] font-semibold text-indigo hover:text-indigo-strong">Your tasks<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg></Link>
           </Card>
           <SeoGoalCard goal={goal.data} gscConnected={gscConnected} />
         </div>

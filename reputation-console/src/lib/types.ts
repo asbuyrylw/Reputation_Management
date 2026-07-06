@@ -189,6 +189,55 @@ export interface Roadmap {
   items: RoadmapItem[];
 }
 
+// The detailed Strategy view — three areas, each with the gaps it closes, the approach, the tasks,
+// and the concrete content specs. Assembled server-side from the gap model + work orders + briefs.
+export interface StrategyTask {
+  id: number;
+  wo_code: string | null;
+  title: string | null;
+  status: string;
+  capability: string | null;
+  area: string | null;
+  platform: string | null;
+  instruction: string;
+  target_date: string | null;
+  predicted_ai_points: number | null;
+  why: string;
+}
+export interface StrategySpec {
+  wo_id: number;
+  title: string | null;
+  content_type: string | null;
+  keywords: string[];
+  primary_keyword: string | null;
+  word_count_target: number | null;
+  readability_target: string | null;
+  structure: string | null;
+  publish_to: string;
+  objective: string;
+}
+export interface StrategyGroup {
+  title: string;
+  gap_source: string | null;
+  source_query: string | null;
+  section: string;
+  approach: string;
+  why: string;
+  tasks: StrategyTask[];
+  specs: StrategySpec[];
+}
+export interface StrategySection {
+  key: string;
+  label: string;
+  narrative: string;
+  groups: StrategyGroup[];
+}
+export interface StrategyView {
+  summary: string;
+  sections: StrategySection[];
+  counts: Record<string, number>;
+}
+
 // One logged completed action (from a work order marked done/verified or a brief marked
 // produced). Powers the "Work completed" readout — what was actually done, and when.
 export interface ActionTaken {

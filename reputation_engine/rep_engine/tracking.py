@@ -177,8 +177,8 @@ def sync_plan(business_id: int) -> dict:
                     recommended_tool, instruction, phase, target_date, status,
                     rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision,
                     start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, task_key,
-                    area, platform, gap_specifics)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    area, platform, gap_specifics, planned)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
                 (business_id, plan_row["id"], w.get("wo_id"), w.get("title"), w.get("capability"),
                  w.get("execution"), w.get("recommended_tool"), w.get("instruction"),
                  w.get("phase"), date.fromisoformat(td) if td else None,

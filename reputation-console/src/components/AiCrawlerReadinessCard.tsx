@@ -87,8 +87,8 @@ export function AiCrawlerReadinessCard({ businessId }: { businessId: number | nu
                 <Link href="/content/work-orders">
                   <Button size="sm">Turn into a developer task</Button>
                 </Link>
-                <Link href="/next-steps" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
-                  See it on Do this next →
+                <Link href="/content/work-orders" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">
+                  See it on the task board →
                 </Link>
               </div>
             </div>

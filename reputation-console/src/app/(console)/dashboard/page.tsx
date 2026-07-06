@@ -8,7 +8,7 @@ import { OperatorHome } from "@/components/OperatorHome";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
   useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
-  useCompare, useSiteHealthTrend, useShareOfVoice,
+  useCompare, useSiteHealthTrend, useShareOfVoice, useRoadmap,
 } from "@/lib/hooks";
 import { ReputationHero } from "@/components/ReputationHero";
 import { GoalBanner, ScoreHero, TwoFronts, TwoGoals, DoThisNext as DoNextV2, StandingAtAGlance, SecHead } from "@/components/DashboardV2";
@@ -285,6 +285,7 @@ export default function DashboardPage() {
   const { data: perEngine } = usePerEngine(businessId, latestRunId);
   const { data: answers } = useRunAnswers(businessId, latestRunId);
   const { data: workOrders } = useWorkOrders(businessId);
+  const { data: roadmap } = useRoadmap(businessId);
   const { data: timeline } = useTimeline(businessId);
   const { data: localGoal } = useLocalSeoGoal(businessId);
   const { data: notifs } = useNotifications(businessId);
@@ -339,14 +340,26 @@ export default function DashboardPage() {
   const openWOs = (workOrders ?? [])
     .filter((w) => w.status !== "done" && w.status !== "verified" && w.status !== "cancelled" && !w.superseded)
     .sort((a, b) => (b.predicted_ai_points ?? 0) - (a.predicted_ai_points ?? 0));
-  const topActions: ActionItem[] = openWOs.slice(0, 3).map((w, i) => ({
-    rank: i + 1,
-    impact: w.predicted_ai_points ?? null,
-    title: w.title ?? "Untitled task",
-    desc: (w.why_helps_ai_rep || w.why_helps_seo || w.instruction || "A prioritized move in your plan.").slice(0, 130),
-    cat: [w.area, w.why_helps_ai_rep ? "AI" : w.why_helps_seo ? "SEO" : null].filter(Boolean).join(" · ") || "Task",
-    href: `/content/work-orders#wo-${w.id}`,
-  }));
+  // Same server-ranked source (impact/effort ROI) the task board and Strategy overview use for
+  // "Today's focus" — previously this was a THIRD independent client-side sort by predicted_ai_
+  // points, which is why the same handful of tasks kept showing up reordered on every page.
+  // Intersect the roadmap ranking with the actual open tasks so "Do this next" can never surface
+  // something that isn't in the task list (the "making things up" fix), then take the top 3.
+  const woById = new Map(openWOs.map((w) => [w.id, w]));
+  const topActions: ActionItem[] = (roadmap?.items ?? [])
+    .filter((item) => woById.has(item.wo_id))
+    .slice(0, 3)
+    .map((item, i) => {
+      const w = woById.get(item.wo_id)!;
+      return {
+        rank: i + 1,
+        impact: item.expected_points ?? null,
+        title: item.title || w.title || "Untitled task",
+        desc: (w.why_helps_ai_rep || w.why_helps_seo || item.why || w.instruction || "A prioritized move in your plan.").slice(0, 130),
+        cat: [item.area, item.expected_points > 0 ? "AI" : item.seo_impact ? "SEO" : null].filter(Boolean).join(" · ") || "Task",
+        href: `/content/work-orders#wo-${item.wo_id}`,
+      };
+    });
   const aiTopWO = openWOs.find((w) => w.why_helps_ai_rep) ?? openWOs[0];
   // Exclude the AI top task so the two fronts' "Do next" never show the identical task.
   const seoTopWO = openWOs.find((w) => w.id !== aiTopWO?.id && (w.why_helps_seo || (w.area && /website|seo|local|schema|blog/i.test(w.area))));
@@ -550,8 +563,8 @@ export default function DashboardPage() {
                       showFix
                     />
                     <div className="mt-3 border-t border-slate-100 pt-3 text-right">
-                      <Link href="/next-steps" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
-                        See your full prioritized plan →
+                      <Link href="/content/work-orders" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                        See your full task list →
                       </Link>
                     </div>
                   </Card>

@@ -103,7 +103,7 @@ export function NarrativeScoreCard({
             )}
           </div>
           <Link
-            href="/next-steps"
+            href="/content/work-orders"
             className="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700"
           >
             See what raises this →

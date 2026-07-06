@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useGapModel, useIntegrationSettings } from "@/lib/hooks";
+import { useGapModel } from "@/lib/hooks";
 import { PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { GapsView } from "@/components/GapsView";
@@ -13,7 +13,6 @@ import { FlowStep, NextActions } from "@/components/flow";
 export default function GapsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useGapModel(businessId);
-  const { data: integrationSettings } = useIntegrationSettings(businessId);
 
   // Degraded plan (mirrors the backend's assemble_plan `degraded` flag): the gap model came back
   // with zero content across every category, so any plan built from it is baseline boilerplate.
@@ -33,9 +32,9 @@ export default function GapsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Gaps"
+        eyebrow="Gap Analysis"
         title="Your gaps"
-        subtitle="What's holding your AI reputation back — and exactly what to do about each one."
+        subtitle="The diagnosis: what's holding your reputation back, where it shows, and what it costs you. The plan to fix each one lives in Strategy."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
       {!data ? (
@@ -62,18 +61,15 @@ export default function GapsPage() {
           <GapsView
             model={data.model}
             asOf={new Date(data.created_at).toLocaleDateString()}
-            businessId={businessId}
-            canEdit={canEdit}
-            pressrangerEnabled={integrationSettings?.pressranger_enabled}
             verifyButton={
               canEdit ? <RunJobButton businessId={businessId} jobType="social_verify" label="Audit socials" variant="secondary" /> : null
             }
           />
-          {/* Close the flow loop: from "what's hurting you" → the plan to fix it → when it pays off. */}
-          <FlowStep label="What's next" hint="Close these gaps, then watch your score climb." action={{ label: "Full plan", href: "/next-steps" }}>
+          {/* Close the flow loop: gap (diagnosis) → strategy (the plan) → timeline (when it pays off). */}
+          <FlowStep label="What's next" hint="See exactly how we close each of these." action={{ label: "Your strategy", href: "/strategy" }}>
             <NextActions
               items={[
-                { title: "Do this next", note: "Your prioritized, highest-impact actions.", href: "/next-steps" },
+                { title: "Your strategy", note: "How we close each gap — the approach, content, and where it publishes.", href: "/strategy" },
                 { title: "See when you'll hit your goal", note: "Your projected timeline as these gaps close.", href: "/timeline" },
               ]}
             />

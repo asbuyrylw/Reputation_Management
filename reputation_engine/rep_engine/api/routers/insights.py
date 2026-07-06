@@ -366,6 +366,19 @@ def gap_model(business_id: int = Depends(authorize_business), conn=Depends(get_c
     return dict(row) if row else None
 
 
+@router.get("/strategy")
+def strategy(business_id: int = Depends(authorize_business)):
+    """The detailed, per-section strategy the console's Strategy page renders: three areas
+    (AI Visibility / SEO / Search), each with the gaps it closes, the approach to close each, the
+    tasks doing it, and the concrete content specs to produce. Assembled from the existing gap
+    model + work orders + piece briefs (no new LLM work)."""
+    try:
+        from ... import strategy_generator as _sg
+    except ImportError:  # pragma: no cover
+        import strategy_generator as _sg  # type: ignore
+    return _sg.strategy_view(business_id)
+
+
 @router.get("/report-view")
 def report_view(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """A viewable, in-console report bundle (score, biggest gaps, Local Reputation, this-month

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap, useSetSubtasks, useIntegrationSettings } from "@/lib/hooks";
@@ -477,6 +478,114 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
   );
 }
 
+// A short one-line status pill for the compact table row (full status control lives in the
+// expanded WorkOrderCard below it).
+const STATUS_TONE: Record<string, string> = {
+  pending: "bg-slate-100 text-slate-600",
+  in_progress: "bg-sky-50 text-sky-700",
+  done: "bg-emerald-50 text-emerald-700",
+  verified: "bg-emerald-50 text-emerald-700",
+  blocked: "bg-rose-50 text-rose-700",
+  skipped: "bg-slate-100 text-slate-400",
+};
+function StatusPill({ status }: { status: string }) {
+  return <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[status] ?? "bg-slate-100 text-slate-600"}`}>{LABEL[status] ?? status}</span>;
+}
+
+// One row of the task TABLE: a compact, scannable summary — title, area, status, due, assignee,
+// whether it's a content task, and predicted impact — that expands on click into the existing
+// (unchanged) WorkOrderCard for the full detail, subtasks, notes, and actions. This is the
+// "streamlined, less information by default" view; nothing about WorkOrderCard's behavior changes,
+// it's just collapsed until asked for.
+function TaskTableRow({
+  w, businessId, canEdit, onStatus, draft, asset, rank, impactOverride, defaultOpen,
+}: {
+  w: WorkOrder; businessId: number | null; canEdit: boolean;
+  onStatus: (s: string, completedOn?: string) => void;
+  draft?: ContentDraft; asset?: Asset; rank?: number; impactOverride?: number | null; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(
+    defaultOpen || (typeof window !== "undefined" && window.location.hash === `#wo-${w.id}`),
+  );
+  const isContent = IN_APP_CONTENT.has(w.capability ?? "") || DRAFTABLE.has(w.capability ?? "");
+  const impact = impactOverride ?? w.predicted_ai_points ?? null;
+  return (
+    <>
+      <tr id={`wo-${w.id}`} className="scroll-mt-24 cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 target:ring-2 target:ring-indigo-400" onClick={() => setOpen((o) => !o)}>
+        <td className="w-6 py-2 pl-3 text-slate-400">{open ? "▾" : "▸"}</td>
+        {rank != null && (
+          <td className="py-2 pr-1 text-center">
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">{rank}</span>
+          </td>
+        )}
+        <td className="max-w-0 py-2 pr-3">
+          <div className="truncate text-sm font-medium text-slate-800">{w.title || "Untitled task"}</div>
+          {/* the "why" lives on the Strategy page now — deep-link straight to this task there */}
+          <Link href={`/strategy#wo-${w.id}`} onClick={(e) => e.stopPropagation()} className="text-[11px] font-medium text-indigo-600 hover:underline">why this →</Link>
+        </td>
+        <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">
+          {w.area ? (AREA_LABEL[areaKey(w.area)] ?? w.area) : "—"}
+        </td>
+        <td className="whitespace-nowrap py-2 pr-3" onClick={(e) => e.stopPropagation()}>
+          {canEdit ? (
+            <select
+              value={w.status}
+              onChange={(e) => onStatus(e.target.value)}
+              className={`cursor-pointer rounded-full border-0 px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[w.status] ?? "bg-slate-100 text-slate-600"}`}
+            >
+              {COLUMNS.map((s) => <option key={s} value={s}>{LABEL[s]}</option>)}
+            </select>
+          ) : <StatusPill status={w.status} />}
+        </td>
+        <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">{w.target_date ? fmtDate(w.target_date) : "—"}</td>
+        <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">{w.assignee || "—"}</td>
+        <td className="whitespace-nowrap py-2 pr-3 text-center text-xs" title={isContent ? "Produced in this console" : "Done outside the console"}>
+          {isContent ? "✍️" : "—"}
+        </td>
+        <td className="whitespace-nowrap py-2 pr-3 text-right text-xs font-semibold text-emerald-700">
+          {impact ? `+${impact.toFixed(1)}` : "—"}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={rank != null ? 8 : 7} className="border-b border-slate-100 bg-slate-50/60 p-3">
+            <WorkOrderCard wo={w} businessId={businessId} canEdit={canEdit} onStatus={onStatus} draft={draft} asset={asset} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// The task board's table shell — header + rows. `renderRow` builds each fully-wired
+// <TaskTableRow> (same closure pattern the page already uses for `renderCard`), so this component
+// only owns the table markup, not the data plumbing (onStatus/draft/asset/roadmap lookups).
+function TaskTable({ rows, renderRow, showRank }: {
+  rows: WorkOrder[]; renderRow: (w: WorkOrder, i: number) => ReactNode; showRank?: boolean;
+}) {
+  if (rows.length === 0) return <p className="px-1 text-xs text-slate-300">—</p>;
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <table className="w-full text-left">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
+            <th className="py-2 pl-3"></th>
+            {showRank && <th className="py-2 pr-1"></th>}
+            <th className="py-2 pr-3">Task</th>
+            <th className="py-2 pr-3">Area</th>
+            <th className="py-2 pr-3">Status</th>
+            <th className="py-2 pr-3">Due</th>
+            <th className="py-2 pr-3">Assignee</th>
+            <th className="py-2 pr-3 text-center">Content</th>
+            <th className="py-2 pr-3 text-right">Impact</th>
+          </tr>
+        </thead>
+        <tbody>{rows.map((w, i) => renderRow(w, i))}</tbody>
+      </table>
+    </div>
+  );
+}
+
 function AddTask({ businessId }: { businessId: number | null }) {
   const add = useAddWorkOrder(businessId);
   const [open, setOpen] = useState(false);
@@ -619,7 +728,7 @@ function WorkCompletedSection({ businessId }: { businessId: number | null }) {
   );
 }
 
-type ViewMode = "status" | "priority" | "mine" | "area" | "assignee" | "due";
+type ViewMode = "all" | "priority" | "mine" | "area" | "assignee" | "due";
 
 // Due-date buckets for the "by due date" view (computed against the local 'today').
 function dueBucket(target: string | null | undefined): { key: string; label: string; order: number } {
@@ -724,7 +833,7 @@ export default function WorkOrdersPage() {
   const setStatus = useSetWorkOrderStatus(businessId);
   const [sortRoi, setSortRoi] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [view, setView] = useState<ViewMode>("status");
+  const [view, setView] = useState<ViewMode>("all");
   const [filters, setFilters] = useState<Record<string, string>>(EMPTY_FILTERS);
   // Fast = just "Today's focus" (3 tasks); Deep = the full board + why/impact detail.
   const [mode, setMode] = useState<"fast" | "deep">("deep");
@@ -778,22 +887,22 @@ export default function WorkOrdersPage() {
 
   const sortRows = (rows: WorkOrder[]) =>
     sortRoi ? [...rows].sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1)) : rows;
-  const byStatus = (s: string) => sortRows(filtered.filter((w) => w.status === s));
   const total = visible.length;
   const done = visible.filter((w) => w.status === "done" || w.status === "verified").length;
   const inProgress = visible.filter((w) => w.status === "in_progress").length;
   const donePct = total ? Math.round((done / total) * 100) : 0;
-  const visibleColumns = COLUMNS.filter((s) => byStatus(s).length > 0 || ["pending", "in_progress", "done"].includes(s));
 
-  const renderCard = (w: WorkOrder) => (
-    <WorkOrderCard
+  const renderRow = (w: WorkOrder, rank?: number, impactOverride?: number | null) => (
+    <TaskTableRow
       key={w.id}
-      wo={w}
+      w={w}
       businessId={businessId}
       canEdit={canEdit}
       onStatus={(st, completedOn) => setStatus.mutate({ woId: w.id, status: st, completed_on: completedOn })}
       draft={draftByWo.get(w.id)}
       asset={assetByWo.get(w.id)}
+      rank={rank}
+      impactOverride={impactOverride}
     />
   );
 
@@ -845,14 +954,18 @@ export default function WorkOrdersPage() {
   // roadmap item back to its WorkOrder (by wo_id) so the board can reuse WorkOrderCard.
   const woById = new Map<number, WorkOrder>(filtered.map((w) => [w.id, w]));
   const roadmapItems = roadmap?.items ?? [];
-  const focusItems = roadmapItems.slice(0, 3);
+  // "Today's focus" = the top of the ACTUAL board only. Intersect the roadmap ranking with the
+  // visible tasks so a focus item can NEVER be something that isn't in the list below it
+  // (this, plus the backend planned-filter, is the fix for "Today's focus makes things up").
+  const visibleIds = new Set(visible.map((w) => w.id));
+  const focusItems = roadmapItems.filter((it) => visibleIds.has(it.wo_id)).slice(0, 3);
   // Open tasks in roadmap impact order — the WorkOrders that still have a card to render.
   const priorityPairs = roadmapItems
     .map((item) => ({ item, wo: woById.get(item.wo_id) }))
     .filter((p): p is { item: RoadmapItem; wo: WorkOrder } => !!p.wo);
 
   const TABS: { key: ViewMode; label: string }[] = [
-    { key: "status", label: "By status" },
+    { key: "all", label: "All tasks" },
     { key: "priority", label: "By priority" },
     { key: "mine", label: "My tasks" },
     { key: "area", label: "By area" },
@@ -910,10 +1023,10 @@ export default function WorkOrdersPage() {
       {total === 0 ? (
         <EmptyState
           title="No tasks yet"
-          why="Improvement tasks are the recommendations you've chosen to manage."
-          produces="Open “Do this next,” pick a recommendation, and click “Add to my tasks” to assign an owner, set dates, and track progress here."
-          timing="You can also add an ad-hoc task above."
-          cta={{ label: "Go to Do this next", href: "/next-steps" }}
+          why="Tasks are generated automatically from your gap analysis — every gap becomes a task here."
+          produces="Run an audit to build your gaps, and this list fills in on its own. You can also add an ad-hoc task above."
+          timing="An audit takes a few minutes."
+          cta={{ label: "See your gaps", href: "/gaps" }}
         />
       ) : mode === "fast" ? (
         // Fast mode = clean, just the focus card above + a way into the full board.
@@ -991,48 +1104,21 @@ export default function WorkOrdersPage() {
             </div>
           </Card>
 
-          {view === "status" && (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {visibleColumns.map((s) => (
-                <div key={s}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-sm font-semibold text-slate-700">{LABEL[s]}</span>
-                    <span className="text-xs text-slate-400">{byStatus(s).length}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {byStatus(s).map(renderCard)}
-                    {byStatus(s).length === 0 && <p className="text-xs text-slate-300">—</p>}
-                  </div>
-                </div>
-              ))}
-            </div>
+          {/* All tasks — one flat table; set status per row via the dropdown, and filter/sort with
+              the controls above (status is just another filter now, not a wall of kanban columns). */}
+          {view === "all" && (
+            <TaskTable rows={sortRows(filtered)} renderRow={(w) => renderRow(w)} />
           )}
 
-          {/* By priority — ALL open tasks in roadmap impact order. Each row prefixes the
-              WorkOrderCard with the impact math (impact_score / expected_points / effort /
-              basis / why) so the ranking is transparent. */}
+          {/* By priority — ALL open tasks in roadmap impact order, ranked 1..N with the impact
+              math (impact_score / effort / basis) folded into the Impact column + expanded detail. */}
           {view === "priority" && (
             priorityPairs.length > 0 ? (
-              <div className="space-y-3">
-                {priorityPairs.map(({ item, wo }, i) => (
-                  <div key={item.wo_id} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-                    <Card className="bg-indigo-50/30">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white">{i + 1}</span>
-                        <span className="text-sm font-semibold text-slate-900">{impactLabel(item)}</span>
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <Badge tone="indigo">Impact {item.impact_score.toFixed(1)}</Badge>
-                        {item.expected_points > 0 && <Badge tone="emerald">≈ +{item.expected_points} pts</Badge>}
-                        <Badge tone="slate">Effort {item.effort}</Badge>
-                      </div>
-                      <div className="mt-1.5 text-[11px] text-slate-500">{basisCaption(item.basis)}</div>
-                      {item.why && <div className="mt-1.5 text-xs text-slate-600">{item.why}</div>}
-                    </Card>
-                    {renderCard(wo)}
-                  </div>
-                ))}
-              </div>
+              <TaskTable
+                rows={priorityPairs.map((p) => p.wo)}
+                showRank
+                renderRow={(w, i) => renderRow(w, i + 1, priorityPairs[i].item.expected_points)}
+              />
             ) : (
               <EmptyState
                 title="No ranked tasks yet"
@@ -1044,7 +1130,7 @@ export default function WorkOrdersPage() {
 
           {view === "mine" && (
             myTasks.length > 0 ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{myTasks.map(renderCard)}</div>
+              <TaskTable rows={myTasks} renderRow={(w) => renderRow(w)} />
             ) : (
               <EmptyState
                 title="Nothing assigned to you yet"
@@ -1066,7 +1152,7 @@ export default function WorkOrdersPage() {
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </summary>
                   <div className="border-t border-slate-100 px-4 py-3">
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
+                    <TaskTable rows={g.items} renderRow={(w) => renderRow(w)} />
                   </div>
                 </details>
               ))}
@@ -1081,7 +1167,7 @@ export default function WorkOrdersPage() {
                     <span className="text-sm font-semibold text-slate-700">👤 {g.name}</span>
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </div>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
+                  <TaskTable rows={g.items} renderRow={(w) => renderRow(w)} />
                 </div>
               ))}
             </div>
@@ -1095,7 +1181,7 @@ export default function WorkOrdersPage() {
                     <span className={`text-sm font-semibold ${g.label === "Overdue" ? "text-rose-600" : "text-slate-700"}`}>{g.label}</span>
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </div>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{g.items.map(renderCard)}</div>
+                  <TaskTable rows={g.items} renderRow={(w) => renderRow(w)} />
                 </div>
               ))}
             </div>

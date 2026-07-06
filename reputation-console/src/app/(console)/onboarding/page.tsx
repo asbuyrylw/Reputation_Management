@@ -130,7 +130,7 @@ export default function OnboardingPage() {
                 <li>⚔ <Link href="/competitors" className="font-medium text-indigo-600 hover:underline">You vs competitors</Link> in AI answers</li>
                 <li>📍 Your <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">Google map-pack standing</Link> + rating</li>
                 <li>🔑 The <Link href="/seo-overview" className="font-medium text-indigo-600 hover:underline">keywords to rank for</Link></li>
-                <li>✅ A <Link href="/next-steps" className="font-medium text-indigo-600 hover:underline">prioritized action plan</Link></li>
+                <li>✅ A <Link href="/content/work-orders" className="font-medium text-indigo-600 hover:underline">prioritized task list</Link></li>
               </ul>
             )}
           </div>

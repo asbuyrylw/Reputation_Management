@@ -510,6 +510,173 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
 # ----------------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------------
+# Strategy VIEW -- the detailed, per-section plan the console's Strategy page renders.
+# This is the "what we'll do and why, in detail" layer: it takes the SAME gap model + work orders
+# the plan already produced and organizes them into the three areas the owner asked for
+# (AI Visibility / SEO / Search), attaching, per gap, the approach to close it and -- for content
+# work -- the concrete spec (title, type, keywords, length, readability, where it publishes,
+# objective). No new LLM calls: everything here already exists across the gap model, the work
+# orders, and content_generator.piece_brief.
+# ----------------------------------------------------------------------------
+_SECTION_LABELS = {
+    "ai_visibility": "AI Visibility",
+    "seo": "SEO (on-site)",
+    "search": "Search (rankings)",
+}
+_SECTION_NARRATIVE = {
+    "ai_visibility": "Give the AI assistants accurate, well-corroborated facts to quote about you — "
+                     "so they answer buyer questions in your favor instead of a competitor's or a "
+                     "stale third-party page's.",
+    "seo": "Fix the on-site technical signals (schema, thin/missing pages, crawlability) so both "
+           "search engines and AI assistants can cleanly read and trust your facts.",
+    "search": "Win the Google searches your buyers actually type — local map-pack and page-1 "
+              "rankings — with geo-specific content and a strong Google Business Profile.",
+}
+_PUBLISH_TO = {
+    "local_page": "Your website — local landing page",
+    "blog": "Your website — blog",
+    "article": "Your website",
+    "faq": "Your website — FAQ",
+    "white_paper": "Your website — gated resource",
+    "landing_page": "Your website — landing page",
+    "gbp_post": "Google Business Profile",
+    "social_post": "Social media",
+    "video_script": "YouTube / social video",
+    "bio": "Your website — about/bio",
+}
+_PLATFORM_PUBLISH = {
+    "gbp": "Google Business Profile", "linkedin": "LinkedIn", "facebook": "Facebook",
+    "instagram": "Instagram", "x": "X (Twitter)", "youtube": "YouTube", "tiktok": "TikTok",
+    "pinterest": "Pinterest", "reddit": "Reddit",
+}
+
+
+def _section_for(gap_source: str | None, capability: str | None, area: str | None) -> str:
+    gs, cap, ar = (gap_source or "").lower(), (capability or "").lower(), (area or "").lower()
+    if "local search" in gs or cap in ("local_content_creation", "gbp_optimization") or ar == "local":
+        return "search"
+    if "schema" in gs or "site crawl" in gs or cap == "schema_markup":
+        return "seo"
+    return "ai_visibility"
+
+
+def _norm_q(s: str | None) -> str:
+    import re as _re
+    return _re.sub(r"\s+", " ", _re.sub(r"[^a-z0-9 ]", "", (s or "").lower())).strip()
+
+
+def _gap_approach_index(gap: dict) -> dict:
+    """source_query (normalized) -> {approach, why} pulled from the gap model, so each work-order
+    group can show HOW we close its gap (the fix/recommendation) alongside the tasks."""
+    idx: dict = {}
+    def put(q, approach, why=""):
+        k = _norm_q(q)
+        if k and k not in idx:
+            idx[k] = {"approach": approach or "", "why": why or ""}
+    for w in gap.get("weak_queries", []) or []:
+        put(w.get("prompt"), w.get("fix"), w.get("problem"))
+    for m in gap.get("missing_owned_content", []) or []:
+        put(m.get("topic"), m.get("why"), m.get("why"))
+    for t in gap.get("thin_corroboration", []) or []:
+        put(t.get("claim"), t.get("where_to_get_it"))
+    for g in gap.get("local_seo_gaps", []) or []:
+        put(g.get("query"), g.get("recommendation"), g.get("why"))
+    for g in gap.get("competitor_defense", []) or []:
+        put(g.get("query"), g.get("recommendation"), g.get("why"))
+    for g in gap.get("site_technical_gaps", []) or []:
+        put(g.get("issue"), g.get("recommendation"), g.get("why"))
+    return idx
+
+
+# Capabilities that produce an actual WRITTEN/PRODUCED piece worth a content spec (keywords, length,
+# structure). schema_markup is a developer task, not content; local goals fan out to a program (no
+# single spec) -- both are excluded so the strategy shows a spec only where a piece is really written.
+_SPEC_CAPS = {"content_writing", "video_creation"}
+_CONTENT_CAPS = {"content_writing", "local_content_creation", "video_creation", "schema_markup"}
+
+
+def strategy_view(business_id: int) -> dict:
+    """Assemble the detailed strategy the console renders: three sections, each with the gaps it
+    covers, the approach to close each, the tasks that do it, and the content specs to produce."""
+    try:
+        from . import content_generator as _cg
+    except ImportError:  # pragma: no cover
+        import content_generator as _cg  # type: ignore
+    with db() as conn:
+        gm = conn.execute(
+            "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+            (business_id,)).fetchone()
+        rows = conn.execute(
+            "SELECT id, wo_code, title, capability, instruction, status, area, platform, "
+            "target_date, predicted_ai_points, predicted_seo_impact, gap_source, gap_specifics, "
+            "why_helps_ai_rep, why_helps_seo, rationale "
+            "FROM work_orders WHERE business_id=%s AND NOT COALESCE(superseded, false) "
+            "AND status NOT IN ('done','verified','skipped') ORDER BY id", (business_id,)).fetchall()
+    gap = {} if not gm else (gm["model"] if isinstance(gm["model"], dict) else json.loads(gm["model"]))
+    approach_idx = _gap_approach_index(gap)
+
+    # Group work orders by the gap they close: (source_query) when present, else (gap_source|title).
+    groups: dict = {}
+    order: list = []
+    for w in rows:
+        w = dict(w)
+        specs_q = (w.get("gap_specifics") or {}).get("source_query") if isinstance(w.get("gap_specifics"), dict) else None
+        gkey = _norm_q(specs_q) or f"{(w.get('gap_source') or '').lower()}|{_norm_q(w.get('title'))}"
+        if gkey not in groups:
+            groups[gkey] = {"source_query": specs_q, "gap_source": w.get("gap_source"),
+                            "section": _section_for(w.get("gap_source"), w.get("capability"), w.get("area")),
+                            "tasks": [], "specs": []}
+            order.append(gkey)
+        g = groups[gkey]
+        rationale = w.get("rationale") if isinstance(w.get("rationale"), dict) else {}
+        g["tasks"].append({
+            "id": w["id"], "wo_code": w.get("wo_code"), "title": w.get("title"),
+            "status": w.get("status"), "capability": w.get("capability"), "area": w.get("area"),
+            "platform": w.get("platform"), "instruction": w.get("instruction") or "",
+            "target_date": w["target_date"].isoformat() if w.get("target_date") else None,
+            "predicted_ai_points": float(w["predicted_ai_points"]) if w.get("predicted_ai_points") is not None else None,
+            "why": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or rationale.get("why") or "",
+        })
+        # Content work orders get their concrete production spec (deterministic; no LLM).
+        if (w.get("capability") or "") in _SPEC_CAPS:
+            try:
+                b = _cg.piece_brief(business_id, w)
+                pub = _PLATFORM_PUBLISH.get((w.get("platform") or "").lower()) \
+                    or _PUBLISH_TO.get(b.get("content_type") or b.get("asset_type") or "", "Your website")
+                g["specs"].append({
+                    "wo_id": w["id"], "title": w.get("title"),
+                    "content_type": b.get("content_type") or b.get("asset_type"),
+                    "keywords": b.get("keywords") or [], "primary_keyword": b.get("primary_keyword"),
+                    "word_count_target": b.get("word_count_target"),
+                    "readability_target": b.get("readability_target"),
+                    "structure": b.get("structure"), "publish_to": pub,
+                    "objective": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or "",
+                })
+            except Exception as e:  # noqa: BLE001 -- a spec failure must never break the whole view
+                log.debug("piece_brief failed for wo %s: %s", w.get("id"), e)
+
+    # Attach the approach/why to each group and bucket into the three sections.
+    sections = {k: {"key": k, "label": _SECTION_LABELS[k], "narrative": _SECTION_NARRATIVE[k], "groups": []}
+                for k in ("ai_visibility", "seo", "search")}
+    for gkey in order:
+        g = groups[gkey]
+        appr = approach_idx.get(_norm_q(g.get("source_query")), {})
+        # The approach ("how we close this") comes from the current gap model when its wording still
+        # matches; otherwise fall back to the work order's own stored instruction, which is stable
+        # across gap-model regenerations and was itself written from the gap at creation time.
+        primary = g["tasks"][0] if g["tasks"] else {}
+        g["approach"] = appr.get("approach") or primary.get("instruction", "")
+        g["why"] = appr.get("why") or primary.get("why", "")
+        g["title"] = g.get("source_query") or primary.get("title", "Task")
+        sections[g["section"]]["groups"].append(g)
+    return {
+        "summary": gap.get("summary", ""),
+        "sections": [sections[k] for k in ("ai_visibility", "seo", "search")],
+        "counts": {k: len(sections[k]["groups"]) for k in sections},
+    }
+
+
 def _latest_gap(business_id: int) -> tuple[dict, dict]:
     with db() as conn:
         b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()

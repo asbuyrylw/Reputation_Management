@@ -71,10 +71,13 @@ def roadmap(business_id: int, limit: int = 40) -> dict:
     priors = cross_client_priors()
     with db() as conn:
         wos = conn.execute(
+            # planned=TRUE == "on the task board". Today's focus feeds off this, so it must never
+            # surface a task the board itself hides (the old query omitted this filter, which let
+            # un-promoted items appear in Today's focus but nowhere on the task list).
             "SELECT id, wo_code, title, capability, area, platform, status, "
             "predicted_ai_points, predicted_seo_impact, why_helps_ai_rep "
             "FROM work_orders WHERE business_id=%s AND status IN ('pending','in_progress') "
-            "AND NOT COALESCE(superseded,false)", (business_id,),
+            "AND NOT COALESCE(superseded,false) AND COALESCE(planned, true)", (business_id,),
         ).fetchall()
     items = []
     for w in wos:
