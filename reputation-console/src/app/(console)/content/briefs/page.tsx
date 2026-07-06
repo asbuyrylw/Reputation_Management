@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
@@ -191,8 +191,6 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
 // video/social recipes (production_briefs). video_creation appears here but is produced from a recipe.
 const CONTENT_CAPS = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation", "video_creation"]);
 const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
-// Show a manageable first page of content pieces, then expand for the rest.
-const CONTENT_PREVIEW = 8;
 
 const CAP_LABEL: Record<string, string> = {
   content_writing: "Website content",
@@ -207,7 +205,7 @@ function stageOf(draft: ContentDraft | undefined, asset: Asset | undefined): { l
   if (asset && (asset.published_status === "live" || asset.published_url)) return { label: "Published", cls: "bg-emerald-100 text-emerald-700" };
   if (asset || draft?.status === "approved") return { label: "Approved — ready to publish", cls: "bg-sky-100 text-sky-700" };
   if (draft?.status === "pending_review") return { label: "Draft in review", cls: "bg-amber-100 text-amber-700" };
-  if (draft?.status === "needs_fix") return { label: "Draft needs a fix", cls: "bg-rose-100 text-rose-700" };
+  if (draft?.status === "held" || draft?.status === "needs_fix") return { label: "Held — needs an author", cls: "bg-rose-100 text-rose-700" };
   if (draft?.status === "rejected") return { label: "Draft rejected", cls: "bg-line text-ink-3" };
   return { label: "Not started", cls: "bg-line text-ink-4" };
 }
@@ -361,6 +359,18 @@ function RecipeCard({ brief: b, businessId, canEdit }: { brief: ProductionBrief;
   );
 }
 
+// Group content work orders by area (Website / Local / Social / …) so "To produce" reads as
+// organized, specific pieces — not one long undifferentiated list.
+const AREA_LABEL: Record<string, string> = {
+  website: "Website", content: "Website", blog: "Blog", local: "Local", social: "Social",
+  outreach: "Outreach", reviews: "Reviews", other: "Other",
+};
+const AREA_ORDER = ["website", "content", "blog", "local", "social", "outreach", "reviews", "other"];
+const areaKey = (a?: string | null) => {
+  const k = (a || "").trim().toLowerCase();
+  return k && AREA_LABEL[k] ? k : "other";
+};
+
 export default function BriefsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data: briefs, isLoading: lb } = useProductionBriefs(businessId);
@@ -369,7 +379,8 @@ export default function BriefsPage() {
   const { data: assets } = useAssets(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
   const { data: keywordIntent } = useKeywordIntent(businessId);
-  const [showAllContent, setShowAllContent] = useState(false);
+  const genAll = useGenerateContentBatch(businessId);
+  const [confirmAll, setConfirmAll] = useState(false);
 
   if (lb || lw || !workOrders) return <Spinner />;
 
@@ -384,21 +395,46 @@ export default function BriefsPage() {
     .sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1));
   const recipes = briefs ?? [];
 
+  // Group the specific pieces by area so each one is organized, not a flat wall.
+  const grouped = AREA_ORDER
+    .map((k) => ({ key: k, label: AREA_LABEL[k], items: contentItems.filter((w) => areaKey(w.area) === k) }))
+    .filter((g) => g.items.length > 0);
+  const notStarted = contentItems.filter((w) => !draftByWo.get(w.id) && !assetByWo.get(w.id)).length;
+
   return (
     <div>
       <PageHeader
         title="Content to produce"
-        subtitle="The content your gap analysis says to create — each piece's status, the search it targets, and why it helps. Generate a draft, review it, then publish."
+        subtitle="Every specific piece your strategy calls for — its spec, the search it targets, and one-click Generate. Draft, review, publish."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
-      {canEdit && (
-        <Card className="mb-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-ink-3">
-              Content comes from your latest gap analysis &amp; plan. Refresh the off-platform recipes below from the plan.
-            </span>
-            <RunJobButton businessId={businessId} jobType="production_briefs" label="Refresh recipes" />
+
+      {/* Bulk produce — the batch "make several pieces at once" flow, folded in here so one click
+          drafts everything the plan calls for. */}
+      {canEdit && contentItems.length > 0 && (
+        <Card className="mb-4 border-indigo-100 bg-indigo-050">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-[240px] flex-1">
+              <div className="text-[14px] font-semibold text-ink">Produce everything at once</div>
+              <div className="text-[12.5px] text-ink-3">
+                Drafts all {notStarted > 0 ? notStarted : contentItems.length} pieces the plan calls for in one run (each is graded + held if it can&apos;t pass). Uses API credits.
+              </div>
+            </div>
+            {!confirmAll ? (
+              <button onClick={() => setConfirmAll(true)} disabled={genAll.isPending}
+                className="rounded-[10px] bg-indigo px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-50">
+                {genAll.isPending ? "Starting…" : "▶ Produce all"}
+              </button>
+            ) : (
+              <span className="flex items-center gap-2 text-[12.5px] text-ink-2">
+                Runs the full content pipeline.
+                <button onClick={() => { genAll.mutate({}); setConfirmAll(false); }} className="rounded-md bg-indigo px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-strong">Yes, produce all</button>
+                <button onClick={() => setConfirmAll(false)} className="rounded-md border border-line-2 px-3 py-1 text-xs font-semibold text-ink-2 hover:bg-line/60">Cancel</button>
+              </span>
+            )}
           </div>
+          {genAll.isSuccess && <div className="mt-2 text-xs text-good">Queued — track progress above.</div>}
+          {genAll.isError && <div className="mt-2 text-xs text-alert">{(genAll.error as Error)?.message ?? "Couldn’t start."}</div>}
         </Card>
       )}
 
@@ -412,13 +448,12 @@ export default function BriefsPage() {
         />
       ) : (
         <div className="space-y-6">
-          <TopicAuthoritySection data={topical} />
-          <KeywordIntentSection data={keywordIntent} />
-          {contentItems.length > 0 && (
-            <section>
-              <h3 className="mb-2 text-sm font-semibold text-ink">Content pieces ({contentItems.length})</h3>
+          {/* the SPECIFIC pieces from the strategy, grouped by area — the heart of this page */}
+          {grouped.map((g) => (
+            <section key={g.key}>
+              <h3 className="mb-2 text-sm font-semibold text-ink">{g.label} <span className="font-normal text-ink-4">({g.items.length})</span></h3>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {(showAllContent ? contentItems : contentItems.slice(0, CONTENT_PREVIEW)).map((w) => (
+                {g.items.map((w) => (
                   <ContentItem
                     key={w.id}
                     wo={w}
@@ -429,20 +464,8 @@ export default function BriefsPage() {
                   />
                 ))}
               </div>
-              {contentItems.length > CONTENT_PREVIEW && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => setShowAllContent((v) => !v)}
-                >
-                  {showAllContent
-                    ? "Show fewer"
-                    : `Show ${contentItems.length - CONTENT_PREVIEW} more`}
-                </Button>
-              )}
             </section>
-          )}
+          ))}
 
           {recipes.length > 0 && (
             <section>
@@ -473,6 +496,25 @@ export default function BriefsPage() {
                 ))}
               </div>
             </section>
+          )}
+
+          {/* Blanket topic ideas — demoted below the specific pieces + collapsed. This is
+              exploratory ("more topics you could own"), not the concrete plan, so it doesn't lead. */}
+          {(topical?.clusters.length || keywordIntent?.by_intent.length) ? (
+            <details className="rounded-xl border border-line bg-paper/40 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-ink-2">Explore more topic ideas</summary>
+              <p className="mt-1 text-xs text-ink-4">Broader topics and keywords you could own beyond the specific pieces above — turn any into a task from your gaps.</p>
+              <div className="mt-3 space-y-6">
+                <TopicAuthoritySection data={topical} />
+                <KeywordIntentSection data={keywordIntent} />
+              </div>
+            </details>
+          ) : null}
+
+          {canEdit && recipes.length > 0 && (
+            <div className="text-right">
+              <RunJobButton businessId={businessId} jobType="production_briefs" label="Refresh video/social recipes" />
+            </div>
           )}
         </div>
       )}

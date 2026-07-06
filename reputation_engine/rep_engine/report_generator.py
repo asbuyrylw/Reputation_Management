@@ -559,7 +559,7 @@ def _section_production_briefs(heading, body, bullet, business_id, gap=None):
             drafts = conn.execute(
                 "SELECT title, asset_type, target_query, status FROM content_drafts "
                 "WHERE business_id=%s AND asset_type IN ('article','faq','schema') "
-                "AND status IN ('pending_review','needs_fix') ORDER BY id DESC LIMIT 12",
+                "AND status IN ('pending_review','needs_fix','held') ORDER BY id DESC LIMIT 12",
                 (business_id,)).fetchall()
     except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
         log.warning("report: content-drafts unavailable for Content-to-Produce (%s)", e)

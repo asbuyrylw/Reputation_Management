@@ -245,7 +245,7 @@ export function DraftReviewCard({
   const atomize = useAtomizeDraft(businessId);
   const body = draft.body || "";
   const long = body.length > 400;
-  const pending = draft.status === "pending_review" || draft.status === "needs_fix";
+  const pending = draft.status === "pending_review" || draft.status === "needs_fix" || draft.status === "held";
   // Long-form pieces (not already a social post) can be atomized into per-platform social drafts.
   const atomizable = long && !(draft.asset_type || "").endsWith("_post");
   const flags = Array.isArray(draft.compliance_flags) ? draft.compliance_flags : [];

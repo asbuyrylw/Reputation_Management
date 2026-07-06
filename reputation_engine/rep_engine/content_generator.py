@@ -57,7 +57,10 @@ QUALITY_THRESHOLD = float(os.getenv("CONTENT_QUALITY_THRESHOLD", "0.75"))   # PH
 # Minimum citation-readiness (0-100, "will an AI quote this?") for a draft to pass as ready rather
 # than going back for a fix. Was advisory-only; now an enforced gate (Phase D).
 CITATION_READY_MIN = float(os.getenv("CONTENT_CITATION_READY_MIN", "55"))
-MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "2"))                # PH 3
+MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "4"))                # PH 3 — revise harder
+# Extra targeted revision passes for the citation-readiness gate (the on-page lever that decides
+# whether AI will quote the piece) before a draft is HELD back for an author instead of shown.
+MAX_CITATION_REVISIONS = int(os.getenv("CONTENT_MAX_CITATION_REVISIONS", "2"))
 
 # Capabilities that this module knows how to generate (others stay manual).
 GENERATABLE = {
@@ -132,7 +135,7 @@ def _duplicate_body(business_id: int, content_hash: str) -> bool:
                 """SELECT 1 FROM assets WHERE business_id=%s AND body_hash=%s
                    UNION ALL
                    SELECT 1 FROM content_drafts
-                   WHERE business_id=%s AND content_hash=%s AND status IN ('approved','pending_review','needs_fix')
+                   WHERE business_id=%s AND content_hash=%s AND status IN ('approved','pending_review','needs_fix','held')
                    LIMIT 1""",
                 (business_id, content_hash, business_id, content_hash),
             ).fetchone()
@@ -866,18 +869,55 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001
         log.debug("neuronwriter score skipped: %s", e)
 
-    # Enforce the citation-readiness gate (these scorers used to be advisory only): a draft that
-    # scores low on "will an AI quote this?" should go back for a fix, not slip through as ready --
-    # this is the on-page lever that most affects whether answer engines cite the content.
+    # Citation-readiness gate (the on-page lever that decides whether AI will quote the piece).
+    # REVISE-UNTIL-CLEAN: rather than immediately flagging a low-scoring draft, take up to
+    # MAX_CITATION_REVISIONS targeted passes to lift it over the bar, re-scoring each time and
+    # keeping the change only if it actually improved. Only if it STILL can't clear the bar does the
+    # draft get HELD for an author (below) -- the owner should never be handed a draft with issues.
+    def _cr_score(qn):
+        cr = qn.get("citation_ready")
+        return cr.get("score") if isinstance(cr, dict) else None, cr
+
     if status == "pending_review":
-        cr = quality_notes.get("citation_ready")
-        cr_score = cr.get("score") if isinstance(cr, dict) else None
+        cr_score, cr = _cr_score(quality_notes)
+        cr_rev = 0
+        while (isinstance(cr_score, (int, float)) and cr_score < CITATION_READY_MIN
+               and cr_rev < MAX_CITATION_REVISIONS and isinstance(cr, dict)):
+            tips = [t.get("fix", "") for t in (cr.get("tips") or [])[:4] if isinstance(t, dict) and t.get("fix")]
+            fixed = _revise(body, ["Improve how quotable/citable this is for AI answer engines "
+                                   "(clear self-contained claims, a direct answer up top, specific "
+                                   "facts/stats, clean structure). Apply: " + "; ".join(tips)]) if tips else None
+            if not fixed or fixed == body:
+                break
+            try:
+                from . import content_quality as _cq2
+                new_cr = _cq2.citation_ready(fixed, wo.get("target_query") or "")
+            except Exception:  # noqa: BLE001
+                new_cr = None
+            new_score = new_cr.get("score") if isinstance(new_cr, dict) else None
+            cr_rev += 1
+            if isinstance(new_score, (int, float)) and new_score > (cr_score or 0):
+                body, cr, cr_score = fixed, new_cr, new_score
+                quality_notes["citation_ready"] = new_cr
+                revisions += 1
+                content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
+            else:
+                break
+        # Still under the bar after all attempts -> HOLD it for an author (don't present a flawed
+        # draft). "held" drafts are kept out of the review queue and surfaced separately.
         if isinstance(cr_score, (int, float)) and cr_score < CITATION_READY_MIN:
-            status = "needs_fix"
-            tips = "; ".join(t.get("fix", "") for t in (cr.get("tips") or [])[:3] if isinstance(t, dict))
+            status = "held"
+            tips = "; ".join(t.get("fix", "") for t in ((cr or {}).get("tips") or [])[:3] if isinstance(t, dict))
             comp_flags = list(comp_flags) + [
-                f"citation-readiness {cr_score:.0f}/100 below {CITATION_READY_MIN:.0f}"
+                f"citation-readiness {cr_score:.0f}/100 below {CITATION_READY_MIN:.0f} after "
+                f"{cr_rev} auto-revision(s) -- needs an author"
                 + (f" -- {tips}" if tips else "")]
+
+    # A draft that couldn't clear quality/compliance is HELD (needs an author), not shown as a
+    # ready-to-review draft with issues. "needs_fix" is folded into "held" so the review queue only
+    # ever contains clean drafts.
+    if status == "needs_fix":
+        status = "held"
 
     _ensure_table()
     with db() as conn:

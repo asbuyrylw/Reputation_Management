@@ -88,10 +88,13 @@ export default function DraftsPage() {
     () => (data ?? []).filter((d) => d.status === "pending_review" && d.compliance_pass !== false),
     [data],
   );
+  // "Held" = the engine couldn't get it over the quality/compliance/citation bar after its
+  // auto-revisions, so it's kept OUT of the review queue and parked here for an author to finish.
+  // (needs_fix kept for any drafts created before the revise-until-clean change.)
   const fixes = useMemo(
     () =>
       (data ?? []).filter(
-        (d) => d.status === "needs_fix" || (d.status === "pending_review" && d.compliance_pass === false),
+        (d) => d.status === "held" || d.status === "needs_fix" || (d.status === "pending_review" && d.compliance_pass === false),
       ),
     [data],
   );
@@ -150,7 +153,7 @@ export default function DraftsPage() {
         <TabNav
           tabs={[
             { key: "ready", label: "Ready to review", count: ready.length },
-            { key: "fixes", label: "Needs fixes first", count: fixes.length },
+            { key: "fixes", label: "Held — need an author", count: fixes.length },
             { key: "all", label: "All", count: data.length },
           ]}
           active={tab}
@@ -187,8 +190,8 @@ export default function DraftsPage() {
 
         <p className="mt-2 text-xs text-ink-3">
           {tab === "fixes"
-            ? "These passed the writing-quality bar but were flagged on a compliance check — usually a missing disclosure (e.g. broker-dealer / licensing). Edit the draft to resolve the flag, which re-screens it, then approve."
-            : "“Ready to review” passed our quality + compliance checks and just needs your sign-off. Approving publishes it and advances its task."}
+            ? "The engine tried to auto-fix these but couldn't get them over the quality, compliance, or citation-readiness bar — so they're held out of your review queue for an author to finish. Edit one to resolve it (which re-screens it), then it moves to “Ready to review.”"
+            : "“Ready to review” passed our quality + compliance checks and just needs your sign-off — no issues to fix. Approving publishes it and advances its task."}
         </p>
         {/* Subtle dormant-feature hint: only when content-optimization is wired in the app but
             not yet configured for this business — drafts will then carry a SERP-coverage score. */}

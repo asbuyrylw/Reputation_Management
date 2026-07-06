@@ -63,7 +63,7 @@ export default function ContentOverviewPage() {
 
   const toProduce = briefs ?? [];
   const recommended = topical?.next_to_write ?? [];
-  const inDraft = (drafts ?? []).filter((d) => d.status === "pending_review" || d.status === "needs_fix");
+  const inDraft = (drafts ?? []).filter((d) => d.status === "pending_review" || d.status === "needs_fix" || d.status === "held");
   // "Published" = actually LIVE (matches the backend's live-only definition in gap_completion /
   // content_impact). An approved draft that hasn't gone live yet is surfaced separately, not counted
   // as published — approved is not the same as live-and-earning-traffic.

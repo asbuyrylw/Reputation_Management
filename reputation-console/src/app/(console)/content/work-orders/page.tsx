@@ -24,7 +24,7 @@ function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset })
   }
   if (asset || draft?.status === "approved") return <Link href="/content/finalized" className="text-sky-700 hover:underline">Approved — publish →</Link>;
   if (draft) {
-    const label = draft.status === "needs_fix" ? "Draft needs a fix" : draft.status === "rejected" ? "Draft rejected" : "Draft in review";
+    const label = (draft.status === "held" || draft.status === "needs_fix") ? "Draft held (needs author)" : draft.status === "rejected" ? "Draft rejected" : "Draft in review";
     return <Link href="/content/drafts" className="text-amber-700 hover:underline">{label} →</Link>;
   }
   return null;

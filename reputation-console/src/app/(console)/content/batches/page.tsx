@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useContentBatches, useGapCompletion, useGenerateContentBatch, useContentImpact } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
@@ -126,47 +125,20 @@ function ImpactLedger({ rows }: { rows: ContentImpactRow[] }) {
 }
 
 export default function BatchesPage() {
-  const { businessId, canEdit, loading } = useBusiness();
+  const { businessId, loading } = useBusiness();
   const { data: batches, isLoading } = useContentBatches(businessId);
   const { data: gaps } = useGapCompletion(businessId);
   const { data: ledger } = useContentImpact(businessId);
-  const genAll = useGenerateContentBatch(businessId);
-  const [confirmAll, setConfirmAll] = useState(false);
 
   if (loading) return <Spinner />;
   return (
     <div>
       <PageHeader
-        eyebrow="Content · Batches & impact"
-        title="Fill gaps with batches — and measure what moved"
-        subtitle="Each gap gets multiple content types (blog, article, white paper, video script, social) at once. After the next audit, we measure how far the batch moved the AI answers it targeted."
+        eyebrow="Monitor · Content impact"
+        title="Did the content move the needle?"
+        subtitle="The measured effect of your published content on each gap it targeted — how far each gap closed, and how AI answers shifted after the next audit. Produce content over in “To produce.”"
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
-
-      {canEdit && (
-        <Card className="mb-5 border-indigo-100 bg-indigo-050">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-[240px] flex-1">
-              <div className="text-[14px] font-semibold text-ink">Produce content for every open gap</div>
-              <div className="text-[12.5px] text-ink-3">Generates a multi-type batch per gap and snapshots each gap&apos;s baseline, so impact is measurable. Uses API credits.</div>
-            </div>
-            {!confirmAll ? (
-              <button onClick={() => setConfirmAll(true)} disabled={genAll.isPending}
-                className="rounded-[10px] bg-indigo px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-50">
-                {genAll.isPending ? "Starting…" : "▶ Fill all gaps"}
-              </button>
-            ) : (
-              <span className="flex items-center gap-2 text-[12.5px] text-ink-2">
-                Runs the full content pipeline.
-                <button onClick={() => { genAll.mutate({}); setConfirmAll(false); }} className="rounded-md bg-indigo px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-strong">Yes, fill all</button>
-                <button onClick={() => setConfirmAll(false)} className="rounded-md border border-line-2 px-3 py-1 text-xs font-semibold text-ink-2 hover:bg-line/60">Cancel</button>
-              </span>
-            )}
-          </div>
-          {genAll.isSuccess && <div className="mt-2 text-xs text-good">Queued — track progress above.</div>}
-          {genAll.isError && <div className="mt-2 text-xs text-alert">{(genAll.error as Error)?.message ?? "Couldn’t start."}</div>}
-        </Card>
-      )}
 
       {gaps && gaps.length > 0 && (
         <div className="mb-6">

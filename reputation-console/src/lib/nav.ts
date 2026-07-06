@@ -55,10 +55,8 @@ export const HUBS: Hub[] = [
     tabs: [
       { href: "/content", label: "Overview" },
       { href: "/content/briefs", label: "To produce" },
-      { href: "/content/batches", label: "Batches & impact" },
       { href: "/content/drafts", label: "Drafts" },
       { href: "/content/finalized", label: "Published" },
-      { href: "/approvals", label: "Approvals" },
       { href: "/content/outreach", label: "Outreach" },
     ],
   },
@@ -66,8 +64,12 @@ export const HUBS: Hub[] = [
     key: "monitor", label: "Watch live", opLabel: "Monitor", href: "/notifications",
     tabs: [
       { href: "/notifications", label: "Attention", opLabel: "Notifications" },
+      // Approvals are responses to monitored pages (reviews/mentions/posts) → they live here.
+      { href: "/approvals", label: "Approvals" },
       { href: "/sustain/mentions", label: "Mentions" },
       { href: "/sustain/incidents", label: "Incidents" },
+      // Content impact = the measured effect of published content on each gap → a monitoring view.
+      { href: "/content/batches", label: "Content impact" },
     ],
   },
   {
