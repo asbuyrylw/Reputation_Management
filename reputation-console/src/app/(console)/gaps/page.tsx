@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useGapModel } from "@/lib/hooks";
+import { useGapModel, useIntegrationSettings } from "@/lib/hooks";
 import { PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { GapsView } from "@/components/GapsView";
@@ -13,6 +13,7 @@ import { FlowStep, NextActions } from "@/components/flow";
 export default function GapsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useGapModel(businessId);
+  const { data: integrationSettings } = useIntegrationSettings(businessId);
 
   // Degraded plan (mirrors the backend's assemble_plan `degraded` flag): the gap model came back
   // with zero content across every category, so any plan built from it is baseline boilerplate.
@@ -63,6 +64,7 @@ export default function GapsPage() {
             asOf={new Date(data.created_at).toLocaleDateString()}
             businessId={businessId}
             canEdit={canEdit}
+            pressrangerEnabled={integrationSettings?.pressranger_enabled}
             verifyButton={
               canEdit ? <RunJobButton businessId={businessId} jobType="social_verify" label="Audit socials" variant="secondary" /> : null
             }

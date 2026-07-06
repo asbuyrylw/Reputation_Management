@@ -430,6 +430,14 @@ export function useContentBrief(businessId: number | null, woId: number | null) 
     businessId && woId ? `/businesses/${businessId}/work-orders/${woId}/brief` : null);
 }
 
+// Gap-grounded prompt suggestion for "Add a visual" — prefills the prompt() dialog with what this
+// task is actually supposed to convey, instead of a blank box. Lazy: only fetched once the panel
+// is opened (the `enabled`-style null-path gate on useApiQuery).
+export function useVisualBrief(businessId: number | null, woId: number | null) {
+  return useApiQuery<{ prompt: string }>(["visual-brief", businessId, woId],
+    businessId && woId ? `/businesses/${businessId}/work-orders/${woId}/visual-brief` : null);
+}
+
 export function useSetWorkOrderStatus(businessId: number | null) {
   return useApiMutation<{ woId: number; status: string; assignee?: string; notes?: string; completed_on?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/status`,
@@ -1036,6 +1044,126 @@ export function useConnections(businessId: number | null) {
   return useApiQuery<ConnectionsResponse>(["connections", businessId], base(businessId, "/connections"));
 }
 
+// ---- Chrome "Reply Assist" extension tokens ----
+export interface ExtensionToken {
+  id: number;
+  label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export function useExtensionTokens(businessId: number | null) {
+  return useApiQuery<{ tokens: ExtensionToken[] }>(["extension-tokens", businessId], base(businessId, "/extension-tokens"));
+}
+
+// Mint a new token. The raw token is only ever returned here, once — the caller must show/copy
+// it immediately (nothing later can retrieve it; only the hash is stored server-side).
+export function useCreateExtensionToken(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (label: string) =>
+      apiFetch<{ ok: boolean; id: number; token: string; created_at: string }>(
+        `/businesses/${businessId}/extension-tokens`, { method: "POST", body: { label } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["extension-tokens", businessId] }),
+  });
+}
+
+export function useRevokeExtensionToken(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tokenId: number) =>
+      apiFetch(`/businesses/${businessId}/extension-tokens/${tokenId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["extension-tokens", businessId] }),
+  });
+}
+
+// ---- Computer-use citation/directory-listing builder ----
+export interface CitationDirectory {
+  key: string;
+  label: string;
+  url: string;
+  has_credentials: boolean;
+}
+
+export interface CitationRunStep {
+  step: number;
+  screenshot: string;
+  action: Record<string, unknown> | null;
+  note?: string;
+}
+
+export interface CitationRun {
+  id: number;
+  business_id: number;
+  work_order_id: number | null;
+  directory_key: string;
+  status: "running" | "awaiting_confirmation" | "done" | "failed" | "cancelled";
+  steps: CitationRunStep[];
+  pending_action: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useCitationDirectories(businessId: number | null) {
+  return useApiQuery<{ configured: boolean; directories: CitationDirectory[] }>(
+    ["citation-directories", businessId], base(businessId, "/citation-directories"));
+}
+
+export function useSetDirectoryCredentials(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ directoryKey, username, password }: { directoryKey: string; username: string; password: string }) =>
+      apiFetch(`/businesses/${businessId}/citation-directories/${directoryKey}/credentials`,
+        { method: "PUT", body: { username, password } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["citation-directories", businessId] }),
+  });
+}
+
+export function useCitationRuns(businessId: number | null) {
+  return useApiQuery<{ runs: CitationRun[] }>(["citation-runs", businessId], base(businessId, "/citation-runs"));
+}
+
+export function useCitationRun(businessId: number | null, runId: number | null) {
+  return useApiQuery<CitationRun>(["citation-run", businessId, runId],
+    businessId != null && runId != null ? `/businesses/${businessId}/citation-runs/${runId}` : null);
+}
+
+export function useStartCitationRun(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ directoryKey, workOrderId }: { directoryKey: string; workOrderId?: number }) =>
+      apiFetch<{ ok: boolean; run_id: number; status: string }>(`/businesses/${businessId}/citation-runs`,
+        { method: "POST", body: { directory_key: directoryKey, work_order_id: workOrderId ?? null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["citation-runs", businessId] }),
+  });
+}
+
+export function useConfirmCitationRun(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: number) =>
+      apiFetch(`/businesses/${businessId}/citation-runs/${runId}/confirm`, { method: "POST" }),
+    onSuccess: (_d, runId) => {
+      qc.invalidateQueries({ queryKey: ["citation-run", businessId, runId] });
+      qc.invalidateQueries({ queryKey: ["citation-runs", businessId] });
+    },
+  });
+}
+
+export function useCancelCitationRun(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: number) =>
+      apiFetch(`/businesses/${businessId}/citation-runs/${runId}/cancel`, { method: "POST" }),
+    onSuccess: (_d, runId) => {
+      qc.invalidateQueries({ queryKey: ["citation-run", businessId, runId] });
+      qc.invalidateQueries({ queryKey: ["citation-runs", businessId] });
+    },
+  });
+}
+
 // Start an OAuth flow (GBP only) — returns the provider authorize URL the caller redirects to.
 export function useAuthorizeConnection(businessId: number | null) {
   return useMutation({
@@ -1309,7 +1437,7 @@ export function useDraftVisuals(businessId: number | null, draftId: number | nul
 // so the progress banner picks it up + the visuals lists so it shows once the job finishes.
 export function useGenerateVisual(businessId: number | null) {
   return useApiMutation<{
-    kind: "image" | "quote_card" | "video_brief";
+    kind: "image" | "quote_card" | "video_brief" | "video";
     prompt?: string;
     text?: string;
     attribution?: string;

@@ -333,8 +333,8 @@ def _run_post_mention_replies(business_id: int, args: dict):
 
 
 def _run_generate_visual(business_id: int, args: dict):
-    """CI-4: generate a human-gated visual (image | quote_card | video_brief). Dormant-safe -- image
-    gen returns {skipped} without a provider key; quote-cards always render locally."""
+    """CI-4: generate a human-gated visual (image | quote_card | video_brief | video). Dormant-safe --
+    image/video gen return {skipped} without a provider key; quote-cards always render locally."""
     vc = _imp("visual_content")
     kind = (args.get("kind") or "image").lower()
     wo = args.get("work_order_id")
@@ -344,6 +344,10 @@ def _run_generate_visual(business_id: int, args: dict):
     if kind == "video_brief":
         return vc.generate_video_brief(business_id, args.get("topic") or args.get("prompt") or "",
                                        work_order_id=wo)
+    if kind == "video":
+        return vc.generate_video(business_id, args.get("prompt") or args.get("topic") or "",
+                                 work_order_id=wo, draft_id=args.get("draft_id"),
+                                 aspect_ratio=args.get("aspect_ratio") or "16:9")
     return vc.generate_image(business_id, args.get("prompt") or "", kind=kind,
                              size=args.get("size") or "1024x1024", work_order_id=wo,
                              draft_id=args.get("draft_id"))

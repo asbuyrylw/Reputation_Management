@@ -25,8 +25,10 @@ from .routers import (
     auth_router,
     billing_router,
     businesses,
+    citations_router,
     connections_router,
     content,
+    ext_router,
     insights,
     integrations,
     jobs_router,
@@ -258,6 +260,8 @@ def create_app() -> FastAPI:
     app.include_router(reviews_router.router)
     app.include_router(approvals_router.router)
     app.include_router(visuals_router.router)
+    app.include_router(ext_router.router)
+    app.include_router(citations_router.router)
     app.include_router(public_router.router)  # unauthenticated lead-magnet funnel
     return app
 

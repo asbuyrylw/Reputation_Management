@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap, useSetSubtasks } from "@/lib/hooks";
+import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap, useSetSubtasks, useIntegrationSettings } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { useAuth } from "@/lib/auth";
 import { Card, PageHeader, Spinner } from "@/components/ui";
@@ -96,7 +96,7 @@ const TOOL_GUIDE: Record<string, { type: string; examples: string[] }> = {
   content_writing: { type: "Article / web-copy creation", examples: ["ChatGPT", "Jasper", "Google Docs", "Surfer SEO"] },
   schema_markup: { type: "Website code (schema)", examples: ["Schema.org generator", "Google Rich Results Test", "your web developer"] },
   review_generation: { type: "Review collection", examples: ["Google Business Profile", "Birdeye", "a follow-up email/SMS"] },
-  press_outreach: { type: "PR / media outreach", examples: ["Connectively (HARO)", "Muck Rack", "a pitch email"] },
+  press_outreach: { type: "PR / media outreach", examples: ["PressRanger (draft via Claude)", "Connectively (HARO)", "Muck Rack", "a pitch email"] },
   media_list_building: { type: "PR / media research", examples: ["Muck Rack", "Prowly", "manual research"] },
   link_building: { type: "Links & citations", examples: ["directory listings", "guest posts", "BBB / industry registries"] },
   social_posting: { type: "Social media", examples: ["Buffer", "Hootsuite", "native schedulers"] },
@@ -181,7 +181,13 @@ function NotesSection({ wo, businessId, canEdit }: { wo: WorkOrder; businessId: 
 }
 
 function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo: WorkOrder; businessId: number | null; canEdit: boolean; onStatus: (s: string, completedOn?: string) => void; draft?: ContentDraft; asset?: Asset }) {
-  const tool = TOOL_GUIDE[wo.capability ?? ""];
+  const { data: integrationSettings } = useIntegrationSettings(businessId);
+  const rawTool = TOOL_GUIDE[wo.capability ?? ""];
+  // PressRanger only appears in the tool guidance once PRESSRANGER_ENABLED is set (env-gated —
+  // off until the Claude MCP is configured).
+  const tool = rawTool && wo.capability === "press_outreach" && !integrationSettings?.pressranger_enabled
+    ? { ...rawTool, examples: rawTool.examples.filter((e) => !e.startsWith("PressRanger")) }
+    : rawTool;
   const bullets = bulletize(wo.instruction || "");
   const gen = useGenerateDraftForWo(businessId);
   const setSubs = useSetSubtasks(businessId);

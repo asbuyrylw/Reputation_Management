@@ -1,8 +1,9 @@
 """Visual content API (LATER: CI-4).
 
-Generate human-gated visuals (image / quote-card / video-brief) for a work order, list them, and
-approve/reject. Generation runs in a job (image gen can be slow + needs a provider key). Dormant-safe:
-without an image key the job returns {skipped} and nothing breaks; quote-cards always work.
+Generate human-gated visuals (image / quote-card / video-brief / video) for a work order, list them,
+and approve/reject. Generation runs in a job (image/video gen can be slow + needs a provider key).
+Dormant-safe: without a provider key the job returns {skipped} and nothing breaks; quote-cards
+always work.
 """
 
 from __future__ import annotations
@@ -23,8 +24,9 @@ except ImportError:  # pragma: no cover
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["visuals"])
 
-_KINDS = {"image", "quote_card", "meme", "video_brief"}
-_IMG_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+_KINDS = {"image", "quote_card", "meme", "video_brief", "video"}
+_IMG_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+             ".mp4": "video/mp4", ".webm": "video/webm"}
 
 
 class VisualRequest(BaseModel):
@@ -35,6 +37,7 @@ class VisualRequest(BaseModel):
     topic: Optional[str] = None
     work_order_id: Optional[int] = None
     draft_id: Optional[int] = None
+    aspect_ratio: Optional[str] = None
 
 
 def _actor(user: dict) -> str:

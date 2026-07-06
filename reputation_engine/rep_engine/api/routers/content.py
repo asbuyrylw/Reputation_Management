@@ -179,6 +179,24 @@ def work_order_brief(wo_id: int, business_id: int = Depends(authorize_business),
     return _cg.piece_brief(business_id, dict(row))
 
 
+@router.get("/work-orders/{wo_id}/visual-brief")
+def work_order_visual_brief(wo_id: int, business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """A gap-grounded prompt SUGGESTION for 'Add a visual' (image/video) on this task -- built
+    from its gap lineage (title, why_helps_ai_rep/seo, source query) so the prefilled prompt is
+    about what this task is actually supposed to convey, not a blank box. Still human-edited
+    before it's sent -- this is a prefill, not a draft."""
+    row = conn.execute(
+        "SELECT title, gap_source, gap_specifics, why_helps_ai_rep, why_helps_seo FROM work_orders "
+        "WHERE id=%s AND business_id=%s", (wo_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work order not found")
+    try:
+        from ... import visual_content as _vc
+    except ImportError:  # pragma: no cover
+        import visual_content as _vc  # type: ignore
+    return {"prompt": _vc.suggested_prompt(business_id, dict(row))}
+
+
 @router.get("/team")
 def team(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """People who can be assigned tasks on this business (org members + business-access editors +

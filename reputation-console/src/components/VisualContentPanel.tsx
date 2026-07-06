@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useVisuals, useGenerateVisual, useApproveVisual, useRejectVisual } from "@/lib/hooks";
+import { useVisuals, useGenerateVisual, useApproveVisual, useRejectVisual, useVisualBrief } from "@/lib/hooks";
 import { ApiError, apiBase } from "@/lib/api";
 import { Pill } from "@/components/ui";
 import type { VisualAsset } from "@/lib/types";
@@ -11,6 +11,7 @@ const KIND_LABEL: Record<string, string> = {
   image: "AI image",
   quote_card: "Quote card",
   video_brief: "Video brief",
+  video: "AI video",
 };
 const kindLabel = (k: string) => KIND_LABEL[k] ?? k.replace(/_/g, " ");
 
@@ -37,7 +38,10 @@ function VisualRow({
   const pending = v.status === "pending";
   const [imgOk, setImgOk] = useState(true);
   const hasImage = !!v.file_path && (v.kind === "image" || v.kind === "quote_card" || v.kind === "meme");
-  const imgSrc = hasImage && businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : null;
+  const hasVideo = !!v.file_path && v.kind === "video";
+  const fileSrc = (hasImage || hasVideo) && businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : null;
+  const imgSrc = hasImage ? fileSrc : null;
+  const videoSrc = hasVideo ? fileSrc : null;
   return (
     <div className="rounded-md border border-slate-200 bg-white p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -66,12 +70,14 @@ function VisualRow({
           </div>
         )}
       </div>
-      {/* render the actual generated image; fall back to the path text if it can't be served */}
+      {/* render the actual generated image/video; fall back to the path text if it can't be served */}
       {imgSrc && imgOk ? (
         <a href={imgSrc} target="_blank" rel="noreferrer" className="mt-1.5 block">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imgSrc} alt={kindLabel(v.kind)} onError={() => setImgOk(false)} loading="lazy" className="max-h-56 w-auto rounded border border-slate-200" />
         </a>
+      ) : videoSrc && imgOk ? (
+        <video src={videoSrc} controls onError={() => setImgOk(false)} className="mt-1.5 max-h-56 w-auto rounded border border-slate-200" />
       ) : v.file_path ? (
         <div className="mt-1 truncate text-[11px] text-slate-400" title={v.file_path}>{v.file_path}</div>
       ) : null}
@@ -101,6 +107,10 @@ export function VisualContentPanel({
   const { data } = useVisuals(businessId, undefined, open);
   const gen = useGenerateVisual(businessId);
   const [err, setErr] = useState<string | null>(null);
+  // Gap-grounded suggestion for the prompt — pulled once the panel is open, so "Add a visual"
+  // starts from what this task is actually supposed to convey instead of a blank box.
+  const { data: brief } = useVisualBrief(businessId, open ? workOrderId : null);
+  const suggested = brief?.prompt || "";
 
   const imageConfigured = data?.image_configured ?? false;
   const videoConfigured = data?.video_configured ?? false;
@@ -108,7 +118,7 @@ export function VisualContentPanel({
   const visuals = (data?.visuals ?? []).filter((v) => v.work_order_id === workOrderId);
 
   const submit = (
-    kind: "image" | "quote_card" | "video_brief",
+    kind: "image" | "quote_card" | "video_brief" | "video",
     body: { prompt?: string; text?: string; attribution?: string; topic?: string },
   ) => {
     setErr(null);
@@ -127,15 +137,21 @@ export function VisualContentPanel({
   };
   const onImage = () => {
     if (typeof window === "undefined") return;
-    const prompt = window.prompt("Describe the image you want generated:")?.trim();
+    const prompt = window.prompt("Describe the image you want generated:", suggested)?.trim();
     if (!prompt) return;
     submit("image", { prompt });
   };
   const onVideoBrief = () => {
     if (typeof window === "undefined") return;
-    const topic = window.prompt("Topic for the video brief:")?.trim();
+    const topic = window.prompt("Topic for the video brief:", suggested)?.trim();
     if (!topic) return;
     submit("video_brief", { topic });
+  };
+  const onVideo = () => {
+    if (typeof window === "undefined") return;
+    const prompt = window.prompt("Describe the short video you want generated (8 seconds):", suggested)?.trim();
+    if (!prompt) return;
+    submit("video", { prompt });
   };
 
   return (
@@ -153,6 +169,11 @@ export function VisualContentPanel({
           {!imageConfigured && (
             <p className="rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
               AI image generation is off — add an image provider key in .env to enable. Quote cards work now.
+            </p>
+          )}
+          {!videoConfigured && (
+            <p className="rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700 ring-1 ring-inset ring-amber-200">
+              AI video generation is off — set VIDEO_PROVIDER=veo + a Gemini key in .env to render real clips. Video brief works now.
             </p>
           )}
 
@@ -183,6 +204,15 @@ export function VisualContentPanel({
                 className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 Video brief
+              </button>
+              <button
+                type="button"
+                onClick={onVideo}
+                disabled={gen.isPending || !videoConfigured}
+                title={videoConfigured ? "Renders in 1-3 minutes." : "Set VIDEO_PROVIDER=veo + a Gemini key in .env to enable AI video."}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                AI video
               </button>
             </div>
           ) : (

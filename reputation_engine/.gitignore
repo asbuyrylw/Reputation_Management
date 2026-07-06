@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 output/*.docx
+output/citations/
+output/visuals/
 reports/*.docx
 .venv/
 venv/

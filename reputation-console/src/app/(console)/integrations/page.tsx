@@ -20,6 +20,16 @@ import {
   useZerniaSetup,
   useZerniaConnect,
   useZerniaSync,
+  useExtensionTokens,
+  useCreateExtensionToken,
+  useRevokeExtensionToken,
+  useCitationDirectories,
+  useSetDirectoryCredentials,
+  useCitationRuns,
+  useCitationRun,
+  useStartCitationRun,
+  useConfirmCitationRun,
+  useCancelCitationRun,
 } from "@/lib/hooks";
 import { Card, PageHeader, Spinner, Pill, Button, Input } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
@@ -27,7 +37,7 @@ import { TabNav } from "@/components/content/TabNav";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { Connection, ZerniaAccount } from "@/lib/types";
 import type { Tone } from "@/lib/uiTokens";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiBase } from "@/lib/api";
 
 const TYPES = ["technical_seo", "keywords", "serp_rank", "backlinks", "brand", "visitors", "other"];
 const TYPE_LABELS: Record<string, string> = {
@@ -816,6 +826,258 @@ function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; ca
   );
 }
 
+// ---- Reply Assist (Chrome extension) tab -----------------------------------------------
+// Yelp/Reddit/Facebook comment replies are read-only in the console (those platforms' terms
+// forbid automated posting, and there's no API to post through anyway). This tab mints a
+// revocable bearer token the extension uses to pull already-drafted replies onto the operator's
+// own screen while they're looking at the review/comment on the platform's own site — they still
+// click "post" themselves, so nothing here touches anyone's terms of service.
+function ReplyAssistTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useExtensionTokens(businessId);
+  const create = useCreateExtensionToken(businessId);
+  const revoke = useRevokeExtensionToken(businessId);
+  const [label, setLabel] = useState("Reply Assist extension");
+  const [freshToken, setFreshToken] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">What this does</div>
+        <p className="mt-1 text-sm text-ink-2">
+          A small Chrome extension shows the reply we already drafted for a Yelp, Reddit, or Facebook review/comment right on
+          that page, so you can review it and paste it in — the platform still requires you to post it yourself. Generate a
+          token below, then paste it into the extension&apos;s options page.
+        </p>
+      </Card>
+
+      {canEdit && (
+        <Card>
+          <div className="text-sm font-semibold text-ink">Generate a token</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} className="max-w-xs" placeholder="e.g. Logan's laptop" />
+            <Button
+              onClick={() => create.mutate(label, { onSuccess: (res) => setFreshToken(res.token) })}
+              disabled={create.isPending}
+            >
+              {create.isPending ? "Generating…" : "+ New token"}
+            </Button>
+          </div>
+          {freshToken && (
+            <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Copy this now — it won&apos;t be shown again
+              </div>
+              <code className="mt-1 block break-all rounded bg-white px-2 py-1.5 text-xs text-ink">{freshToken}</code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(freshToken)}
+                className="mt-2 text-xs font-medium text-indigo-600 hover:underline"
+              >
+                Copy to clipboard
+              </button>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Card>
+        <div className="text-sm font-semibold text-ink">Active tokens</div>
+        {isLoading ? (
+          <Spinner />
+        ) : !data?.tokens.length ? (
+          <p className="mt-1 text-sm text-ink-4">No tokens yet.</p>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {data.tokens.map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">{t.label || "Reply Assist extension"}</div>
+                  <div className="text-xs text-ink-4">
+                    Created {new Date(t.created_at).toLocaleDateString()}
+                    {t.last_used_at ? ` · last used ${new Date(t.last_used_at).toLocaleDateString()}` : " · never used"}
+                    {t.revoked_at && " · revoked"}
+                  </div>
+                </div>
+                {canEdit && !t.revoked_at && (
+                  <button
+                    type="button"
+                    onClick={() => revoke.mutate(t.id)}
+                    disabled={revoke.isPending}
+                    className="text-xs font-medium text-rose-600 hover:underline disabled:opacity-50"
+                  >
+                    Revoke
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Citation builder (computer-use directory listings) tab ---------------------------
+// Drives a headless browser under Gemini Computer Use through a directory's own claim/update
+// flow, pausing for an explicit confirm before any submit-like click. Always triggered by hand;
+// never a background job. See rep_engine.citation_builder for the full safety posture.
+function RunViewer({ businessId, runId, onClose }: { businessId: number | null; runId: number; onClose: () => void }) {
+  const { data: run } = useCitationRun(businessId, runId);
+  const confirm = useConfirmCitationRun(businessId);
+  const cancel = useCancelCitationRun(businessId);
+
+  if (!run) return <Spinner />;
+  const lastStep = run.steps[run.steps.length - 1];
+  const shotUrl = lastStep && businessId != null
+    ? `${apiBase()}/businesses/${businessId}/citation-runs/${runId}/screenshot/${lastStep.step}`
+    : null;
+  const statusWord: Record<string, string> = {
+    running: "Running…", awaiting_confirmation: "Waiting on you", done: "Done", failed: "Failed", cancelled: "Cancelled",
+  };
+
+  return (
+    <Card className="mt-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-ink">Run #{run.id} — {statusWord[run.status] || run.status}</div>
+        <button type="button" onClick={onClose} className="text-xs text-ink-4 hover:underline">Close</button>
+      </div>
+      {shotUrl && (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img src={shotUrl} alt={`Step ${lastStep.step}`} className="mt-2 max-h-80 w-auto rounded border border-line" />
+      )}
+      {run.status === "awaiting_confirmation" && run.pending_action && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Ready to submit — your call</div>
+          <p className="mt-1 text-sm text-ink-2">
+            The next action looks like a final submit/claim/publish click: <code className="text-xs">{JSON.stringify(run.pending_action)}</code>.
+            Nothing gets sent to the directory until you approve it.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button onClick={() => confirm.mutate(runId)} disabled={confirm.isPending}>
+              {confirm.isPending ? "Submitting…" : "Approve & continue"}
+            </Button>
+            <button
+              type="button"
+              onClick={() => cancel.mutate(runId)}
+              disabled={cancel.isPending}
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-slate-50"
+            >
+              Cancel run
+            </button>
+          </div>
+        </div>
+      )}
+      {run.status === "failed" && run.error && (
+        <p className="mt-2 text-sm text-rose-600">{run.error}</p>
+      )}
+      <p className="mt-2 text-xs text-ink-4">{run.steps.length} step{run.steps.length === 1 ? "" : "s"} so far.</p>
+    </Card>
+  );
+}
+
+function CitationBuilderTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useCitationDirectories(businessId);
+  const { data: runsData } = useCitationRuns(businessId);
+  const setCreds = useSetDirectoryCredentials(businessId);
+  const start = useStartCitationRun(businessId);
+  const [editingDir, setEditingDir] = useState<string | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [activeRun, setActiveRun] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (isLoading || !data) return <Spinner />;
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">What this does</div>
+        <p className="mt-1 text-sm text-ink-2">
+          Claiming/updating a directory listing (Apple Maps, Bing Places, Nextdoor Business) has no API — it&apos;s pure
+          click-through toil. This drives a browser through that flow for you, using your saved login, and pauses right
+          before any submit/claim/publish click so you approve it yourself.
+        </p>
+        {!data.configured && (
+          <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+            Not configured yet — set COMPUTER_USE_API_KEY (or GEMINI_API_KEY) and run{" "}
+            <code>playwright install chromium</code> on the server to enable.
+          </p>
+        )}
+      </Card>
+
+      <div className="space-y-3">
+        {data.directories.map((d) => (
+          <Card key={d.key}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-ink">{d.label}</div>
+                <div className="text-xs text-ink-4">{d.has_credentials ? "Login saved" : "No login saved yet"}</div>
+              </div>
+              {canEdit && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setEditingDir(editingDir === d.key ? null : d.key); setUsername(""); setPassword(""); }}
+                    className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-ink-2 hover:bg-slate-50"
+                  >
+                    {d.has_credentials ? "Update login" : "Add login"}
+                  </button>
+                  <Button
+                    onClick={() => {
+                      setErr(null);
+                      start.mutate({ directoryKey: d.key }, {
+                        onSuccess: (res) => setActiveRun(res.run_id),
+                        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start the run."),
+                      });
+                    }}
+                    disabled={!data.configured || !d.has_credentials || start.isPending}
+                    title={!d.has_credentials ? "Add a login first" : undefined}
+                  >
+                    {start.isPending ? "Starting…" : "Start run"}
+                  </Button>
+                </div>
+              )}
+            </div>
+            {editingDir === d.key && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-2">
+                <Input placeholder="Username / email" value={username} onChange={(e) => setUsername(e.target.value)} className="max-w-xs" />
+                <Input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="max-w-xs" />
+                <Button
+                  onClick={() => setCreds.mutate({ directoryKey: d.key, username, password }, {
+                    onSuccess: () => { setEditingDir(null); setUsername(""); setPassword(""); },
+                  })}
+                  disabled={!username || !password || setCreds.isPending}
+                >
+                  Save
+                </Button>
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+
+      {err && <p className="text-sm text-rose-600">{err}</p>}
+      {activeRun != null && <RunViewer businessId={businessId} runId={activeRun} onClose={() => setActiveRun(null)} />}
+
+      {!!runsData?.runs.length && (
+        <Card>
+          <div className="text-sm font-semibold text-ink">Past runs</div>
+          <ul className="mt-2 space-y-1.5">
+            {runsData.runs.map((r) => (
+              <li key={r.id} className="flex items-center justify-between text-sm">
+                <button type="button" onClick={() => setActiveRun(r.id)} className="text-indigo-600 hover:underline">
+                  #{r.id} · {r.directory_key} · {r.status}
+                </button>
+                <span className="text-xs text-ink-4">{new Date(r.updated_at).toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ---- Data imports tab (the original page content) -------------------------------------
 function DataImportsTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
   const { data, isLoading } = useExternalSignals(businessId);
@@ -933,7 +1195,7 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
   );
 }
 
-type Tab = "connections" | "imports";
+type Tab = "connections" | "imports" | "reply-assist" | "citations";
 
 export default function IntegrationsPage() {
   const { businessId, canEdit } = useBusiness();
@@ -954,6 +1216,8 @@ export default function IntegrationsPage() {
         tabs={[
           { key: "connections", label: "Connections" },
           { key: "imports", label: "Data imports" },
+          { key: "reply-assist", label: "Reply Assist extension" },
+          { key: "citations", label: "Citation builder" },
         ]}
         active={tab}
         onSelect={(k) => setTab(k as Tab)}
@@ -961,8 +1225,12 @@ export default function IntegrationsPage() {
 
       {tab === "connections" ? (
         <ConnectionsTab businessId={businessId} canEdit={canEdit} />
-      ) : (
+      ) : tab === "imports" ? (
         <DataImportsTab businessId={businessId} canEdit={canEdit} />
+      ) : tab === "reply-assist" ? (
+        <ReplyAssistTab businessId={businessId} canEdit={canEdit} />
+      ) : (
+        <CitationBuilderTab businessId={businessId} canEdit={canEdit} />
       )}
     </div>
   );

@@ -97,12 +97,14 @@ export function GapsView({
   verifyButton,
   businessId,
   canEdit,
+  pressrangerEnabled,
 }: {
   model: Json;
   asOf?: string;
   verifyButton?: ReactNode;
   businessId?: number | null;
   canEdit?: boolean;
+  pressrangerEnabled?: boolean;
 }) {
   const addBtn = (payload: WoPayload) =>
     canEdit && businessId != null ? <AddTaskButton businessId={businessId} payload={payload} /> : null;
@@ -235,7 +237,14 @@ export function GapsView({
                     </ul>
                   </div>
                 )}
-                {addBtn({ title: `Corroborate: ${t.claim}`, instruction: `Secure third-party coverage supporting '${t.claim}'. Source: ${t.where_to_get_it || ""}`.trim(), capability: "press_outreach", gap_source: "audited gap: thin corroboration", source_query: t.claim })}
+                {addBtn({
+                  title: `Corroborate: ${t.claim}`,
+                  instruction: `Secure third-party coverage supporting '${t.claim}'. Source: ${t.where_to_get_it || ""}. `.trim()
+                    + (pressrangerEnabled
+                      ? `Draft the release with the PressRanger MCP in Claude (ask Claude to "draft a press release for [this business] about ${t.claim}"), then review and send from your PressRanger account.`
+                      : `Draft a press release or outreach pitch for this and send it through your PR tool of choice.`),
+                  capability: "press_outreach", gap_source: "audited gap: thin corroboration", source_query: t.claim,
+                })}
               </li>
             );
           })}

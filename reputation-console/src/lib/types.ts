@@ -1189,6 +1189,7 @@ export interface IntegrationSettingsResponse {
   settings: IntegrationSettings;
   can_manage_autopost: boolean; // is the current user an org manager (may change auto-post fields)?
   autopost_globally_enabled: boolean; // platform-wide kill-switch state (read-only)
+  pressranger_enabled: boolean; // PRESSRANGER_ENABLED env flag — off until the Claude MCP is set up
 }
 
 // =====================================================================================
@@ -1233,7 +1234,7 @@ export interface VisualAsset {
   id: number;
   work_order_id: number | null;
   draft_id: number | null;
-  kind: string; // image | quote_card | video_brief
+  kind: string; // image | quote_card | video_brief | video
   provider: string | null;
   model: string | null;
   prompt: string | null;
