@@ -515,7 +515,7 @@ def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[s
             sets.append("body=%s"); args.append(body)
         sets += ["quality_score=NULL", "compliance_pass=%s", "compliance_flags=%s", "updated_at=now()"]
         args += [comp_pass, json.dumps(comp_flags)]
-        conn.execute(f"UPDATE content_drafts SET {', '.join(sets)} WHERE id=%s",
+        conn.execute(f"UPDATE content_drafts SET {', '.join(sets)} WHERE id=%s",  # nosec B608
                      tuple(args) + (draft_id,))
         conn.commit()
     log.info("Draft %d edited (re-screened: compliance_pass=%s)", draft_id, comp_pass)

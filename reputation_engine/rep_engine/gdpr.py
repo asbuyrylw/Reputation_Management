@@ -50,7 +50,7 @@ def export_business(business_id: int) -> dict:
             if t in _EXPORT_EXCLUDE:
                 continue
             # no ORDER BY: not every scoped table has an `id` column (e.g. business_config).
-            rows = conn.execute(f'SELECT * FROM "{t}" WHERE business_id=%s', (business_id,)).fetchall()
+            rows = conn.execute(f'SELECT * FROM "{t}" WHERE business_id=%s', (business_id,)).fetchall()  # nosec B608
             tables[t] = [dict(r) for r in rows]
     return {"business": dict(biz), "tables": tables}
 
@@ -74,7 +74,7 @@ def delete_business(business_id: int) -> dict:
                 try:
                     with conn.transaction():  # savepoint: a FK violation rolls back just this
                         n = conn.execute(
-                            f'DELETE FROM "{t}" WHERE business_id=%s', (business_id,)
+                            f'DELETE FROM "{t}" WHERE business_id=%s', (business_id,)  # nosec B608
                         ).rowcount
                     counts[t] = counts.get(t, 0) + (n or 0)
                 except psycopg.errors.ForeignKeyViolation:

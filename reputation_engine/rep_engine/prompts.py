@@ -118,7 +118,7 @@ def add_prompt(business_id: int, prompt: str, topic: str = "", tags: str = "",
                     sets.append("topic=%s"); args.append(topic.strip())
                 if tags:
                     sets.append("tags=%s"); args.append(tags.strip())
-                conn.execute(f"UPDATE custom_prompts SET {', '.join(sets)} WHERE id=%s",
+                conn.execute(f"UPDATE custom_prompts SET {', '.join(sets)} WHERE id=%s",  # nosec B608
                              tuple(args) + (existing["id"],))
                 conn.commit()
             return existing["id"]
@@ -163,7 +163,7 @@ def update_prompt(business_id: int, prompt_id: int, *, enabled: Optional[bool] =
                                  "enabled); pause one before tracking another")
         args += [prompt_id, business_id]
         row = conn.execute(
-            f"UPDATE custom_prompts SET {', '.join(sets)} WHERE id=%s AND business_id=%s RETURNING id",
+            f"UPDATE custom_prompts SET {', '.join(sets)} WHERE id=%s AND business_id=%s RETURNING id",  # nosec B608
             tuple(args),
         ).fetchone()
         conn.commit()
