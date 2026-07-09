@@ -403,6 +403,40 @@ export function useRejectDraft(businessId: number | null) {
   );
 }
 
+// ---- Katteb content-scoring layer ----
+export function useKattebCredits(businessId: number | null) {
+  return useApiQuery<{ configured: boolean; ok?: boolean; credits_available?: number; credits_total?: number; plan_tier?: string }>(
+    ["katteb-credits", businessId], base(businessId, "/katteb/credits"));
+}
+
+// Kick off a Katteb SEO + competitor analysis for a draft (~1000 credits, runs as a job). Poll the
+// drafts list afterward; quality_notes.katteb appears when it finishes. Invalidates jobs (banner).
+export function useAnalyzeSeo(businessId: number | null) {
+  return useApiMutation<{ draftId: number }>(
+    ({ draftId }) => `/businesses/${businessId}/drafts/${draftId}/analyze-seo`,
+    () => ({}),
+    [["jobs", businessId], ["content-drafts", businessId], ["katteb-credits", businessId]],
+  );
+}
+
+// Humanizer rewrite (~100 credits, synchronous). Returns the rewritten text; caller decides to save.
+export function useHumanizeDraft(businessId: number | null) {
+  return useMutation({
+    mutationFn: (draftId: number) =>
+      apiFetch<{ ok: boolean; rewritten_text: string; credits_charged: number }>(
+        `/businesses/${businessId}/drafts/${draftId}/humanize`, { method: "POST", body: {} }),
+  });
+}
+
+// Fact-check one claim from a draft (~100 credits, synchronous). Returns verdict + references.
+export function useFactcheckClaim(businessId: number | null) {
+  return useMutation({
+    mutationFn: ({ draftId, claim }: { draftId: number; claim: string }) =>
+      apiFetch<{ ok: boolean; verdict: string; is_fact: boolean; explanation: string; references: { url?: string; title?: string }[]; credits_charged: number }>(
+        `/businesses/${businessId}/drafts/${draftId}/factcheck`, { method: "POST", body: { claim } }),
+  });
+}
+
 // Atomize a long-form draft into per-platform social posts (stored as human-gated drafts).
 export function useAtomizeDraft(businessId: number | null) {
   return useApiMutation<{ draftId: number }>(

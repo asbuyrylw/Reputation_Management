@@ -341,8 +341,27 @@ export interface ContentDraft {
         topic_coverage?: DraftTopicCoverage;
         suggested_links?: DraftSuggestedLink[];
         image_markers?: DraftImageMarker[];
+        katteb?: DraftKatteb;
       } & Record<string, unknown>)
     | null;
+}
+
+// Katteb SEO/competitor analysis stored on a draft (from a human-triggered ~1000-credit run).
+export interface DraftKattebCompetitor {
+  url?: string; domain?: string; words?: number; images?: number; headings?: number;
+  entities?: number; seo_score?: number;
+}
+export interface DraftKatteb {
+  seo_score?: number | null;                 // our content's Katteb SEO score
+  competitor_scores?: { avg?: number; top?: number };
+  structure?: {
+    images_avg?: number; images_top?: number; headings_avg?: number; headings_top?: number;
+    word_count_avg?: number; word_count_top?: number;
+  };
+  competitors?: DraftKattebCompetitor[];
+  keyword?: string;
+  analyzed_at?: string;
+  credits_charged?: number;
 }
 
 // GEO/citability grade (0–100), weighted for the content type. Social posts use their own rubric.

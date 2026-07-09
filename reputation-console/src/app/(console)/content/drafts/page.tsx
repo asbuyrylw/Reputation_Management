@@ -3,11 +3,33 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useContentOptimizationStatus, useApproveDraft } from "@/lib/hooks";
+import { useContentDrafts, useContentOptimizationStatus, useApproveDraft, useRejectDraft, useKattebCredits } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
+import { DraftEditorPanel, readabilityScore } from "@/components/DraftEditorPanel";
+import { StatusBadge } from "@/components/content/StatusBadge";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { TabNav } from "@/components/content/TabNav";
 import type { ContentDraft } from "@/lib/types";
+
+// Per-draft metadata for the table, read from its quality_notes (all already computed).
+function draftWords(d: ContentDraft): number {
+  return d.quality_notes?.on_page?.word_count ?? (d.body ?? "").split(/\s+/).filter(Boolean).length;
+}
+function draftHasImage(d: ContentDraft): boolean {
+  return (d.quality_notes?.on_page?.images ?? 0) > 0;
+}
+function aiVisScore(d: ContentDraft): number | null {
+  return d.quality_notes?.citation_ready?.score ?? null;
+}
+function readScore(d: ContentDraft): number | null {
+  return readabilityScore(d.quality_notes?.readability?.grade);
+}
+function scoreCls(n: number | null): string {
+  if (n == null) return "text-slate-400";
+  if (n >= 70) return "text-emerald-600";
+  if (n >= 50) return "text-amber-600";
+  return "text-rose-600";
+}
 
 type Tab = "ready" | "fixes" | "all";
 type Sort = "impact" | "quality" | "newest";
@@ -76,11 +98,14 @@ export default function DraftsPage() {
   const { data, isLoading } = useContentDrafts(businessId);
   const { data: optStatus } = useContentOptimizationStatus(businessId);
   const approve = useApproveDraft(businessId);
+  const reject = useRejectDraft(businessId);
+  const { data: kattebCredits } = useKattebCredits(businessId);
   const [tab, setTab] = useState<Tab>("ready");
   const [sort, setSort] = useState<Sort>("impact");
   const [groupFlaws, setGroupFlaws] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const [openDraft, setOpenDraft] = useState<ContentDraft | null>(null);
 
   // "Ready" = passed our checks and waiting on you. "Needs fixes" = flagged (usually a missing
   // disclosure) — high quality can still land here; it's a compliance gate, not a quality one.
@@ -142,12 +167,36 @@ export default function DraftsPage() {
   const allShownSelected =
     approvableShown.length > 0 && approvableShown.every((d) => selected.has(d.id));
 
+  // Delete/dismiss selected drafts (reject removes them from the queue). Snapshot like approve.
+  const deleteSelected = async () => {
+    const batch = shown.filter((d) => selected.has(d.id));
+    if (batch.length === 0 || !confirm(`Delete ${batch.length} draft${batch.length === 1 ? "" : "s"}? This removes them from the queue.`)) return;
+    setBulk({ done: 0, total: batch.length });
+    for (let i = 0; i < batch.length; i++) {
+      try { await reject.mutateAsync({ draftId: batch[i].id }); } catch { /* skip */ }
+      setBulk({ done: i + 1, total: batch.length });
+    }
+    setBulk(null);
+    setSelected(new Set());
+  };
+
+  // The open draft, kept live from the latest fetch so a finished Katteb analysis (which lands in
+  // quality_notes.katteb after a refetch) shows up in the slide-over without reopening it.
+  const liveOpen = openDraft ? ((data ?? []).find((d) => d.id === openDraft.id) ?? openDraft) : null;
+
   return (
     <div>
-      <PageHeader
-        title="Content drafts"
-        subtitle="AI-drafted content waiting for your review. Approving publishes it as an asset and advances its work order — nothing publishes without you."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <PageHeader
+          title="Content drafts"
+          subtitle="Your drafts at a glance — click any row to review, edit, and publish. Nothing publishes without you."
+        />
+        {kattebCredits?.configured && kattebCredits.credits_available != null && (
+          <span className="mt-1 shrink-0 rounded-full bg-indigo-50 px-2.5 py-1 font-mono text-[11px] text-indigo-700" title="Katteb credits for deep SEO analysis this month">
+            Katteb: {kattebCredits.credits_available.toLocaleString()} / {kattebCredits.credits_total?.toLocaleString()} credits
+          </span>
+        )}
+      </div>
 
       <Card className="mb-4">
         <TabNav
@@ -204,45 +253,35 @@ export default function DraftsPage() {
         )}
       </Card>
 
-      {/* Bulk approve bar — only when there's something you're allowed to approve in bulk. */}
-      {canEdit && approvableShown.length > 0 && (
+      {/* Bulk action bar — publish (approvable only) or delete any selected rows. */}
+      {canEdit && selected.size > 0 && (
         <Card className="mb-3 flex flex-wrap items-center gap-3 py-2.5">
-          <label className="flex items-center gap-1.5 text-sm text-ink-2">
-            <input
-              type="checkbox"
-              checked={allShownSelected}
-              onChange={(e) => (e.target.checked ? selectAllShown() : clearSelected())}
-              className="h-4 w-4 rounded border-line-2"
-            />
-            Select all approvable ({approvableShown.length})
-          </label>
+          <span className="text-sm font-medium text-ink-2">{selected.size} selected</span>
           <button
             type="button"
             disabled={selectedApprovable.length === 0 || bulk != null}
             onClick={approveSelected}
             className="rounded-md bg-good px-3 py-1.5 text-sm font-medium text-white hover:brightness-95 disabled:opacity-50"
+            title={selectedApprovable.length === 0 ? "Only fully-checked drafts (compliance passed, no placeholders) can be published in bulk." : undefined}
           >
-            {bulk ? `Approving ${bulk.done}/${bulk.total}…` : `Approve selected (${selectedApprovable.length})`}
+            {bulk ? `Working ${bulk.done}/${bulk.total}…` : `Publish selected (${selectedApprovable.length})`}
           </button>
-          {selected.size > 0 && !bulk && (
-            <button
-              type="button"
-              onClick={clearSelected}
-              className="text-xs text-ink-3 hover:text-ink-2"
-            >
-              Clear
-            </button>
-          )}
-          <span className="text-xs text-ink-4">
-            Only fully-checked drafts (compliance passed, no placeholders) can be approved here — others need per-draft sign-off.
-          </span>
+          <button
+            type="button"
+            disabled={bulk != null}
+            onClick={deleteSelected}
+            className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+          >
+            Delete selected ({selected.size})
+          </button>
+          <button type="button" onClick={clearSelected} className="text-xs text-ink-3 hover:text-ink-2">Clear</button>
         </Card>
       )}
 
       {shown.length === 0 ? (
         <Card>
           <p className="text-sm text-ink-3">
-            {tab === "ready" ? "Nothing waiting on you right now — check “Needs fixes first” or generate a draft from a content task." : "No drafts here."}
+            {tab === "ready" ? "Nothing waiting on you right now — check “Held — need an author” or generate a draft from a content task." : "No drafts here."}
           </p>
         </Card>
       ) : grouping ? (
@@ -255,20 +294,71 @@ export default function DraftsPage() {
           onToggle={toggleOne}
         />
       ) : (
-        <div className="space-y-3">
-          {shown.map((d) => (
-            <DraftRow
-              key={d.id}
-              draft={d}
-              businessId={businessId}
-              canEdit={canEdit}
-              selectable={approvableShown.some((s) => s.id === d.id)}
-              selected={selected.has(d.id)}
-              onToggle={toggleOne}
-            />
-          ))}
-        </div>
+        <DraftTable
+          drafts={shown}
+          canEdit={canEdit}
+          selected={selected}
+          onToggle={toggleOne}
+          onToggleAll={(all) => (all ? selectAllShown() : clearSelected())}
+          allSelected={shown.length > 0 && shown.every((d) => selected.has(d.id))}
+          onOpen={setOpenDraft}
+        />
       )}
+
+      {/* right-side slide-over editor */}
+      {liveOpen && (
+        <DraftEditorPanel draft={liveOpen} businessId={businessId} canEdit={canEdit} onClose={() => setOpenDraft(null)} />
+      )}
+    </div>
+  );
+}
+
+// The drafts TABLE — one scannable row per draft (title, area/gap, words, keywords, image,
+// readability, AI-visibility, status), a select checkbox for bulk actions, and a click that opens
+// the slide-over editor.
+function DraftTable({ drafts, canEdit, selected, onToggle, onToggleAll, allSelected, onOpen }: {
+  drafts: ContentDraft[]; canEdit: boolean; selected: Set<number>; onToggle: (id: number) => void;
+  onToggleAll: (all: boolean) => void; allSelected: boolean; onOpen: (d: ContentDraft) => void;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <table className="w-full text-left text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
+            {canEdit && <th className="py-2 pl-3"><input type="checkbox" checked={allSelected} onChange={(e) => onToggleAll(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300" aria-label="Select all" /></th>}
+            <th className="py-2 pr-3">Title</th>
+            <th className="py-2 pr-3">Area / gap</th>
+            <th className="py-2 pr-3 text-right">Words</th>
+            <th className="py-2 pr-3">Keywords</th>
+            <th className="py-2 pr-3 text-center">Img</th>
+            <th className="py-2 pr-3 text-right">Read</th>
+            <th className="py-2 pr-3 text-right">AI-Vis</th>
+            <th className="py-2 pr-3">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {drafts.map((d) => {
+            const ai = aiVisScore(d), rd = readScore(d);
+            return (
+              <tr key={d.id} className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50" onClick={() => onOpen(d)}>
+                {canEdit && (
+                  <td className="py-2 pl-3" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(d.id)} onChange={() => onToggle(d.id)} className="h-3.5 w-3.5 rounded border-slate-300" aria-label={`Select ${d.title}`} />
+                  </td>
+                )}
+                <td className="max-w-0 py-2 pr-3"><div className="truncate font-medium text-slate-800">{d.title || "Untitled"}</div></td>
+                <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">{d.gap_source || d.content_type || d.asset_type || "—"}</td>
+                <td className="py-2 pr-3 text-right tabular-nums text-slate-600">{draftWords(d)}</td>
+                <td className="max-w-[180px] py-2 pr-3"><div className="truncate text-xs text-slate-500">{d.target_query || "—"}</div></td>
+                <td className="py-2 pr-3 text-center">{draftHasImage(d) ? "🖼" : <span className="text-slate-300">—</span>}</td>
+                <td className={`py-2 pr-3 text-right font-mono text-xs font-semibold ${scoreCls(rd)}`}>{rd ?? "—"}</td>
+                <td className={`py-2 pr-3 text-right font-mono text-xs font-semibold ${scoreCls(ai)}`}>{ai ?? "—"}</td>
+                <td className="whitespace-nowrap py-2 pr-3"><StatusBadge status={d.status} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
