@@ -7,27 +7,25 @@
 // task board's "why" link lands right on it. All the "why this task" detail that used to clutter
 // the task cards lives here now.
 
+import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useStrategy, useDashboard, useTimeline, useRoadmap } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { TableContainer, Th, Td } from "@/components/content/TableContainer";
+import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
 import { EmptyState } from "@/components/primitives";
 import { repScore, dashboardScore } from "@/lib/repScore";
-import type { StrategyGroup, StrategySpec } from "@/lib/types";
+import type { StrategyGroup } from "@/lib/types";
 
 type Json = Record<string, unknown>;
+type StratRow = StrategyGroup & { sectionLabel: string; _id: number };
 
 const fmtDate = (d?: string | null) => (d ? new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—");
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "To do", in_progress: "In progress", done: "Done", verified: "Verified", blocked: "Blocked", skipped: "Skipped",
-};
-const STATUS_TONE: Record<string, string> = {
-  pending: "bg-slate-100 text-slate-600", in_progress: "bg-sky-50 text-sky-700",
-  done: "bg-emerald-50 text-emerald-700", verified: "bg-emerald-50 text-emerald-700",
-  blocked: "bg-rose-50 text-rose-700", skipped: "bg-slate-100 text-slate-400",
 };
 
 function Tile({ k, value, sub, color }: { k: string; value: string; sub: string; color?: string }) {
@@ -42,81 +40,52 @@ function Tile({ k, value, sub, color }: { k: string; value: string; sub: string;
 
 // One content piece's production spec — the concrete "what to make": type, keywords, length,
 // readability, structure, and where it publishes.
-function SpecCard({ spec }: { spec: StrategySpec }) {
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-indigo-100 bg-indigo-050/40 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {spec.content_type && <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-strong">{spec.content_type.replace(/_/g, " ")}</span>}
-        <span className="text-[11px] text-ink-4">Publishes to: <span className="font-medium text-ink-3">{spec.publish_to}</span></span>
-      </div>
-      <div className="mt-1 text-sm font-semibold text-ink">{spec.title}</div>
-      <dl className="mt-1.5 space-y-0.5 text-[11.5px] text-ink-2">
-        {spec.keywords.length > 0 && (
-          <div><span className="font-semibold text-ink-3">Keywords:</span> {spec.keywords.join(", ")}</div>
-        )}
-        <div className="flex flex-wrap gap-x-4">
-          {spec.word_count_target != null && <span><span className="font-semibold text-ink-3">Length:</span> ~{spec.word_count_target} words</span>}
-          {spec.readability_target && <span><span className="font-semibold text-ink-3">Readability:</span> {spec.readability_target}</span>}
-        </div>
-        {spec.structure && <div><span className="font-semibold text-ink-3">Structure:</span> {spec.structure}</div>}
-        {spec.objective && <div><span className="font-semibold text-emerald-700">Objective:</span> {spec.objective}</div>}
-      </dl>
-    </div>
+    <button type="button" onClick={onClick}
+      className={`rounded-md px-3 py-1.5 text-[12.5px] font-medium ${active ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+      {children}
+    </button>
   );
 }
 
-// One gap and how we close it: the approach, the objective, the tasks (each anchored so the task
-// board can deep-link to it), and the content specs.
-function GroupCard({ group }: { group: StrategyGroup }) {
-  return (
-    <Card className="border-l-[3px] border-l-indigo-300">
-      <div className="text-sm font-bold text-ink">{group.title}</div>
-      {group.approach && (
-        <div className="mt-1.5">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-indigo-strong">How we&apos;ll close it</div>
-          <p className="mt-0.5 text-sm leading-relaxed text-ink-2">{group.approach}</p>
-        </div>
-      )}
-      {group.why && (
-        <div className="mt-1.5 text-[12.5px] text-ink-3"><span className="font-semibold text-emerald-700">Why it matters:</span> {group.why}</div>
-      )}
-
-      {/* the content to produce for this gap */}
-      {group.specs.length > 0 && (
-        <div className="mt-2.5">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-4">Content to produce ({group.specs.length})</div>
-          <div className="space-y-2">
-            {group.specs.map((s) => <SpecCard key={s.wo_id} spec={s} />)}
+// The strategy TABLE columns: one row per gap, with how we'll close it, why, the tasks (linked to
+// the board), and the content to produce (type + title + where it publishes + link to the content
+// detail). Wrap columns hold the multi-item task/content lists. Sortable via headers.
+const STRATEGY_COLUMNS: DataGridColumn<StratRow>[] = [
+  { key: "gap", label: "Gap", width: 190, wrap: true, hideable: false, sortValue: (r) => r.title.toLowerCase(),
+    render: (r) => <span className="text-[13px] font-semibold text-slate-800">{r.title}</span> },
+  { key: "section", label: "Gap section", width: 118, sortValue: (r) => r.sectionLabel,
+    render: (r) => <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">{r.sectionLabel}</span> },
+  { key: "how", label: "How we'll close it", width: 300, wrap: true,
+    render: (r) => <span className="text-[12.5px] leading-relaxed text-slate-600">{r.approach || "—"}</span> },
+  { key: "why", label: "Why it matters", width: 200, wrap: true,
+    render: (r) => <span className="text-[12px] leading-relaxed text-slate-500">{r.why || "—"}</span> },
+  { key: "tasks", label: "Tasks", width: 250, wrap: true, sortValue: (r) => r.tasks.length,
+    render: (r) => r.tasks.length ? (
+      <div className="space-y-1">
+        {r.tasks.map((t) => (
+          <div key={t.id} className="text-[12px] leading-snug">
+            <Link href={`/content/work-orders#wo-${t.id}`} className="text-indigo-600 hover:underline">{t.title}</Link>
+            <span className="text-[10px] text-slate-400"> · {STATUS_LABEL[t.status] ?? t.status}</span>
           </div>
-        </div>
-      )}
-
-      {/* the tasks that carry this out — each anchored for the task board's "why" deep-link */}
-      {group.tasks.length > 0 && (
-        <div className="mt-2.5">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-4">Tasks ({group.tasks.length})</div>
-          <ul className="space-y-1.5">
-            {group.tasks.map((t) => (
-              <li key={t.id} id={`wo-${t.id}`} className="scroll-mt-24 rounded-md border border-line px-2.5 py-1.5 target:ring-2 target:ring-indigo-400">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-[13px] font-medium text-ink-2">{t.title}</span>
-                  <div className="flex items-center gap-2">
-                    {t.predicted_ai_points != null && t.predicted_ai_points > 0 && (
-                      <span className="font-mono text-[11px] font-semibold text-emerald-700">+{t.predicted_ai_points.toFixed(1)}</span>
-                    )}
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_TONE[t.status] ?? "bg-slate-100 text-slate-600"}`}>{STATUS_LABEL[t.status] ?? t.status}</span>
-                  </div>
-                </div>
-                {t.instruction && <div className="mt-0.5 text-[12px] leading-relaxed text-ink-3">{t.instruction}</div>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <Link href="/content/work-orders" className="mt-2 inline-block text-[11.5px] font-semibold text-indigo-600 hover:underline">Manage these on the task board →</Link>
-    </Card>
-  );
-}
+        ))}
+        <Link href="/content/work-orders" className="text-[10.5px] font-semibold text-indigo-500 hover:underline">Manage on task board →</Link>
+      </div>
+    ) : <span className="text-slate-400">—</span> },
+  { key: "content", label: "Content to produce", width: 250, wrap: true, sortValue: (r) => r.specs.length,
+    render: (r) => r.specs.length ? (
+      <div className="space-y-1.5">
+        {r.specs.map((s) => (
+          <div key={s.wo_id} className="text-[12px] leading-snug">
+            <span className="rounded bg-indigo-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-indigo-700">{(s.content_type || "").replace(/_/g, " ")}</span>{" "}
+            <Link href="/content/briefs" className="font-medium text-slate-700 hover:text-indigo-600 hover:underline" title="Full spec (keywords, length, structure) in the content section">{s.title}</Link>
+            <span className="text-[10px] text-slate-400"> → {s.publish_to}</span>
+          </div>
+        ))}
+      </div>
+    ) : <span className="text-slate-400">—</span> },
+];
 
 export default function StrategyPage() {
   const { businessId, businesses, loading } = useBusiness();
@@ -124,6 +93,8 @@ export default function StrategyPage() {
   const { data: dash, isLoading: dashLoading } = useDashboard(businessId);
   const { data: timeline } = useTimeline(businessId);
   const { data: roadmap } = useRoadmap(businessId);
+  const [secTab, setSecTab] = useState("all");
+  const [ctFilter, setCtFilter] = useState("all");
 
   if (loading) return <Spinner />;
   if (businesses.length === 0) {
@@ -213,24 +184,54 @@ export default function StrategyPage() {
         </div>
       )}
 
-      {/* ============ the detailed plan, by area ============ */}
+      {/* ============ the detailed plan: per-area report + a sortable/filterable gap table ============ */}
       {totalGroups === 0 ? (
         <EmptyState title="No plan yet" why="Your plan is built from an audit of what AI and Google say about you." produces="Once an audit + gap analysis run, the approach and content for each gap appear here." timing="An audit takes a few minutes." cta={{ label: "Run an audit", href: "/runs" }} />
-      ) : (
-        <div className="space-y-8">
-          {sections.filter((s) => s.groups.length > 0).map((s) => (
-            <section key={s.key} id={s.key} className="scroll-mt-24">
-              <div className="mb-2 border-b border-slate-200 pb-2">
-                <h2 className="text-[15px] font-bold text-slate-800">{s.label} <span className="ml-1 font-mono text-[12px] font-normal text-slate-400">{s.groups.length} gap{s.groups.length === 1 ? "" : "s"}</span></h2>
-                <p className="mt-0.5 text-[13px] text-ink-3">{s.narrative}</p>
+      ) : (() => {
+        // one row per gap, tagged with its section; filter by section tab + content type.
+        const allRows: StratRow[] = sections
+          .filter((s) => s.groups.length > 0)
+          .flatMap((s) => s.groups.map((g) => ({ ...g, sectionLabel: s.label })))
+          .map((g, i) => ({ ...g, _id: i }));
+        const contentTypes = Array.from(new Set(allRows.flatMap((r) => r.specs.map((s) => (s.content_type || "").replace(/_/g, " "))).filter(Boolean))).sort();
+        const activeSection = sections.find((s) => s.key === secTab);
+        let rows = secTab === "all" ? allRows : allRows.filter((r) => activeSection && r.section === secTab);
+        if (ctFilter !== "all") rows = rows.filter((r) => r.specs.some((s) => (s.content_type || "").replace(/_/g, " ") === ctFilter));
+        return (
+          <div>
+            {/* per-area tabs */}
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              <TabBtn active={secTab === "all"} onClick={() => setSecTab("all")}>All areas ({totalGroups})</TabBtn>
+              {sections.filter((s) => s.groups.length > 0).map((s) => (
+                <TabBtn key={s.key} active={secTab === s.key} onClick={() => setSecTab(s.key)}>{s.label} ({s.groups.length})</TabBtn>
+              ))}
+            </div>
+
+            {/* the per-area strategy REPORT (the overall plan narrative for this area) */}
+            {activeSection && (
+              <div className="mb-4 rounded-[14px] border border-indigo-100 bg-indigo-050/50 p-4">
+                <div className="text-[13px] font-bold text-slate-800">The plan for {activeSection.label}</div>
+                <p className="mt-1 text-[13px] leading-relaxed text-slate-600">{activeSection.narrative}</p>
               </div>
-              <div className="space-y-3">
-                {s.groups.map((g, i) => <GroupCard key={`${s.key}-${i}`} group={g} />)}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
+            )}
+
+            {/* content-type filter + count */}
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span className="font-semibold uppercase tracking-wide text-slate-400">Filter</span>
+              <label className="inline-flex items-center gap-1">Content type
+                <select value={ctFilter} onChange={(e) => setCtFilter(e.target.value)} className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs capitalize">
+                  <option value="all">All</option>
+                  {contentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              {ctFilter !== "all" && <button type="button" onClick={() => setCtFilter("all")} className="font-medium text-indigo-600 hover:underline">Clear</button>}
+              <span className="text-slate-400">· {rows.length} gap{rows.length === 1 ? "" : "s"} · drag column edges to resize, click headers to sort</span>
+            </div>
+
+            <DataGrid columns={STRATEGY_COLUMNS} rows={rows} getId={(r) => r._id} storageKey="strategy" emptyText="No gaps in this area." />
+          </div>
+        );
+      })()}
     </div>
   );
 }

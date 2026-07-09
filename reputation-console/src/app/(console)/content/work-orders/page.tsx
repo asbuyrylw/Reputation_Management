@@ -31,7 +31,8 @@ function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset })
 }
 
 // Capabilities whose work the AI can draft for you (the per-item "Generate draft" button).
-const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
+// schema_markup excluded — schema is a website/developer task, not content we draft in-app.
+const DRAFTABLE = new Set(["content_writing", "review_generation", "local_content_creation"]);
 // Copy we draft IN-APP — point these at OUR pipeline (Generate draft → Drafts), not external tools.
 const IN_APP_CONTENT = new Set(["content_writing", "local_content_creation"]);
 

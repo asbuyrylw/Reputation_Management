@@ -63,17 +63,18 @@ MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "4"))                # PH
 MAX_CITATION_REVISIONS = int(os.getenv("CONTENT_MAX_CITATION_REVISIONS", "2"))
 
 # Capabilities that this module knows how to generate (others stay manual).
+# NOTE: schema_markup is NOT here — schema (JSON-LD) is a website/developer task, not editorial
+# content, so it lives on the task board as a "website fix", never in the content section.
 GENERATABLE = {
     "content_writing": "article",
     # A local page-1 goal's anchor piece: a geo landing page. (Was un-generatable, so the
     # "Generate draft" button on local work orders silently produced nothing and failed the job.)
     "local_content_creation": "local_page",
-    "schema_markup": "schema",
     "review_generation": "review_request",
 }
-# asset_type inferred from work-order title keywords as a fallback
+# asset_type inferred from work-order title keywords as a fallback (schema deliberately excluded).
 TITLE_HINTS = [
-    ("faq", "faq"), ("schema", "schema"), ("bio", "bio"),
+    ("faq", "faq"), ("bio", "bio"),
     ("article", "article"), ("post", "gbp_post"), ("review", "review_request"),
 ]
 

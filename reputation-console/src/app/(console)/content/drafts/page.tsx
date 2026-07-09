@@ -6,6 +6,7 @@ import { useBusiness } from "@/lib/business";
 import { useContentDrafts, useContentOptimizationStatus, useApproveDraft, useRejectDraft, useKattebCredits } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
 import { DraftEditorPanel, readabilityScore } from "@/components/DraftEditorPanel";
+import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { TabNav } from "@/components/content/TabNav";
@@ -30,6 +31,49 @@ function scoreCls(n: number | null): string {
   if (n >= 50) return "text-amber-600";
   return "text-rose-600";
 }
+function seoScore(d: ContentDraft): number | null {
+  return d.quality_notes?.katteb?.seo_score ?? d.quality_notes?.on_page?.score ?? null;
+}
+// The content AREA of a draft (for the area filter), from its content/asset type.
+const CONTENT_AREA: Record<string, string> = {
+  article: "Article", blog: "Blog", white_paper: "Article", faq: "Website",
+  landing_page: "Website", local_page: "Local", gbp_post: "Local",
+  social_post: "Social", video_script: "Social", schema: "Website",
+};
+function draftArea(d: ContentDraft): string {
+  return CONTENT_AREA[(d.content_type || d.asset_type || "").toLowerCase()] ?? "Website";
+}
+// The gap SECTION a draft closes (for the gap-type filter), from its gap_source.
+function draftSection(d: ContentDraft): string {
+  const gs = (d.gap_source || "").toLowerCase();
+  if (gs.includes("local search") || gs.includes("local")) return "Local Ranking";
+  if (gs.includes("schema") || gs.includes("site crawl")) return "SEO";
+  if (gs.includes("search") || gs.includes("ranking")) return "Search";
+  return "AI Visibility";
+}
+const AREA_OPTIONS = ["Website", "Article", "Blog", "Social", "Local"];
+const GAP_OPTIONS = ["AI Visibility", "SEO", "Local Ranking", "Search"];
+const typeLabel = (d: ContentDraft) => (d.content_type || d.asset_type || "—").replace(/_/g, " ");
+
+// The drafts grid columns — everything readable in-row (title, type, area, gap, words, keywords,
+// image, readability, AI-visibility, SEO, status). Resizable + hideable via DataGrid.
+const DRAFT_COLUMNS: DataGridColumn<ContentDraft>[] = [
+  { key: "title", label: "Title", width: 260, hideable: false, sortValue: (d) => (d.title || "").toLowerCase(),
+    render: (d) => <span className="font-medium text-slate-800">{d.title || "Untitled"}</span> },
+  { key: "type", label: "Type", width: 100, sortValue: (d) => typeLabel(d),
+    render: (d) => <span className="text-xs text-slate-500 capitalize">{typeLabel(d)}</span> },
+  { key: "area", label: "Area", width: 90, sortValue: draftArea, render: (d) => <span className="text-xs text-slate-500">{draftArea(d)}</span> },
+  { key: "gap", label: "Gap type", width: 120, sortValue: draftSection, render: (d) => <span className="text-xs text-slate-500">{draftSection(d)}</span> },
+  { key: "words", label: "Words", width: 72, align: "right", sortValue: draftWords, render: (d) => <span className="tabular-nums text-slate-600">{draftWords(d)}</span> },
+  { key: "keywords", label: "Keywords", width: 220, sortValue: (d) => (d.target_query || "").toLowerCase(), render: (d) => <span className="text-xs text-slate-500">{d.target_query || "—"}</span> },
+  { key: "img", label: "Img", width: 52, align: "center", sortValue: (d) => (draftHasImage(d) ? 1 : 0), render: (d) => draftHasImage(d) ? <span>🖼</span> : <span className="text-slate-300">—</span> },
+  { key: "read", label: "Read", width: 68, align: "right", sortValue: (d) => readScore(d) ?? -1, render: (d) => { const n = readScore(d); return <span className={`font-mono text-xs font-semibold ${scoreCls(n)}`}>{n ?? "—"}</span>; } },
+  { key: "aivis", label: "AI-Vis", width: 76, align: "right", sortValue: (d) => aiVisScore(d) ?? -1, render: (d) => { const n = aiVisScore(d); return <span className={`font-mono text-xs font-semibold ${scoreCls(n)}`}>{n ?? "—"}</span>; } },
+  { key: "seo", label: "SEO", width: 68, align: "right", defaultHidden: true, sortValue: (d) => seoScore(d) ?? -1, render: (d) => { const n = seoScore(d); return <span className={`font-mono text-xs font-semibold ${scoreCls(n)}`}>{n ?? "—"}</span>; } },
+  { key: "status", label: "Status", width: 130, sortValue: (d) => d.status, render: (d) => <StatusBadge status={d.status} /> },
+];
+
+const filterSelectCls = "rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700";
 
 type Tab = "ready" | "fixes" | "all";
 type Sort = "impact" | "quality" | "newest";
@@ -106,6 +150,8 @@ export default function DraftsPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [openDraft, setOpenDraft] = useState<ContentDraft | null>(null);
+  const [areaFilter, setAreaFilter] = useState("all");
+  const [gapFilter, setGapFilter] = useState("all");
 
   // "Ready" = passed our checks and waiting on you. "Needs fixes" = flagged (usually a missing
   // disclosure) — high quality can still land here; it's a compliance gate, not a quality one.
@@ -124,9 +170,11 @@ export default function DraftsPage() {
     [data],
   );
   const shown = useMemo(() => {
-    const base = tab === "all" ? (data ?? []) : tab === "ready" ? ready : fixes;
+    let base = tab === "all" ? (data ?? []) : tab === "ready" ? ready : fixes;
+    if (areaFilter !== "all") base = base.filter((d) => draftArea(d) === areaFilter);
+    if (gapFilter !== "all") base = base.filter((d) => draftSection(d) === gapFilter);
     return sortDrafts(base, sort);
-  }, [tab, data, ready, fixes, sort]);
+  }, [tab, data, ready, fixes, sort, areaFilter, gapFilter]);
 
   // Which of the shown drafts a "Approve selected" run could act on (reusing the card's guard).
   const approvableShown = useMemo(() => shown.filter(bulkApprovable), [shown]);
@@ -143,7 +191,6 @@ export default function DraftsPage() {
       return next;
     });
 
-  const selectAllShown = () => setSelected(new Set(approvableShown.map((d) => d.id)));
   const clearSelected = () => setSelected(new Set());
 
   const approveSelected = async () => {
@@ -163,9 +210,6 @@ export default function DraftsPage() {
     setBulk(null);
     setSelected(new Set());
   };
-
-  const allShownSelected =
-    approvableShown.length > 0 && approvableShown.every((d) => selected.has(d.id));
 
   // Delete/dismiss selected drafts (reject removes them from the queue). Snapshot like approve.
   const deleteSelected = async () => {
@@ -278,30 +322,42 @@ export default function DraftsPage() {
         </Card>
       )}
 
-      {shown.length === 0 ? (
-        <Card>
-          <p className="text-sm text-ink-3">
-            {tab === "ready" ? "Nothing waiting on you right now — check “Held — need an author” or generate a draft from a content task." : "No drafts here."}
-          </p>
-        </Card>
-      ) : grouping ? (
-        <FlawGroups
-          drafts={shown}
-          businessId={businessId}
-          canEdit={canEdit}
-          selectable={approvableShown}
-          selected={selected}
-          onToggle={toggleOne}
-        />
+      {/* filters: by content area + by gap type */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span className="font-semibold uppercase tracking-wide text-slate-400">Filter</span>
+        <label className="inline-flex items-center gap-1">Area
+          <select value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)} className={filterSelectCls}>
+            <option value="all">All</option>
+            {AREA_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </label>
+        <label className="inline-flex items-center gap-1">Gap type
+          <select value={gapFilter} onChange={(e) => setGapFilter(e.target.value)} className={filterSelectCls}>
+            <option value="all">All</option>
+            {GAP_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+        </label>
+        {(areaFilter !== "all" || gapFilter !== "all") && (
+          <button type="button" onClick={() => { setAreaFilter("all"); setGapFilter("all"); }} className="font-medium text-indigo-600 hover:underline">Clear</button>
+        )}
+        <span className="text-slate-400">· {shown.length} shown</span>
+        {grouping && <button type="button" onClick={() => setGroupFlaws(false)} className="ml-auto font-medium text-indigo-600 hover:underline">Show as table</button>}
+      </div>
+
+      {grouping ? (
+        <FlawGroups drafts={shown} businessId={businessId} canEdit={canEdit} selectable={approvableShown} selected={selected} onToggle={toggleOne} />
       ) : (
-        <DraftTable
-          drafts={shown}
-          canEdit={canEdit}
-          selected={selected}
-          onToggle={toggleOne}
-          onToggleAll={(all) => (all ? selectAllShown() : clearSelected())}
-          allSelected={shown.length > 0 && shown.every((d) => selected.has(d.id))}
-          onOpen={setOpenDraft}
+        <DataGrid
+          columns={DRAFT_COLUMNS}
+          rows={shown}
+          getId={(d) => d.id}
+          storageKey="drafts"
+          onRowClick={(d) => setOpenDraft(d)}
+          selectable={canEdit}
+          selected={selected as Set<number | string>}
+          onToggle={(id) => toggleOne(Number(id))}
+          onToggleAll={(all) => (all ? setSelected(new Set(shown.map((d) => d.id))) : clearSelected())}
+          emptyText={tab === "ready" ? "Nothing waiting on you — generate a draft from a content task." : "No drafts here."}
         />
       )}
 
@@ -309,56 +365,6 @@ export default function DraftsPage() {
       {liveOpen && (
         <DraftEditorPanel draft={liveOpen} businessId={businessId} canEdit={canEdit} onClose={() => setOpenDraft(null)} />
       )}
-    </div>
-  );
-}
-
-// The drafts TABLE — one scannable row per draft (title, area/gap, words, keywords, image,
-// readability, AI-visibility, status), a select checkbox for bulk actions, and a click that opens
-// the slide-over editor.
-function DraftTable({ drafts, canEdit, selected, onToggle, onToggleAll, allSelected, onOpen }: {
-  drafts: ContentDraft[]; canEdit: boolean; selected: Set<number>; onToggle: (id: number) => void;
-  onToggleAll: (all: boolean) => void; allSelected: boolean; onOpen: (d: ContentDraft) => void;
-}) {
-  return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-      <table className="w-full text-left text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
-            {canEdit && <th className="py-2 pl-3"><input type="checkbox" checked={allSelected} onChange={(e) => onToggleAll(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300" aria-label="Select all" /></th>}
-            <th className="py-2 pr-3">Title</th>
-            <th className="py-2 pr-3">Area / gap</th>
-            <th className="py-2 pr-3 text-right">Words</th>
-            <th className="py-2 pr-3">Keywords</th>
-            <th className="py-2 pr-3 text-center">Img</th>
-            <th className="py-2 pr-3 text-right">Read</th>
-            <th className="py-2 pr-3 text-right">AI-Vis</th>
-            <th className="py-2 pr-3">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {drafts.map((d) => {
-            const ai = aiVisScore(d), rd = readScore(d);
-            return (
-              <tr key={d.id} className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50" onClick={() => onOpen(d)}>
-                {canEdit && (
-                  <td className="py-2 pl-3" onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={selected.has(d.id)} onChange={() => onToggle(d.id)} className="h-3.5 w-3.5 rounded border-slate-300" aria-label={`Select ${d.title}`} />
-                  </td>
-                )}
-                <td className="max-w-0 py-2 pr-3"><div className="truncate font-medium text-slate-800">{d.title || "Untitled"}</div></td>
-                <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">{d.gap_source || d.content_type || d.asset_type || "—"}</td>
-                <td className="py-2 pr-3 text-right tabular-nums text-slate-600">{draftWords(d)}</td>
-                <td className="max-w-[180px] py-2 pr-3"><div className="truncate text-xs text-slate-500">{d.target_query || "—"}</div></td>
-                <td className="py-2 pr-3 text-center">{draftHasImage(d) ? "🖼" : <span className="text-slate-300">—</span>}</td>
-                <td className={`py-2 pr-3 text-right font-mono text-xs font-semibold ${scoreCls(rd)}`}>{rd ?? "—"}</td>
-                <td className={`py-2 pr-3 text-right font-mono text-xs font-semibold ${scoreCls(ai)}`}>{ai ?? "—"}</td>
-                <td className="whitespace-nowrap py-2 pr-3"><StatusBadge status={d.status} /></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
 }

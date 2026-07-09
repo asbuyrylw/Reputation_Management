@@ -189,8 +189,10 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
 
 // The content the gap analysis says to produce (these are work-orders), vs. the off-platform
 // video/social recipes (production_briefs). video_creation appears here but is produced from a recipe.
-const CONTENT_CAPS = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation", "video_creation"]);
-const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
+// schema_markup is intentionally EXCLUDED — schema (JSON-LD) is a website/developer task, not
+// editorial content, so it stays on the task board under "website fixes", not in the content section.
+const CONTENT_CAPS = new Set(["content_writing", "review_generation", "local_content_creation", "video_creation"]);
+const DRAFTABLE = new Set(["content_writing", "review_generation", "local_content_creation"]);
 
 const CAP_LABEL: Record<string, string> = {
   content_writing: "Website content",
@@ -214,14 +216,16 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   wo: WorkOrder; draft?: ContentDraft; asset?: Asset; businessId: number | null; canEdit: boolean;
 }) {
   const gen = useGenerateDraftForWo(businessId);
+  const genProgram = useGenerateContentBatch(businessId);
   const [showSpec, setShowSpec] = useState(false);
   const brief = useContentBrief(businessId, showSpec ? wo.id : null);
   const stage = stageOf(draft, asset);
   const target = draft?.target_query ?? asset?.target_query ?? null;
   const published = asset && (asset.published_status === "live" || asset.published_url);
-  // A local page-1 GOAL isn't one draftable piece — it needs a program (geo page + blogs + FAQ +
-  // social). Route it to the batch flow instead of a single "Generate draft".
+  // A local page-1 GOAL isn't one draftable piece — it needs a PROGRAM (geo page + blogs + FAQ +
+  // social) to rank. "Produce content program" generates that multi-piece batch for this gap.
   const isLocalGoal = wo.capability === "local_content_creation";
+  const localQuery = (wo.gap_specifics?.source_query || wo.title || "").toLowerCase();
   const canDraft = canEdit && DRAFTABLE.has(wo.capability ?? "") && !isLocalGoal && !draft && !asset;
   return (
     <Card>
@@ -278,8 +282,17 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
           </Button>
         )}
         {canEdit && isLocalGoal && !draft && !asset && (
-          <Link href="/content/batches" className="inline-flex items-center rounded-md bg-indigo px-2.5 py-1 font-semibold text-white hover:bg-indigo-strong">Produce content program →</Link>
+          <button
+            type="button"
+            onClick={() => genProgram.mutate({ gap_key: `local:${localQuery}` })}
+            disabled={genProgram.isPending || genProgram.isSuccess}
+            className="inline-flex items-center rounded-md bg-indigo px-2.5 py-1 font-semibold text-white hover:bg-indigo-strong disabled:opacity-60"
+            title="Generates the multi-piece program (geo page + supporting blogs + FAQ + social) to rank for this local search"
+          >
+            {genProgram.isPending ? "Starting…" : genProgram.isSuccess ? "Program queued ✓" : "Produce content program"}
+          </button>
         )}
+        {genProgram.isSuccess && isLocalGoal && <span className="text-[11px] text-emerald-700">Multi-piece program queued — track it under Content impact.</span>}
         {draft && !published && (
           <Link href="/content/drafts" className="font-medium text-indigo hover:underline">Review draft →</Link>
         )}
