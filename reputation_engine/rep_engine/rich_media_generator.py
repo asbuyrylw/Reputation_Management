@@ -40,19 +40,16 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 from typing import Optional
 
 try:
     from . import agent_tools as _tools
     from . import notebooklm_client as _nlm
-    from . import ai_state_audit as _llm
     from .db import db
 except ImportError:  # pragma: no cover -- loose-script fallback
     import agent_tools as _tools  # type: ignore
     import notebooklm_client as _nlm  # type: ignore
-    import ai_state_audit as _llm  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("rich_media_generator")
