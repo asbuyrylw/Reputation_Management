@@ -57,12 +57,29 @@ MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "2"))                # PH
 
 # Capabilities that this module knows how to generate (others stay manual).
 GENERATABLE = {
-    "content_writing": "article",
-    "schema_markup": "schema",
+    "content_writing":  "article",
+    "schema_markup":    "schema",
     "review_generation": "review_request",
-    # Rich-media capabilities routed to rich_media_generator; listed here so
-    # work-order capability matching doesn't silently skip them.
-    "deep_content": "deep_article",
+    # Rich-media capabilities — routed to rich_media_generator (see _RICH_MEDIA_CAP_MAP).
+    # Listed here so work-order capability matching doesn't silently skip them.
+    "deep_content":     "deep_article",
+    "podcast_creation": "podcast",
+    "slide_deck":       "slide_deck",
+    "infographic":      "infographic",
+    "explainer_video":  "explainer_video",
+    "research_brief":   "research_brief",
+}
+
+# Maps work-order capability -> rich_media_generator asset_type list.
+# Any capability present here is routed to rich_media_generator instead of the
+# LLM-only path below.  deep_content requests all three long-form text types at once.
+_RICH_MEDIA_CAP_MAP: dict[str, list[str]] = {
+    "podcast_creation": ["podcast"],
+    "slide_deck":       ["slide_deck"],
+    "infographic":      ["infographic"],
+    "explainer_video":  ["explainer_video"],
+    "research_brief":   ["research_brief"],
+    "deep_content":     ["deep_article", "blog_series", "newsletter"],
 }
 # asset_type inferred from work-order title keywords as a fallback
 TITLE_HINTS = [
@@ -293,6 +310,26 @@ def _compliance(body: str) -> dict:
 # Orchestrated generation for a work order
 # ----------------------------------------------------------------------------
 def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
+    cap = (wo.get("capability") or "").lower()
+
+    # Rich-media capabilities bypass the single-source LLM path and go directly to
+    # rich_media_generator, which assembles multi-source corpus context (audit answers,
+    # gap model, competitor data) and uses the NotebookLM API or its LLM fallback.
+    if cap in _RICH_MEDIA_CAP_MAP:
+        topic = wo.get("title", "")
+        if _already_covered(business_id, topic):
+            log.info("WO '%s' already covered (pgvector); skipping.", topic)
+            return None
+        try:
+            from . import rich_media_generator as _rmg
+        except ImportError:  # pragma: no cover
+            import rich_media_generator as _rmg  # type: ignore
+        rm_types = _RICH_MEDIA_CAP_MAP[cap]
+        ids = _rmg.generate(business_id, rm_types)
+        log.info("WO %s (cap=%s) → rich_media_generator(%s): created %s",
+                 wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
+        return ids[0] if ids else None
+
     asset_type = _asset_type_for(wo)
     if not asset_type:
         log.info("WO %s not a generatable content type; skipping.", wo.get("wo_code") or wo.get("wo_id"))

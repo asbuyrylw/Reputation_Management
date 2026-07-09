@@ -262,6 +262,46 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
         "Identify 3-5 relevant local/finance podcasts; pitch the principal as guest; "
         "each episode yields an indexed third-party positive page.", 7)
 
+    # --- Phase 2: rich-media amplification via NotebookLM API + in-house LLM ---
+    # These work orders are ALWAYS emitted so the strategy surfaces every available
+    # channel. Execution is AUTO or SEMI (per TOOL_REGISTRY). Auto-runs when
+    # AGENT_RICH_MEDIA_IN_CYCLE=1 via orchestrator, or call rich_media_generator.generate()
+    # directly. Text-only types (deep_content) need no external key; NotebookLM types
+    # require NOTEBOOKLM_API_KEY or GEMINI_API_KEY and fall back to LLM when absent.
+    add("Generate deep-content bundle (long-form article + blog series + newsletter)",
+        "deep_content",
+        "rich_media_generator.generate(['deep_article','blog_series','newsletter']): "
+        "Engine-native LLM generates a 1 500-2 500 word thought-leadership article, "
+        "three blog-post outlines, and a newsletter brief using audit + gap context as "
+        "source material. No external API key required beyond the orchestrator. "
+        "Drafts saved to rich_media_drafts as pending_review.", 6)
+    add("Generate AI reputation podcast (Audio Overview)",
+        "podcast_creation",
+        "rich_media_generator.generate(['podcast']): NotebookLM Audio Overview synthesises "
+        "a two-host AI podcast from audit answers, gap model, competitor data, and the "
+        "strategy plan. Requires NOTEBOOKLM_API_KEY or GEMINI_API_KEY. "
+        "Output: MP3 audio URL + transcript in rich_media_drafts as pending_review.", 7)
+    add("Generate executive slide-deck brief",
+        "slide_deck",
+        "rich_media_generator.generate(['slide_deck']): NotebookLM study-guide synthesis "
+        "across all audit sources → 10-12 slide executive deck brief. "
+        "Falls back to in-house LLM if API key absent. Saved to rich_media_drafts.", 8)
+    add("Generate PR/content-team research brief",
+        "research_brief",
+        "rich_media_generator.generate(['research_brief']): NotebookLM briefing-doc "
+        "synthesis across audit + competitor sources → deep research brief for PR "
+        "teams and journalists. Falls back to LLM if API key absent.", 8)
+    add("Generate infographic content brief",
+        "infographic",
+        "rich_media_generator.generate(['infographic']): NotebookLM FAQ synthesis → "
+        "structured infographic brief. Hand to a graphic designer with brand assets. "
+        "Falls back to LLM if API key absent.", 9)
+    add("Generate explainer video script",
+        "explainer_video",
+        "rich_media_generator.generate(['explainer_video']): NotebookLM study-guide "
+        "synthesis → explainer video script skeleton (2-4 min). Pair with the "
+        "production_brief.py video spec. Falls back to LLM script if API key absent.", 9)
+
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
     surfaces = gap.get("surface_actions", {}) or {}
     surface_week = {"google_business": 1, "linkedin": 5, "facebook": 5, "x": 6, "reddit": 8}
