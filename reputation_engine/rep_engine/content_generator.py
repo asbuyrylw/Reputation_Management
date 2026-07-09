@@ -60,11 +60,19 @@ GENERATABLE = {
     "content_writing": "article",
     "schema_markup": "schema",
     "review_generation": "review_request",
+    # Rich-media capabilities routed to rich_media_generator; listed here so
+    # work-order capability matching doesn't silently skip them.
+    "deep_content": "deep_article",
 }
 # asset_type inferred from work-order title keywords as a fallback
 TITLE_HINTS = [
     ("faq", "faq"), ("schema", "schema"), ("bio", "bio"),
     ("article", "article"), ("post", "gbp_post"), ("review", "review_request"),
+    # Rich-media types -- surfaced in Module 6 list view; actual generation is
+    # in rich_media_generator.py (NotebookLM path) or _gen_deep_content() below.
+    ("blog", "blog_series"), ("newsletter", "newsletter"),
+    ("podcast", "podcast"), ("slide", "slide_deck"), ("infographic", "infographic"),
+    ("explainer", "explainer_video"), ("brief", "research_brief"),
 ]
 
 
@@ -143,6 +151,19 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str) -> str:
         "gbp_post": "Write a short Google Business Profile post (80-150 words), friendly and local.",
         "review_request": "Write a short, warm review-request message (SMS + email versions) "
                           "asking a happy client to leave a Google review, with a placeholder for the link.",
+        # Rich-media types generated via in-house LLM path (NotebookLM path is
+        # in rich_media_generator.py and produces richer multi-source output).
+        "deep_article": "Write a long-form thought-leadership article (1 500-2 500 words) "
+                        "in markdown with a clear H1, H2 subheadings, and a concrete "
+                        "conclusion. Use [INSERT: ...] placeholders for unknown facts. "
+                        "No performance promises, guaranteed-return language, or "
+                        "unverifiable superlatives.",
+        "blog_series": "Generate outlines for THREE related blog posts. Each outline: "
+                       "title, target query, 5-7 heading structure, key points, recommended "
+                       "word count, CTA. Format in markdown. No fabricated facts.",
+        "newsletter": "Write a newsletter brief (400-600 words) covering reputation "
+                      "progress highlights. Include 3 subject-line options, preview text, "
+                      "3-4 content sections, key takeaway, and CTA. Tone: warm, credible.",
     }
     spec = specs.get(asset_type, "Write the requested asset in markdown.")
     return (

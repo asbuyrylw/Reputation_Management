@@ -31,6 +31,15 @@ class Settings(BaseModel):
     perplexity_api_key: str = "YOUR_PERPLEXITY_KEY"
     gemini_api_key: str = "YOUR_GEMINI_KEY"
 
+    # --- NotebookLM API (rich-media generation) ---
+    # Falls back to GEMINI_API_KEY when not set; both use the same Google AI Studio key.
+    notebooklm_api_key: str = ""
+    # Base URL for the NotebookLM / Semantic Retrieval API (override for VPC endpoints).
+    notebooklm_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    # Rich-media asset types to generate when AGENT_RICH_MEDIA_IN_CYCLE=1.
+    # Comma-separated list; empty string means all types.
+    rich_media_types: str = ""
+
     # --- crawler ---
     crawl_respect_robots: bool = True
     crawl_use_pyseo: bool = True
@@ -94,6 +103,12 @@ def load_settings(env: Optional[dict] = None) -> Settings:
         openai_api_key=e.get("OPENAI_API_KEY", "YOUR_OPENAI_KEY"),
         perplexity_api_key=e.get("PERPLEXITY_API_KEY", "YOUR_PERPLEXITY_KEY"),
         gemini_api_key=e.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY"),
+        notebooklm_api_key=e.get("NOTEBOOKLM_API_KEY", ""),
+        notebooklm_base_url=e.get(
+            "NOTEBOOKLM_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        ),
+        rich_media_types=e.get("RICH_MEDIA_TYPES", ""),
         crawl_respect_robots=_as_bool(e.get("CRAWL_RESPECT_ROBOTS"), True),
         crawl_use_pyseo=_as_bool(e.get("CRAWL_USE_PYSEO"), True),
         crawl_ua=e.get("CRAWL_UA", "ReputationEngineBot/1.0 (+audit)"),

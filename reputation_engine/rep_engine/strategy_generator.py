@@ -68,6 +68,13 @@ CAPABILITIES = [
     "social_publishing", "press_outreach", "media_list_building", "link_building",
     "review_generation", "ai_visibility_tracking", "form_capture", "visitor_tracking",
     "schema_markup", "course_microsite",
+    # Rich-media capabilities (enabled by NotebookLM API + in-house LLM path)
+    "podcast_creation",    # Audio Overview: two-host AI podcast from audit data
+    "slide_deck",          # Executive slide deck brief from study-guide synthesis
+    "infographic",         # Infographic content brief from FAQ synthesis
+    "explainer_video",     # Explainer video script from multi-source synthesis
+    "research_brief",      # Deep research brief for PR / content teams
+    "deep_content",        # Long-form articles, blog series, newsletters
 ]
 
 # Registry. preference within a capability = order listed (best/most-automatable first).
@@ -120,8 +127,39 @@ TOOL_REGISTRY: list[Tool] = [
     Tool("visitortracking", "VisitorTracking.com", "visitor_tracking", Exec.SEMI, "AppSumo; site visitor ID/analytics."),
     Tool("learniverse", "Learniverse", "course_microsite", Exec.MANUAL, "AppSumo; courses (financial-literacy content asset)."),
     Tool("acadle", "Acadle", "course_microsite", Exec.MANUAL, "AppSumo; academy/community (authority asset)."),
-    Tool("notebooklm", "NotebookLM", "topic_research", Exec.MANUAL, "Free; synthesize source docs into briefs/audio."),
+    # NotebookLM (MANUAL for topic research; SEMI via API for rich-media generation)
+    Tool("notebooklm", "NotebookLM", "topic_research", Exec.MANUAL,
+         "Free (browser); synthesize source docs into briefs/audio. "
+         "Use notebooklm_api for automated generation."),
     Tool("getgeni2", "Vadoo AI captions", "video_repurpose", Exec.MANUAL, "AppSumo; captions/clips."),
+
+    # --- Rich-media generation via NotebookLM API ---
+    Tool("notebooklm_api", "NotebookLM API", "podcast_creation", Exec.SEMI,
+         "Google NotebookLM API; generates Audio Overview (two-host AI podcast) from "
+         "audit + gap + competitor sources. Requires NOTEBOOKLM_API_KEY or GEMINI_API_KEY. "
+         "Output: MP3 audio + transcript, stored as pending_review draft."),
+    Tool("notebooklm_api_slides", "NotebookLM API", "slide_deck", Exec.SEMI,
+         "Google NotebookLM API; generates study-guide synthesis across audit sources → "
+         "structured slide-deck brief (10-12 slides). Requires API key."),
+    Tool("notebooklm_api_infographic", "NotebookLM API", "infographic", Exec.SEMI,
+         "Google NotebookLM API; generates FAQ synthesis → infographic content brief. "
+         "Pass to a designer with brand assets to produce the final graphic."),
+    Tool("notebooklm_api_video", "NotebookLM API", "explainer_video", Exec.SEMI,
+         "Google NotebookLM API; synthesises a study guide from all audit sources → "
+         "explainer video script. Pair with video production brief from production_brief.py."),
+    Tool("notebooklm_api_brief", "NotebookLM API", "research_brief", Exec.SEMI,
+         "Google NotebookLM API; generates a briefing doc across all audit/competitor "
+         "sources → PR / content team research brief."),
+    # In-house LLM path for deep written content (no external API key required)
+    Tool("llm_deep_content", "Engine-native LLM", "deep_content", Exec.AUTO,
+         "System generates long-form articles, blog-series outlines, and newsletter briefs "
+         "using the in-house LLM path. No external API key needed beyond the orchestrator."),
+    # Veo (Google) for cinematic video generation when Gemini key is set
+    Tool("veo", "Google Veo", "video_creation", Exec.SEMI,
+         "Google Veo API (requires GEMINI_API_KEY with Veo access); generates short "
+         "cinematic video clips from the video-production brief. Use production_brief.py "
+         "to generate the brief first, then pass to Veo for clip generation. "
+         "Veo output lands in pending_review before any use."),
 ]
 
 
