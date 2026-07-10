@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -53,16 +53,22 @@ def visuals(status: Optional[str] = None, draft_id: Optional[int] = None,
 
 @router.get("/visuals/{visual_id}/file")
 def visual_file(visual_id: int, business_id: int = Depends(authorize_business)):
-    """Serve a generated visual's image bytes (tenancy-checked, no path traversal)."""
+    """Serve a generated visual's bytes (tenancy-checked, no path traversal). Prefers the local
+    file (fast, e.g. single-machine dev); falls back to the DB blob when the file isn't on THIS
+    service's disk (the split API/worker Railway deploy) so visuals render everywhere."""
     fp = _vc.visual_file_path(visual_id, business_id)
-    if not fp:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "visual not found")
-    base = os.path.realpath(_vc._OUTPUT_DIR)
-    path = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(os.getcwd(), fp))
-    if not (path == base or path.startswith(base + os.sep)) or not os.path.isfile(path):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "file not found")
-    media = _IMG_MIME.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
-    return FileResponse(path, media_type=media)
+    if fp:
+        base = os.path.realpath(_vc._OUTPUT_DIR)
+        path = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(os.getcwd(), fp))
+        if (path == base or path.startswith(base + os.sep)) and os.path.isfile(path):
+            media = _IMG_MIME.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+            return FileResponse(path, media_type=media)
+    # local file absent (or on another service's disk) -> serve the DB blob
+    blob = _vc.visual_file_blob(visual_id, business_id)
+    if blob:
+        data, media = blob
+        return Response(content=data, media_type=media)
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "visual file not found")
 
 
 @router.post("/visuals/generate")

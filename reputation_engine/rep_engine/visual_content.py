@@ -171,16 +171,25 @@ def _save_png(business_id: int, raw: bytes, ext: str = "png") -> str:
     return path
 
 
+_MIME_BY_EXT = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp",
+                "mp4": "video/mp4", "webm": "video/webm"}
+
+
 def _persist(business_id: int, *, kind: str, provider: Optional[str], model: Optional[str],
              prompt: str, file_path: Optional[str], url: Optional[str], compliance_note: Optional[str],
-             work_order_id=None, draft_id=None, width=None, height=None, meta=None) -> int:
+             work_order_id=None, draft_id=None, width=None, height=None, meta=None,
+             file_bytes: Optional[bytes] = None, mime: Optional[str] = None) -> int:
+    # Store the bytes in the DB too (shared across API/worker) so the file serves even when the
+    # generating worker's local disk isn't the one the API reads from. Derive mime from the path ext.
+    if mime is None and file_path:
+        mime = _MIME_BY_EXT.get(os.path.splitext(file_path)[1].lstrip(".").lower())
     with db() as conn:
         row = conn.execute(
             "INSERT INTO visual_assets (business_id, work_order_id, draft_id, kind, provider, model, "
-            "prompt, file_path, url, width, height, compliance_note, meta) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "prompt, file_path, url, width, height, compliance_note, meta, file_bytes, mime) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (business_id, work_order_id, draft_id, kind, provider, model, prompt, file_path, url,
-             width, height, compliance_note, Json(meta or {}))).fetchone()
+             width, height, compliance_note, Json(meta or {}), file_bytes, mime)).fetchone()
         conn.commit()
     return int(row["id"])
 
@@ -210,7 +219,7 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
     path = _save_png(business_id, raw)
     vid = _persist(business_id, kind=kind, provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
-                   work_order_id=work_order_id, draft_id=draft_id)
+                   work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw)
     return {"ok": True, "visual_id": vid, "file_path": path, "provider": provider, "model": model,
             "compliance_note": note}
 
@@ -361,9 +370,13 @@ def generate_quote_card(business_id: int, text: str, *, attribution: Optional[st
     if attribution:
         draw.text((80, y + 30), f"— {attribution}", font=small, fill=(148, 163, 184))
     raw_path = _save_png_image(business_id, img)
+    import io as _io
+    _buf = _io.BytesIO()
+    img.save(_buf, "PNG")
     vid = _persist(business_id, kind="quote_card", provider="local", model="pillow",
                    prompt=text, file_path=raw_path, url=None, compliance_note=None,
-                   work_order_id=work_order_id, width=W, height=H)
+                   work_order_id=work_order_id, width=W, height=H,
+                   file_bytes=_buf.getvalue(), mime="image/png")
     return {"ok": True, "visual_id": vid, "file_path": raw_path}
 
 
@@ -484,7 +497,7 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
     path = _save_png(business_id, raw, ext="mp4")
     vid = _persist(business_id, kind="video", provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
-                   work_order_id=work_order_id, draft_id=draft_id)
+                   work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4")
     return {"ok": True, "visual_id": vid, "file_path": path, "provider": provider, "model": model,
             "compliance_note": note}
 
@@ -517,6 +530,18 @@ def visual_file_path(visual_id: int, business_id: int) -> Optional[str]:
         r = conn.execute("SELECT file_path FROM visual_assets WHERE id=%s AND business_id=%s",
                          (visual_id, business_id)).fetchone()
     return (r or {}).get("file_path") if r else None
+
+
+def visual_file_blob(visual_id: int, business_id: int) -> Optional[tuple[bytes, str]]:
+    """The visual's bytes + mime from the DB (tenancy-scoped). This is the cross-service fallback:
+    on a split API/worker deploy the API serves from here when the worker-written local file isn't
+    on the API's disk. Returns None if absent."""
+    with db() as conn:
+        r = conn.execute("SELECT file_bytes, mime FROM visual_assets WHERE id=%s AND business_id=%s",
+                         (visual_id, business_id)).fetchone()
+    if not r or not r.get("file_bytes"):
+        return None
+    return bytes(r["file_bytes"]), (r.get("mime") or "application/octet-stream")
 
 
 def set_visual_status(visual_id: int, status: str, reviewer: str, business_id: int) -> bool:

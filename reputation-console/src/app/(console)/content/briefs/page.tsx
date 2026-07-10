@@ -10,6 +10,7 @@ import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { VisualContentPanel } from "@/components/VisualContentPanel";
 import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent, ProductionBrief } from "@/lib/types";
 
 // Today as a YYYY-MM-DD string in the local timezone (default for "produced on").
@@ -305,6 +306,9 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
           <span className="text-ink-4">Produce from a recipe below</span>
         )}
       </div>
+      {/* generate a visual (image / video / quote card) for this content piece — lives here in
+          Content, not on the task board */}
+      <VisualContentPanel businessId={businessId} workOrderId={wo.id} canEdit={canEdit} />
     </Card>
   );
 }

@@ -107,6 +107,8 @@ export function VisualContentPanel({
   const { data } = useVisuals(businessId, undefined, open);
   const gen = useGenerateVisual(businessId);
   const [err, setErr] = useState<string | null>(null);
+  // Which kind is currently generating (so the CLICKED button spins + says "Generating…", not all).
+  const [busyKind, setBusyKind] = useState<string | null>(null);
   // Gap-grounded suggestion for the prompt — pulled once the panel is open, so "Add a visual"
   // starts from what this task is actually supposed to convey instead of a blank box.
   const { data: brief } = useVisualBrief(businessId, open ? workOrderId : null);
@@ -122,11 +124,17 @@ export function VisualContentPanel({
     body: { prompt?: string; text?: string; attribution?: string; topic?: string },
   ) => {
     setErr(null);
+    setBusyKind(kind);
     gen.mutate(
       { kind, work_order_id: workOrderId, ...body },
-      { onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start — try again.") },
+      {
+        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start — try again."),
+        onSettled: () => setBusyKind(null),
+      },
     );
   };
+  // A tiny inline spinner for a button that's mid-generate.
+  const Spin = () => <span className="inline-block h-3 w-3 animate-spin rounded-full border-[1.5px] border-slate-400 border-t-transparent align-[-1px]" />;
 
   const onQuoteCard = () => {
     if (typeof window === "undefined") return;
@@ -183,36 +191,36 @@ export function VisualContentPanel({
                 type="button"
                 onClick={onQuoteCard}
                 disabled={gen.isPending}
-                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
-                Quote card
+                {busyKind === "quote_card" ? <><Spin /> Generating…</> : "Quote card"}
               </button>
               <button
                 type="button"
                 onClick={onImage}
                 disabled={gen.isPending || !imageConfigured}
                 title={imageConfigured ? undefined : "Add an image provider key in .env to enable AI images."}
-                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                AI image
+                {busyKind === "image" ? <><Spin /> Generating…</> : "AI image"}
               </button>
               <button
                 type="button"
                 onClick={onVideoBrief}
                 disabled={gen.isPending}
                 title={videoConfigured ? undefined : "A shootable brief until a video provider key is added."}
-                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
-                Video brief
+                {busyKind === "video_brief" ? <><Spin /> Generating…</> : "Video brief"}
               </button>
               <button
                 type="button"
                 onClick={onVideo}
                 disabled={gen.isPending || !videoConfigured}
                 title={videoConfigured ? "Renders in 1-3 minutes." : "Set VIDEO_PROVIDER=veo + a Gemini key in .env to enable AI video."}
-                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                AI video
+                {busyKind === "video" ? <><Spin /> Generating…</> : "AI video"}
               </button>
             </div>
           ) : (

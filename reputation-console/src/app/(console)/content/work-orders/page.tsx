@@ -10,7 +10,6 @@ import { useAuth } from "@/lib/auth";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { Badge, Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import { VisualContentPanel } from "@/components/VisualContentPanel";
 import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, RoadmapItem } from "@/lib/types";
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
@@ -373,9 +372,7 @@ function WorkOrderCard({ wo, businessId, canEdit, onStatus, draft, asset }: { wo
 
       {/* per-task work log */}
       <NotesSection wo={wo} businessId={businessId} canEdit={canEdit} />
-
-      {/* generate a visual (quote card / AI image / video brief) for this task */}
-      <VisualContentPanel businessId={businessId} workOrderId={wo.id} canEdit={canEdit} />
+      {/* visuals (images/video) are generated in the Content section, not here on the task board. */}
 
       {canDraft && !draft && !asset && (
         <div className="mt-2">
