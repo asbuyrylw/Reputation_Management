@@ -30,6 +30,10 @@ import {
   useStartCitationRun,
   useConfirmCitationRun,
   useCancelCitationRun,
+  useWritingStyles,
+  useAnalyzeWritingStyle,
+  useSetActiveStyle,
+  useDeleteWritingStyle,
 } from "@/lib/hooks";
 import { Card, PageHeader, Spinner, Pill, Button, Input } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
@@ -1195,7 +1199,81 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
   );
 }
 
-type Tab = "connections" | "imports" | "reply-assist" | "citations";
+// ---- Writing styles tab: clone a brand voice from a URL; the active one shapes generated content ----
+function WritingStylesTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useWritingStyles(businessId);
+  const analyze = useAnalyzeWritingStyle(businessId);
+  const setActive = useSetActiveStyle(businessId);
+  const del = useDeleteWritingStyle(businessId);
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const styles = data?.styles ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">Write in your brand&apos;s voice</div>
+        <p className="mt-1 text-sm text-ink-2">
+          Paste a URL to an article that sounds like you (yours or a reference). We analyze its style — tone, sentence length, vocabulary, quirks — and the <span className="font-medium">active</span> style shapes every piece we generate.
+        </p>
+      </Card>
+
+      {canEdit && (
+        <Card>
+          <div className="text-sm font-semibold text-ink">Clone a style from a URL</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/an-article" className="min-w-[260px] flex-1" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)" className="max-w-[180px]" />
+            <Button
+              onClick={() => { setErr(null); analyze.mutate({ url, name: name || undefined }, { onSuccess: () => { setUrl(""); setName(""); }, onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't analyze that URL.") }); }}
+              disabled={analyze.isPending || !url.trim()}
+            >
+              {analyze.isPending ? "Analyzing…" : "Analyze style"}
+            </Button>
+          </div>
+          {err && <p className="mt-1.5 text-xs text-rose-600">{err}</p>}
+        </Card>
+      )}
+
+      <Card>
+        <div className="text-sm font-semibold text-ink">Your styles</div>
+        {isLoading ? <Spinner /> : styles.length === 0 ? (
+          <p className="mt-1 text-sm text-ink-4">No styles yet — analyze a URL above.</p>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {styles.map((s) => (
+              <li key={s.id} className={`rounded-lg border p-3 ${s.active ? "border-indigo-300 bg-indigo-050/40" : "border-line"}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-sm font-medium text-ink">
+                      {s.name}
+                      {s.active && <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold text-white">Active</span>}
+                    </div>
+                    {s.source_url && <a href={s.source_url} target="_blank" rel="noreferrer" className="text-[11px] text-ink-4 hover:text-indigo hover:underline">{s.source_url}</a>}
+                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-2">
+                      {s.active ? (
+                        <button onClick={() => setActive.mutate(null)} className="text-xs font-medium text-ink-3 hover:underline">Deactivate</button>
+                      ) : (
+                        <button onClick={() => setActive.mutate(s.id)} className="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">Use this</button>
+                      )}
+                      <button onClick={() => del.mutate(s.id)} className="text-xs font-medium text-rose-600 hover:underline">Delete</button>
+                    </div>
+                  )}
+                </div>
+                {s.profile && <p className="mt-1.5 text-[12px] leading-relaxed text-ink-2">{s.profile}</p>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+type Tab = "connections" | "imports" | "reply-assist" | "citations" | "writing-styles";
 
 export default function IntegrationsPage() {
   const { businessId, canEdit } = useBusiness();
@@ -1218,6 +1296,7 @@ export default function IntegrationsPage() {
           { key: "imports", label: "Data imports" },
           { key: "reply-assist", label: "Reply Assist extension" },
           { key: "citations", label: "Citation builder" },
+          { key: "writing-styles", label: "Writing styles" },
         ]}
         active={tab}
         onSelect={(k) => setTab(k as Tab)}
@@ -1229,8 +1308,10 @@ export default function IntegrationsPage() {
         <DataImportsTab businessId={businessId} canEdit={canEdit} />
       ) : tab === "reply-assist" ? (
         <ReplyAssistTab businessId={businessId} canEdit={canEdit} />
-      ) : (
+      ) : tab === "citations" ? (
         <CitationBuilderTab businessId={businessId} canEdit={canEdit} />
+      ) : (
+        <WritingStylesTab businessId={businessId} canEdit={canEdit} />
       )}
     </div>
   );

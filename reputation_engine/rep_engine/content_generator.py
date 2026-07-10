@@ -717,6 +717,15 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001 -- optimization is best-effort, never blocks generation
         log.debug("neuronwriter brief skipped: %s", e)
     voice = _brand_voice(business_id)
+    # If the owner cloned a brand writing style (from a URL), prepend it so the draft matches that
+    # voice. Best-effort — never blocks generation.
+    try:
+        from . import writing_style as _ws
+        _style = _ws.active_profile(business_id)
+        if _style:
+            voice = (f"BRAND WRITING STYLE — match this voice exactly: {_style}\n\n" + (voice or "")).strip()
+    except Exception as e:  # noqa: BLE001
+        log.debug("writing-style voice unavailable: %s", e)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
     comp_system = _compliance_system(reg)
     # Pass 1 (long-form): a keyword-mapped outline the draft writes from.

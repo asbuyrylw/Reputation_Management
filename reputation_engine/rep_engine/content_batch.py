@@ -91,6 +91,40 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).strip()
 
 
+def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
+    """The ranking keywords a local/geo goal should target -- from the keyword-research set
+    (target_keywords), scored by relevance to the geo query. A page-1 goal needs a PROGRAM of
+    content across this keyword cluster (not one page), so each becomes a supporting blog."""
+    qtoks = {w for w in re.findall(r"[a-z]{4,}", (query or "").lower()) if w not in _STOPW}
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT keyword, kind, priority FROM target_keywords WHERE business_id=%s "
+                "ORDER BY priority DESC NULLS LAST LIMIT 80", (business_id,)).fetchall()
+    except Exception:  # noqa: BLE001 -- no keyword table yet -> no extra pieces
+        return []
+    scored: list[tuple[int, str]] = []
+    for r in rows:
+        kw = (r.get("keyword") or "").strip()
+        if not kw or kw.lower() == (query or "").lower():
+            continue
+        ktoks = {w for w in re.findall(r"[a-z]{4,}", kw.lower()) if w not in _STOPW}
+        overlap = len(qtoks & ktoks)
+        is_local = (r.get("kind") or "") == "local"
+        if overlap >= 1 or is_local:
+            scored.append((overlap + (1 if is_local else 0), kw))
+    scored.sort(key=lambda x: -x[0])
+    seen, out = set(), []
+    for _, kw in scored:
+        k = kw.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(kw)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
     """Snap gap-model prompt strings (LLM-authored, often paraphrased) to the ACTUAL battery prompt
     text stored in `answers`, so the cluster query (`prompt = ANY`) matches instead of silently
@@ -159,7 +193,9 @@ def gaps_for_business(business_id: int) -> list[dict]:
             "why": item.get("why") or "",
             "target_prompts": _match_prompts(topic, weak),
         })
-    # Local page-1 GOALS -> a geo content program (not one draftable item).
+    # Local page-1 GOALS -> a KEYWORD-DRIVEN geo content program (not one draftable item): the geo
+    # page + a supporting blog per ranking keyword + FAQ + social, so a page-2→page-1 move has a
+    # cluster of ranking assets behind it, not a single page.
     for i, item in enumerate(gm.get("local_seo_gaps") or []):
         q = (item.get("query") or f"local query {i+1}").strip()
         out.append({
@@ -169,6 +205,7 @@ def gaps_for_business(business_id: int) -> list[dict]:
             "gap_source": "local search ranking",
             "why": item.get("recommendation") or item.get("why") or "",
             "target_prompts": _match_prompts(q, weak),
+            "keywords": _local_keywords(business_id, q),   # the ranking keyword cluster for this geo goal
         })
     # Questions a rival wins -> competing owned content.
     for i, item in enumerate(gm.get("competitor_defense") or []):
@@ -340,6 +377,24 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
         except Exception as e:  # noqa: BLE001 -- collect per-piece errors, don't abort the batch
             log.warning("batch %d: %s piece failed: %s", batch_id, ct, e)
             errors.append({"content_type": ct, "reason": str(e)[:200]})
+    # Keyword-driven local program: a supporting blog per RANKING KEYWORD so the geo goal is backed by
+    # a content cluster (multiple ranking assets), not one page. Only local gaps carry `keywords`.
+    for kw in (gap.get("keywords") or [])[:3]:
+        if not kw or _norm(kw) == _norm(topic):
+            continue
+        wo = {"title": f"Blog: {kw}", "capability": "content_writing", "execution": "auto",
+              "target_query": kw, "content_type": "blog", "_db_id": matched_wo,
+              "instruction": f"Rank for '{kw}' as part of the local content program for '{topic}'.",
+              "gap_specifics": {"source_query": kw}}
+        try:
+            did = _cg.generate_for_wo(business_id, wo, biz, content_type="blog", batch_id=batch_id)
+            if did:
+                made.append({"draft_id": did, "content_type": "blog"})
+            else:
+                errors.append({"content_type": f"blog:{kw}", "reason": "skipped (already covered / empty)"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("batch %d: keyword blog '%s' failed: %s", batch_id, kw, e)
+            errors.append({"content_type": f"blog:{kw}", "reason": str(e)[:200]})
     # Social: atomize the primary long-form piece into per-platform posts, tag them into the batch,
     # and give each its (social-profile) GEO grade.
     if want_social and made:

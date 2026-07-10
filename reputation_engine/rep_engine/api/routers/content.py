@@ -197,6 +197,52 @@ def work_order_visual_brief(wo_id: int, business_id: int = Depends(authorize_bus
     return {"prompt": _vc.suggested_prompt(business_id, dict(row))}
 
 
+# ---- brand writing styles (cloned from a URL; the active one shapes generation) ----
+class StyleAnalyze(BaseModel):
+    url: str
+    name: Optional[str] = None
+
+
+class StyleActivate(BaseModel):
+    style_id: Optional[int] = None
+
+
+def _ws():
+    try:
+        from ... import writing_style as w
+    except ImportError:  # pragma: no cover
+        import writing_style as w  # type: ignore
+    return w
+
+
+@router.get("/writing-styles")
+def writing_styles(business_id: int = Depends(authorize_business)):
+    return {"styles": _ws().list_styles(business_id)}
+
+
+@router.post("/writing-styles/analyze")
+def analyze_writing_style(body: StyleAnalyze, business_id: int = Depends(require_business_editor)):
+    """Clone a writing style from an article URL (fetch + LLM style analysis, stored inactive)."""
+    res = _ws().analyze_url(business_id, body.url, name=body.name)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, res.get("error", "could not analyze"))
+    return res
+
+
+@router.patch("/writing-styles/active")
+def set_writing_style_active(body: StyleActivate, business_id: int = Depends(require_business_editor)):
+    """Set (or clear, with null) the active style used to shape generated content."""
+    _ws().set_active(business_id, body.style_id)
+    return {"ok": True}
+
+
+@router.delete("/writing-styles/{style_id}")
+def delete_writing_style(style_id: int, business_id: int = Depends(require_business_editor)):
+    if not _ws().delete_style(business_id, style_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "style not found")
+    return {"ok": True}
+
+
 @router.get("/team")
 def team(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """People who can be assigned tasks on this business (org members + business-access editors +

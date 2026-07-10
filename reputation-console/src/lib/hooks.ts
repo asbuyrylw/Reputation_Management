@@ -403,6 +403,39 @@ export function useRejectDraft(businessId: number | null) {
   );
 }
 
+// ---- brand writing styles (cloned from a URL; the active one shapes generation) ----
+export interface WritingStyle {
+  id: number; name: string; source_url: string | null; profile: string | null;
+  active: boolean; created_at: string;
+}
+export function useWritingStyles(businessId: number | null) {
+  return useApiQuery<{ styles: WritingStyle[] }>(["writing-styles", businessId], base(businessId, "/writing-styles"));
+}
+export function useAnalyzeWritingStyle(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ url, name }: { url: string; name?: string }) =>
+      apiFetch<{ ok: boolean; id: number }>(`/businesses/${businessId}/writing-styles/analyze`, { method: "POST", body: { url, name: name ?? null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
+  });
+}
+export function useSetActiveStyle(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (style_id: number | null) =>
+      apiFetch(`/businesses/${businessId}/writing-styles/active`, { method: "PATCH", body: { style_id } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
+  });
+}
+export function useDeleteWritingStyle(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (style_id: number) =>
+      apiFetch(`/businesses/${businessId}/writing-styles/${style_id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
+  });
+}
+
 // ---- Katteb content-scoring layer ----
 export function useKattebCredits(businessId: number | null) {
   return useApiQuery<{ configured: boolean; ok?: boolean; credits_available?: number; credits_total?: number; plan_tier?: string }>(
