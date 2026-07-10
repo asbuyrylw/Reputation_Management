@@ -68,6 +68,13 @@ CAPABILITIES = [
     "social_publishing", "press_outreach", "media_list_building", "link_building",
     "review_generation", "ai_visibility_tracking", "form_capture", "visitor_tracking",
     "schema_markup", "course_microsite",
+    # Rich-media capabilities (NotebookLM API + in-house LLM fallback path)
+    "podcast_creation",    # Audio Overview: two-host AI podcast from audit data
+    "slide_deck",          # Executive slide-deck brief from study-guide synthesis
+    "infographic",         # Infographic content brief from FAQ synthesis
+    "explainer_video",     # Explainer-video script from multi-source synthesis
+    "research_brief",      # Deep research brief for PR / content teams
+    "deep_content",        # Long-form articles, blog series, newsletters
 ]
 
 # Registry. preference within a capability = order listed (best/most-automatable first).
@@ -120,8 +127,30 @@ TOOL_REGISTRY: list[Tool] = [
     Tool("visitortracking", "VisitorTracking.com", "visitor_tracking", Exec.SEMI, "AppSumo; site visitor ID/analytics."),
     Tool("learniverse", "Learniverse", "course_microsite", Exec.MANUAL, "AppSumo; courses (financial-literacy content asset)."),
     Tool("acadle", "Acadle", "course_microsite", Exec.MANUAL, "AppSumo; academy/community (authority asset)."),
-    Tool("notebooklm", "NotebookLM", "topic_research", Exec.MANUAL, "Free; synthesize source docs into briefs/audio."),
+    # NotebookLM (MANUAL for topic research; SEMI via API for rich-media generation)
+    Tool("notebooklm", "NotebookLM", "topic_research", Exec.MANUAL,
+         "Free (browser); synthesize source docs into briefs/audio. Use notebooklm_api for automated generation."),
     Tool("getgeni2", "Vadoo AI captions", "video_repurpose", Exec.MANUAL, "AppSumo; captions/clips."),
+
+    # --- Rich-media generation via NotebookLM API (dormant-safe; LLM fallback when no key) ---
+    Tool("notebooklm_api", "NotebookLM API", "podcast_creation", Exec.SEMI,
+         "Google NotebookLM API; Audio Overview (two-host AI podcast) from audit + gap + competitor "
+         "sources. Requires NOTEBOOKLM_API_KEY or GEMINI_API_KEY. Output: MP3 + transcript, pending_review."),
+    Tool("notebooklm_api_slides", "NotebookLM API", "slide_deck", Exec.SEMI,
+         "Google NotebookLM API; study-guide synthesis across audit sources -> 10-12 slide deck brief."),
+    Tool("notebooklm_api_infographic", "NotebookLM API", "infographic", Exec.SEMI,
+         "Google NotebookLM API; FAQ synthesis -> infographic content brief for a designer."),
+    Tool("notebooklm_api_video", "NotebookLM API", "explainer_video", Exec.SEMI,
+         "Google NotebookLM API; study-guide synthesis -> explainer-video script. Pair with a video production brief."),
+    Tool("notebooklm_api_brief", "NotebookLM API", "research_brief", Exec.SEMI,
+         "Google NotebookLM API; briefing-doc synthesis across audit/competitor sources -> PR/content research brief."),
+    # In-house LLM path for deep written content (no external key required)
+    Tool("llm_deep_content", "Engine-native LLM", "deep_content", Exec.AUTO,
+         "System generates long-form articles, blog-series outlines, and newsletter briefs via the in-house LLM path."),
+    # Veo (Google) for cinematic video generation when the Gemini/Veo key is set
+    Tool("veo", "Google Veo", "video_creation", Exec.SEMI,
+         "Google Veo (requires GEMINI_API_KEY with Veo access); short cinematic clips from the video-production "
+         "brief. Output lands in pending_review before any use."),
 ]
 
 
@@ -375,6 +404,39 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
         f"Identify 3-5 relevant {geo} / {industry} podcasts; pitch the principal as guest; "
         f"each episode yields an indexed third-party positive page.", 7,
         gap_source="audited gap: thin corroboration", source_query="podcast appearances")
+
+    # --- Phase 2: rich-media amplification via NotebookLM API + in-house LLM ---
+    # Always emitted so the strategy surfaces every available channel. Execution is AUTO/SEMI
+    # (per TOOL_REGISTRY). Auto-runs when AGENT_RICH_MEDIA_IN_CYCLE=1, or via the "Generate draft"
+    # button (generate_for_wo routes these capabilities to rich_media_generator). Text-only types
+    # need no external key; NotebookLM types require NOTEBOOKLM_API_KEY or GEMINI_API_KEY and fall
+    # back to the in-house LLM when absent — so the whole block is dormant-safe.
+    add("Generate deep-content bundle (long-form article + blog series + newsletter)", "deep_content",
+        "rich_media_generator.generate(['deep_article','blog_series','newsletter']): engine-native LLM "
+        "writes a 1,500-2,500 word thought-leadership article, three blog-post outlines, and a "
+        "newsletter brief from audit + gap context. No external key required. Saved as pending_review.", 6,
+        gap_source="rich-media amplification", source_query="deep content bundle")
+    add("Generate AI reputation podcast (Audio Overview)", "podcast_creation",
+        "rich_media_generator.generate(['podcast']): NotebookLM Audio Overview synthesizes a two-host "
+        "AI podcast from audit answers, gap model, competitor data + strategy plan. Requires "
+        "NOTEBOOKLM_API_KEY or GEMINI_API_KEY. Output: MP3 + transcript, pending_review.", 7,
+        gap_source="rich-media amplification", source_query="reputation podcast")
+    add("Generate executive slide-deck brief", "slide_deck",
+        "rich_media_generator.generate(['slide_deck']): NotebookLM study-guide synthesis across audit "
+        "sources -> 10-12 slide executive deck brief. Falls back to in-house LLM if no key.", 8,
+        gap_source="rich-media amplification", source_query="slide deck")
+    add("Generate PR/content-team research brief", "research_brief",
+        "rich_media_generator.generate(['research_brief']): NotebookLM briefing-doc synthesis across "
+        "audit + competitor sources -> deep research brief for PR teams/journalists. LLM fallback.", 8,
+        gap_source="rich-media amplification", source_query="research brief")
+    add("Generate infographic content brief", "infographic",
+        "rich_media_generator.generate(['infographic']): NotebookLM FAQ synthesis -> structured "
+        "infographic brief for a graphic designer. Falls back to LLM if no key.", 9,
+        gap_source="rich-media amplification", source_query="infographic brief")
+    add("Generate explainer video script", "explainer_video",
+        "rich_media_generator.generate(['explainer_video']): NotebookLM study-guide synthesis -> "
+        "explainer video script skeleton (2-4 min). Pair with the video production brief. LLM fallback.", 9,
+        gap_source="rich-media amplification", source_query="explainer video script")
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
     # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks

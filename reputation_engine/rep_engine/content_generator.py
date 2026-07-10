@@ -71,11 +71,37 @@ GENERATABLE = {
     # "Generate draft" button on local work orders silently produced nothing and failed the job.)
     "local_content_creation": "local_page",
     "review_generation": "review_request",
+    # Rich-media capabilities — ROUTED to rich_media_generator (see _RICH_MEDIA_CAP_MAP + the
+    # prologue in generate_for_wo). Listed here so capability matching / UI doesn't treat these
+    # work orders as non-generatable.
+    "deep_content":     "deep_article",
+    "podcast_creation": "podcast",
+    "slide_deck":       "slide_deck",
+    "infographic":      "infographic",
+    "explainer_video":  "explainer_video",
+    "research_brief":   "research_brief",
+}
+
+# Work-order capability -> rich_media_generator asset_type list. Any capability present here is
+# intercepted at the top of generate_for_wo() and routed to rich_media_generator (multi-source
+# NotebookLM synthesis, or its in-house LLM fallback) instead of the single-source LLM path.
+_RICH_MEDIA_CAP_MAP: dict[str, list[str]] = {
+    "podcast_creation": ["podcast"],
+    "slide_deck":       ["slide_deck"],
+    "infographic":      ["infographic"],
+    "explainer_video":  ["explainer_video"],
+    "research_brief":   ["research_brief"],
+    "deep_content":     ["deep_article", "blog_series", "newsletter"],
 }
 # asset_type inferred from work-order title keywords as a fallback (schema deliberately excluded).
+# NOTE: intentionally NO generic "blog"/"newsletter"/"brief" hints here — those collide with normal
+# content/visual/production work orders (e.g. Track-3 "Blog: <kw>" pieces must stay 'article', and
+# "…brief" WOs must not become research_briefs). Rich-media WOs route by CAPABILITY, not title.
 TITLE_HINTS = [
     ("faq", "faq"), ("bio", "bio"),
     ("article", "article"), ("post", "gbp_post"), ("review", "review_request"),
+    ("podcast", "podcast"), ("slide", "slide_deck"),
+    ("infographic", "infographic"), ("explainer", "explainer_video"),
 ]
 
 
@@ -376,6 +402,19 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
                     "local, naturally including a local keyword.",
         "review_request": "Write a short, warm review-request message (SMS + email versions) "
                           "asking a happy client to leave a Google review, with a placeholder for the link.",
+        # Rich-media long-form types generated via the in-house LLM path. (The NotebookLM
+        # multi-source path in rich_media_generator.py produces richer output when a key is set;
+        # these specs are the deterministic LLM fallback / when routed here directly.)
+        "deep_article": "Write a long-form thought-leadership article (1,500-2,500 words) in "
+                        "markdown with a clear H1, H2 subheadings, and a concrete conclusion. Use "
+                        "[INSERT: ...] placeholders for unknown facts. No performance promises, "
+                        "guaranteed-return language, or unverifiable superlatives.",
+        "blog_series": "Generate outlines for THREE related blog posts. Each outline: title, "
+                       "target query, 5-7 heading structure, key points, recommended word count, "
+                       "and CTA. Format in markdown. No fabricated facts.",
+        "newsletter": "Write a newsletter brief (400-600 words) covering reputation progress "
+                      "highlights. Include 3 subject-line options, preview text, 3-4 content "
+                      "sections, a key takeaway, and a CTA. Tone: warm, credible.",
     }
     spec = specs.get(asset_type, "Write the requested asset in markdown.")
     kw = grounding.get("keywords") or []
@@ -666,6 +705,28 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
 # ----------------------------------------------------------------------------
 def generate_for_wo(business_id: int, wo: dict, biz: dict,
                     content_type: Optional[str] = None, batch_id: Optional[int] = None) -> Optional[int]:
+    # Rich-media capabilities bypass the single-source LLM path and go to rich_media_generator,
+    # which assembles multi-source corpus context (audit answers, gap model, competitor data) and
+    # uses the NotebookLM API or its in-house LLM fallback. Output lands in rich_media_drafts as
+    # pending_review (same human gate). Dormant-safe: rich_media_generator self-creates its table
+    # and falls back to the LLM when no NotebookLM/Gemini key is set. (batch_id/content_type don't
+    # apply to rich-media pieces — they're not part of the gap batch's content-type spread.)
+    cap = (wo.get("capability") or "").lower()
+    if cap in _RICH_MEDIA_CAP_MAP:
+        topic = wo.get("title", "")
+        if _already_covered(business_id, topic):
+            log.info("WO '%s' already covered (pgvector); skipping.", topic)
+            return None
+        try:
+            from . import rich_media_generator as _rmg
+        except ImportError:  # pragma: no cover -- loose-script fallback
+            import rich_media_generator as _rmg  # type: ignore
+        rm_types = _RICH_MEDIA_CAP_MAP[cap]
+        ids = _rmg.generate(business_id, rm_types)
+        log.info("WO %s (cap=%s) -> rich_media_generator(%s): created %s",
+                 wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
+        return ids[0] if ids else None
+
     asset_type = _asset_type_for(wo)
     if not asset_type:
         log.info("WO %s not a generatable content type; skipping.", wo.get("wo_code") or wo.get("wo_id"))
