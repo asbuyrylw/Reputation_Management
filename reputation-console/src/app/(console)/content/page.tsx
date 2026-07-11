@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue, useAddWorkOrder } from "@/lib/hooks";
+import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue, useAddWorkOrder, useVisuals, useRichMediaDrafts } from "@/lib/hooks";
+import { apiBase } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
@@ -44,6 +45,34 @@ function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_k
 // Content hub landing — "everything content, in one view": what to produce, what's in draft,
 // what's published, and the topic-authority recommendations not yet on the board, plus the
 // outreach that pulls the timeline forward. All read-only; row actions deep-link into the tabs.
+// Recent media — a discoverable strip of the videos / images / podcasts / rich content the engine
+// generated, linking to the full Media gallery. Only renders when there's media to show.
+function RecentMediaCard({ businessId }: { businessId: number | null }) {
+  const visuals = useVisuals(businessId);
+  const rich = useRichMediaDrafts(businessId);
+  const icon = (t: string) => t === "video" ? "▶" : t === "podcast" || t === "report_audio" ? "♪"
+    : t === "slide_deck" ? "▤" : t === "infographic" ? "◫" : (t === "image" || t === "quote_card" || t === "meme") ? "▦" : "¶";
+  const items: { key: string; kind: string; fileUrl?: string }[] = [];
+  for (const v of visuals.data?.visuals ?? []) {
+    if (["image", "quote_card", "meme", "video"].includes(v.kind))
+      items.push({ key: `v${v.id}`, kind: v.kind, fileUrl: businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : undefined });
+  }
+  for (const r of rich.data?.drafts ?? []) items.push({ key: `r${r.id}`, kind: r.asset_type });
+  if (items.length === 0) return null;
+  return (
+    <Card className="mb-6">
+      <SecHead title="Recent media" note="videos, images, podcasts & rich content you've generated" link={{ label: "Media gallery", href: "/content/media" }} />
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+        {items.slice(0, 8).map((it) => (
+          <Link key={it.key} href="/content/media" className="grid aspect-square place-items-center overflow-hidden rounded-[10px] border border-line bg-paper transition hover:border-line-2" title={it.kind.replace(/_/g, " ")}>
+            {it.fileUrl && it.kind !== "video" ? <img src={it.fileUrl} alt="" className="h-full w-full object-cover" loading="lazy" /> : <span className="text-[20px] text-ink-3">{icon(it.kind)}</span>}
+          </Link>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function ContentOverviewPage() {
   const { businessId, businesses, loading, canEdit } = useBusiness();
   const { data: drafts } = useContentDrafts(businessId);
@@ -121,6 +150,9 @@ export default function ContentOverviewPage() {
           )}
         </div>
       </div>
+
+      {/* recent media — discoverable gallery entry point */}
+      <RecentMediaCard businessId={businessId} />
 
       {/* outreach accelerator promo */}
       <Card className="flex flex-wrap items-center gap-4">
