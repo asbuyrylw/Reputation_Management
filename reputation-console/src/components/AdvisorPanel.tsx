@@ -5,9 +5,24 @@
 // GA/GSC/PageSpeed and keyword-demand data) and renders it as a plan-do-check-act view. Fully wired
 // to live data; every number comes from the API, nothing is static.
 
+import Link from "next/link";
 import { useAdvisor } from "@/lib/hooks";
 import { Card, Spinner } from "@/components/ui";
 import type { Advisor, AdvisorGap, AdvisorAction, PdcaStatus } from "@/lib/types";
+
+// Each recommended action deep-links to exactly where the owner acts on it (the "dead text" fix).
+function actionHref(a: AdvisorAction): string {
+  switch (a.action) {
+    case "publish": return "/content/drafts?status=approved";
+    case "produce_more":
+    case "new_content": return "/content/briefs";
+    case "revise": return "/content/drafts";
+    case "change_approach": return "/strategy";
+    case "technical_fix":
+    case "index_fix": return "/seo-overview";
+    default: return "/strategy";
+  }
+}
 
 const STATUS: Record<PdcaStatus, { label: string; tone: string; note: string }> = {
   on_track: { label: "On track", tone: "#0f9d63", note: "Content is moving the gaps toward the goal." },
@@ -71,12 +86,15 @@ function GapRow({ g }: { g: AdvisorGap }) {
 function ActionRow({ a }: { a: AdvisorAction }) {
   const tone = ACTION_TONE[a.priority] ?? "#5d6f77";
   return (
-    <li className="flex gap-3 border-t border-line py-2.5 first:border-t-0">
-      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: tone }} />
-      <div className="min-w-0">
-        <div className="text-[13.5px] text-ink"><span className="font-mono text-[11px] uppercase tracking-[0.04em]" style={{ color: tone }}>{a.action.replace(/_/g, " ")}</span> — {a.detail}</div>
-        <div className="mt-0.5 text-[11.5px] text-ink-4">Expected: {a.expected_impact}</div>
-      </div>
+    <li className="border-t border-line first:border-t-0">
+      <Link href={actionHref(a)} className="group flex gap-3 py-2.5 transition hover:bg-paper/60">
+        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: tone }} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] text-ink"><span className="font-mono text-[11px] uppercase tracking-[0.04em]" style={{ color: tone }}>{a.action.replace(/_/g, " ")}</span> — {a.detail}</div>
+          <div className="mt-0.5 text-[11.5px] text-ink-4">Expected: {a.expected_impact}</div>
+        </div>
+        <span className="mt-0.5 shrink-0 self-center text-ink-4 opacity-0 transition group-hover:opacity-100">→</span>
+      </Link>
     </li>
   );
 }
@@ -112,6 +130,16 @@ export function AdvisorPanel({ businessId, compact = false }: { businessId: numb
         <Tile k="Content live" value={String(o.published_pieces)} sub="published pieces" />
         <Tile k="To reach goal" value={o.projected_weeks_to_goal ? `~${o.projected_weeks_to_goal}w` : (o.total_pieces_recommended ? `${o.total_pieces_recommended} pcs` : "—")} sub={o.projected_weeks_to_goal ? "at current pace" : "recommended next"} />
       </div>
+
+      {/* compact (Dashboard): top next-move + link to the full advisor */}
+      {compact && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+          {d.recommended_actions[0]
+            ? <Link href={actionHref(d.recommended_actions[0])} className="min-w-0 flex-1 text-[13px] text-ink-2 hover:text-ink"><span className="font-semibold text-ink">Next:</span> {d.recommended_actions[0].detail}</Link>
+            : <span className="text-[13px] text-ink-4">No action needed right now.</span>}
+          <Link href="/strategy" className="shrink-0 text-[13px] font-semibold text-indigo hover:text-indigo-strong">Full strategy →</Link>
+        </div>
+      )}
 
       {!compact && (
         <>

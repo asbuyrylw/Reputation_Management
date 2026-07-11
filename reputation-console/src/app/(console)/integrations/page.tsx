@@ -38,6 +38,7 @@ import {
 import { Card, PageHeader, Spinner, Pill, Button, Input } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { TabNav } from "@/components/content/TabNav";
+import { DataSourcesPanel } from "@/components/DataSourcesPanel";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { Connection, ZerniaAccount } from "@/lib/types";
 import type { Tone } from "@/lib/uiTokens";
@@ -1287,6 +1288,9 @@ export default function IntegrationsPage() {
       />
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
+
+      {/* What's connected vs. dormant — so features never sit silently empty. */}
+      <div className="mb-4"><DataSourcesPanel businessId={businessId} /></div>
 
       {/* In-page switch — segmented filter (distinct from the Settings hub's underline tab bar above). */}
       <TabNav

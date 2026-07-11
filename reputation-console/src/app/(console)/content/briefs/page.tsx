@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
@@ -213,6 +213,27 @@ function stageOf(draft: ContentDraft | undefined, asset: Asset | undefined): { l
   return { label: "Not started", cls: "bg-line text-ink-4" };
 }
 
+// Target keywords with their real monthly search volume (when a volume provider is configured), so
+// producers see demand at the moment they write. Volume comes from the shared target_keywords set.
+function KeywordChips({ keywords, businessId }: { keywords: string[]; businessId: number | null }) {
+  const { data: all } = useTargetKeywords(businessId);
+  const vol = new Map((all ?? []).map((k) => [k.keyword.toLowerCase(), k]));
+  return (
+    <div className="flex flex-wrap gap-1">
+      {keywords.map((kw) => {
+        const m = vol.get(kw.toLowerCase());
+        return (
+          <span key={kw} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700"
+            title={m?.search_volume != null ? `${m.search_volume.toLocaleString()} searches/mo${m.keyword_difficulty != null ? ` · difficulty ${m.keyword_difficulty}/100` : ""}` : undefined}>
+            {kw}
+            {m?.search_volume != null && <span className="font-mono text-[9.5px] font-semibold text-emerald-700">{m.search_volume >= 1000 ? `${(m.search_volume / 1000).toFixed(1)}k` : m.search_volume}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   wo: WorkOrder; draft?: ContentDraft; asset?: Asset; businessId: number | null; canEdit: boolean;
 }) {
@@ -257,7 +278,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
             ) : brief.data ? (
               <div className="mt-1 space-y-1 rounded-lg border border-line bg-paper px-3 py-2 text-[11.5px] text-ink-2">
                 {brief.data.keywords.length > 0 && (
-                  <div><span className="font-semibold text-ink-3">Target keywords:</span> {brief.data.keywords.join(", ")}</div>
+                  <div className="flex flex-wrap items-center gap-1.5"><span className="font-semibold text-ink-3">Target keywords:</span> <KeywordChips keywords={brief.data.keywords} businessId={businessId} /></div>
                 )}
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5">
                   <span><span className="font-semibold text-ink-3">Length:</span> ~{brief.data.word_count_target} words</span>

@@ -269,6 +269,7 @@ export function useGenerateContentBatch(businessId: number | null) {
       qc.invalidateQueries({ queryKey: ["content-batches", businessId] });
       qc.invalidateQueries({ queryKey: ["gap-completion", businessId] });
       qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+      qc.invalidateQueries({ queryKey: ["advisor", businessId] });  // predictions depend on produced content
     },
   });
 }
@@ -549,7 +550,7 @@ export function useGenerateDraftForWo(businessId: number | null) {
   return useApiMutation<{ woId: number }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/generate-draft`,
     () => ({}),
-    [["jobs", businessId], ["content-drafts", businessId]],
+    [["jobs", businessId], ["content-drafts", businessId], ["advisor", businessId]],
   );
 }
 

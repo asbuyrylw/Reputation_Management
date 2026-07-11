@@ -6,6 +6,7 @@ import { useGapModel } from "@/lib/hooks";
 import { PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { GapsView } from "@/components/GapsView";
+import { AdvisorPanel } from "@/components/AdvisorPanel";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { FlowStep, NextActions } from "@/components/flow";
@@ -37,6 +38,8 @@ export default function GapsPage() {
         subtitle="The diagnosis: what's holding your reputation back, where it shows, and what it costs you. The plan to fix each one lives in Strategy."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
+      {/* The advisor: how far the content produced for these gaps has moved them + what's next. */}
+      {data ? <div className="mb-5"><AdvisorPanel businessId={businessId} compact /></div> : null}
       {!data ? (
         <EmptyState
           title="No gaps analysis yet"

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useAuth } from "@/lib/auth";
 import { OperatorHome } from "@/components/OperatorHome";
+import { AdvisorPanel } from "@/components/AdvisorPanel";
 import {
   useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
   useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
@@ -487,6 +488,9 @@ export default function DashboardPage() {
 
           {/* v2 — your two goals: AI reputation + local page-1. */}
           <TwoGoals score={score} goalScore={goalScore} aiDate={aiDate} aiMonths={aiMonths} localGoal={localGoal} />
+
+          {/* Strategy Advisor (PDCA) — is the plan working + the single next move, live-wired. */}
+          <AdvisorPanel businessId={businessId} compact />
 
           {/* v2 — do this next: top-3 actions + plan bar. */}
           <DoNextV2 actions={topActions} approvalsCount={approvalsCount} openTasksCount={openTasksCount} />
