@@ -537,6 +537,20 @@ def generate(
                 )
                 created.append(draft_id)
 
+            # itemized cost for this rich-media piece (best-effort). Category + api reflect the path
+            # taken — NotebookLM (audio/note) vs the in-house LLM fallback — so "Google vs NotebookLM"
+            # spend is visible. Audio billed per-minute (est.), text as one asset.
+            try:
+                from . import cost as _cost
+                is_audio = method == "notebooklm_audio"
+                api = "notebooklm" if method in ("notebooklm_audio", "notebooklm_note") else "llm"
+                _cost.record_cost(business_id, None, "audio" if is_audio else "llm_content", api,
+                                  f"rich_media:{asset_type}", units=5 if is_audio else 1,
+                                  unit_label="minutes" if is_audio else "assets",
+                                  detail={"content_type": asset_type, "api": api})
+            except Exception:  # noqa: BLE001
+                pass
+
         except _tools.BudgetExceededError:
             log.warning("rich_media: budget exceeded mid-run; stopping at %s", asset_type)
             break

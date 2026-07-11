@@ -67,9 +67,11 @@ def _store(key: str, endpoint: str, data: dict) -> None:
         log.debug("serper cache write skipped: %s", e)
 
 
-def cached_post(endpoint: str, body: dict, *, timeout: int = 20, max_retries: int = 2) -> Optional[dict]:
+def cached_post(endpoint: str, body: dict, *, timeout: int = 20, max_retries: int = 2,
+                business_id: Optional[int] = None, run_id: Optional[int] = None) -> Optional[dict]:
     """POST to a Serper endpoint with a TTL cache. Returns the parsed dict, or None when the key is
-    missing or the call fails (identical to the bare clients callers replaced)."""
+    missing or the call fails. A cache HIT costs nothing; only a real (miss) call is billed, so we
+    record cost exactly once per real API call, attributed to business_id when the caller supplies it."""
     key_env = os.getenv("SERPER_API_KEY", "")
     if not key_env:
         return None
@@ -83,4 +85,10 @@ def cached_post(endpoint: str, body: dict, *, timeout: int = 20, max_retries: in
     if res.failed or not isinstance(res.data, dict):
         return None
     _store(ck, endpoint, res.data)
+    try:  # cost tracking is best-effort; must never break a search
+        from . import cost as _cost
+        _cost.record_cost(business_id, run_id, "search", "serper", endpoint,
+                          units=1, detail={"endpoint": endpoint})
+    except Exception:  # noqa: BLE001
+        pass
     return res.data

@@ -96,7 +96,7 @@ def volume_configured() -> bool:
     return False
 
 
-def _enrich_volume(keywords: list[str], location: str) -> dict:
+def _enrich_volume(keywords: list[str], location: str, business_id: Optional[int] = None) -> dict:
     """Return {keyword_lower: {search_volume, keyword_difficulty, cpc}} from the configured provider.
     Dormant-safe: returns {} when no provider key is set or the call fails."""
     if not volume_configured() or not keywords:
@@ -104,7 +104,7 @@ def _enrich_volume(keywords: list[str], location: str) -> dict:
     prov = (os.getenv("KEYWORD_VOLUME_PROVIDER") or "").strip().lower()
     try:
         if prov == "dataforseo":
-            return _dataforseo_volume(keywords, location)
+            return _dataforseo_volume(keywords, location, business_id)
         if prov == "keywords_everywhere":
             return _keywords_everywhere_volume(keywords)
     except Exception as e:  # noqa: BLE001 -- enrichment is best-effort
@@ -112,7 +112,7 @@ def _enrich_volume(keywords: list[str], location: str) -> dict:
     return {}
 
 
-def _dataforseo_volume(keywords: list[str], location: str) -> dict:
+def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional[int] = None) -> dict:
     import base64 as _b64
     login = os.getenv("DATAFORSEO_LOGIN", "")
     pw = os.getenv("DATAFORSEO_PASSWORD", "")
@@ -125,6 +125,19 @@ def _dataforseo_volume(keywords: list[str], location: str) -> dict:
         json=body, timeout=60, max_retries=2, guard_redirects=True)
     out: dict = {}
     if res.ok and isinstance(res.data, dict):
+        # DataForSEO returns the EXACT USD cost of the call -> record it (falls back to a per-request
+        # estimate if the field is absent). This is what keeps the $1 test credit from overrunning.
+        try:
+            from . import cost as _cost
+            exact = res.data.get("cost")
+            _cost.record_cost(business_id, None, "keyword_volume", "dataforseo",
+                              "google_ads/search_volume",
+                              cost_usd=float(exact) if exact not in (None, 0) else None,
+                              units=len(keywords), unit_label="keywords",
+                              detail={"keyword_count": len(keywords), "exact_cost": exact,
+                                      "status": res.data.get("status_message")})
+        except Exception:  # noqa: BLE001 -- cost logging must never break enrichment
+            pass
         for task in res.data.get("tasks") or []:
             for item in (task.get("result") or []):
                 kw = (item.get("keyword") or "").lower()
@@ -473,7 +486,7 @@ def research(business_id: int) -> dict:
             break
 
     # CI-5: enrich with real search volume / difficulty when a provider key is set (dormant otherwise).
-    vol = _enrich_volume([it["keyword"] for it in ranked], location)
+    vol = _enrich_volume([it["keyword"] for it in ranked], location, business_id)
 
     with db() as conn:
         # refresh the set (a re-run reflects the latest crawl/competitors)

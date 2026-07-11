@@ -13,6 +13,7 @@ import type {
   DataSources,
   RichMediaList,
   RichMediaDraft,
+  CostDashboard,
   AdminUser,
   Asset,
   AuditRun,
@@ -948,6 +949,18 @@ export function useAdminUsers() {
   return useQuery({
     queryKey: ["admin-users"],
     queryFn: () => apiFetch<AdminUser[]>("/admin/users"),
+    enabled: !!user,
+  });
+}
+
+// Admin itemized cost dashboard. Omit businessId for system-wide; pass one to scope to a tenant.
+export function useCostDashboard(days = 30, businessId?: number | null) {
+  const { user } = useAuth();
+  const qs = new URLSearchParams({ days: String(days) });
+  if (businessId) qs.set("business_id", String(businessId));
+  return useQuery({
+    queryKey: ["admin-costs", days, businessId ?? null],
+    queryFn: () => apiFetch<CostDashboard>(`/admin/costs?${qs.toString()}`),
     enabled: !!user,
   });
 }

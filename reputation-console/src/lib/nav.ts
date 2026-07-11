@@ -97,6 +97,7 @@ export const HUBS: Hub[] = [
     key: "admin", label: "Admin", href: "/admin/jobs", adminOnly: true,
     tabs: [
       { href: "/admin/jobs", label: "Run jobs" },
+      { href: "/admin/costs", label: "Costs" },
       { href: "/admin/users", label: "Users" },
       { href: "/admin/businesses", label: "Businesses" },
     ],

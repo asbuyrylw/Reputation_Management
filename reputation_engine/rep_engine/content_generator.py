@@ -1018,7 +1018,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         _in = llm.cost.approx_tokens(json.dumps(grounding, default=str)) + \
             llm.cost.approx_tokens(outline or topic)
         _out = llm.cost.approx_tokens(body) * _passes + 800  # +eval/compliance/keyword overhead
-        llm.cost.record(business_id, None, llm.ORCHESTRATOR, "content_draft", _cm, _in, _out)
+        llm.cost.record(business_id, None, llm.ORCHESTRATOR, "content_draft", _cm, _in, _out,
+                        {"content_type": asset_type, "api": "llm"})
     except Exception as e:  # noqa: BLE001 -- cost logging must never break generation
         log.debug("content cost record skipped: %s", e)
     log.info("Draft %d for '%s' (type=%s, score=%.2f, rev=%d, compliance=%s, status=%s, placeholders=%d)",

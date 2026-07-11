@@ -220,6 +220,13 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
     vid = _persist(business_id, kind=kind, provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw)
+    try:  # itemized cost: one generated image (best-effort)
+        from . import cost as _cost
+        _cost.record_cost(business_id, None, "image", provider or "image", "generate_image",
+                          units=1, unit_label="images", model=model,
+                          detail={"content_type": kind, "api": provider})
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "visual_id": vid, "file_path": path, "provider": provider, "model": model,
             "compliance_note": note}
 
@@ -498,6 +505,14 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
     vid = _persist(business_id, kind="video", provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4")
+    try:  # itemized cost: video billed per second (Veo). Default 8s clip unless VIDEO_SECONDS set.
+        from . import cost as _cost
+        secs = float(os.getenv("VIDEO_SECONDS", "8") or 8)
+        _cost.record_cost(business_id, None, "video", provider or "veo", "generate_video",
+                          units=secs, unit_label="seconds", model=model,
+                          detail={"content_type": "video", "api": provider})
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "visual_id": vid, "file_path": path, "provider": provider, "model": model,
             "compliance_note": note}
 

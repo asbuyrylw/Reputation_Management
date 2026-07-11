@@ -1844,6 +1844,37 @@ export interface PageSpeed {
   technical_gaps?: PageSpeedTechGap[];
 }
 
+// ---- Admin cost dashboard (itemized real spend) ----
+export interface CostCategoryRow { category: string; label: string; cost_usd: number; events: number; units: number | null; unit_label: string | null; }
+export interface CostProviderRow { provider: string; cost_usd: number; events: number; }
+export interface CostOperationRow { operation: string; category: string; cost_usd: number; events: number; }
+export interface CostContentRow { content_type: string; api: string; cost_usd: number; events: number; }
+export interface CostRunRow { run_id: number | null; cost_usd: number; events: number; started: string | null; }
+export interface CostBreakdown {
+  days: number;
+  business_id: number | null;
+  total_usd: number;
+  events: number;
+  by_category: CostCategoryRow[];
+  by_provider: CostProviderRow[];
+  by_operation: CostOperationRow[];
+  by_content: CostContentRow[];
+  by_run: CostRunRow[];
+}
+export interface CostBusinessRow { business_id: number | null; name: string; cost_usd: number; events: number; }
+export interface CostLineItem {
+  business_id: number | null; run_id: number | null; category: string | null; provider: string | null;
+  operation: string | null; model: string | null; cost_usd: number; units: number | null;
+  unit_label: string | null; detail: Record<string, unknown> | null; at: string | null;
+}
+export interface CostDashboard {
+  days: number;
+  scope: string;
+  breakdown: CostBreakdown;
+  by_business: CostBusinessRow[] | null;
+  recent: CostLineItem[];
+}
+
 // ---- Rich media (podcast / deck / infographic / explainer / long-form) ----
 export interface RichMediaDraft {
   id: number;
