@@ -150,6 +150,19 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
         )
         sources.append({"title": "Business Profile", "text": trusted_ctx})
 
+        # Brand guardrails + owner-uploaded source material (trusted) -> so NotebookLM rich media is
+        # on-brand and grounded in the client's real docs, not generic web filler.
+        try:
+            from . import source_material as _sm
+            _g = _sm.guardrails(business_id)
+            if _g:
+                sources.append({"title": "BRAND RULES (absolute)", "text": _g})
+            _c = _sm.corpus(business_id, max_tokens=8000)
+            if _c:
+                sources.append({"title": "Client Source Material", "text": _c})
+        except Exception as e:  # noqa: BLE001
+            log.debug("rich_media: brand/source material unavailable: %s", e)
+
         # Gap model (trusted output from the engine)
         gm = conn.execute(
             "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",

@@ -14,7 +14,7 @@ import json
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
@@ -71,6 +71,105 @@ except ImportError:  # pragma: no cover
     import tracking as _tracking  # type: ignore
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["content"])
+
+
+# ---------------------------------------------------------------------------
+# Brand guardrails + source material (grounding for on-brand content)
+# ---------------------------------------------------------------------------
+def _sm():
+    try:
+        from ... import source_material as s
+    except ImportError:  # pragma: no cover
+        import source_material as s  # type: ignore
+    return s
+
+
+class GuardrailsBody(BaseModel):
+    brand_guardrails: str
+
+
+class SourceDocBody(BaseModel):
+    title: Optional[str] = None
+    content: str
+    source_type: Optional[str] = "note"
+    source_url: Optional[str] = None
+
+
+def _extract_text(filename: str, raw: bytes) -> str:
+    """Best-effort text extraction from an uploaded file (txt/md/csv direct; pdf via pypdf; docx via
+    python-docx). Unknown/binary -> decoded text fallback."""
+    name = (filename or "").lower()
+    try:
+        if name.endswith(".pdf"):
+            try:
+                from pypdf import PdfReader
+                import io
+                return "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(raw)).pages)
+            except Exception:  # noqa: BLE001
+                return ""
+        if name.endswith(".docx"):
+            try:
+                import io
+                from docx import Document
+                return "\n".join(p.text for p in Document(io.BytesIO(raw)).paragraphs)
+            except Exception:  # noqa: BLE001
+                return ""
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@router.get("/brand-guardrails")
+def get_guardrails(business_id: int = Depends(authorize_business)):
+    """The business's brand/voice guardrails (e.g. always Team Unstoppable, never Primerica)."""
+    return {"brand_guardrails": _sm().guardrails(business_id)}
+
+
+@router.put("/brand-guardrails")
+def put_guardrails(body: GuardrailsBody, business_id: int = Depends(require_business_editor)):
+    _sm().set_guardrails(business_id, body.brand_guardrails)
+    return {"ok": True}
+
+
+@router.get("/source-documents")
+def list_source_docs(business_id: int = Depends(authorize_business)):
+    """The client's uploaded source corpus that grounds content generation."""
+    return {"documents": _sm().list_documents(business_id)}
+
+
+@router.post("/source-documents")
+def add_source_doc(body: SourceDocBody, business_id: int = Depends(require_business_editor),
+                   user: dict = Depends(get_current_user)):
+    """Add a source document from pasted text or a URL note."""
+    doc_id = _sm().add_document(business_id, body.content, title=body.title,
+                               source_type=body.source_type or "note", source_url=body.source_url,
+                               created_by=(user or {}).get("id"))
+    if not doc_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty or unstorable content")
+    return {"id": doc_id}
+
+
+@router.post("/source-documents/upload")
+async def upload_source_doc(file: UploadFile = File(...),
+                            business_id: int = Depends(require_business_editor),
+                            user: dict = Depends(get_current_user)):
+    """Upload a document (txt/md/pdf/docx). The text is extracted, stored, and fed to the content
+    generators (Claude + NotebookLM) as grounding."""
+    raw = await file.read()
+    text = _extract_text(file.filename or "", raw)
+    if not text.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "could not extract text (unsupported file or empty)")
+    doc_id = _sm().add_document(business_id, text, title=file.filename, source_type="upload",
+                               created_by=(user or {}).get("id"))
+    return {"id": doc_id, "title": file.filename, "chars": len(text)}
+
+
+@router.delete("/source-documents/{doc_id}")
+def delete_source_doc(doc_id: int, business_id: int = Depends(require_business_editor)):
+    if not _sm().delete_document(business_id, doc_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    return {"deleted": doc_id}
 
 
 def _actor(user: dict) -> str:

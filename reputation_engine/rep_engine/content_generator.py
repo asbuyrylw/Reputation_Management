@@ -787,6 +787,16 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             voice = (f"BRAND WRITING STYLE — match this voice exactly: {_style}\n\n" + (voice or "")).strip()
     except Exception as e:  # noqa: BLE001
         log.debug("writing-style voice unavailable: %s", e)
+    # Brand guardrails (e.g. "always Team Unstoppable, never Primerica") + the owner's uploaded source
+    # material — prepended so EVERY draft is on-brand and grounded in the client's real facts. The
+    # guardrails are ABSOLUTE (they lead the prompt). Best-effort; empty when nothing is configured.
+    try:
+        from . import source_material as _sm
+        _brand = _sm.grounding_block(business_id)
+        if _brand:
+            voice = (_brand + "\n\n" + (voice or "")).strip()
+    except Exception as e:  # noqa: BLE001
+        log.debug("brand/source grounding unavailable: %s", e)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
     comp_system = _compliance_system(reg)
     # Pass 1 (long-form): a keyword-mapped outline the draft writes from.
