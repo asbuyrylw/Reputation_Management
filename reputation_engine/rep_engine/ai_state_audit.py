@@ -1785,6 +1785,50 @@ def _search_perf_for_gap(business_id: int) -> dict:
                                       "difficulty": r["keyword_difficulty"], "cpc": r["cpc"]} for r in rows]
     except Exception as e:  # noqa: BLE001
         log.warning("gap model: keyword-demand signals unavailable (%s)", e)
+    # WINNABLE keywords: real demand + LOW difficulty = "attack these to get to page 1". This is what
+    # turns raw volume into an actionable target list the strategy can build content around. Uses the
+    # real keyword_difficulty from DataForSEO Labs (0-100). Includes competitor-gap keywords here (as
+    # opportunities) — they're excluded only from the demand-weighting above, not from opportunities.
+    try:
+        _maxdiff = int(os.getenv("KEYWORD_WINNABLE_MAX_DIFFICULTY", "35"))
+        with db() as _c:
+            wins = _c.execute(
+                "SELECT keyword, search_volume, keyword_difficulty, cpc, source FROM target_keywords "
+                "WHERE business_id=%s AND search_volume IS NOT NULL AND search_volume >= 20 "
+                "AND keyword_difficulty IS NOT NULL AND keyword_difficulty <= %s "
+                "ORDER BY search_volume DESC NULLS LAST LIMIT 15", (business_id, _maxdiff)).fetchall()
+        if wins:
+            out["keyword_opportunities"] = [
+                {"keyword": r["keyword"], "search_volume": r["search_volume"],
+                 "difficulty": r["keyword_difficulty"], "cpc": r["cpc"],
+                 "from_competitor": (r["source"] == "dataforseo_competitor")} for r in wins]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: keyword-opportunity signals unavailable (%s)", e)
+    # COMPETITOR keyword footholds: relevant, higher-volume terms rivals rank for that we don't yet
+    # target — surfaced as strategy opportunities (kept separate from local demand weighting).
+    try:
+        with db() as _c:
+            crows = _c.execute(
+                "SELECT keyword, search_volume, keyword_difficulty, rationale FROM target_keywords "
+                "WHERE business_id=%s AND source='dataforseo_competitor' AND search_volume IS NOT NULL "
+                "ORDER BY search_volume DESC NULLS LAST LIMIT 12", (business_id,)).fetchall()
+        if crows:
+            out["competitor_keyword_gaps"] = [
+                {"keyword": r["keyword"], "search_volume": r["search_volume"],
+                 "difficulty": r["keyword_difficulty"], "note": r["rationale"]} for r in crows]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: competitor-keyword signals unavailable (%s)", e)
+    # BRAND mentions + sentiment + REVIEWS: reputation signals the gap model should weigh. Read from
+    # STORED ingest (dataforseo_mentions / dataforseo_reviews tables) -- never a live call in the gap
+    # hot path. Dormant until the ingest jobs have run + stored; a missing table is a no-op.
+    try:
+        with db() as _c:
+            mr = _c.execute("SELECT total_count, sentiment FROM dataforseo_mentions WHERE business_id=%s "
+                            "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+            if mr:
+                out["web_mentions"] = {"total": mr["total_count"], "sentiment": mr["sentiment"]}
+    except Exception:  # noqa: BLE001 -- table not created yet -> no-op
+        pass
     return out
 
 
