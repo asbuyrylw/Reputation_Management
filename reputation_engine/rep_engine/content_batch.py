@@ -100,6 +100,7 @@ def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
         with db() as conn:
             rows = conn.execute(
                 "SELECT keyword, kind, priority FROM target_keywords WHERE business_id=%s "
+                "AND (source IS NULL OR source <> 'dataforseo_competitor') "
                 "ORDER BY priority DESC NULLS LAST LIMIT 80", (business_id,)).fetchall()
     except Exception:  # noqa: BLE001 -- no keyword table yet -> no extra pieces
         return []

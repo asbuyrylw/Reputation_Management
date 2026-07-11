@@ -165,6 +165,14 @@ def _dfs_location(geo: str) -> str:
     return "United States"   # empty / non-'City, ST' geo -> national volume
 
 
+def _dfs_labs_location(geo: str) -> str:
+    """DataForSEO LABS endpoints (keyword_overview, ranked_keywords, ...) take a COUNTRY-level
+    location_name — NOT the 'City,State' form the Google-Ads endpoint wants. Our keywords already
+    bake in the geo ('financial advisor cincinnati'), so national volume of the geo-phrase is the
+    right number. Defaults to United States; set DATAFORSEO_LOCATION for a different country."""
+    return (os.getenv("DATAFORSEO_LOCATION") or "").strip() or "United States"
+
+
 def _dfs_clean_kw(k: str) -> str:
     """Sanitize a keyword for DataForSEO's Google Ads endpoint, which rejects punctuation (?, !, etc.)
     and fails the ENTIRE batch on one bad term. Keep letters/numbers/spaces/&/- ; drop the rest.
@@ -217,9 +225,11 @@ def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional
                 cleaned.append(ck)
         if not cleaned:
             continue
-        body = [{"keywords": cleaned, "location_name": _dfs_location(location), "language_name": "English"}]
+        # Labs keyword_overview: ~$0.012/batch (vs $0.09 for google_ads) AND returns REAL keyword
+        # difficulty + search intent, not just competition. Same request shape; richer response.
+        body = [{"keywords": cleaned, "location_name": _dfs_labs_location(location), "language_name": "English"}]
         res = _http.request_json(
-            "POST", "https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live",
+            "POST", "https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_overview/live",
             headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
             json=body, timeout=90, max_retries=2, guard_redirects=True)
         if not (res.ok and isinstance(res.data, dict)):
@@ -229,8 +239,7 @@ def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional
         try:
             from . import cost as _cost
             exact = res.data.get("cost")
-            _cost.record_cost(business_id, None, "keyword_volume", "dataforseo",
-                              "google_ads/search_volume",
+            _cost.record_cost(business_id, None, "keyword_volume", "dataforseo", "labs/keyword_overview",
                               cost_usd=float(exact) if exact not in (None, 0) else None,
                               units=len(chunk), unit_label="keywords",
                               detail={"keyword_count": len(chunk), "batch": i // _CHUNK + 1,
@@ -238,15 +247,20 @@ def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional
         except Exception:  # noqa: BLE001 -- cost logging must never break enrichment
             pass
         for task in res.data.get("tasks") or []:
-            for item in (task.get("result") or []):
-                kw = (item.get("keyword") or "").lower()   # the cleaned term DataForSEO echoes back
-                if not kw:
-                    continue
-                orig = (clean_to_orig.get(kw) or kw).lower()   # map back to the original stored keyword
-                comp = item.get("competition_index")
-                out[orig] = {"search_volume": item.get("search_volume"),
-                             "keyword_difficulty": int(comp) if isinstance(comp, (int, float)) else None,
-                             "cpc": item.get("cpc")}
+            for result in (task.get("result") or []):
+                for item in (result.get("items") or []):
+                    kw = (item.get("keyword") or "").lower()   # the cleaned term DataForSEO echoes back
+                    if not kw:
+                        continue
+                    orig = (clean_to_orig.get(kw) or kw).lower()   # map back to the original stored keyword
+                    ki = item.get("keyword_info") or {}
+                    kp = item.get("keyword_properties") or {}
+                    si = item.get("search_intent_info") or {}
+                    diff = kp.get("keyword_difficulty")
+                    out[orig] = {"search_volume": ki.get("search_volume"),
+                                 "keyword_difficulty": int(diff) if isinstance(diff, (int, float)) else None,
+                                 "cpc": ki.get("cpc"),
+                                 "intent": si.get("main_intent")}
     return out
 
 
@@ -289,11 +303,13 @@ def enrich_target_keywords(business_id: int) -> dict:
     updated = 0
     with db() as conn:
         for kw, v in vol.items():
+            # intent from Labs is authoritative -> overwrite only when present (COALESCE keeps the
+            # prior LLM-derived intent if DataForSEO didn't return one).
             updated += conn.execute(
-                "UPDATE target_keywords SET search_volume=%s, keyword_difficulty=%s, cpc=%s "
-                "WHERE business_id=%s AND lower(keyword)=%s",
+                "UPDATE target_keywords SET search_volume=%s, keyword_difficulty=%s, cpc=%s, "
+                "intent=COALESCE(%s, intent) WHERE business_id=%s AND lower(keyword)=%s",
                 (v.get("search_volume"), v.get("keyword_difficulty"), v.get("cpc"),
-                 business_id, kw.lower())).rowcount
+                 v.get("intent"), business_id, kw.lower())).rowcount
         conn.commit()
     log.info("enrich_target_keywords biz %d: %d keywords -> %d enriched, %d rows updated, %d provider call(s)",
              business_id, len(keywords), len(vol), updated, calls)

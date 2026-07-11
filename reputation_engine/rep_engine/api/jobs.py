@@ -309,6 +309,17 @@ def _run_ingest_ga(business_id: int, args: dict):
     return _imp("ga_data").ingest(business_id)
 
 
+def _run_dataforseo_intel(business_id: int, args: dict):
+    """Competitor keyword gaps (what rivals rank for that we don't) + brand mentions/sentiment via
+    DataForSEO. Cheap synchronous calls; dormant-safe without DataForSEO creds."""
+    return _imp("dataforseo").run_intel(business_id)
+
+
+def _run_dataforseo_reviews(business_id: int, args: dict):
+    """Pull Google (+ optional Trustpilot) reviews for the business via DataForSEO (task-based)."""
+    return _imp("dataforseo").run_reviews(business_id)
+
+
 def _run_enrich_keyword_volume(business_id: int, args: dict):
     """Batch-enrich ALL of a business's stored target keywords with real search volume/CPC in the
     fewest provider calls (one request per <=700 keywords). Dormant-safe + balance-guarded."""
@@ -465,6 +476,9 @@ JOB_DISPATCH = {
     "ingest_pagespeed": _run_ingest_pagespeed,
     # batch keyword-volume enrichment (fewest DataForSEO calls)
     "enrich_keyword_volume": _run_enrich_keyword_volume,
+    # DataForSEO intelligence: competitor keyword gaps + mentions/sentiment + reviews
+    "dataforseo_intel": _run_dataforseo_intel,
+    "dataforseo_reviews": _run_dataforseo_reviews,
     # white-hat own-content indexing (Wave 3)
     "index_own_content": _run_index_own_content,
 }
@@ -520,6 +534,8 @@ _JOB_RATE_LIMITS = {
     "ingest_ga": (6, 3600),
     "ingest_pagespeed": (6, 3600),
     "enrich_keyword_volume": (6, 3600),
+    "dataforseo_intel": (6, 3600),
+    "dataforseo_reviews": (6, 3600),
     "index_own_content": (4, 3600),
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),

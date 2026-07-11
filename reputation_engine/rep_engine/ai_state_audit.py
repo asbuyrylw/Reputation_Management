@@ -1776,6 +1776,9 @@ def _search_perf_for_gap(business_id: int) -> dict:
             rows = _c.execute(
                 "SELECT keyword, search_volume, keyword_difficulty, cpc FROM target_keywords "
                 "WHERE business_id=%s AND search_volume IS NOT NULL "
+                # exclude competitor-gap keywords: they're national-generic intel (huge volumes) that
+                # would swamp the client's own local demand signal.
+                "AND (source IS NULL OR source <> 'dataforseo_competitor') "
                 "ORDER BY search_volume DESC NULLS LAST LIMIT 15", (business_id,)).fetchall()
         if rows:
             out["keyword_demand"] = [{"keyword": r["keyword"], "search_volume": r["search_volume"],
