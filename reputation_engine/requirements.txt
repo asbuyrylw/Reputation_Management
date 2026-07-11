@@ -19,6 +19,8 @@ psycopg-pool>=3.2      # connection pool for the Postgres checkpointer + the rea
 #     hashing uses stdlib pbkdf2 (no bcrypt/passlib native dep), so nothing else is needed. ---
 fastapi>=0.110         # JSON API for the console
 uvicorn[standard]>=0.29  # ASGI server (python -m uvicorn rep_engine.api.main:app)
+python-multipart>=0.0.9  # required by FastAPI for file uploads (source-material documents)
+pypdf>=4.0             # extract text from uploaded PDF source documents
 pyjwt>=2.8             # JWT auth tokens (HS256)
 stripe>=9.0            # Phase 2c billing (Checkout/Portal/webhooks); imported lazily,
                        # the app runs fine without it until STRIPE_SECRET_KEY is set
