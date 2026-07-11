@@ -206,7 +206,7 @@ export default function DashboardPage() {
     sub: "How AI assistants answer about you",
     score,
     rows: [
-      { tone: "good", k: "What's working", v: <>Owned sources cited <b>{pct(latest.owned_rate)}</b>{latest.contested_rate != null ? <> · contested just <b>{pct(latest.contested_rate)}</b></> : null}.</> },
+      { tone: "good", k: "What's working", v: <>Owned sources cited <b>{pct(latest?.owned_rate)}</b>{latest?.contested_rate != null ? <> · contested just <b>{pct(latest.contested_rate)}</b></> : null}.</> },
       deltaVsLast != null && Math.abs(deltaVsLast) >= 0.5
         ? { tone: deltaVsLast >= 0 ? "trend" : "alert", k: "Trending", v: <><b>{deltaVsLast >= 0 ? "Up" : "Down"} {Math.abs(deltaVsLast)} pts</b> at the last audit.</> }
         : { tone: "trend", k: "Trending", v: "Holding steady since the last audit." },

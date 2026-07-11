@@ -729,7 +729,9 @@ def run_job(job_id: int) -> Optional[str]:
     with db() as conn:
         conn.execute(
             "UPDATE api_jobs SET status=%s, error=%s, result=%s, finished_at=now() WHERE id=%s",
-            (status, err, json.dumps(result) if result is not None else None, job_id),
+            # default=str so a handler returning a Decimal/date can never raise out of run_job and
+            # strand the job as 'running' until reap_stale (90m). Records the real status instead.
+            (status, err, json.dumps(result, default=str) if result is not None else None, job_id),
         )
         conn.commit()
     # Fan out a job.finished event to the client's stack (GHL/Zapier/...). No-op until

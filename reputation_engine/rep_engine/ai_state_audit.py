@@ -1440,7 +1440,23 @@ def audit(business_id: int, fast: bool = False) -> int:
                 # (or a killed worker) preserves the work done so far instead of rolling back the
                 # whole battery. The per-business advisory lock is session-level, so this is safe.
                 conn.commit()
-            conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
+            # Run-level integrity guard: a battery that ran but scored NOTHING is not a clean
+            # 'complete'. If the judge/orchestrator provider was unreachable for the whole run while
+            # the answer engines succeeded, every score_answer() returned {} and every row was marked
+            # failed -- completing it green would aggregate a score over ZERO rows and let
+            # build_gap_model synthesize a plan on empty evidence. Mark it failed instead (the answers
+            # are durable; refresh_failed_answers can re-score once the judge is back). Only trips on a
+            # TOTAL blackout (0 scored) so a normal partial-failure run still completes.
+            _cnt = conn.execute(
+                "SELECT count(*) AS total, count(*) FILTER (WHERE NOT COALESCE(failed,false)) AS scored "
+                "FROM answers WHERE run_id=%s", (run_id,)).fetchone()
+            if _cnt and (_cnt["total"] or 0) > 0 and (_cnt["scored"] or 0) == 0:
+                log.error("Audit run %d: 0 of %d answers scored -- marking FAILED, not complete "
+                          "(judge/orchestrator provider unreachable?). Re-run or refresh_failed once it's back.",
+                          run_id, _cnt["total"])
+                conn.execute("UPDATE audit_runs SET finished_at=now(), status='failed' WHERE id=%s", (run_id,))
+            else:
+                conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
             conn.commit()
         except SystemExit:
             raise   # budget/lock exits are clean control flow, not crashes

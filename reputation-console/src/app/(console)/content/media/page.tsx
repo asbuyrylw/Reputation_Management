@@ -82,7 +82,9 @@ function MediaCard({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
 }
 
 function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId: number | null; onClose: () => void }) {
-  const needsBody = item.source === "rich" && item.kind !== "podcast";
+  // Rich-media details carry the full body AND (for podcasts) the transcript — fetch for every rich
+  // item, including podcasts, so the transcript section actually renders.
+  const needsBody = item.source === "rich";
   const detail = useRichMediaDraft(businessId, needsBody ? item.id : null);
   const approve = useApproveRichMedia(businessId);
   const reject = useRejectRichMedia(businessId);
