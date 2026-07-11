@@ -1915,11 +1915,60 @@ export interface DataSourceStatus {
   env_key?: string;
   unlocks: string;
 }
+export interface DataForSeoStatus extends DataSourceStatus {
+  competitor_gaps?: number;
+  has_mentions?: boolean;
+  review_platforms?: string[];
+}
 export interface DataSources {
   google_search_console: DataSourceStatus;
   google_analytics: DataSourceStatus;
   pagespeed: DataSourceStatus;
   keyword_volume: DataSourceStatus;
+  dataforseo?: DataForSeoStatus;
+}
+
+// ---- Create content (user-initiated generation) ----
+export interface ContentTypeOption {
+  content_type: string;
+  label: string;
+  family: "text" | "rich_media" | "visual";
+  ready: boolean;
+  needs: string | null;
+}
+export interface ContentTypeCatalogue {
+  types: ContentTypeOption[];
+  image_configured: boolean;
+  video_configured: boolean;
+  notebooklm_configured: boolean;
+}
+export interface CustomContentResult {
+  job_id: number | null;
+  job_type: string;
+  work_order_id: number;
+  family: "visual" | "content";
+  content_type: string;
+  status: string;
+}
+
+// ---- Reputation signals (DataForSEO mentions + reviews, stored between audits) ----
+export interface ReviewSnapshot {
+  platform: string;
+  rating: { value?: number; votes_count?: number } | number | null;
+  reviews_count: number | null;
+  reviews: { rating: number | null; text: string | null; author: string | null; date: string | null }[];
+  created_at: string | null;
+}
+export interface MentionSnapshot {
+  keyword: string | null;
+  total_count: number | null;
+  sentiment: Record<string, number> | null;
+  sample: { url: string; title: string | null; sentiment: Record<string, number> }[];
+  created_at: string | null;
+}
+export interface ReputationSignals {
+  mentions: MentionSnapshot | null;
+  reviews: ReviewSnapshot[];
 }
 
 // ---- GSC full-surface: URL Inspection (index / canonical / schema health) ----

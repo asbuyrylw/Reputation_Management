@@ -7,27 +7,22 @@ import { useAuth } from "@/lib/auth";
 import { OperatorHome } from "@/components/OperatorHome";
 import { AdvisorPanel } from "@/components/AdvisorPanel";
 import {
-  useDashboard, usePerEngine, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
-  useLocalRankings, useLocalRankTrend, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
+  useDashboard, useRunAnswers, useWorkOrders, useTimeline, useNotifications,
+  useLocalRankings, useLocalSeoGoal, useActivitySummary, useGscSummary, useIncidents, useMentions, useApprovalQueue,
   useCompare, useSiteHealthTrend, useShareOfVoice, useRoadmap,
 } from "@/lib/hooks";
-import { ReputationHero } from "@/components/ReputationHero";
 import { GoalBanner, ScoreHero, TwoFronts, TwoGoals, DoThisNext as DoNextV2, StandingAtAGlance, SecHead } from "@/components/DashboardV2";
 import type { FrontData, ActionItem } from "@/components/DashboardV2";
-import { MetricTrend } from "@/components/MetricTrend";
 import { ScoreTrend } from "@/components/ScoreTrend";
-import { VerdictBanner } from "@/components/VerdictBanner";
 import { ResultsProofCard } from "@/components/ResultsProofCard";
-import { WorstAnswers } from "@/components/WorstAnswers";
-import { EngineScoreStrip } from "@/components/EngineScoreStrip";
 import OnboardingCard from "@/components/OnboardingCard";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunPipelineButton } from "@/components/RunPipelineButton";
 import { FreshnessChip } from "@/components/FreshnessChip";
 import { PipelinePrecheckBanner } from "@/components/PipelinePrecheckBanner";
 import VisibilityTrendChart from "@/components/VisibilityTrendChart";
-import { Card, PageHeader, SectionCard, Spinner } from "@/components/ui";
-import { EmptyState, ToneLegend, DataSection } from "@/components/primitives";
+import { Card, PageHeader, Spinner } from "@/components/ui";
+import { EmptyState } from "@/components/primitives";
 import { repScore, dashboardScore } from "@/lib/repScore";
 import type { SeriesPoint, Business } from "@/lib/types";
 
@@ -62,187 +57,21 @@ function LiveMonitorStrip({ businessId }: { businessId: number | null }) {
   );
 }
 
-// "What we're tracking for you" — profile readback + setup-completeness meter.
-function ProfileTrackingCard({ biz }: { biz?: Business }) {
+// Compact setup indicator for the header — replaces the old bottom "Setup & housekeeping" section
+// with a small notification-style chip. Only appears when the profile is incomplete; links to the
+// one place to finish it. Green check when everything's set.
+function SetupBell({ biz }: { biz?: Business }) {
   if (!biz) return null;
-  const fields = [
-    { label: "Areas served", value: biz.geo, enables: "local rankings & Google reviews" },
-    { label: "Services", value: biz.services, enables: "keyword targeting & category prompts" },
-    { label: "Industry", value: biz.industry, enables: "sharper benchmarking" },
-    { label: "Goal", value: biz.goal, enables: "your North-Star score framing" },
-    { label: "Contested terms", value: biz.contested_terms, enables: "narrative defense" },
-    { label: "Firm type", value: biz.regulatory_profile?.firm_type, enables: "correct compliance checks" },
-  ];
-  const filled = fields.filter((f) => (f.value ?? "").toString().trim());
-  const empty = fields.filter((f) => !(f.value ?? "").toString().trim());
-  const setupPct = Math.round((filled.length / fields.length) * 100);
+  const fields = [biz.geo, biz.services, biz.industry, biz.goal, biz.contested_terms, biz.regulatory_profile?.firm_type];
+  const filled = fields.filter((v) => (v ?? "").toString().trim()).length;
+  const missing = fields.length - filled;
+  const pctSet = Math.round((filled / fields.length) * 100);
+  if (missing === 0) return null;
   return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold tracking-tight text-slate-900">What we&apos;re tracking for you</h3>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">{setupPct}% set up</span>
-          <Link href="/account" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">Edit →</Link>
-        </div>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {filled.map((f) => <span key={f.label} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">✓ {f.label}</span>)}
-      </div>
-      {empty.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-xs text-slate-500">
-          {empty.map((f) => (
-            <li key={f.label}>⚠ <Link href="/account" className="font-medium text-indigo-600 hover:underline">{f.label}</Link> not set — add it to enable {f.enables}.</li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-// --- Biggest gaps: the worst questions AI gets wrong ---
-function BiggestGaps({ gap }: { gap: Json | undefined }) {
-  const weak = (gap?.weak_queries as WeakQuery[] | undefined) ?? [];
-  const top = weak.slice(0, 3);
-  return (
-    <SectionCard title="Your biggest gaps" subtitle="The questions AI answers worst about you." accent="bad" action={{ label: "Close these gaps", href: "/gaps" }}>
-      {top.length === 0 ? (
-        <p className="text-sm text-slate-500">Run an audit to see where AI answers fall short.</p>
-      ) : (
-        <ol className="space-y-3.5">
-          {top.map((w, i) => (
-            <li key={i} className="flex gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-rose-500 text-xs font-bold text-white shadow-sm">{i + 1}</span>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-bold text-slate-900">“{w.prompt}”</div>
-                {w.problem && (
-                  <div className="mt-1 flex gap-2 text-sm leading-relaxed text-slate-600">
-                    <span className="select-none text-slate-300" aria-hidden>–</span><span>{w.problem}</span>
-                  </div>
-                )}
-                {w.fix && (
-                  <div className="mt-1.5 text-sm leading-relaxed text-emerald-700">
-                    <span className="font-semibold">Fix:</span> {w.fix}
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
-    </SectionCard>
-  );
-}
-
-// --- Action plan & progress — merges the plan progress bar, the tasks-done/score-change strip,
-// and the old "improvement tasks" block into ONE surface, with "Manage tasks" promoted up here. ---
-function ActionPlanProgress({ woCounts, assetsN, delta }: { woCounts: Record<string, number>; assetsN: number; delta: number | null }) {
-  const total = Object.values(woCounts).reduce((a, b) => a + b, 0);
-  const done = (woCounts.done ?? 0) + (woCounts.verified ?? 0);
-  const inProg = (woCounts.in_progress ?? 0) + (woCounts.in_review ?? 0) + (woCounts.review ?? 0);
-  const open = Math.max(0, total - done - inProg);
-  const woPct = total ? Math.round((done / total) * 100) : 0;
-  return (
-    <Card accent="good">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h3 className="text-base font-semibold tracking-tight text-slate-900">Action plan progress</h3>
-          <p className="mt-0.5 text-xs text-slate-500">Completing these work items is what moves your score.</p>
-        </div>
-        <Link href="/content/work-orders" className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">Manage tasks →</Link>
-      </div>
-      <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-        <div className="h-full rounded-full bg-linear-to-r from-emerald-400 to-emerald-600 transition-all" style={{ width: `${woPct}%` }} />
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div>
-          <div className="text-2xl font-bold leading-none text-slate-900">{done}<span className="text-base font-medium text-slate-400">/{total}</span></div>
-          <div className="text-xs text-slate-500">tasks done ({woPct}%)</div>
-        </div>
-        {delta != null && (
-          <div>
-            <div className={`text-2xl font-bold leading-none ${delta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{delta >= 0 ? "+" : ""}{delta}</div>
-            <div className="text-xs text-slate-500">score since you started</div>
-          </div>
-        )}
-        <div>
-          <div className="text-2xl font-bold leading-none text-slate-900">{assetsN}</div>
-          <div className="text-xs text-slate-500">published</div>
-        </div>
-        <div className="ml-auto flex flex-wrap gap-x-4 gap-y-1 text-xs font-medium">
-          <span className="flex items-center gap-1.5 text-slate-600"><span className="h-2 w-2 rounded-full bg-emerald-500" /> {done} done</span>
-          <span className="flex items-center gap-1.5 text-slate-600"><span className="h-2 w-2 rounded-full bg-amber-500" /> {inProg} in progress</span>
-          <span className="flex items-center gap-1.5 text-slate-600"><span className="h-2 w-2 rounded-full bg-slate-300" /> {open} not started</span>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-// --- Local search snapshot (grouped with organic search under "Search performance") ---
-function LocalSearchCard({ businessId }: { businessId: number | null }) {
-  const { data: ranks } = useLocalRankings(businessId);
-  const { data: trend } = useLocalRankTrend(businessId);
-  const sum = ranks?.summary ?? null;
-  return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold tracking-tight text-slate-900">📍 Local search</h3>
-        <Link href="/seo-overview" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">SEO overview →</Link>
-      </div>
-      {sum ? (
-        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-          <div><div className="text-xl font-bold text-slate-900">{pct(sum.page_one_rate)}</div><div className="text-[11px] text-slate-500">on page 1</div></div>
-          <div><div className="text-xl font-bold text-slate-900">{pct(sum.local_pack_rate)}</div><div className="text-[11px] text-slate-500">in map pack</div></div>
-          <div><div className="text-xl font-bold text-slate-900">{sum.avg_organic_rank == null ? "—" : `#${sum.avg_organic_rank}`}</div><div className="text-[11px] text-slate-500">avg rank</div></div>
-        </div>
-      ) : (
-        <p className="mt-3 text-sm text-slate-500">No local-rank snapshot yet. <Link href="/local-seo" className="font-medium text-indigo-600 hover:text-indigo-700">Run a check →</Link></p>
-      )}
-      {trend && trend.length >= 2 && (
-        <div className="mt-4 border-t border-slate-100 pt-3">
-          <MetricTrend data={trend} label="Local visibility over time" suffix="%" hint="Share of your tracked local searches ranking on page 1, per check." />
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// --- Organic search traffic (real Google clicks). Self-hides to a connect hint when not linked. ---
-function OrganicSearchCard({ businessId }: { businessId: number | null }) {
-  const { data } = useGscSummary(businessId);
-  if (!data) return null;
-  const collecting = data.collecting;
-  const hasData = data.has_data;
-  if (!hasData && !collecting) {
-    return (
-      <Card className="bg-slate-50/60">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm text-slate-600">Want real Google clicks &amp; rankings alongside your AI score?</p>
-          <Link href="/integrations" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">Connect Search Console →</Link>
-        </div>
-      </Card>
-    );
-  }
-  const delta = data.clicks_delta ?? null;
-  const deltaTone = delta == null ? "text-slate-400" : delta >= 0 ? "text-emerald-600" : "text-rose-600";
-  return (
-    <Card className="bg-linear-to-br from-sky-50/50 to-white">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold tracking-tight text-slate-900">🔍 Organic search traffic</h3>
-        <Link href="/search-performance" className="text-xs font-medium text-indigo-600 hover:text-indigo-700">Search traffic →</Link>
-      </div>
-      {!hasData && collecting ? (
-        <p className="mt-3 text-sm text-slate-500">Collecting search data…</p>
-      ) : (
-        <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="text-2xl font-bold text-slate-900">{(data.clicks ?? 0).toLocaleString()}</span>
-          <span className="text-xs text-slate-500">clicks from Google · last 28 days</span>
-          {delta != null && Math.abs(delta) >= 0.5 && (
-            <span className={`text-sm font-medium ${deltaTone}`}>{delta >= 0 ? "▲ +" : "▼ "}{Math.round(delta)}% vs prior 28d</span>
-          )}
-        </div>
-      )}
-    </Card>
+    <Link href="/account" title={`${missing} profile field${missing === 1 ? "" : "s"} missing — finish setup to unlock more accuracy`}
+      className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">
+      <span aria-hidden>⚙</span> {pctSet}% set up
+    </Link>
   );
 }
 
@@ -283,7 +112,6 @@ export default function DashboardPage() {
   const [workView, setWorkView] = useState(false);
   const { data, isLoading, error } = useDashboard(businessId);
   const latestRunId = data?.series?.length ? data.series[data.series.length - 1].run_id : null;
-  const { data: perEngine } = usePerEngine(businessId, latestRunId);
   const { data: answers } = useRunAnswers(businessId, latestRunId);
   const { data: workOrders } = useWorkOrders(businessId);
   const { data: roadmap } = useRoadmap(businessId);
@@ -323,7 +151,7 @@ export default function DashboardPage() {
 
   const s = data.series;
   const latest: SeriesPoint | undefined = s[s.length - 1];
-  const { score, deltaVsLast, deltaSinceStart } = dashboardScore(s);
+  const { score, deltaVsLast } = dashboardScore(s);
   const goalScore = repScore((timeline as Json | undefined)?.dominance_target as number);
   const goalText = (businesses.find((b) => b.id === businessId)?.goal || "").trim();
 
@@ -407,19 +235,6 @@ export default function DashboardPage() {
     linkLabel: "Open Search & SEO",
   };
 
-  const engVals = perEngine ? Object.values(perEngine.engines) : [];
-  const grounded = engVals.filter((e) => e.grounded_rate);
-  const groundedRate = grounded.length ? grounded.reduce((a, e) => a + (e.grounded_rate!.p ?? 0), 0) / grounded.length : null;
-
-  const counts: Record<string, number> = { positive: 0, neutral: 0, mixed: 0, negative: 0 };
-  for (const a of answers ?? []) if (a.sentiment && a.sentiment in counts) counts[a.sentiment]++;
-  const sentimentData = [
-    { name: "positive", value: counts.positive, color: "#16a34a" },
-    { name: "neutral", value: counts.neutral, color: "#9ca3af" },
-    { name: "mixed", value: counts.mixed, color: "#f59e0b" },
-    { name: "negative", value: counts.negative, color: "#dc2626" },
-  ];
-
   return (
     <div>
       {isOperator && (
@@ -436,8 +251,9 @@ export default function DashboardPage() {
           title={`Dashboard — ${data.business.name}`}
           subtitle="Where you stand with AI assistants, what to do next, and when it'll improve."
         />
-        {/* Always-on freshness + owner-safe one-click refresh (never sends owners to /admin). */}
+        {/* Always-on freshness + setup indicator + owner-safe one-click refresh (never sends owners to /admin). */}
         <div className="flex shrink-0 items-center gap-2 pt-1">
+          <SetupBell biz={businesses.find((b) => b.id === businessId)} />
           <FreshnessChip asOf={latest?.date} />
           {canEdit && <RunPipelineButton key={businessId} businessId={businessId} />}
         </div>
@@ -518,96 +334,11 @@ export default function DashboardPage() {
           {/* Results & Proof — tactic impact */}
           <ResultsProofCard businessId={businessId} currentScore={score} />
 
-          {/* Deeper detail — drivers, sentiment, search performance, worst answers, task & gap detail, per-engine. */}
-          <DataSection title="Full breakdown & detail" headline="Drivers, sentiment, search performance, the worst answers with their fixes, your task & gap detail, and per-engine scores." detailsLabel="Show full breakdown">
-            <div className="space-y-6">
-              {/* drivers + sentiment + verdict */}
-              <div className="space-y-3">
-                <ReputationHero
-                  goalAlignment={latest.goal_alignment}
-                  contestedRate={latest.contested_rate}
-                  ownedRate={latest.owned_rate}
-                  groundedRate={groundedRate}
-                  coverage={perEngine?.coverage ?? null}
-                  sentiment={sentimentData}
-                  asOf={latest.date}
-                  delta={deltaVsLast}
-                />
-                <VerdictBanner businessName={data.business.name} score={score} challenge={data.challenge} compact />
-                <div className="flex justify-end px-1"><ToneLegend /></div>
-              </div>
-
-              {/* search performance */}
-              <section>
-                <h2 className="mb-3 text-sm font-semibold tracking-tight text-slate-900">
-                  Search performance <span className="font-normal text-slate-400">— your Google visibility</span>
-                </h2>
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                  <LocalSearchCard businessId={businessId} />
-                  <OrganicSearchCard businessId={businessId} />
-                </div>
-              </section>
-
-              {/* fix the worst things — actionable, with fixes */}
-              {answers && answers.some((a) => !a.failed && a.goal_alignment != null) && (
-                <section>
-                  <h2 className="mb-1 text-sm font-semibold tracking-tight text-slate-900">
-                    Fix the worst things AI is saying <span className="font-normal text-slate-400">— your highest-ROI moves</span>
-                  </h2>
-                  <p className="mb-3 text-xs text-slate-500">
-                    The lowest-scoring answers from your latest audit — each paired with the specific action that fixes it.
-                  </p>
-                  <Card accent="bad">
-                    <WorstAnswers
-                      answers={answers}
-                      runId={latestRunId}
-                      limit={4}
-                      weakQueries={data.gap?.weak_queries as WeakQuery[] | undefined}
-                      workOrders={workOrders}
-                      showFix
-                    />
-                    <div className="mt-3 border-t border-slate-100 pt-3 text-right">
-                      <Link href="/content/work-orders" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
-                        See your full task list →
-                      </Link>
-                    </div>
-                  </Card>
-                </section>
-              )}
-
-              {/* biggest gaps — the single "do this next" action center lives up top (DoNextV2);
-                  this detail block stays focused on the worst gaps, not a second task list. */}
-              <BiggestGaps gap={data.gap} />
-
-              {/* per-engine AI scores */}
-              <section className="space-y-2">
-                <h2 className="text-sm font-semibold tracking-tight text-slate-900">Per-engine AI scores</h2>
-                <Card>
-                  <EngineScoreStrip perEngine={perEngine} challenge={data.challenge} />
-                </Card>
-              </section>
-            </div>
-          </DataSection>
-
-          {/* 7) Your progress — action plan + this month's work, combined, at the bottom */}
-          <section className="space-y-4">
-            <h2 className="text-sm font-semibold tracking-tight text-slate-900">Your progress</h2>
-            <ActionPlanProgress woCounts={data.wo_counts} assetsN={data.assets_n} delta={deltaSinceStart} />
-            <ThisMonthPanel businessId={businessId} />
-          </section>
-
-          {/* 8) Setup & housekeeping — collapsed at the very bottom */}
-          <DataSection title="Setup & housekeeping" headline="What we're tracking for you, and the deeper AI breakdown." detailsLabel="Show setup & housekeeping">
-            <div className="space-y-6">
-              <ProfileTrackingCard biz={businesses.find((b) => b.id === businessId)} />
-              <Card className="bg-slate-50/60">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm text-slate-600">Want the why — your primary challenge and how each AI assistant differs?</p>
-                  <Link href="/ai-overview" className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700">AI overview →</Link>
-                </div>
-              </Card>
-            </div>
-          </DataSection>
+          {/* This month's work — the client-facing value narrative. (The old "Full breakdown &
+              detail" and the duplicate action-plan bar were removed: the score + worst answers live
+              in the hero above, and the deep breakdowns live on their own hub pages — AI overview,
+              Search & SEO, Gaps — so the dashboard stays a summary, not a second copy of everything.) */}
+          <ThisMonthPanel businessId={businessId} />
         </div>
       )}
     </div>

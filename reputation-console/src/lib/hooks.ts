@@ -12,6 +12,9 @@ import type {
   IndexHealth,
   DataSources,
   RichMediaList,
+  ContentTypeCatalogue,
+  CustomContentResult,
+  ReputationSignals,
   RichMediaDraft,
   CostDashboard,
   SourceDocument,
@@ -1948,6 +1951,30 @@ export function useDeleteSourceDoc(businessId: number | null) {
     mutationFn: (docId: number) => apiFetch<{ deleted: number }>(`/businesses/${businessId}/source-documents/${docId}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
   });
+}
+
+// ---- Create content (user-initiated generation) ----
+export function useContentTypes(businessId: number | null) {
+  return useApiQuery<ContentTypeCatalogue>(["content-types", businessId], base(businessId, "/content-types"));
+}
+export function useCreateContent(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { content_type: string; description: string; title?: string; gap_key?: string; gap_label?: string; aspect_ratio?: string }) =>
+      apiFetch<CustomContentResult>(`/businesses/${businessId}/custom-content`, { method: "POST", body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["content-drafts", businessId] });
+      qc.invalidateQueries({ queryKey: ["rich-media", businessId] });
+      qc.invalidateQueries({ queryKey: ["visuals", businessId] });
+      qc.invalidateQueries({ queryKey: ["work-orders", businessId] });
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+    },
+  });
+}
+
+// Stored reputation signals (DataForSEO): brand mentions + cross-platform reviews, between audits.
+export function useReputationSignals(businessId: number | null) {
+  return useApiQuery<ReputationSignals>(["reputation-signals", businessId], base(businessId, "/reputation-signals"));
 }
 
 // GSC full-surface: per-page index status + canonical loss + schema validity + crawl reasons.

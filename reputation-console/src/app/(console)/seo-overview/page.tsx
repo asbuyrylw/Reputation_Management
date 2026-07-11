@@ -11,6 +11,8 @@ import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { RunJobButton } from "@/components/RunJobButton";
 import { SearchPerformanceCard } from "@/components/SearchPerformanceCard";
 import { AiCrawlerReadinessCard } from "@/components/AiCrawlerReadinessCard";
+import { KeywordsToWinPanel } from "@/components/KeywordsToWinPanel";
+import { ReputationSignalsPanel } from "@/components/ReputationSignalsPanel";
 import { NapBlock } from "@/components/NapBlock";
 import type { TargetKeyword, ReviewsSummary, ReviewRequestKit, OurContentImpact, ReviewSla, LocalSeoGoal } from "@/lib/types";
 
@@ -596,8 +598,10 @@ export default function SeoOverviewPage() {
         <DataSection title="More detail — reviews, keywords, AI-readiness, competitors & site" headline="Your Google reviews + how to get more, the keywords to target, AI-crawler readiness, competitive standing, and site health." detailsLabel="Show detail">
           <div className="space-y-6">
             <ReviewsCard businessId={businessId} canEdit={canEdit} data={revs.data} />
+            <ReputationSignalsPanel businessId={businessId} canEdit={canEdit} />
             <ReviewRequestCard kit={reviewKit.data} businessId={businessId} canEdit={canEdit} sla={reviewSla.data} />
             <KeywordsCard businessId={businessId} canEdit={canEdit} kws={kws.data} />
+            <KeywordsToWinPanel businessId={businessId} canEdit={canEdit} />
             <AiCrawlerReadinessCard businessId={businessId} />
 
             {/* Competitor standing */}

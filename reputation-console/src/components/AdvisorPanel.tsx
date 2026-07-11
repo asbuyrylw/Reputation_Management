@@ -99,21 +99,28 @@ function ActionRow({ a }: { a: AdvisorAction }) {
   );
 }
 
-export function AdvisorPanel({ businessId, compact = false }: { businessId: number | null; compact?: boolean }) {
+export function AdvisorPanel({ businessId, compact = false, framing = "strategy" }: { businessId: number | null; compact?: boolean; framing?: "strategy" | "content" }) {
   const { data, isLoading } = useAdvisor(businessId, !compact);
-  if (isLoading) return <Card><div className="flex items-center gap-2 py-6 text-ink-3"><Spinner /> Analyzing strategy…</div></Card>;
+  if (isLoading) return <Card><div className="flex items-center gap-2 py-6 text-ink-3"><Spinner /> Analyzing content performance…</div></Card>;
   if (!data) return null;
   const d: Advisor = data;
   const s = STATUS[d.pdca_status] ?? STATUS.insufficient_data;
   const o = d.overall;
+  // Same live data, two framings: on the Content hub it reads as a content-performance monitor
+  // (what's our published content doing between audits?); elsewhere as the strategy PDCA advisor.
+  const isContent = framing === "content";
+  const eyebrow = isContent ? "Content Performance · measured between audits" : "Strategy Advisor · Plan · Do · Check · Act";
+  const heading = isContent ? "Is our published content working?" : "Are we on track to the goal?";
+  const fullHref = isContent ? "/content/performance" : "/strategy";
+  const fullLabel = isContent ? "Content performance →" : "Full strategy →";
 
   return (
     <Card className="flex flex-col gap-5">
       {/* header + PDCA status */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-4">Strategy Advisor · Plan · Do · Check · Act</div>
-          <h2 className="font-display text-[20px] font-semibold tracking-[-0.01em] text-ink">Are we on track to the goal?</h2>
+          <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-4">{eyebrow}</div>
+          <h2 className="font-display text-[20px] font-semibold tracking-[-0.01em] text-ink">{heading}</h2>
         </div>
         <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ color: s.tone, background: `${s.tone}16` }}>
           <span className="h-2 w-2 rounded-full" style={{ background: s.tone }} />{s.label}
@@ -137,7 +144,7 @@ export function AdvisorPanel({ businessId, compact = false }: { businessId: numb
           {d.recommended_actions[0]
             ? <Link href={actionHref(d.recommended_actions[0])} className="min-w-0 flex-1 text-[13px] text-ink-2 hover:text-ink"><span className="font-semibold text-ink">Next:</span> {d.recommended_actions[0].detail}</Link>
             : <span className="text-[13px] text-ink-4">No action needed right now.</span>}
-          <Link href="/strategy" className="shrink-0 text-[13px] font-semibold text-indigo hover:text-indigo-strong">Full strategy →</Link>
+          <Link href={fullHref} className="shrink-0 text-[13px] font-semibold text-indigo hover:text-indigo-strong">{fullLabel}</Link>
         </div>
       )}
 

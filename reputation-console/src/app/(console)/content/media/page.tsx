@@ -11,6 +11,7 @@ import { useBusiness } from "@/lib/business";
 import { useVisuals, useRichMediaDrafts, useRichMediaDraft, useApproveRichMedia, useRejectRichMedia } from "@/lib/hooks";
 import { apiBase } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
+import { CreateContentButton } from "@/components/CreateContentButton";
 import { EmptyState } from "@/components/primitives";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import type { VisualAsset, RichMediaDraft } from "@/lib/types";
@@ -174,8 +175,11 @@ export default function MediaPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Content · Media" title="Media gallery"
-        subtitle="Every asset the engine generated — videos, images, podcasts, slide decks, infographics and long-form — in one place, each with the right viewer. Preview, then approve or reject." />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader eyebrow="Content · Media" title="Media gallery"
+          subtitle="Every asset the engine generated — videos, images, podcasts, slide decks, infographics and long-form — in one place, each with the right viewer. Preview, then approve or reject." />
+        <CreateContentButton className="inline-flex h-9 shrink-0 items-center rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-sm hover:bg-indigo-strong" />
+      </div>
 
       {/* filter bar */}
       <div className="mb-4 flex flex-wrap items-center gap-1.5">

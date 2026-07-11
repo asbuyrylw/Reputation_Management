@@ -54,6 +54,7 @@ export const HUBS: Hub[] = [
     key: "content", label: "Getting it done", opLabel: "Content", href: "/content",
     tabs: [
       { href: "/content", label: "Overview" },
+      { href: "/content/performance", label: "Performance" },
       { href: "/content/briefs", label: "To produce" },
       { href: "/content/drafts", label: "Drafts" },
       { href: "/content/media", label: "Media" },

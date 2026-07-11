@@ -7,6 +7,7 @@ import { apiBase } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
+import { CreateContentButton } from "@/components/CreateContentButton";
 
 function Tile({ k, value, sub, color }: { k: string; value: string; sub: string; color?: string }) {
   return (
@@ -103,10 +104,13 @@ export default function ContentOverviewPage() {
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader eyebrow="Content · Overview" title="Content at a glance" subtitle="What to produce, what's in draft, what's published, what's recommended — plus the outreach that speeds your timeline. Everything content, in one view." />
-        <Link href="/content/briefs" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong">
-          See what to produce
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <CreateContentButton className="inline-flex h-9 items-center rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong" />
+          <Link href="/content/briefs" className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-line bg-white px-4 text-[13.5px] font-semibold text-ink hover:bg-paper">
+            See what to produce
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+          </Link>
+        </div>
       </div>
 
       {/* KPI tiles */}

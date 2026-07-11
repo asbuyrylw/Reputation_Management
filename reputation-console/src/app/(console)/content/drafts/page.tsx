@@ -10,6 +10,7 @@ import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { TabNav } from "@/components/content/TabNav";
+import { CreateContentButton } from "@/components/CreateContentButton";
 import type { ContentDraft } from "@/lib/types";
 
 // Per-draft metadata for the table, read from its quality_notes (all already computed).
@@ -235,11 +236,14 @@ export default function DraftsPage() {
           title="Content drafts"
           subtitle="Your drafts at a glance — click any row to review, edit, and publish. Nothing publishes without you."
         />
-        {kattebCredits?.configured && kattebCredits.credits_available != null && (
-          <span className="mt-1 shrink-0 rounded-full bg-indigo-50 px-2.5 py-1 font-mono text-[11px] text-indigo-700" title="Katteb credits for deep SEO analysis this month">
-            Katteb: {kattebCredits.credits_available.toLocaleString()} / {kattebCredits.credits_total?.toLocaleString()} credits
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {kattebCredits?.configured && kattebCredits.credits_available != null && (
+            <span className="mt-1 rounded-full bg-indigo-50 px-2.5 py-1 font-mono text-[11px] text-indigo-700" title="Katteb credits for deep SEO analysis this month">
+              Katteb: {kattebCredits.credits_available.toLocaleString()} / {kattebCredits.credits_total?.toLocaleString()} credits
+            </span>
+          )}
+          <CreateContentButton className="inline-flex h-9 items-center rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-sm hover:bg-indigo-strong" />
+        </div>
       </div>
 
       <Card className="mb-4">

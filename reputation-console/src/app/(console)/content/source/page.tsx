@@ -31,15 +31,26 @@ export default function SourceMaterialPage() {
   const documents = docs.data?.documents ?? [];
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setUploadMsg("Uploading…");
-    try {
-      const r = await upload.mutateAsync(f);
-      setUploadMsg(`Added "${r.title}" (${r.chars.toLocaleString()} chars)`);
-    } catch (err) {
-      setUploadMsg(err instanceof Error ? err.message : "Upload failed");
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    // Bulk upload: process each file in turn, reporting running progress. One failure doesn't
+    // abort the rest — the doc that failed is named so the owner can retry just that one.
+    const ok: string[] = [];
+    const failed: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setUploadMsg(files.length > 1 ? `Uploading ${i + 1} of ${files.length}: ${f.name}…` : "Uploading…");
+      try {
+        const r = await upload.mutateAsync(f);
+        ok.push(r.title || f.name);
+      } catch {
+        failed.push(f.name);
+      }
     }
+    const parts: string[] = [];
+    if (ok.length) parts.push(`Added ${ok.length} document${ok.length > 1 ? "s" : ""}`);
+    if (failed.length) parts.push(`${failed.length} failed (${failed.join(", ")})`);
+    setUploadMsg(parts.join(" · ") || "Nothing uploaded");
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -69,13 +80,13 @@ export default function SourceMaterialPage() {
         {/* Upload + add */}
         <Card className="flex flex-col">
           <h3 className="text-base font-semibold tracking-tight text-slate-900">Add source material</h3>
-          <p className="mt-0.5 mb-3 text-xs text-slate-500">Upload brand docs, scripts, product one-pagers, testimonials, FAQs — anything the AI should build content from. TXT / MD / PDF / DOCX.</p>
+          <p className="mt-0.5 mb-3 text-xs text-slate-500">Upload brand docs, scripts, product one-pagers, testimonials, FAQs — anything the AI should build content from. Select several at once. TXT / MD / PDF / DOCX.</p>
           {canEdit && (
             <>
-              <input ref={fileRef} type="file" accept=".txt,.md,.csv,.pdf,.docx" onChange={onFile} className="hidden" />
+              <input ref={fileRef} type="file" multiple accept=".txt,.md,.csv,.pdf,.docx" onChange={onFile} className="hidden" />
               <button onClick={() => fileRef.current?.click()} disabled={upload.isPending}
                 className="rounded-[10px] border-2 border-dashed border-line-2 bg-paper px-4 py-6 text-[14px] font-semibold text-ink-2 hover:border-indigo hover:text-indigo disabled:opacity-60">
-                {upload.isPending ? "Uploading…" : "⬆  Upload a document"}</button>
+                {upload.isPending ? "Uploading…" : "⬆  Upload documents"}</button>
               {uploadMsg && <div className="mt-2 text-[12px] text-ink-3">{uploadMsg}</div>}
 
               <div className="mt-4 border-t border-line pt-4">

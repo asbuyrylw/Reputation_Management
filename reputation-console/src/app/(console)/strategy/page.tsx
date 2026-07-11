@@ -12,7 +12,7 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useStrategy, useDashboard, useTimeline, useRoadmap } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
-import { AdvisorPanel } from "@/components/AdvisorPanel";
+import { KeywordsToWinPanel } from "@/components/KeywordsToWinPanel";
 import { SecHead } from "@/components/DashboardV2";
 import { TableContainer, Th, Td } from "@/components/content/TableContainer";
 import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
@@ -89,7 +89,7 @@ const STRATEGY_COLUMNS: DataGridColumn<StratRow>[] = [
 ];
 
 export default function StrategyPage() {
-  const { businessId, businesses, loading } = useBusiness();
+  const { businessId, businesses, loading, canEdit } = useBusiness();
   const { data: strat, isLoading: stratLoading } = useStrategy(businessId);
   const { data: dash, isLoading: dashLoading } = useDashboard(businessId);
   const { data: timeline } = useTimeline(businessId);
@@ -133,9 +133,11 @@ export default function StrategyPage() {
         </Link>
       </div>
 
-      {/* PDCA advisor — is the plan working, and what's needed next (live, data-driven). */}
+      {/* Which keywords to actually go after — winnable (real demand + low difficulty), competitor
+          gaps, and highest demand. Each becomes a content task carrying the target keyword. The
+          measured "is it working?" view now lives in Content → Performance. */}
       <div className="mb-5 mt-1">
-        <AdvisorPanel businessId={businessId} />
+        <KeywordsToWinPanel businessId={businessId} canEdit={canEdit} />
       </div>
 
       {summary && (

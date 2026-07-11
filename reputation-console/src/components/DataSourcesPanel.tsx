@@ -14,6 +14,7 @@ const ROWS: Row[] = [
   { key: "google_analytics", label: "Google Analytics (GA4)", kind: "oauth" },
   { key: "pagespeed", label: "PageSpeed / Core Web Vitals", kind: "key" },
   { key: "keyword_volume", label: "Keyword volume", kind: "key" },
+  { key: "dataforseo", label: "DataForSEO (competitors, mentions & reviews)", kind: "key" },
 ];
 
 function isReady(s: DataSourceStatus, kind: "oauth" | "key"): boolean {
@@ -31,7 +32,10 @@ function agoLabel(iso?: string | null): string {
 export function DataSourcesPanel({ businessId, compact = false }: { businessId: number | null; compact?: boolean }) {
   const { data } = useDataSources(businessId);
   if (!data) return null;
-  const rows = ROWS.map((r) => ({ ...r, s: data[r.key], ready: isReady(data[r.key], r.kind) }));
+  const rows = ROWS.flatMap((r) => {
+    const s = data[r.key];
+    return s ? [{ ...r, s, ready: isReady(s, r.kind) }] : [];
+  });
   const readyCount = rows.filter((r) => r.ready).length;
 
   if (compact) {
