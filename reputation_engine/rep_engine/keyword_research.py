@@ -239,8 +239,10 @@ def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional
         try:
             from . import cost as _cost
             exact = res.data.get("cost")
+            # DataForSEO returns the EXACT cost; a failed/empty call returns none -> record $0 (no
+            # charge). Never fall back to a per-keyword estimate (that mis-multiplied failed calls).
             _cost.record_cost(business_id, None, "keyword_volume", "dataforseo", "labs/keyword_overview",
-                              cost_usd=float(exact) if exact not in (None, 0) else None,
+                              cost_usd=float(exact or 0),
                               units=len(chunk), unit_label="keywords",
                               detail={"keyword_count": len(chunk), "batch": i // _CHUNK + 1,
                                       "exact_cost": exact, "status": res.data.get("status_message")})

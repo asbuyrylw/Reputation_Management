@@ -77,8 +77,9 @@ def _post(endpoint: str, body: list, business_id: Optional[int], category: str, 
         return None
     try:
         exact = res.data.get("cost")
+        # Record the EXACT cost DataForSEO returns; a failed/free call returns none -> $0 (no charge).
         _cost.record_cost(business_id, None, category, "dataforseo", op,
-                          cost_usd=float(exact) if exact not in (None, 0) else None,
+                          cost_usd=float(exact or 0),
                           units=units, unit_label=unit_label,
                           detail={"endpoint": endpoint, "exact_cost": exact, "status": res.data.get("status_message")})
     except Exception:  # noqa: BLE001
