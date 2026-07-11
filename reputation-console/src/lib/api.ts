@@ -61,6 +61,23 @@ export async function apiFetch<T>(path: string, opts: FetchOpts = {}): Promise<T
   return (await res.json()) as T;
 }
 
+// Credentialed multipart upload (a file). The browser sets the multipart boundary, so we must NOT
+// set Content-Type. Sends the session cookie + CSRF token like any other write.
+export async function apiUpload<T>(path: string, file: File, field = "file"): Promise<T> {
+  const fd = new FormData();
+  fd.append(field, file);
+  const headers: Record<string, string> = {};
+  const t = csrfToken();
+  if (t) headers["X-CSRF-Token"] = t;
+  const res = await fetch(`${BASE}${path}`, { method: "POST", headers, credentials: "include", body: fd });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); if (j?.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* */ }
+    throw new ApiError(res.status, msg);
+  }
+  return (await res.json()) as T;
+}
+
 // Credentialed binary download (e.g. a .docx report): fetch as a blob with the session
 // cookie, then trigger a browser download. GET-only, so no CSRF token is needed.
 export async function apiDownload(path: string, filename: string): Promise<void> {

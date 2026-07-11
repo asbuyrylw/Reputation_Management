@@ -1844,6 +1844,17 @@ export interface PageSpeed {
   technical_gaps?: PageSpeedTechGap[];
 }
 
+// ---- Brand guardrails + source material ----
+export interface SourceDocument {
+  id: number;
+  title: string | null;
+  source_type: string;
+  source_url: string | null;
+  tokens: number | null;
+  active: boolean;
+  created_at: string | null;
+}
+
 // ---- Admin cost dashboard (itemized real spend) ----
 export interface CostCategoryRow { category: string; label: string; cost_usd: number; events: number; units: number | null; unit_label: string | null; }
 export interface CostProviderRow { provider: string; cost_usd: number; events: number; }

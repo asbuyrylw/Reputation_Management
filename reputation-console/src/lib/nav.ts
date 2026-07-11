@@ -60,6 +60,7 @@ export const HUBS: Hub[] = [
       { href: "/content/finalized", label: "Published" },
       { href: "/content/library", label: "Library" },
       { href: "/content/calendar", label: "Calendar" },
+      { href: "/content/source", label: "Source material" },
       { href: "/content/outreach", label: "Outreach" },
     ],
   },

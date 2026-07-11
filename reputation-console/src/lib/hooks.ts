@@ -4,7 +4,7 @@
 // isolated per tenant.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "./api";
+import { apiFetch, apiUpload } from "./api";
 import { useAuth } from "./auth";
 import type {
   PageSpeed,
@@ -14,6 +14,7 @@ import type {
   RichMediaList,
   RichMediaDraft,
   CostDashboard,
+  SourceDocument,
   AdminUser,
   Asset,
   AuditRun,
@@ -1910,6 +1911,43 @@ export function useAdvisor(businessId: number | null, llm = true) {
     ["advisor", businessId, llm],
     businessId ? `/businesses/${businessId}/advisor?llm=${llm ? "true" : "false"}` : null,
   );
+}
+
+// ---- Brand guardrails + source material (content grounding) ----
+export function useBrandGuardrails(businessId: number | null) {
+  return useApiQuery<{ brand_guardrails: string }>(["brand-guardrails", businessId], base(businessId, "/brand-guardrails"));
+}
+export function useSetBrandGuardrails(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (brand_guardrails: string) => apiFetch<{ ok: boolean }>(`/businesses/${businessId}/brand-guardrails`, { method: "PUT", body: { brand_guardrails } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["brand-guardrails", businessId] }),
+  });
+}
+export function useSourceDocuments(businessId: number | null) {
+  return useApiQuery<{ documents: SourceDocument[] }>(["source-docs", businessId], base(businessId, "/source-documents"));
+}
+export function useAddSourceDoc(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { title?: string; content: string; source_url?: string }) =>
+      apiFetch<{ id: number }>(`/businesses/${businessId}/source-documents`, { method: "POST", body: { ...body, source_type: body.source_url ? "url" : "note" } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
+  });
+}
+export function useUploadSourceDoc(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => apiUpload<{ id: number; title: string; chars: number }>(`/businesses/${businessId}/source-documents/upload`, file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
+  });
+}
+export function useDeleteSourceDoc(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (docId: number) => apiFetch<{ deleted: number }>(`/businesses/${businessId}/source-documents/${docId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
+  });
 }
 
 // GSC full-surface: per-page index status + canonical loss + schema validity + crawl reasons.
