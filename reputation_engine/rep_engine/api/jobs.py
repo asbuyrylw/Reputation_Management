@@ -309,6 +309,14 @@ def _run_ingest_ga(business_id: int, args: dict):
     return _imp("ga_data").ingest(business_id)
 
 
+def _run_ingest_pagespeed(business_id: int, args: dict):
+    """PageSpeed Insights: grade owned (+ competitor) URLs on Lighthouse + Core Web Vitals.
+    Gated by PAGESPEED_ENABLED; no-op without it. Live scores need a PAGESPEED_API_KEY."""
+    urls = (args or {}).get("urls")
+    strategy = (args or {}).get("strategy")
+    return _imp("pagespeed").ingest(business_id, urls=urls, strategy=strategy)
+
+
 def _run_index_own_content(business_id: int, args: dict):
     """White-hat indexing: ping search engines about the owned-content feed + report GSC index
     status. Keyless-safe (RSS/ping always work; index check no-ops without GSC)."""
@@ -440,6 +448,8 @@ JOB_DISPATCH = {
     # search analytics (Wave 1)
     "ingest_gsc": _run_ingest_gsc,
     "ingest_ga": _run_ingest_ga,
+    # technical SEO / Core Web Vitals (adopt batch)
+    "ingest_pagespeed": _run_ingest_pagespeed,
     # white-hat own-content indexing (Wave 3)
     "index_own_content": _run_index_own_content,
 }
@@ -493,6 +503,7 @@ _JOB_RATE_LIMITS = {
     "katteb_seo": (6, 3600),
     "ingest_gsc": (6, 3600),
     "ingest_ga": (6, 3600),
+    "ingest_pagespeed": (6, 3600),
     "index_own_content": (4, 3600),
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),

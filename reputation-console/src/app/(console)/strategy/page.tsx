@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useStrategy, useDashboard, useTimeline, useRoadmap } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
+import { AdvisorPanel } from "@/components/AdvisorPanel";
 import { SecHead } from "@/components/DashboardV2";
 import { TableContainer, Th, Td } from "@/components/content/TableContainer";
 import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
@@ -130,6 +131,11 @@ export default function StrategyPage() {
           Open task board
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
         </Link>
+      </div>
+
+      {/* PDCA advisor — is the plan working, and what's needed next (live, data-driven). */}
+      <div className="mb-5 mt-1">
+        <AdvisorPanel businessId={businessId} />
       </div>
 
       {summary && (

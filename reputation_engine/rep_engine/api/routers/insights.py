@@ -101,6 +101,56 @@ def ga_channels(business_id: int = Depends(authorize_business)):
     return _ga().channels(business_id)
 
 
+def _ps():
+    try:
+        from ... import pagespeed as p
+    except ImportError:  # pragma: no cover
+        import pagespeed as p  # type: ignore
+    return p
+
+
+@router.get("/pagespeed")
+def pagespeed(business_id: int = Depends(authorize_business)):
+    """Latest PageSpeed / Core Web Vitals scores for owned (+ competitor) URLs, a rollup, and the
+    structured technical-SEO gaps that feed the gap model + advisor. Dormant-safe: returns
+    {has_data:false} until the ingest_pagespeed job has graded pages (needs PAGESPEED_API_KEY)."""
+    p = _ps()
+    out = p.latest(business_id)
+    out["technical_gaps"] = p.technical_gaps(business_id)
+    return out
+
+
+class PageSpeedRun(BaseModel):
+    urls: Optional[list[str]] = None
+    strategy: Optional[str] = None
+
+
+@router.post("/pagespeed/run")
+def pagespeed_run(body: PageSpeedRun, business_id: int = Depends(require_business_editor)):
+    """Grade owned (+ competitor) URLs now — enqueues the ingest_pagespeed job (each URL ~30-60s, so
+    it runs in the background). Needs PAGESPEED_ENABLED + a PAGESPEED_API_KEY for live scores."""
+    try:
+        from .. import jobs as _jobs
+    except ImportError:  # pragma: no cover
+        import api.jobs as _jobs  # type: ignore
+    args = {k: v for k, v in {"urls": body.urls, "strategy": body.strategy}.items() if v}
+    job = _jobs.enqueue(business_id, "ingest_pagespeed", args=args or None)
+    return {"enqueued": True, "job": job}
+
+
+@router.get("/advisor")
+def advisor(llm: bool = True, business_id: int = Depends(authorize_business)):
+    """The PDCA strategy advisor: the goal + per-gap progress (DO/CHECK) + impact predictions +
+    the specific recommended next content (ACT), synthesized from the gap model, content batches,
+    measured impact, and the GA/GSC/PageSpeed/keyword-demand signals. Pass llm=false to skip the
+    LLM briefing (deterministic fallback) for a faster response."""
+    try:
+        from ... import strategy_advisor as _sa
+    except ImportError:  # pragma: no cover
+        import strategy_advisor as _sa  # type: ignore
+    return _sa.advise(business_id, with_narrative=llm)
+
+
 @router.get("/our-content-impact")
 def our_content_impact(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """Causal proof loop (Wave 1 item 3): for content WE published, did it start earning search
@@ -501,8 +551,9 @@ def seo_keywords(business_id: int = Depends(authorize_business), conn=Depends(ge
     Produced by the keyword_research job (LLM seed + Serper grounding). Distinct from
     /keywords, which is the brand-monitoring keyword list."""
     rows = conn.execute(
-        "SELECT keyword, kind, source, intent, priority, rationale FROM target_keywords "
-        "WHERE business_id=%s ORDER BY priority DESC NULLS LAST, keyword",
+        "SELECT keyword, kind, source, intent, priority, rationale, "
+        "search_volume, keyword_difficulty, cpc FROM target_keywords "
+        "WHERE business_id=%s ORDER BY search_volume DESC NULLS LAST, priority DESC NULLS LAST, keyword",
         (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]

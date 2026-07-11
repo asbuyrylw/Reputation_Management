@@ -7,6 +7,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./api";
 import { useAuth } from "./auth";
 import type {
+  PageSpeed,
+  Advisor,
   AdminUser,
   Asset,
   AuditRun,
@@ -1859,4 +1861,35 @@ export function useLlmsTxt(businessId: number | null) {
 }
 export function useSchemaVerify(businessId: number | null) {
   return useApiQuery<SchemaVerify>(["schema-verify", businessId], base(businessId, "/schema-verify"));
+}
+
+// =====================================================================================
+// PageSpeed / Core Web Vitals (technical-SEO layer) + PDCA Strategy Advisor.
+// =====================================================================================
+
+// Latest Lighthouse + Core Web Vitals scores for owned (+ competitor) URLs, rollup, technical gaps.
+export function usePageSpeed(businessId: number | null) {
+  return useApiQuery<PageSpeed>(["pagespeed", businessId], base(businessId, "/pagespeed"));
+}
+
+// Grade owned URLs now (enqueues the ingest_pagespeed job). Needs PAGESPEED_API_KEY for live scores.
+export function useRunPageSpeed(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body?: { urls?: string[]; strategy?: string }) =>
+      apiFetch<{ enqueued: boolean }>(`/businesses/${businessId}/pagespeed/run`, {
+        method: "POST",
+        body: body ?? {},
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pagespeed", businessId] }),
+  });
+}
+
+// The PDCA strategy advisor: goal + per-gap progress + impact predictions + recommended next content.
+// llm=false skips the LLM briefing for a faster response.
+export function useAdvisor(businessId: number | null, llm = true) {
+  return useApiQuery<Advisor>(
+    ["advisor", businessId, llm],
+    businessId ? `/businesses/${businessId}/advisor?llm=${llm ? "true" : "false"}` : null,
+  );
 }

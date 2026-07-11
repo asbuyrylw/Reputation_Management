@@ -1735,6 +1735,36 @@ def _search_perf_for_gap(business_id: int) -> dict:
             out["our_content_pages"] = _ga.top_pages(business_id, limit=10, ours_only=True)
     except Exception as e:  # noqa: BLE001
         log.warning("gap model: GA signals unavailable (%s)", e)
+    # Page-level TECHNICAL health (PageSpeed / Core Web Vitals): owned pages that are slow, fail
+    # CWV, or are schema/SEO-weak silently suppress their own ranking + AI citation, so the model
+    # can prescribe a technical fix (not just "write more"). First-party, fail-safe.
+    try:
+        from . import pagespeed as _ps
+        snap = _ps.latest(business_id)
+        if snap.get("has_data"):
+            out["technical_health"] = {"avg_performance": snap.get("avg_performance"),
+                                       "avg_seo": snap.get("avg_seo"),
+                                       "cwv_failing": snap.get("cwv_failing"),
+                                       "slow_pages": snap.get("slow_pages")}
+            tg = _ps.technical_gaps(business_id)
+            if tg:
+                out["technical_seo_issues"] = tg[:10]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: PageSpeed signals unavailable (%s)", e)
+    # Real search DEMAND (Google Keyword Planner via the volume provider): the highest-volume target
+    # keywords, so the model can weight gaps by how much traffic is actually at stake, not just by
+    # answer sentiment. First-party, fail-safe -- empty when no volume provider is configured.
+    try:
+        with db() as _c:
+            rows = _c.execute(
+                "SELECT keyword, search_volume, keyword_difficulty, cpc FROM target_keywords "
+                "WHERE business_id=%s AND search_volume IS NOT NULL "
+                "ORDER BY search_volume DESC NULLS LAST LIMIT 15", (business_id,)).fetchall()
+        if rows:
+            out["keyword_demand"] = [{"keyword": r["keyword"], "search_volume": r["search_volume"],
+                                      "difficulty": r["keyword_difficulty"], "cpc": r["cpc"]} for r in rows]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: keyword-demand signals unavailable (%s)", e)
     return out
 
 

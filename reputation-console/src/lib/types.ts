@@ -75,6 +75,9 @@ export interface TargetKeyword {
   intent: string | null;
   priority: number | null;
   rationale: string | null;
+  search_volume?: number | null;      // real monthly searches (keyword-volume provider)
+  keyword_difficulty?: number | null; // 0-100 competition index
+  cpc?: number | null;                // top-of-page bid proxy
 }
 
 // --- billing ---
@@ -1800,4 +1803,108 @@ export interface Location {
   phone: string | null;
   is_primary: boolean;
   created_at: string;
+}
+
+// ---- PageSpeed / Core Web Vitals (technical-SEO layer) ----
+export interface PageSpeedRow {
+  url: string;
+  strategy: string;
+  performance: number | null;
+  seo: number | null;
+  accessibility: number | null;
+  best_practices: number | null;
+  lcp_ms: number | null;
+  cls: number | null;
+  tbt_ms: number | null;
+  field_lcp_ms: number | null;
+  field_inp_ms: number | null;
+  field_cls: number | null;
+  cwv_pass: boolean | null;
+  is_our_content: boolean;
+  asset_id: number | null;
+  fetched_at: string | null;
+}
+export interface PageSpeedTechGap {
+  url: string;
+  asset_id: number | null;
+  strategy: string;
+  issues: string[];
+  performance: number | null;
+  seo: number | null;
+}
+export interface PageSpeed {
+  has_data: boolean;
+  enabled: boolean;
+  pages?: PageSpeedRow[];
+  owned_count?: number;
+  avg_performance?: number | null;
+  avg_seo?: number | null;
+  cwv_failing?: string[];
+  slow_pages?: string[];
+  technical_gaps?: PageSpeedTechGap[];
+}
+
+// ---- Strategy Advisor (PDCA loop) ----
+export type PdcaStatus =
+  | "on_track" | "needs_action" | "stalled" | "awaiting_measurement" | "insufficient_data";
+export interface AdvisorGoal {
+  goal: string;
+  business: string;
+  current_alignment: number | null;
+  target_alignment: number;
+  gap_to_goal: number | null;
+  summary: string;
+  has_gap_model: boolean;
+  gap_model_age_days: number | null;
+}
+export interface AdvisorGapPrediction {
+  pieces_needed: number | null;
+  eta_weeks: number | null;
+  confidence: string;
+  basis: string;
+}
+export interface AdvisorGap {
+  batch_id: number;
+  gap_key: string;
+  gap_source: string;
+  topic: string;
+  content_types: string[];
+  pieces: number;
+  approved: number;
+  published: number;
+  batch_status: string;
+  weeks_live: number;
+  gap_pct_closed: number | null;
+  alignment_delta: number | null;
+  velocity_per_week: number | null;
+  status: string;   // not_published | awaiting_measurement | regressing | stalled | on_track | gap_closing
+  measured_at: string | null;
+  prediction: AdvisorGapPrediction;
+}
+export interface AdvisorAction {
+  priority: number;
+  action: string;   // publish | revise | change_approach | produce_more | technical_fix | new_content
+  gap: string;
+  detail: string;
+  expected_impact: string;
+}
+export interface AdvisorOverall {
+  gaps_worked: number;
+  gaps_measured: number;
+  avg_gap_closed: number | null;
+  avg_velocity_per_week: number | null;
+  projected_weeks_to_goal: number | null;
+  total_pieces_recommended: number;
+  published_pieces: number;
+}
+export interface Advisor {
+  business_id: number;
+  pdca_status: PdcaStatus;
+  goal: AdvisorGoal;
+  overall: AdvisorOverall;
+  gaps: AdvisorGap[];
+  recommended_actions: AdvisorAction[];
+  signals: Record<string, unknown>;
+  briefing: string;
+  generated_at: string;
 }

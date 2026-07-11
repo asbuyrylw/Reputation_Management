@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests, useSiteHealthTrend, useSchemaVerify, useGscSummary } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests, useSiteHealthTrend, useSchemaVerify, useGscSummary, usePageSpeed, useRunPageSpeed } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, CopyButton, DataSection } from "@/components/primitives";
 import { SecHead } from "@/components/DashboardV2";
@@ -162,8 +162,11 @@ function KeywordsCard({ businessId, canEdit, kws }: { businessId: number | null;
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{g.label}</div>
               <div className="flex flex-wrap gap-1.5">
                 {g.items.map((k) => (
-                  <span key={k.keyword} title={k.rationale || undefined}
-                    className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{k.keyword}</span>
+                  <span key={k.keyword} title={[k.rationale, k.search_volume != null ? `${k.search_volume.toLocaleString()} searches/mo` : "", k.keyword_difficulty != null ? `difficulty ${k.keyword_difficulty}/100` : ""].filter(Boolean).join(" · ") || undefined}
+                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                    {k.keyword}
+                    {k.search_volume != null && <span className="font-mono text-[10px] font-semibold text-emerald-700">{k.search_volume >= 1000 ? `${(k.search_volume / 1000).toFixed(1)}k` : k.search_volume}/mo</span>}
+                  </span>
                 ))}
               </div>
             </div>
@@ -349,6 +352,58 @@ function LinkCard({ href, title, desc }: { href: string; title: string; desc: st
 
 // Section landing page for "Search & SEO" — the traditional-search rollup: local Google
 // rankings scorecard, competitor standing, and site-audit freshness, with deep links.
+// PageSpeed / Core Web Vitals — real Google Lighthouse scores for owned pages. Live-wired to
+// /pagespeed; the "Grade pages now" button enqueues the ingest_pagespeed job. Needs PAGESPEED_API_KEY.
+function TechnicalHealthCard({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const ps = usePageSpeed(businessId);
+  const run = useRunPageSpeed(businessId);
+  const d = ps.data;
+  const scoreColor = (v: number | null | undefined) => v == null ? "var(--ink-4)" : v >= 90 ? "#0f9d63" : v >= 50 ? "#c67c15" : "#b1442f";
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Page speed &amp; Core Web Vitals</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Real Google Lighthouse scores for your published pages. Slow / failing pages quietly suppress their own ranking &amp; AI citation — these feed the gap model and the advisor.</p>
+        </div>
+        {canEdit && (
+          <button onClick={() => run.mutate(undefined)} disabled={run.isPending}
+            className="shrink-0 rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-slate-50 disabled:opacity-60">
+            {run.isPending ? "Grading…" : "Grade pages now"}
+          </button>
+        )}
+      </div>
+      {d && d.enabled === false ? (
+        <p className="mt-3 text-sm text-slate-500">PageSpeed is turned off (<span className="font-mono text-xs">PAGESPEED_ENABLED=0</span>).</p>
+      ) : !d || !d.has_data ? (
+        <p className="mt-3 text-sm text-slate-500">No page grades yet. Click “Grade pages now” — needs a <span className="font-mono text-xs">PAGESPEED_API_KEY</span> for live scores.</p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Performance</div><div className="font-display text-[24px] font-semibold" style={{ color: scoreColor(d.avg_performance) }}>{d.avg_performance ?? "—"}</div></div>
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">SEO</div><div className="font-display text-[24px] font-semibold" style={{ color: scoreColor(d.avg_seo) }}>{d.avg_seo ?? "—"}</div></div>
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Pages graded</div><div className="font-display text-[24px] font-semibold text-ink">{d.owned_count ?? 0}</div></div>
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Failing CWV</div><div className="font-display text-[24px] font-semibold" style={{ color: (d.cwv_failing?.length || 0) ? "#b1442f" : "#0f9d63" }}>{d.cwv_failing?.length ?? 0}</div></div>
+          </div>
+          {(d.technical_gaps?.length || 0) > 0 && (
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pages needing a fix</div>
+              <ul className="space-y-1.5">
+                {d.technical_gaps!.slice(0, 5).map((t) => (
+                  <li key={t.url} className="flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
+                    <span className="truncate font-medium text-ink" style={{ maxWidth: "40ch" }}>{t.url.replace(/^https?:\/\//, "")}</span>
+                    <span className="text-slate-500">{t.issues.join("; ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function SeoOverviewPage() {
   const { businessId, businesses, loading, canEdit } = useBusiness();
   const ranks = useLocalRankings(businessId);
@@ -451,6 +506,9 @@ export default function SeoOverviewPage() {
             </div>
           </div>
         </Card>
+
+        {/* Page speed / Core Web Vitals — technical health of published pages */}
+        <TechnicalHealthCard businessId={businessId} canEdit={canEdit} />
 
         {/* Do this next + Goal */}
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
