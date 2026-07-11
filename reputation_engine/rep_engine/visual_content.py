@@ -148,6 +148,20 @@ def _reg_firm_type(business_id: int) -> str:
         return ""
 
 
+def _brand_grounding(business_id: int, max_tokens: int = 500) -> str:
+    """Compact brand-rules + source-facts block for image/video prompts, so Gemini/Imagen/Veo obey
+    the same 'always Team Unstoppable, never Primerica' rules and stay on the client's real facts as
+    the text + NotebookLM generators do. Dormant-safe: empty string when nothing is configured."""
+    try:
+        from . import source_material as _sm
+    except ImportError:  # pragma: no cover
+        import source_material as _sm  # type: ignore
+    try:
+        return _sm.visual_grounding(business_id, max_tokens=max_tokens)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _image_policy(business_id: int) -> tuple[str, Optional[str]]:
     """Return (prompt-policy-suffix, compliance_note). Regulated firms forbid real-people likenesses."""
     if _reg_firm_type(business_id) in _FINANCIAL_FIRMS:
@@ -201,7 +215,8 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
     if not image_configured():
         return {"skipped": True, "reason": "no image provider key set (IMAGE_API_KEY / OPENAI_API_KEY)"}
     policy, note = _image_policy(business_id)
-    full_prompt = (prompt or "").strip() + policy
+    ground = _brand_grounding(business_id)
+    full_prompt = ((ground + "\n\n") if ground else "") + (prompt or "").strip() + policy
     provider, model = _image_provider(), _image_model()
     try:
         if provider == "openai":
@@ -465,7 +480,8 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
     if provider not in ("veo", "gemini"):
         return {"skipped": True, "reason": f"unsupported VIDEO_PROVIDER '{provider}' (use 'veo')"}
     policy, note = _image_policy(business_id)
-    full_prompt = (prompt or "").strip() + policy
+    ground = _brand_grounding(business_id)
+    full_prompt = ((ground + "\n\n") if ground else "") + (prompt or "").strip() + policy
     key = _video_key()
     hdr = {"Content-Type": "application/json", "x-goog-api-key": key}
     try:

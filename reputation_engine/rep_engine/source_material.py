@@ -145,5 +145,23 @@ def grounding_block(business_id: int, max_tokens: int = 4500) -> str:
     return "\n\n".join(out).strip()
 
 
+def visual_grounding(business_id: int, max_tokens: int = 500) -> str:
+    """A COMPACT grounding block for IMAGE/VIDEO prompts (Gemini/Imagen/Veo), which need short
+    prompts — not the full text corpus. Brand rules in full (branding/compliance is non-negotiable,
+    e.g. 'always Team Unstoppable, never Primerica') + a brief source snippet so on-screen text /
+    narration stays on the client's real facts. Empty string when nothing is configured."""
+    g = guardrails(business_id)
+    c = corpus(business_id, max_tokens=max_tokens)
+    if not g and not c:
+        return ""
+    out = []
+    if g:
+        out.append("BRAND RULES (absolute): " + g)
+    if c:
+        snippet = " ".join(c.split())[: max_tokens * 4]
+        out.append("Stay consistent with these brand facts: " + snippet)
+    return "\n".join(out).strip()
+
+
 def has_material(business_id: int) -> bool:
     return bool(guardrails(business_id)) or bool(list_documents(business_id))

@@ -172,6 +172,131 @@ def delete_source_doc(doc_id: int, business_id: int = Depends(require_business_e
     return {"deleted": doc_id}
 
 
+# ---------------------------------------------------------------------------
+# Create content (user-initiated): one button -> describe it + pick a type -> generate.
+# Every type funnels through the SAME grounded, human-gated pipeline: a work order is created
+# (so the piece has gap lineage + a home), then the right generator runs as a background job.
+#   - text / rich media  -> generate_drafts(only_wo)  [content_generator routes rich-media caps
+#                            to rich_media_generator]; lands in Drafts / Media, pending review.
+#   - image/quote/video  -> generate_visual;           lands in Media, pending review.
+# Brand rules + source material ground ALL of them (Team Unstoppable, never Primerica).
+# ---------------------------------------------------------------------------
+# content_type -> work-order capability the content_generator understands (see content_generator
+# GENERATABLE + _RICH_MEDIA_CAP_MAP). Anything not here is treated as a VISUAL kind.
+_CONTENT_TYPE_CAP = {
+    "article": "content_writing", "blog": "content_writing", "white_paper": "content_writing",
+    "faq": "content_writing", "landing_page": "content_writing", "local_page": "local_content_creation",
+    "deep_article": "deep_content", "newsletter": "deep_content", "blog_series": "deep_content",
+    "podcast": "podcast_creation", "slide_deck": "slide_deck", "infographic": "infographic",
+    "explainer_video": "explainer_video", "research_brief": "research_brief",
+}
+_CONTENT_TYPE_VISUAL = {"image", "quote_card", "video"}
+_TYPE_LABELS = {
+    "article": "Article", "blog": "Blog post", "white_paper": "White paper", "faq": "FAQ",
+    "landing_page": "Landing page", "local_page": "Local page", "deep_article": "Long-form article",
+    "newsletter": "Newsletter", "blog_series": "Blog series", "podcast": "Podcast",
+    "slide_deck": "Slide deck", "infographic": "Infographic", "explainer_video": "Explainer video",
+    "research_brief": "Research brief", "image": "Image", "quote_card": "Quote card", "video": "Video",
+}
+
+
+class CustomContentBody(BaseModel):
+    content_type: str
+    description: str                      # what the user wants created (the topic/prompt)
+    title: Optional[str] = None          # optional explicit title (defaults from description)
+    gap_key: Optional[str] = None        # optional: tie to a gap (lineage + keyword scoping)
+    gap_label: Optional[str] = None      # the gap's human topic (steers keyword scoping)
+    aspect_ratio: Optional[str] = None   # image/video (16:9, 9:16, 1:1)
+
+
+@router.get("/content-types")
+def content_types(business_id: int = Depends(authorize_business)):
+    """The catalogue the 'Create content' picker renders: each type, its label, family, and whether
+    its generator is configured (so the UI can flag e.g. video needs a Veo key)."""
+    try:
+        from ... import visual_content as _vc
+        from ... import rich_media_generator as _rmg
+    except ImportError:  # pragma: no cover
+        import visual_content as _vc  # type: ignore
+        import rich_media_generator as _rmg  # type: ignore
+    img_ok, vid_ok = _vc.image_configured(), _vc.video_configured()
+    rm_ok = _rmg.configured()  # NotebookLM audio; text rich-media always works via LLM fallback
+    def _fam(ct: str) -> str:
+        if ct in _CONTENT_TYPE_VISUAL:
+            return "visual"
+        cap = _CONTENT_TYPE_CAP.get(ct)
+        return "rich_media" if cap in ("podcast_creation", "slide_deck", "infographic",
+                                       "explainer_video", "research_brief", "deep_content") else "text"
+    out = []
+    for ct, label in _TYPE_LABELS.items():
+        fam = _fam(ct)
+        ready, need = True, None
+        if ct == "video" and not vid_ok:
+            ready, need = False, "Set VIDEO_PROVIDER=veo + a Gemini/Veo key to render video."
+        elif ct == "image" and not img_ok:
+            ready, need = False, "Set an image provider key (GEMINI_API_KEY / IMAGE_API_KEY)."
+        elif ct == "podcast" and not rm_ok:
+            need = "Audio needs a NotebookLM key; without it a podcast SCRIPT is produced instead."
+        out.append({"content_type": ct, "label": label, "family": fam, "ready": ready, "needs": need})
+    return {"types": out, "image_configured": img_ok, "video_configured": vid_ok,
+            "notebooklm_configured": rm_ok}
+
+
+@router.post("/custom-content", status_code=202)
+def create_custom_content(body: CustomContentBody, background: BackgroundTasks,
+                          business_id: int = Depends(require_business_editor),
+                          user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Create a piece of content the owner describes themselves. Grounded + human-gated like every
+    other draft — nothing auto-publishes."""
+    ct = (body.content_type or "").strip().lower()
+    desc = (body.description or "").strip()
+    if not desc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Describe what you'd like created.")
+    if ct not in _CONTENT_TYPE_CAP and ct not in _CONTENT_TYPE_VISUAL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown content type '{ct}'.")
+    # Billing/quota gate — this spends on LLM/media generation, same gate as batch content.
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "custom_content")
+    if not ok:
+        raise HTTPException(code, reason)
+    is_visual = ct in _CONTENT_TYPE_VISUAL
+    job_type = "generate_visual" if is_visual else "generate_drafts"
+    if not _jobs.rate_ok(business_id, job_type):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're creating content too fast — give it a little while.")
+    label = _TYPE_LABELS.get(ct, ct.replace("_", " ").title())
+    title = (body.title or f"{label}: {desc}").strip()[:180]
+    # A work order gives the piece gap lineage + a home in the pipeline. Visual pieces use a
+    # 'visual_content' capability the draft generator ignores (we dispatch them to generate_visual).
+    from ... import tracking as _t
+    cap = _CONTENT_TYPE_CAP.get(ct, "visual_content")
+    try:
+        wid = _t.create_work_order(
+            business_id, title, instruction=desc, capability=cap,
+            gap_source=("user_content" if body.gap_key else None),
+            source_query=(body.gap_label or None),
+            why_helps_ai_rep=(f"Owner-requested {label.lower()} to close the '{body.gap_label}' gap."
+                              if body.gap_label else "Owner-requested content."))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    if is_visual:
+        args = {"kind": ct, "prompt": desc, "work_order_id": wid,
+                "aspect_ratio": body.aspect_ratio or "16:9"}
+        if ct == "quote_card":
+            args["text"] = desc
+        job_id, active = _jobs.enqueue(business_id, "generate_visual", args=args, requested_by=user["id"])
+    else:
+        job_id, active = _jobs.enqueue(business_id, "generate_drafts", args={"only_wo": wid},
+                                       requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"A generation job is already running (#{active}) — it'll pick this up; try again in a moment.")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "job_type": job_type,
+                                                  "work_order_id": wid, "family": "visual" if is_visual else "content",
+                                                  "content_type": ct, "status": "queued"})
+
+
 def _actor(user: dict) -> str:
     return user.get("full_name") or user["email"]
 

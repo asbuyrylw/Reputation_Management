@@ -722,7 +722,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         except ImportError:  # pragma: no cover -- loose-script fallback
             import rich_media_generator as _rmg  # type: ignore
         rm_types = _RICH_MEDIA_CAP_MAP[cap]
-        ids = _rmg.generate(business_id, rm_types)
+        # Steer rich media to what THIS work order is about (the user's "Create content" description
+        # lands in the instruction; fall back to the title) instead of a generic corpus synthesis.
+        rm_topic = (wo.get("instruction") or "").strip() or topic
+        ids = _rmg.generate(business_id, rm_types, topic=rm_topic)
         log.info("WO %s (cap=%s) -> rich_media_generator(%s): created %s",
                  wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
         return ids[0] if ids else None

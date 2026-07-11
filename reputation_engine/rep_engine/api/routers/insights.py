@@ -140,15 +140,43 @@ def data_sources(business_id: int = Depends(authorize_business), conn=Depends(ge
         return {"connected": True, "property": meta.get("gsc_property") or meta.get("ga_property") or r.get("account_ref"),
                 "synced_at": r["updated_at"].isoformat() if r.get("updated_at") else None}
     try:
-        from ... import pagespeed as _ps_m, keyword_research as _kr
+        from ... import pagespeed as _ps_m, keyword_research as _kr, dataforseo as _dfs
     except ImportError:  # pragma: no cover
-        import pagespeed as _ps_m; import keyword_research as _kr  # type: ignore
+        import pagespeed as _ps_m; import keyword_research as _kr; import dataforseo as _dfs  # type: ignore
+    # DataForSEO powers competitor keyword intel + brand mentions/sentiment + cross-platform reviews.
+    # Report configured + whether ingest has actually STORED anything yet (so the card says
+    # "connected, last synced …" rather than a bare configured flag).
+    dfs_configured = _dfs.configured()
+    dfs_ment = _dfs.latest_mentions(business_id) if dfs_configured else None
+    dfs_revs = _dfs.latest_reviews(business_id) if dfs_configured else []
+    try:
+        comp_gaps = conn.execute("SELECT COUNT(*) c FROM target_keywords WHERE business_id=%s AND "
+                                 "source='dataforseo_competitor'", (business_id,)).fetchone()["c"]
+    except Exception:  # noqa: BLE001
+        conn.rollback(); comp_gaps = 0
     return {
         "google_search_console": {**_conn("google_search_console"), "unlocks": "real rankings, clicks & index/canonical health"},
         "google_analytics": {**_conn("google_analytics"), "unlocks": "traffic & conversions per published page"},
         "pagespeed": {"configured": _ps_m.configured(), "env_key": "PAGESPEED_API_KEY", "unlocks": "Core Web Vitals & technical-SEO grades"},
         "keyword_volume": {"configured": _kr.volume_configured(), "env_key": "KEYWORD_VOLUME_PROVIDER + DataForSEO/KeywordsEverywhere", "unlocks": "real search volume, difficulty & CPC"},
+        "dataforseo": {"configured": dfs_configured, "env_key": "DATAFORSEO_LOGIN + DATAFORSEO_PASSWORD",
+                       "competitor_gaps": comp_gaps, "has_mentions": bool(dfs_ment),
+                       "review_platforms": [r["platform"] for r in dfs_revs],
+                       "synced_at": (dfs_ment or {}).get("created_at") if dfs_ment else (dfs_revs[0]["created_at"] if dfs_revs else None),
+                       "unlocks": "competitor keyword gaps, brand mentions & cross-platform reviews"},
     }
+
+
+@router.get("/reputation-signals")
+def reputation_signals(business_id: int = Depends(authorize_business)):
+    """Stored off-audit reputation signals (DataForSEO): latest brand-mention volume + sentiment and
+    the latest review ratings per platform. Powers the console reputation panel; empty until the
+    dataforseo_intel / dataforseo_reviews ingest jobs have run. Never raises."""
+    try:
+        from ... import dataforseo as _dfs
+    except ImportError:  # pragma: no cover
+        import dataforseo as _dfs  # type: ignore
+    return {"mentions": _dfs.latest_mentions(business_id), "reviews": _dfs.latest_reviews(business_id)}
 
 
 class PageSpeedRun(BaseModel):

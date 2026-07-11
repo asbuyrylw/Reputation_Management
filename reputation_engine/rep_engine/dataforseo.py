@@ -45,6 +45,92 @@ log = logging.getLogger("dataforseo")
 _BASE = "https://api.dataforseo.com/v3"
 
 
+# ---------------------------------------------------------------------------
+# Storage (self-creating) — mentions + reviews are INGESTED and STORED so the gap model reads them
+# from the DB (never a live call in its hot path) and the console can surface them between audits.
+# ---------------------------------------------------------------------------
+def _ensure_tables() -> None:
+    try:
+        with db() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS dataforseo_mentions ("
+                "id SERIAL PRIMARY KEY, business_id INT NOT NULL, keyword TEXT, total_count INT, "
+                "sentiment JSONB, sample JSONB, created_at TIMESTAMPTZ DEFAULT now())")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS dataforseo_reviews ("
+                "id SERIAL PRIMARY KEY, business_id INT NOT NULL, platform TEXT, rating JSONB, "
+                "reviews_count INT, reviews JSONB, created_at TIMESTAMPTZ DEFAULT now())")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_dfs_mentions_biz ON dataforseo_mentions(business_id, id DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_dfs_reviews_biz ON dataforseo_reviews(business_id, id DESC)")
+            conn.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("dataforseo: ensure_tables failed: %s", e)
+
+
+def _store_mentions(business_id: int, res: dict) -> None:
+    if not res or res.get("skipped") or res.get("total_count") is None:
+        return
+    from psycopg.types.json import Json
+    try:
+        _ensure_tables()
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO dataforseo_mentions (business_id, keyword, total_count, sentiment, sample) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (business_id, res.get("keyword"), res.get("total_count"),
+                 Json(res.get("sentiment") or {}), Json(res.get("sample") or [])))
+            conn.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("dataforseo: store_mentions failed: %s", e)
+
+
+def _store_reviews(business_id: int, platform: str, res: dict) -> None:
+    if not res or res.get("skipped") or res.get("pending"):
+        return
+    from psycopg.types.json import Json
+    try:
+        _ensure_tables()
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO dataforseo_reviews (business_id, platform, rating, reviews_count, reviews) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (business_id, platform, Json(res.get("rating") or {}),
+                 res.get("reviews_count"), Json(res.get("reviews") or [])))
+            conn.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("dataforseo: store_reviews failed: %s", e)
+
+
+def latest_mentions(business_id: int) -> Optional[dict]:
+    """The most recent stored brand-mentions snapshot (for the console reputation panel)."""
+    try:
+        with db() as conn:
+            r = conn.execute(
+                "SELECT keyword, total_count, sentiment, sample, created_at FROM dataforseo_mentions "
+                "WHERE business_id=%s ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+        if not r:
+            return None
+        return {"keyword": r["keyword"], "total_count": r["total_count"], "sentiment": r["sentiment"],
+                "sample": r["sample"], "created_at": r["created_at"].isoformat() if r["created_at"] else None}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def latest_reviews(business_id: int) -> list[dict]:
+    """The most recent stored review snapshot per platform (google/trustpilot)."""
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT ON (platform) platform, rating, reviews_count, reviews, created_at "
+                "FROM dataforseo_reviews WHERE business_id=%s ORDER BY platform, id DESC",
+                (business_id,)).fetchall()
+        return [{"platform": r["platform"], "rating": r["rating"], "reviews_count": r["reviews_count"],
+                 "reviews": (r["reviews"] or [])[:20],
+                 "created_at": r["created_at"].isoformat() if r["created_at"] else None} for r in rows]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def configured() -> bool:
     return volume_configured() and (os.getenv("KEYWORD_VOLUME_PROVIDER", "").strip().lower() == "dataforseo")
 
@@ -294,16 +380,25 @@ def get_reviews(business_id: int, platform: str = "google", term: Optional[str] 
 # job entry points
 # ---------------------------------------------------------------------------
 def run_intel(business_id: int) -> dict:
-    """One cheap synchronous pass: competitor keyword gaps + brand mentions/sentiment."""
-    return {"keyword_gaps": keyword_gaps(business_id), "mentions": mentions(business_id)}
+    """One cheap synchronous pass: competitor keyword gaps + brand mentions/sentiment. Mentions are
+    STORED (dataforseo_mentions) so the gap model + console reputation panel read them from the DB."""
+    gaps = keyword_gaps(business_id)
+    ment = mentions(business_id)
+    _store_mentions(business_id, ment)
+    return {"keyword_gaps": gaps, "mentions": ment}
 
 
 def run_reviews(business_id: int) -> dict:
-    """Pull Google (+ Trustpilot if enabled) reviews. Trustpilot is opt-in via DATAFORSEO_TRUSTPILOT=1
-    since many local/service businesses aren't listed there."""
-    out = {"google": get_reviews(business_id, "google")}
+    """Pull Google (+ Trustpilot if enabled) reviews and STORE them (dataforseo_reviews) so the gap
+    model weighs reputation signals + the console shows the latest ratings. Trustpilot is opt-in via
+    DATAFORSEO_TRUSTPILOT=1 since many local/service businesses aren't listed there."""
+    g = get_reviews(business_id, "google")
+    _store_reviews(business_id, "google", g)
+    out = {"google": g}
     if (os.getenv("DATAFORSEO_TRUSTPILOT", "0") or "").strip().lower() in ("1", "true", "yes", "on"):
-        out["trustpilot"] = get_reviews(business_id, "trustpilot")
+        t = get_reviews(business_id, "trustpilot")
+        _store_reviews(business_id, "trustpilot", t)
+        out["trustpilot"] = t
     return out
 
 

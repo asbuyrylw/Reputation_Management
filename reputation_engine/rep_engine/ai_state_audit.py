@@ -1827,6 +1827,15 @@ def _search_perf_for_gap(business_id: int) -> dict:
                             "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             if mr:
                 out["web_mentions"] = {"total": mr["total_count"], "sentiment": mr["sentiment"]}
+            # Reviews across platforms (Google/Trustpilot): rating + volume are reputation signals the
+            # gap model weighs (low/no reviews => a real reputation gap; poor rating => narrative risk).
+            rv = _c.execute(
+                "SELECT DISTINCT ON (platform) platform, rating, reviews_count FROM dataforseo_reviews "
+                "WHERE business_id=%s ORDER BY platform, id DESC", (business_id,)).fetchall()
+            if rv:
+                out["reviews"] = [{"platform": r["platform"],
+                                   "rating": (r["rating"] or {}).get("value") if isinstance(r["rating"], dict) else r["rating"],
+                                   "count": r["reviews_count"]} for r in rv]
     except Exception:  # noqa: BLE001 -- table not created yet -> no-op
         pass
     return out

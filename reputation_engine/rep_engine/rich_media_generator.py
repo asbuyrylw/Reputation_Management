@@ -457,6 +457,7 @@ def _persist(
 def generate(
     business_id: int,
     asset_types: Optional[list[str]] = None,
+    topic: Optional[str] = None,
 ) -> list[int]:
     """Generate rich media drafts for a business.
 
@@ -464,6 +465,9 @@ def generate(
         business_id: DB id of the business to generate for.
         asset_types: List of asset_type strings to generate. Defaults to
                      DEFAULT_TYPES. Unknown types are silently skipped.
+        topic: Optional user-requested focus (from the "Create content" box). When set, it's
+               injected as a top-priority source so the generated piece is ABOUT what the user
+               asked for, not just a generic synthesis of the whole corpus.
 
     Returns:
         List of draft ids created.
@@ -486,6 +490,11 @@ def generate(
 
     # Assemble corpus sources once; reuse across all generation calls.
     sources = _build_sources(business_id, biz)
+    # A user-requested focus (from "Create content") steers generation to what they asked for.
+    # Placed right after the Business Profile so it's high-priority context, not buried.
+    topic = (topic or "").strip()
+    if topic:
+        sources.insert(1, {"title": "Requested Focus (make the piece about THIS)", "text": topic})
     source_titles = [s["title"] for s in sources]
 
     types_to_run = asset_types or DEFAULT_TYPES
@@ -498,7 +507,8 @@ def generate(
 
         method, description = RICH_TYPES[asset_type]
         log.info("rich_media: generating %s (%s)", asset_type, description)
-        title = f"{biz.get('name', 'Business')} — {asset_type.replace('_', ' ').title()}"
+        title = (f"{biz.get('name', 'Business')} — {topic[:80]}" if topic
+                 else f"{biz.get('name', 'Business')} — {asset_type.replace('_', ' ').title()}")
 
         try:
             if method == "notebooklm_audio":

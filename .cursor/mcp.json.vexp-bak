@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "vexp": {
+      "command": "node",
+      "args": [
+        "c:\\Users\\asbur\\.vscode\\extensions\\vexp.vexp-vscode-2.1.4-win32-x64\\dist\\mcp-server.cjs"
+      ],
+      "env": {
+        "VEXP_WORKSPACE": "c:\\Users\\asbur\\Koob_Reputation_Management"
+      }
+    }
+  }
+}
