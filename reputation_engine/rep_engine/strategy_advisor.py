@@ -229,6 +229,12 @@ def _signals(business_id: int) -> dict:
     except Exception as e:  # noqa: BLE001
         log.debug("advisor PageSpeed signal off: %s", e)
     try:
+        from . import gsc_inspect as _gi
+        sig["index_health"] = _gi.latest(business_id)
+        sig["index_issues"] = _gi.technical_gaps(business_id)
+    except Exception as e:  # noqa: BLE001
+        log.debug("advisor GSC-inspection signal off: %s", e)
+    try:
         with db() as conn:
             rows = conn.execute(
                 "SELECT keyword, search_volume, keyword_difficulty FROM target_keywords "
@@ -273,6 +279,12 @@ def _recommendations(goal: dict, gaps: list[dict], signals: dict) -> list[dict]:
         recs.append({"priority": 2, "action": "technical_fix", "gap": t.get("url"),
                      "detail": "Fix page technical health: " + "; ".join(t.get("issues") or []),
                      "expected_impact": "removes a ranking/AI-citation suppressor on an owned page"})
+    # index / canonical / schema fixes (GSC URL Inspection) — highest-leverage: an owned page Google
+    # won't index or has canonical-swapped can't crowd out anything until it's fixed.
+    for t in (signals.get("index_issues") or [])[:5]:
+        recs.append({"priority": 1, "action": "index_fix", "gap": t.get("url"),
+                     "detail": "Fix indexing/canonical/schema: " + "; ".join(t.get("issues") or []),
+                     "expected_impact": "gets an owned page indexed + canonically preferred so it can rank"})
     # high-demand keywords with no worked gap (opportunity)
     covered = " ".join((g["topic"] or "").lower() for g in gaps)
     for k in (signals.get("keyword_demand") or [])[:5]:

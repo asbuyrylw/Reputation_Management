@@ -319,8 +319,15 @@ def _run_ingest_pagespeed(business_id: int, args: dict):
 
 def _run_index_own_content(business_id: int, args: dict):
     """White-hat indexing: ping search engines about the owned-content feed + report GSC index
-    status. Keyless-safe (RSS/ping always work; index check no-ops without GSC)."""
-    return _imp("indexing").run(business_id)
+    status. Keyless-safe (RSS/ping always work; index check no-ops without GSC). Also runs the GSC
+    full-surface inspection (canonical/schema/index-reason harvest + sitemap submit) when a GSC
+    connection exists -- no-ops otherwise."""
+    out = _imp("indexing").run(business_id)
+    try:
+        out["gsc_inspect"] = _imp("gsc_inspect").run(business_id)
+    except Exception as e:  # noqa: BLE001 -- inspection must never fail the indexing job
+        out["gsc_inspect"] = {"error": str(e)[:200]}
+    return out
 
 
 def _run_post_review_replies(business_id: int, args: dict):

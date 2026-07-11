@@ -1844,6 +1844,41 @@ export interface PageSpeed {
   technical_gaps?: PageSpeedTechGap[];
 }
 
+// ---- GSC full-surface: URL Inspection (index / canonical / schema health) ----
+export interface IndexHealthPage {
+  url: string;
+  asset_id: number | null;
+  verdict: string | null;
+  coverage_state: string | null;
+  indexing_state: string | null;
+  robots_state: string | null;
+  fetch_state: string | null;
+  last_crawl: string | null;
+  google_canonical: string | null;
+  user_canonical: string | null;
+  canonical_mismatch: boolean;
+  is_indexed: boolean | null;
+  rich_verdict: string | null;
+  schema_issues: { type: string; name?: string; severity?: string; message?: string }[];
+  mobile_verdict: string | null;
+  inspected_at: string | null;
+}
+export interface IndexHealthGap {
+  url: string;
+  asset_id: number | null;
+  issues: string[];
+}
+export interface IndexHealth {
+  has_data: boolean;
+  pages?: IndexHealthPage[];
+  checked?: number;
+  indexed?: number;
+  not_indexed?: string[];
+  canonical_loss?: string[];
+  schema_invalid?: string[];
+  technical_gaps?: IndexHealthGap[];
+}
+
 // ---- Strategy Advisor (PDCA loop) ----
 export type PdcaStatus =
   | "on_track" | "needs_action" | "stalled" | "awaiting_measurement" | "insufficient_data";

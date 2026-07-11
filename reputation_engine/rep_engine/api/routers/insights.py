@@ -325,6 +325,39 @@ def indexing_status(business_id: int = Depends(authorize_business)):
     return _ix.check_index_status(business_id)
 
 
+def _gi():
+    try:
+        from ... import gsc_inspect as g
+    except ImportError:  # pragma: no cover
+        import gsc_inspect as g  # type: ignore
+    return g
+
+
+@router.get("/index-health")
+def index_health(business_id: int = Depends(authorize_business)):
+    """GSC full-surface URL Inspection: per-owned-page index status + canonical loss (Google prefers a
+    different URL) + structured-data/schema validity + crawl/fetch reason codes, plus a rollup and the
+    structured technical gaps that feed the gap model + advisor. Dormant-safe: {has_data:false} until
+    the index_own_content job has inspected pages (needs a live GSC connection)."""
+    g = _gi()
+    out = g.latest(business_id)
+    out["technical_gaps"] = g.technical_gaps(business_id)
+    return out
+
+
+@router.get("/sitemaps")
+def gsc_sitemaps(business_id: int = Depends(authorize_business)):
+    """Submitted sitemaps + per-sitemap submitted/indexed/warning/error counts (GSC Sitemaps resource)."""
+    return _gi().sitemaps(business_id)
+
+
+@router.post("/sitemaps/submit")
+def gsc_submit_sitemap(business_id: int = Depends(require_business_editor)):
+    """Submit our owned-content feed to Google for faster discovery (complements IndexNow, which
+    Google ignores). Needs a live GSC connection + PUBLIC_APP_ORIGIN."""
+    return _gi().submit_content_feed(business_id)
+
+
 @router.get("/answer-changes")
 def answer_changes(business_id: int = Depends(authorize_business)):
     """Material changes in what AI says about you, run-over-run (Wave 4, item 17)."""

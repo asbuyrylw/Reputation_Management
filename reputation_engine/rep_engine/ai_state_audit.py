@@ -1751,6 +1751,23 @@ def _search_perf_for_gap(business_id: int) -> dict:
                 out["technical_seo_issues"] = tg[:10]
     except Exception as e:  # noqa: BLE001
         log.warning("gap model: PageSpeed signals unavailable (%s)", e)
+    # INDEX / CANONICAL / SCHEMA health (GSC URL Inspection full-surface): owned pages Google isn't
+    # indexing, canonical loss (Google prefers a different URL), or invalid structured data that
+    # blocks rich-results / AI extraction. Each is a concrete, fixable reason an owned page isn't
+    # crowding out a negative. First-party, fail-safe.
+    try:
+        from . import gsc_inspect as _gi
+        isnap = _gi.latest(business_id)
+        if isnap.get("has_data"):
+            out["index_health"] = {"checked": isnap.get("checked"), "indexed": isnap.get("indexed"),
+                                   "not_indexed": (isnap.get("not_indexed") or [])[:10],
+                                   "canonical_loss": (isnap.get("canonical_loss") or [])[:10],
+                                   "schema_invalid": (isnap.get("schema_invalid") or [])[:10]}
+            ig = _gi.technical_gaps(business_id)
+            if ig:
+                out["index_issues"] = ig[:10]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: GSC inspection signals unavailable (%s)", e)
     # Real search DEMAND (Google Keyword Planner via the volume provider): the highest-volume target
     # keywords, so the model can weight gaps by how much traffic is actually at stake, not just by
     # answer sentiment. First-party, fail-safe -- empty when no volume provider is configured.

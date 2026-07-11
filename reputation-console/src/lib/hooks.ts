@@ -9,6 +9,7 @@ import { useAuth } from "./auth";
 import type {
   PageSpeed,
   Advisor,
+  IndexHealth,
   AdminUser,
   Asset,
   AuditRun,
@@ -1892,4 +1893,18 @@ export function useAdvisor(businessId: number | null, llm = true) {
     ["advisor", businessId, llm],
     businessId ? `/businesses/${businessId}/advisor?llm=${llm ? "true" : "false"}` : null,
   );
+}
+
+// GSC full-surface: per-page index status + canonical loss + schema validity + crawl reasons.
+export function useIndexHealth(businessId: number | null) {
+  return useApiQuery<IndexHealth>(["index-health", businessId], base(businessId, "/index-health"));
+}
+
+// Submit the owned-content feed to Google as a sitemap (faster discovery). Needs a live GSC connection.
+export function useSubmitSitemap(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<{ ok?: boolean; skipped?: boolean }>(`/businesses/${businessId}/sitemaps/submit`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["index-health", businessId] }),
+  });
 }

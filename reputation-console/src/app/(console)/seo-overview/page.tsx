@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests, useSiteHealthTrend, useSchemaVerify, useGscSummary, usePageSpeed, useRunPageSpeed } from "@/lib/hooks";
+import { useLocalRankings, useCompare, useSiteAudit, useLocalSeoGoal, useTargetKeywords, useReviews, useReviewRequest, useOurContentImpact, useReviewSla, useSendReviewRequests, useSiteHealthTrend, useSchemaVerify, useGscSummary, usePageSpeed, useRunPageSpeed, useIndexHealth, useSubmitSitemap } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState, CopyButton, DataSection } from "@/components/primitives";
 import { SecHead } from "@/components/DashboardV2";
@@ -404,6 +404,57 @@ function TechnicalHealthCard({ businessId, canEdit }: { businessId: number | nul
   );
 }
 
+// GSC full-surface: index / canonical / schema health per owned page. Live-wired to /index-health;
+// populated by the index_own_content job once a GSC connection exists.
+function IndexHealthCard({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const ih = useIndexHealth(businessId);
+  const submit = useSubmitSitemap(businessId);
+  const d = ih.data;
+  if (!d) return null;
+  const gaps = d.technical_gaps ?? [];
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold tracking-tight text-slate-900">Index &amp; canonical health</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Straight from Google Search Console: which published pages Google has indexed, where it prefers a <em>different</em> URL (canonical loss), and whether your structured data is valid — the concrete reasons a page can&apos;t rank or be cited by AI.</p>
+        </div>
+        {canEdit && d.has_data && (
+          <button onClick={() => submit.mutate()} disabled={submit.isPending}
+            className="shrink-0 rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-slate-50 disabled:opacity-60">
+            {submit.isPending ? "Submitting…" : "Submit sitemap"}
+          </button>
+        )}
+      </div>
+      {!d.has_data ? (
+        <p className="mt-3 text-sm text-slate-500">No inspection data yet. Connect Google Search Console in <a href="/integrations" className="font-semibold text-indigo hover:underline">Integrations</a> — then the indexing job harvests per-page index, canonical &amp; schema status.</p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Indexed</div><div className="font-display text-[24px] font-semibold text-ink">{d.indexed ?? 0}<span className="text-[13px] text-ink-4">/{d.checked ?? 0}</span></div></div>
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Not indexed</div><div className="font-display text-[24px] font-semibold" style={{ color: (d.not_indexed?.length || 0) ? "#c67c15" : "#0f9d63" }}>{d.not_indexed?.length ?? 0}</div></div>
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Canonical loss</div><div className="font-display text-[24px] font-semibold" style={{ color: (d.canonical_loss?.length || 0) ? "#b1442f" : "#0f9d63" }}>{d.canonical_loss?.length ?? 0}</div></div>
+            <div className="rounded-[12px] border border-line bg-paper p-3"><div className="eyebrow mb-1">Schema invalid</div><div className="font-display text-[24px] font-semibold" style={{ color: (d.schema_invalid?.length || 0) ? "#b1442f" : "#0f9d63" }}>{d.schema_invalid?.length ?? 0}</div></div>
+          </div>
+          {gaps.length > 0 && (
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pages needing a fix</div>
+              <ul className="space-y-1.5">
+                {gaps.slice(0, 5).map((t) => (
+                  <li key={t.url} className="flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
+                    <span className="truncate font-medium text-ink" style={{ maxWidth: "40ch" }}>{t.url.replace(/^https?:\/\//, "")}</span>
+                    <span className="text-slate-500">{t.issues.join("; ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function SeoOverviewPage() {
   const { businessId, businesses, loading, canEdit } = useBusiness();
   const ranks = useLocalRankings(businessId);
@@ -509,6 +560,9 @@ export default function SeoOverviewPage() {
 
         {/* Page speed / Core Web Vitals — technical health of published pages */}
         <TechnicalHealthCard businessId={businessId} canEdit={canEdit} />
+
+        {/* Index / canonical / schema health — GSC full-surface URL Inspection */}
+        <IndexHealthCard businessId={businessId} canEdit={canEdit} />
 
         {/* Do this next + Goal */}
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
