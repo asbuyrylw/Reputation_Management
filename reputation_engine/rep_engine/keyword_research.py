@@ -112,11 +112,44 @@ def _enrich_volume(keywords: list[str], location: str, business_id: Optional[int
     return {}
 
 
-def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional[int] = None) -> dict:
+def _dataforseo_auth() -> str:
     import base64 as _b64
     login = os.getenv("DATAFORSEO_LOGIN", "")
     pw = os.getenv("DATAFORSEO_PASSWORD", "")
-    auth = _b64.b64encode(f"{login}:{pw}".encode()).decode("ascii")
+    return _b64.b64encode(f"{login}:{pw}".encode()).decode("ascii")
+
+
+def dataforseo_balance() -> Optional[float]:
+    """Live account balance (USD) via DataForSEO's free user_data endpoint. None if unavailable."""
+    try:
+        res = _http.request_json(
+            "GET", "https://api.dataforseo.com/v3/appendix/user_data",
+            headers={"Authorization": f"Basic {_dataforseo_auth()}"},
+            timeout=20, max_retries=1, guard_redirects=True)
+        if res.ok and isinstance(res.data, dict):
+            r = ((res.data.get("tasks") or [{}])[0].get("result") or [{}])[0]
+            return float((r.get("money") or {}).get("balance"))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional[int] = None) -> dict:
+    auth = _dataforseo_auth()
+    # Insufficient-funds guard: skip the paid call when the live balance is below the floor, so
+    # enrichment degrades gracefully (no volumes) instead of failing. Floor defaults to ~2 calls'
+    # worth ($0.20). Set DATAFORSEO_MIN_BALANCE=0 to disable the check.
+    try:
+        floor = float(os.getenv("DATAFORSEO_MIN_BALANCE", "0.20") or 0)
+        if floor > 0:
+            bal = dataforseo_balance()
+            if bal is not None and bal < floor:
+                log.warning("DataForSEO balance $%.2f is below the $%.2f floor -- skipping volume "
+                            "enrichment to avoid an insufficient-funds failure. Top up to resume.",
+                            bal, floor)
+                return {}
+    except Exception:  # noqa: BLE001 -- guard must never break enrichment
+        pass
     body = [{"keywords": [k[:80] for k in keywords[:700]],
              "location_name": location or "United States", "language_name": "English"}]
     res = _http.request_json(
