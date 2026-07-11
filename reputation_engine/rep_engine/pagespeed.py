@@ -53,6 +53,12 @@ def _api_key() -> str:
     return (os.getenv("PAGESPEED_API_KEY") or "").strip()
 
 
+def configured() -> bool:
+    """Whether live PageSpeed scoring is available (enabled + a plain Google API key set). Keyless
+    calls are rate-limited to zero, so a key is required for real data."""
+    return enabled() and bool(_api_key())
+
+
 def _ensure_table() -> None:
     with db() as conn:
         conn.execute("""

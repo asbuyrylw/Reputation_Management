@@ -1844,6 +1844,42 @@ export interface PageSpeed {
   technical_gaps?: PageSpeedTechGap[];
 }
 
+// ---- Rich media (podcast / deck / infographic / explainer / long-form) ----
+export interface RichMediaDraft {
+  id: number;
+  asset_type: string;   // podcast | slide_deck | infographic | explainer_video | research_brief | deep_article | blog_series | newsletter | report_audio
+  title: string | null;
+  audio_url: string | null;
+  transcript?: string | null;
+  duration_secs: number | null;
+  status: string;       // pending_review | approved | rejected
+  compliance_pass: boolean | null;
+  compliance_flags?: unknown;
+  has_body?: boolean;
+  has_transcript?: boolean;
+  body?: string | null; // only on the detail fetch
+  created_at: string | null;
+  updated_at: string | null;
+}
+export interface RichMediaList {
+  configured: boolean;  // NotebookLM audio path available (text always works)
+  drafts: RichMediaDraft[];
+}
+export interface DataSourceStatus {
+  connected?: boolean;
+  configured?: boolean;
+  property?: string | null;
+  synced_at?: string | null;
+  env_key?: string;
+  unlocks: string;
+}
+export interface DataSources {
+  google_search_console: DataSourceStatus;
+  google_analytics: DataSourceStatus;
+  pagespeed: DataSourceStatus;
+  keyword_volume: DataSourceStatus;
+}
+
 // ---- GSC full-surface: URL Inspection (index / canonical / schema health) ----
 export interface IndexHealthPage {
   url: string;

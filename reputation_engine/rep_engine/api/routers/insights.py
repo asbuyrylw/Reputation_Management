@@ -117,7 +117,38 @@ def pagespeed(business_id: int = Depends(authorize_business)):
     p = _ps()
     out = p.latest(business_id)
     out["technical_gaps"] = p.technical_gaps(business_id)
+    out["configured"] = p.configured()
     return out
+
+
+@router.get("/data-sources")
+def data_sources(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Live status of every data source that powers the new features, so the UI can show
+    connected / needs-key / needs-connection instead of silently-empty cards. Env-key features
+    (PageSpeed, keyword volume) report a `configured` bool; OAuth features report whether an active
+    connection exists + the property. Read-only; never raises."""
+    def _conn(kind: str):
+        try:
+            r = conn.execute("SELECT account_ref, meta, updated_at FROM platform_connections WHERE "
+                             "business_id=%s AND kind=%s AND status='active' ORDER BY id DESC LIMIT 1",
+                             (business_id, kind)).fetchone()
+        except Exception:  # noqa: BLE001
+            conn.rollback(); return {"connected": False}
+        if not r:
+            return {"connected": False}
+        meta = r.get("meta") or {}
+        return {"connected": True, "property": meta.get("gsc_property") or meta.get("ga_property") or r.get("account_ref"),
+                "synced_at": r["updated_at"].isoformat() if r.get("updated_at") else None}
+    try:
+        from ... import pagespeed as _ps_m, keyword_research as _kr
+    except ImportError:  # pragma: no cover
+        import pagespeed as _ps_m; import keyword_research as _kr  # type: ignore
+    return {
+        "google_search_console": {**_conn("google_search_console"), "unlocks": "real rankings, clicks & index/canonical health"},
+        "google_analytics": {**_conn("google_analytics"), "unlocks": "traffic & conversions per published page"},
+        "pagespeed": {"configured": _ps_m.configured(), "env_key": "PAGESPEED_API_KEY", "unlocks": "Core Web Vitals & technical-SEO grades"},
+        "keyword_volume": {"configured": _kr.volume_configured(), "env_key": "KEYWORD_VOLUME_PROVIDER + DataForSEO/KeywordsEverywhere", "unlocks": "real search volume, difficulty & CPC"},
+    }
 
 
 class PageSpeedRun(BaseModel):

@@ -548,6 +548,63 @@ def generate(
     return created
 
 
+# ---------------------------------------------------------------------------
+# API reads (structured — the CLI list_drafts below just prints)
+# ---------------------------------------------------------------------------
+def configured() -> bool:
+    """Whether the full NotebookLM path (incl. podcast AUDIO) is available. Text rich media always
+    works via the in-house LLM fallback; only audio needs a key."""
+    return bool(_api_key())
+
+
+def _iso(d: dict, *keys) -> dict:
+    for k in keys:
+        if d.get(k) is not None and hasattr(d[k], "isoformat"):
+            d[k] = d[k].isoformat()
+    return d
+
+
+def api_list(business_id: int, asset_type: Optional[str] = None, status: Optional[str] = None,
+             limit: int = 100) -> list[dict]:
+    """List rich-media drafts (podcast/deck/infographic/explainer/…) for the media gallery.
+    Returns lightweight rows (no full body) + flags for what viewer to use. Dormant-safe."""
+    _ensure_table()
+    q = ("SELECT id, asset_type, title, audio_url, duration_secs, status, compliance_pass, "
+         "compliance_flags, created_at, updated_at, "
+         "(body IS NOT NULL AND length(body) > 0) AS has_body, "
+         "(transcript IS NOT NULL AND length(transcript) > 0) AS has_transcript "
+         "FROM rich_media_drafts WHERE business_id=%s")
+    args: list = [business_id]
+    if asset_type:
+        q += " AND asset_type=%s"; args.append(asset_type)
+    if status:
+        q += " AND status=%s"; args.append(status)
+    q += " ORDER BY id DESC LIMIT %s"; args.append(limit)
+    with db() as conn:
+        rows = conn.execute(q, tuple(args)).fetchall()
+    return [_iso(dict(r), "created_at", "updated_at") for r in rows]
+
+
+def api_get(business_id: int, draft_id: int) -> Optional[dict]:
+    """Full rich-media draft incl. body + transcript, for the viewer modal."""
+    _ensure_table()
+    with db() as conn:
+        r = conn.execute("SELECT * FROM rich_media_drafts WHERE id=%s AND business_id=%s",
+                         (draft_id, business_id)).fetchone()
+    return _iso(dict(r), "created_at", "updated_at", "reviewed_at") if r else None
+
+
+def set_status(business_id: int, draft_id: int, status: str, reviewer: Optional[str] = None) -> bool:
+    """Approve/reject a rich-media draft (human gate). Returns True if a row was updated."""
+    _ensure_table()
+    with db() as conn:
+        r = conn.execute(
+            "UPDATE rich_media_drafts SET status=%s, reviewer=%s, reviewed_at=now(), updated_at=now() "
+            "WHERE id=%s AND business_id=%s RETURNING id", (status, reviewer, draft_id, business_id)).fetchone()
+        conn.commit()
+    return bool(r)
+
+
 def list_drafts(business_id: int) -> None:
     _ensure_table()
     with db() as conn:

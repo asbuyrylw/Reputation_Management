@@ -10,6 +10,9 @@ import type {
   PageSpeed,
   Advisor,
   IndexHealth,
+  DataSources,
+  RichMediaList,
+  RichMediaDraft,
   AdminUser,
   Asset,
   AuditRun,
@@ -1898,6 +1901,47 @@ export function useAdvisor(businessId: number | null, llm = true) {
 // GSC full-surface: per-page index status + canonical loss + schema validity + crawl reasons.
 export function useIndexHealth(businessId: number | null) {
   return useApiQuery<IndexHealth>(["index-health", businessId], base(businessId, "/index-health"));
+}
+
+// Live status of every data source powering the new features (connected / needs-key / needs-connection).
+export function useDataSources(businessId: number | null) {
+  return useApiQuery<DataSources>(["data-sources", businessId], base(businessId, "/data-sources"));
+}
+
+// Rich-media gallery feed: podcast / deck / infographic / explainer / long-form drafts.
+export function useRichMediaDrafts(businessId: number | null, opts?: { type?: string; status?: string }) {
+  const qs = new URLSearchParams();
+  if (opts?.type) qs.set("asset_type", opts.type);
+  if (opts?.status) qs.set("status_filter", opts.status);
+  const q = qs.toString();
+  return useApiQuery<RichMediaList>(
+    ["rich-media", businessId, opts?.type ?? "", opts?.status ?? ""],
+    businessId ? `/businesses/${businessId}/rich-media-drafts${q ? `?${q}` : ""}` : null,
+  );
+}
+
+// One rich-media draft with its full body + transcript (for the viewer modal).
+export function useRichMediaDraft(businessId: number | null, draftId: number | null) {
+  return useApiQuery<RichMediaDraft>(
+    ["rich-media-draft", businessId, draftId],
+    businessId && draftId ? `/businesses/${businessId}/rich-media-drafts/${draftId}` : null,
+  );
+}
+
+export function useApproveRichMedia(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: number) => apiFetch<{ status: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/approve`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rich-media", businessId] }),
+  });
+}
+
+export function useRejectRichMedia(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: number) => apiFetch<{ status: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/reject`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rich-media", businessId] }),
+  });
 }
 
 // Submit the owned-content feed to Google as a sitemap (faster discovery). Needs a live GSC connection.
