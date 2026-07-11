@@ -134,51 +134,119 @@ def dataforseo_balance() -> Optional[float]:
     return None
 
 
+_US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts",
+    "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
+    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico",
+    "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont",
+    "VA": "Virginia", "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+    "DC": "District of Columbia",
+}
+
+
+def _dfs_location(geo: str) -> str:
+    """DataForSEO location_name must be the canonical 'City,State,Country' form. Businesses store geo
+    loosely ('Cincinnati, OH'), which DataForSEO REJECTS. Normalize 'City, ST' -> 'City,State,United
+    States' (expanding the state abbreviation); fall back to national 'United States' if we can't.
+    DATAFORSEO_LOCATION overrides everything (set an exact DataForSEO location_name to force it)."""
+    override = (os.getenv("DATAFORSEO_LOCATION") or "").strip()
+    if override:
+        return override
+    parts = [p.strip() for p in (geo or "").split(",") if p.strip()]
+    if len(parts) == 2:
+        city, st = parts
+        state = _US_STATES.get(st.upper(), st)   # expand 'OH' -> 'Ohio'; leave full state names as-is
+        return f"{city},{state},United States"
+    return "United States"   # empty / non-'City, ST' geo -> national volume
+
+
+def _dfs_clean_kw(k: str) -> str:
+    """Sanitize a keyword for DataForSEO's Google Ads endpoint, which rejects punctuation (?, !, etc.)
+    and fails the ENTIRE batch on one bad term. Keep letters/numbers/spaces/&/- ; drop the rest.
+    'How long does term life insurance pay out?' -> 'How long does term life insurance pay out'."""
+    s = re.sub(r"[^0-9A-Za-z &\-]", " ", k or "")
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _dataforseo_volume(keywords: list[str], location: str, business_id: Optional[int] = None) -> dict:
     auth = _dataforseo_auth()
-    # Insufficient-funds guard: skip the paid call when the live balance is below the floor, so
-    # enrichment degrades gracefully (no volumes) instead of failing. Floor defaults to ~2 calls'
-    # worth ($0.20). Set DATAFORSEO_MIN_BALANCE=0 to disable the check.
+    # DEDUPE (case-insensitive, order-preserving) so we never pay to look up the same term twice, then
+    # batch into the FEWEST possible calls: DataForSEO bills PER REQUEST (not per keyword) and accepts
+    # up to 700 keywords/request, so N unique keywords cost exactly ceil(N/700) calls.
+    seen: set = set()
+    unique: list[str] = []
+    for k in keywords:
+        kl = (k or "").strip().lower()
+        if kl and kl not in seen:
+            seen.add(kl)
+            unique.append(k.strip())
+    if not unique:
+        return {}
     try:
         floor = float(os.getenv("DATAFORSEO_MIN_BALANCE", "0.20") or 0)
+    except (TypeError, ValueError):
+        floor = 0.20
+    _CHUNK = 700
+    out: dict = {}
+    for i in range(0, len(unique), _CHUNK):
+        chunk = unique[i:i + _CHUNK]
+        # Insufficient-funds guard BEFORE each paid call, so a multi-batch run stops cleanly instead
+        # of failing mid-way when the balance runs low.
         if floor > 0:
             bal = dataforseo_balance()
             if bal is not None and bal < floor:
-                log.warning("DataForSEO balance $%.2f is below the $%.2f floor -- skipping volume "
-                            "enrichment to avoid an insufficient-funds failure. Top up to resume.",
-                            bal, floor)
-                return {}
-    except Exception:  # noqa: BLE001 -- guard must never break enrichment
-        pass
-    body = [{"keywords": [k[:80] for k in keywords[:700]],
-             "location_name": location or "United States", "language_name": "English"}]
-    res = _http.request_json(
-        "POST", "https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live",
-        headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
-        json=body, timeout=60, max_retries=2, guard_redirects=True)
-    out: dict = {}
-    if res.ok and isinstance(res.data, dict):
-        # DataForSEO returns the EXACT USD cost of the call -> record it (falls back to a per-request
-        # estimate if the field is absent). This is what keeps the $1 test credit from overrunning.
+                log.warning("DataForSEO balance $%.2f < $%.2f floor -- stopping after %d keyword(s) "
+                            "enriched. Top up to resume.", bal, floor, len(out))
+                break
+        # DataForSEO's Google Ads keywords reject punctuation ('?', '!', etc.) and one bad keyword
+        # fails the WHOLE batch -> sanitize every term, and keep a cleaned->original map so results
+        # (keyed by the cleaned term) update the original stored rows.
+        clean_to_orig: dict = {}
+        cleaned: list[str] = []
+        for k in chunk:
+            ck = _dfs_clean_kw(k)[:80]
+            # DataForSEO Google Ads rejects keywords with >10 words (and one bad term fails the WHOLE
+            # batch). Long-tail questions have no ad-volume data anyway -> skip them cleanly.
+            if ck and len(ck.split()) <= 10:
+                clean_to_orig.setdefault(ck.lower(), k)
+                cleaned.append(ck)
+        if not cleaned:
+            continue
+        body = [{"keywords": cleaned, "location_name": _dfs_location(location), "language_name": "English"}]
+        res = _http.request_json(
+            "POST", "https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json=body, timeout=90, max_retries=2, guard_redirects=True)
+        if not (res.ok and isinstance(res.data, dict)):
+            log.warning("DataForSEO volume call failed: %s", getattr(res, "error", None) or getattr(res, "status", "?"))
+            continue
+        # DataForSEO returns the EXACT USD cost of the call -> record it per batch.
         try:
             from . import cost as _cost
             exact = res.data.get("cost")
             _cost.record_cost(business_id, None, "keyword_volume", "dataforseo",
                               "google_ads/search_volume",
                               cost_usd=float(exact) if exact not in (None, 0) else None,
-                              units=len(keywords), unit_label="keywords",
-                              detail={"keyword_count": len(keywords), "exact_cost": exact,
-                                      "status": res.data.get("status_message")})
+                              units=len(chunk), unit_label="keywords",
+                              detail={"keyword_count": len(chunk), "batch": i // _CHUNK + 1,
+                                      "exact_cost": exact, "status": res.data.get("status_message")})
         except Exception:  # noqa: BLE001 -- cost logging must never break enrichment
             pass
         for task in res.data.get("tasks") or []:
             for item in (task.get("result") or []):
-                kw = (item.get("keyword") or "").lower()
-                if kw:
-                    comp = item.get("competition_index")
-                    out[kw] = {"search_volume": item.get("search_volume"),
-                               "keyword_difficulty": int(comp) if isinstance(comp, (int, float)) else None,
-                               "cpc": item.get("cpc")}
+                kw = (item.get("keyword") or "").lower()   # the cleaned term DataForSEO echoes back
+                if not kw:
+                    continue
+                orig = (clean_to_orig.get(kw) or kw).lower()   # map back to the original stored keyword
+                comp = item.get("competition_index")
+                out[orig] = {"search_volume": item.get("search_volume"),
+                             "keyword_difficulty": int(comp) if isinstance(comp, (int, float)) else None,
+                             "cpc": item.get("cpc")}
     return out
 
 
@@ -198,6 +266,39 @@ def _keywords_everywhere_volume(keywords: list[str]) -> dict:
                 out[kw] = {"search_volume": item.get("vol"), "keyword_difficulty": item.get("competition"),
                            "cpc": (item.get("cpc") or {}).get("value")}
     return out
+
+
+def enrich_target_keywords(business_id: int) -> dict:
+    """Batch-enrich EVERY stored target keyword for a business with real search volume / difficulty /
+    CPC in the FEWEST possible provider calls. The keyword set is deduped and sent in one request per
+    <=700 keywords (DataForSEO bills per request), so a typical business (<=45 keywords) costs exactly
+    ONE call. Updates target_keywords in place. Dormant-safe (no provider -> skipped) + balance-guarded.
+    Run:  python -m rep_engine.keyword_research enrich --business-id 1"""
+    if not volume_configured():
+        return {"skipped": True, "reason": "no keyword-volume provider set (KEYWORD_VOLUME_PROVIDER)"}
+    with db() as conn:
+        rows = conn.execute("SELECT DISTINCT keyword FROM target_keywords WHERE business_id=%s "
+                            "AND keyword IS NOT NULL", (business_id,)).fetchall()
+        biz = conn.execute("SELECT geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
+    keywords = [r["keyword"] for r in rows if (r.get("keyword") or "").strip()]
+    if not keywords:
+        return {"skipped": True, "reason": "no target keywords to enrich yet — run keyword research first"}
+    location = (biz.get("geo") if biz else "") or ""
+    calls = (len(set(k.lower() for k in keywords)) + 699) // 700
+    vol = _enrich_volume(keywords, location, business_id)   # dedupes + chunks internally
+    updated = 0
+    with db() as conn:
+        for kw, v in vol.items():
+            updated += conn.execute(
+                "UPDATE target_keywords SET search_volume=%s, keyword_difficulty=%s, cpc=%s "
+                "WHERE business_id=%s AND lower(keyword)=%s",
+                (v.get("search_volume"), v.get("keyword_difficulty"), v.get("cpc"),
+                 business_id, kw.lower())).rowcount
+        conn.commit()
+    log.info("enrich_target_keywords biz %d: %d keywords -> %d enriched, %d rows updated, %d provider call(s)",
+             business_id, len(keywords), len(vol), updated, calls)
+    return {"keywords": len(keywords), "enriched": len(vol), "updated": updated,
+            "provider_calls": calls, "provider": os.getenv("KEYWORD_VOLUME_PROVIDER")}
 
 
 def _norm(s: str) -> str:
