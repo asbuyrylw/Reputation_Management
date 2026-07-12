@@ -226,7 +226,8 @@ def suggest(business_id: int, n: int = 8, quiet: bool = False) -> dict:
         f"Already-tracked prompts to AVOID duplicating: {json.dumps(existing[:60], default=str)}\n"
         f"Propose {n} new prompts."
     )
-    raw = _ai.orchestrator_json(_SUGGEST_SYS, user, max_tokens=1200)
+    raw = _ai.orchestrator_json(_SUGGEST_SYS, user, max_tokens=1200,
+                                bill={"business_id": business_id, "operation": "suggest_prompts"})
     items = (raw or {}).get("prompts") or []
     existing_set = {e.strip() for e in existing}
     added = 0

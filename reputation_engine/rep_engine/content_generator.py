@@ -910,9 +910,13 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             site_summary=_site, with_fact_check=True, neuron_terms=_nterms or None,
             business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
             geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
-            content_type=content_type, asset_type=asset_type, serp_benchmark=serp_bench))
+            content_type=content_type, asset_type=asset_type, serp_benchmark=serp_bench,
+            business_id=business_id))
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
-        log.debug("draft quality analysis skipped: %s", e)
+        # WARNING not debug: if this path fails, citation_ready is absent and the HOLD gate below is
+        # silently skipped, so an un-vetted draft is presented as a normal pending_review.
+        log.warning("draft quality analysis failed (%s) -- citation-readiness gate will be skipped "
+                    "for this draft; flagging it for manual review.", e)
     # Denormalize the GEO grade for cheap querying/sorting (the batch/impact views read it).
     geo_val = None
     try:
@@ -996,6 +1000,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 f"citation-readiness {cr_score:.0f}/100 below {CITATION_READY_MIN:.0f} after "
                 f"{cr_rev} auto-revision(s) -- needs an author"
                 + (f" -- {tips}" if tips else "")]
+        elif cr_score is None:
+            # Grading didn't produce a citation-readiness score (grader/orchestrator hiccup). Don't
+            # present the draft as fully vetted -- flag it so the reviewer knows the gate was skipped.
+            comp_flags = list(comp_flags) + ["citation-readiness check unavailable — please review this draft manually"]
 
     # A draft that couldn't clear quality/compliance is HELD (needs an author), not shown as a
     # ready-to-review draft with issues. "needs_fix" is folded into "held" so the review queue only
@@ -1058,8 +1066,11 @@ def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
                 wos.append({"_db_id": r["id"], "wo_code": r["wo_code"], "title": r["title"],
                             "capability": r["capability"], "execution": r["execution"],
                             "instruction": r["instruction"]})
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # Don't silently fall through to plan-JSON work orders (which lack _db_id, so drafts
+            # generate WITHOUT work-order linkage and approve() can't advance the WO) with no trace.
+            log.warning("content_generator: tracked work-order query failed (%s) -- falling back to "
+                        "plan JSON; generated drafts may not link to work orders.", e)
         if not wos:
             plan = conn.execute(
                 "SELECT plan FROM strategy_plans WHERE business_id=%s ORDER BY id DESC LIMIT 1",
@@ -1311,7 +1322,8 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
     if len(body) < 120:
         return {"ok": False, "error": "draft is too short to atomize into social posts"}
     payload = json.dumps({"title": d.get("title") or "", "article": body[:6000]})
-    res = llm.orchestrator_json(ATOMIZE_SYSTEM, payload, tier="mid") or {}
+    res = llm.orchestrator_json(ATOMIZE_SYSTEM, payload, tier="mid",
+                                bill={"business_id": business_id, "operation": "atomize"}) or {}
     atoms = res.get("atoms") if isinstance(res, dict) else None
     if not isinstance(atoms, list) or not atoms:
         return {"ok": False, "error": "could not generate social posts (content LLM unavailable)"}

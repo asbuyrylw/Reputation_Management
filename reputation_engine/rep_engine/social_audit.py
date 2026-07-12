@@ -322,7 +322,8 @@ def _assess(business: dict, discovered: dict) -> dict:
     payload = json.dumps({"business": {k: business.get(k) for k in ("name", "domain", "services",
                           "goal", "geo")}, "discovered": discovered}, default=str)
     try:
-        res = orchestrator_json(_AUDIT_SYSTEM, payload, tier="cheap", max_tokens=2500, timeout=120)
+        res = orchestrator_json(_AUDIT_SYSTEM, payload, tier="cheap", max_tokens=2500, timeout=120,
+                                bill={"business_id": business.get("id"), "operation": "social_audit"})
     except Exception as e:  # noqa: BLE001
         log.warning("social audit LLM unavailable (%s); using heuristic fallback", e)
         res = {}

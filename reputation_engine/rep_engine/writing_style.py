@@ -65,7 +65,8 @@ def analyze_url(business_id: int, url: str, *, name: Optional[str] = None) -> di
     except ImportError:  # pragma: no cover
         import ai_state_audit as llm  # type: ignore
     import json as _json
-    res = llm.orchestrator_json(_STYLE_SYSTEM, _json.dumps({"article_text": text}), tier="cheap")
+    res = llm.orchestrator_json(_STYLE_SYSTEM, _json.dumps({"article_text": text}), tier="cheap",
+                                bill={"business_id": business_id, "operation": "writing_style"})
     if not res or not isinstance(res, dict):
         return {"ok": False, "error": "Style analysis unavailable (LLM). Try again."}
     profile = _format_profile(res)

@@ -412,7 +412,8 @@ def _drop_offbrand_llm(candidates: list[dict], ctx: dict) -> set[str]:
         "candidates": [c["keyword"] for c in candidates],
     })[:8000]
     try:
-        res = _llm.orchestrator_json(_RELEVANCE_SYSTEM, payload, tier="mid")
+        res = _llm.orchestrator_json(_RELEVANCE_SYSTEM, payload, tier="mid",
+                                     bill={"business_id": ctx.get("business_id"), "operation": "keyword_relevance"})
     except Exception as e:  # noqa: BLE001 -- relevance filtering is best-effort
         log.debug("relevance filter failed: %s", e)
         return set()
@@ -488,7 +489,8 @@ _SEED_SYSTEM = (
 
 def _seed_llm(ctx: dict) -> list[dict]:
     payload = json.dumps(ctx)[:6000]
-    res = _llm.orchestrator_json(_SEED_SYSTEM, payload, tier="mid")
+    res = _llm.orchestrator_json(_SEED_SYSTEM, payload, tier="mid",
+                                 bill={"business_id": ctx.get("business_id"), "operation": "keyword_seed"})
     items = (res or {}).get("keywords") if isinstance(res, dict) else None
     out = []
     for it in (items or []):
@@ -570,6 +572,7 @@ def _load_context(business_id: int) -> dict:
         except Exception:  # noqa: BLE001
             pass
     return {
+        "business_id": business_id,   # carried so the LLM seed/relevance calls can meter their spend
         "name": b["name"], "industry": b.get("industry"), "services": b.get("services"),
         "geo": b.get("geo"), "goal": b.get("goal"), "contested_terms": b.get("contested_terms"),
         "site_missing_topics": sorted(set(missing))[:12],

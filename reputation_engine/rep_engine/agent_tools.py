@@ -71,7 +71,8 @@ def llm_text(system: str, user: str, *, business_id: int, tier: str = "full",
     if _cost.over_budget(business_id):
         raise BudgetExceededError(f"business {business_id} is over its monthly budget")
     out = _audit.orchestrator_text(system, user, max_tokens=max_tokens, tier=tier)
-    _record(business_id, tier, operation, system + user, out)
+    if out:  # only bill a call that actually returned output -- no phantom cost on a failed call
+        _record(business_id, tier, operation, system + user, out)
     return out
 
 
@@ -81,7 +82,8 @@ def llm_json(system: str, user: str, *, business_id: int, tier: str = "full",
     if _cost.over_budget(business_id):
         raise BudgetExceededError(f"business {business_id} is over its monthly budget")
     out = _audit.orchestrator_json(system, user, tier=tier)
-    _record(business_id, tier, operation, system + user, json.dumps(out, default=str))
+    if out:  # only bill a call that actually returned output -- no phantom cost on a failed call
+        _record(business_id, tier, operation, system + user, json.dumps(out, default=str))
     return out
 
 

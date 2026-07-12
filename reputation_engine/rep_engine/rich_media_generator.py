@@ -567,10 +567,15 @@ def generate(
                 from . import cost as _cost
                 is_audio = method == "notebooklm_audio"
                 api = "notebooklm" if method in ("notebooklm_audio", "notebooklm_note") else "llm"
-                _cost.record_cost(business_id, None, "audio" if is_audio else "llm_content", api,
-                                  f"rich_media:{asset_type}", units=5 if is_audio else 1,
-                                  unit_label="minutes" if is_audio else "assets",
-                                  detail={"content_type": asset_type, "api": api})
+                # Only flat-record the NotebookLM API paths (audio per-minute + note). The
+                # in-house LLM fallback (llm_structured, and note-when-NotebookLM-is-down) is
+                # already token-metered inside _fallback_llm via agent_tools._record, so a flat
+                # record here would DOUBLE-count it.
+                if api == "notebooklm":
+                    _cost.record_cost(business_id, None, "audio" if is_audio else "llm_content", api,
+                                      f"rich_media:{asset_type}", units=5 if is_audio else 1,
+                                      unit_label="minutes" if is_audio else "assets",
+                                      detail={"content_type": asset_type, "api": api})
             except Exception:  # noqa: BLE001
                 pass
 
@@ -581,7 +586,16 @@ def generate(
             log.warning("rich_media: %s failed: %s — continuing", asset_type, e)
             continue
 
-    log.info("rich_media: created %d draft(s) for business %d", len(created), business_id)
+    # A run that was asked for specific types but produced NOTHING is a real failure (LLM +
+    # NotebookLM both unavailable, or every type errored) -- surface it loudly rather than reading
+    # as a silent success. (The single-WO custom-content path also fails via content_generator's
+    # 0-draft guard; this covers the direct/bulk callers.)
+    if not created and types_to_run:
+        log.warning("rich_media: produced 0 of %d requested type(s) for business %d -- generation "
+                    "failed (check the NotebookLM/orchestrator LLM availability).",
+                    len(types_to_run), business_id)
+    else:
+        log.info("rich_media: created %d draft(s) for business %d", len(created), business_id)
     return created
 
 

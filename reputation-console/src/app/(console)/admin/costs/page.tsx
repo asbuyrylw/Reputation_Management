@@ -126,6 +126,9 @@ export default function AdminCostsPage() {
           <table className="w-full min-w-[640px] text-left text-[12.5px]">
             <thead><tr className="font-mono text-[10.5px] uppercase tracking-wider text-ink-4"><th className="pb-1.5 pr-3 font-normal">When</th><th className="pb-1.5 pr-3 font-normal">Service</th><th className="pb-1.5 pr-3 font-normal">Provider</th><th className="pb-1.5 pr-3 font-normal">Operation</th><th className="pb-1.5 pr-3 text-right font-normal">Units</th><th className="pb-1.5 text-right font-normal">Cost</th></tr></thead>
             <tbody>
+              {data.recent.length === 0 && (
+                <tr><td colSpan={6} className="py-4 text-center text-ink-4">No line items recorded in this window.</td></tr>
+              )}
               {data.recent.map((r: CostLineItem, i) => (
                 <tr key={i} className="border-t border-line">
                   <td className="py-1.5 pr-3 font-mono text-ink-4">{r.at ? new Date(r.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</td>

@@ -973,12 +973,40 @@ def _anthropic_headers() -> dict:
             "anthropic-beta": "prompt-caching-2024-07-31", "content-type": "application/json"}
 
 
+def _bill_orchestrator(bill: Optional[dict], system: str, user: str, output_text: str,
+                       usage: Optional[dict], tier: str) -> None:
+    """Record the cost of ONE orchestrator LLM call to the ledger. Opt-in: a caller that wants its
+    spend metered passes bill={'business_id':int|None, 'operation':str, 'run_id':int|None}. Prefers
+    the provider's REAL token usage, else estimates from prompt+output (cost.py is an estimate
+    anyway). Skips a failed/empty call so no phantom cost is recorded. Never raises -- metering must
+    never break generation."""
+    if not bill or not output_text:
+        return
+    op = bill.get("operation")
+    if not op:
+        return
+    try:
+        amodel, omodel = _model_for(tier)
+        is_openai = ORCHESTRATOR == "openai"
+        provider = "openai" if is_openai else "anthropic"
+        model = omodel if is_openai else amodel
+        if usage and usage.get("input") is not None:
+            inp, out = int(usage.get("input") or 0), int(usage.get("output") or 0)
+        else:
+            inp = cost.approx_tokens(system) + cost.approx_tokens(user)
+            out = cost.approx_tokens(output_text)
+        cost.record(bill.get("business_id"), bill.get("run_id"), provider, op, model, inp, out)
+    except Exception:  # noqa: BLE001 -- cost metering must never break generation
+        pass
+
+
 def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
-                      tier: str = "full") -> str:
+                      tier: str = "full", *, bill: Optional[dict] = None) -> str:
     """Free-text completion from the configured orchestrator LLM (no JSON
     constraint). Used by the content generator. Returns '' on failure.
     tier ('cheap'|'mid'|'full') selects the model so callers can route creative
-    work to the mid tier (Sonnet/gpt-4o) instead of the full Opus tier."""
+    work to the mid tier (Sonnet/gpt-4o) instead of the full Opus tier.
+    bill (optional): {'business_id','operation','run_id'} -> meters this call's spend."""
     anthropic_model, openai_model = _model_for(tier)
     if ORCHESTRATOR == "openai":
         if "YOUR_OPENAI" in OPENAI_API_KEY:
@@ -995,9 +1023,11 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
             log.warning("orchestrator_text(openai) failed: %s", res.error)
             return ""
         try:
-            return res.data["choices"][0]["message"]["content"]
+            text = res.data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             return ""
+        _bill_orchestrator(bill, system, user, text, _usage(res.data), tier)
+        return text
     # anthropic
     if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
         return ""
@@ -1012,24 +1042,29 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
         log.warning("orchestrator_text(anthropic) failed: %s", res.error)
         return ""
     d = res.data or {}
-    return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+    text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+    _bill_orchestrator(bill, system, user, text, _usage(d), tier)
+    return text
 
 
 def orchestrator_json(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
-                      timeout: int = 90, deadline: Optional[float] = None) -> dict:
+                      timeout: int = 90, deadline: Optional[float] = None,
+                      bill: Optional[dict] = None) -> dict:
     """Call the configured orchestrator LLM and parse a JSON object response.
     Uses provider structured-output modes where available so parsing is reliable.
     tier='cheap' routes to the smaller model (high-volume scoring); max_tokens lets large
     structured outputs (e.g. the gap model) avoid truncation; timeout accommodates large
     syntheses whose generation can exceed the default read timeout. deadline (optional) caps the
     TOTAL wall-clock across retries so a stalled call fails fast instead of retrying its full
-    timeout N times."""
+    timeout N times. bill (optional): {'business_id','operation','run_id'} -> meters this call's
+    spend (estimate-based, since the complete helpers surface text, not usage)."""
     if ORCHESTRATOR == "openai":
         text = _openai_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout, deadline=deadline)
     else:
         text = _anthropic_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout, deadline=deadline)
     if not text:
         return {}
+    _bill_orchestrator(bill, system, user, text, None, tier)
     return _parse_json_lenient(text)
 
 

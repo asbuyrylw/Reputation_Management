@@ -359,7 +359,8 @@ def _narrative(business_id: int, goal: dict, overall: dict, gaps: list[dict],
         "the 2-3 highest-leverage moves next. Reference the ACTUAL numbers. No hype, no guarantees, no "
         "invented facts. Return ONE JSON object: {\"briefing\": \"...\"}.")
     try:
-        out = orchestrator_json(system, payload, tier="cheap", max_tokens=700, timeout=90)
+        out = orchestrator_json(system, payload, tier="cheap", max_tokens=700, timeout=90,
+                                bill={"business_id": business_id, "operation": "advisor"})
         if isinstance(out, dict) and out.get("briefing"):
             return str(out["briefing"]).strip()
     except Exception as e:  # noqa: BLE001

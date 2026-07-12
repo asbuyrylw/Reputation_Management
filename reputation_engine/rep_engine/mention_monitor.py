@@ -144,7 +144,8 @@ def suggest_keywords(business_id: int, n: int = 8, quiet: bool = False) -> dict:
         f"Already-tracked keywords to AVOID duplicating: {json.dumps(existing[:80], default=str)}\n"
         f"Propose {n} new keywords."
     )
-    raw = _ai.orchestrator_json(_SUGGEST_KW_SYS, user, max_tokens=900)
+    raw = _ai.orchestrator_json(_SUGGEST_KW_SYS, user, max_tokens=900,
+                                bill={"business_id": business_id, "operation": "keyword_suggest"})
     if raw is None:
         if not quiet:
             log.info("suggest_keywords skipped (no orchestrator key) for business %d", business_id)
@@ -368,7 +369,7 @@ _SENTIMENT_SYS = (
 )
 
 
-def score_sentiment(text: str) -> str:
+def score_sentiment(text: str, business_id: int | None = None) -> str:
     """Sentiment of a mention. Uses the orchestrator LLM when one is configured (far better
     on sarcasm/context than keyword counting) and falls back to the keyword heuristic offline
     or on any failure. Opt out with MENTION_LLM_SENTIMENT=0. Called only from the (job-run)
@@ -383,7 +384,8 @@ def score_sentiment(text: str) -> str:
             return _sentiment(txt)
         # fence the untrusted mention text as DATA so it can't act as an instruction
         out = _ai.orchestrator_json(_SENTIMENT_SYS, _ai._fence_untrusted(txt[:1500]),
-                                    tier="cheap", max_tokens=30)
+                                    tier="cheap", max_tokens=30,
+                                    bill={"business_id": business_id, "operation": "mention_sentiment"})
         s = (out or {}).get("sentiment", "").strip().lower()
         if s in ("positive", "neutral", "negative"):
             return s
@@ -426,7 +428,8 @@ def is_about_business(text: str, biz: dict) -> bool:
             _RELEVANCE_SYS,
             "Business profile: " + json.dumps(profile, default=str) + "\n\nText:\n"
             + _ai._fence_untrusted(txt[:1500]),
-            tier="cheap", max_tokens=20)
+            tier="cheap", max_tokens=20,
+            bill={"business_id": biz.get("id"), "operation": "mention_sentiment"})
         v = (out or {}).get("about_business")
         if isinstance(v, bool):
             return v
@@ -487,7 +490,7 @@ def discover(business_id: int, sources: Optional[list[str]] = None, quiet: bool 
                                ON CONFLICT (dedup_hash) DO NOTHING RETURNING id""",
                             (business_id, it.get("source"), it.get("source_url"), it.get("external_id"),
                              it.get("author"), it.get("title"), it.get("body"), kw,
-                             score_sentiment(text), rel, h),
+                             score_sentiment(text, business_id), rel, h),
                         ).fetchone()
                         if r:
                             found += 1
@@ -578,7 +581,8 @@ def _draft_one(biz: dict, mention: dict, tone: str, cg) -> str:
         "sentiment": mention.get("sentiment"),
     })
     try:
-        text = m.orchestrator_text(system, user, max_tokens=300)
+        text = m.orchestrator_text(system, user, max_tokens=300,
+                                   bill={"business_id": biz.get("id"), "operation": "mention_reply"})
         if text and text.strip():
             return text.strip()
     except Exception as e:  # noqa: BLE001

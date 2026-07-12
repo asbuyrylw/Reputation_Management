@@ -114,6 +114,11 @@ _LLM_CATEGORY = {
     "answer": "llm_audit", "score": "llm_audit", "gap_model": "llm_gap", "gap_critic": "llm_gap",
     "content_draft": "llm_content", "atomize": "llm_content", "outline": "llm_content",
     "strategy": "llm_strategy", "advisor": "llm_strategy", "writing_style": "llm_content",
+    # Previously-unmetered LLM operations (now billed via the orchestrator billing hook), mapped to
+    # existing rollup buckets so the ledger + Admin→Costs stay complete without new labels.
+    "social_audit": "llm_audit", "suggest_prompts": "llm_audit", "mention_sentiment": "llm_audit",
+    "keyword_seed": "llm_content", "keyword_relevance": "llm_content", "keyword_suggest": "llm_content",
+    "fact_check": "llm_content", "video_brief": "llm_content", "pitch": "llm_strategy",
 }
 
 

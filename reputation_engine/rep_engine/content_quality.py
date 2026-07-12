@@ -142,7 +142,7 @@ _FACTCHECK_SYSTEM = (
 )
 
 
-def fact_check(body: str, site_summary: Optional[dict] = None) -> dict:
+def fact_check(body: str, site_summary: Optional[dict] = None, business_id: int | None = None) -> dict:
     """Extract + verify factual claims against the crawled site facts. Keyless-safe: returns
     {skipped} without an LLM. The caller surfaces 'unverifiable'/'contradicted' before approval."""
     if not (body or "").strip():
@@ -156,7 +156,8 @@ def fact_check(body: str, site_summary: Optional[dict] = None) -> dict:
         import ai_state_audit as llm  # type: ignore
     import json as _json
     payload = _json.dumps({"draft": body[:6000], "known_facts": site_summary or {}}, default=str)
-    res = llm.orchestrator_json(_FACTCHECK_SYSTEM, payload, tier="cheap")
+    res = llm.orchestrator_json(_FACTCHECK_SYSTEM, payload, tier="cheap",
+                                bill={"business_id": business_id, "operation": "fact_check"})
     if not res or not isinstance(res, dict):
         return {"skipped": True, "claims": [], "unverified": 0}
     claims = res.get("claims") or []
@@ -512,7 +513,8 @@ def analyze_draft(body: str, *, target_query: str = "", keywords: Optional[list[
                   site_summary: Optional[dict] = None, with_fact_check: bool = True,
                   neuron_terms: Optional[list[str]] = None, business_name: str = "",
                   geo: str = "", keyword_intent: str = "", content_type: str = "",
-                  asset_type: str = "", serp_benchmark: Optional[dict] = None) -> dict:
+                  asset_type: str = "", serp_benchmark: Optional[dict] = None,
+                  business_id: int | None = None) -> dict:
     """Run every scorer -> a dict suitable for content_drafts.quality_notes. All deterministic +
     keyless except the optional fact_check LLM pass; new callers can pass neuron_terms / business_name
     / geo / keyword_intent for the richer term-coverage, entity, and intent grades."""
@@ -543,5 +545,5 @@ def analyze_draft(body: str, *, target_query: str = "", keywords: Optional[list[
     if serp_benchmark is not None:
         out["serp"] = _safe("serp", lambda: serp_grade(body, serp_benchmark, keywords))
     if with_fact_check:
-        out["fact_check"] = _safe("fact_check", lambda: fact_check(body, site_summary))
+        out["fact_check"] = _safe("fact_check", lambda: fact_check(body, site_summary, business_id))
     return out

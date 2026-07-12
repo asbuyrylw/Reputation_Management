@@ -111,12 +111,28 @@ def _cu_model() -> str:
     return (os.getenv("COMPUTER_USE_MODEL") or "gemini-2.5-computer-use-preview-10-2025").strip()
 
 
+def _chromium_installed() -> bool:
+    """True only if a Playwright Chromium browser binary is actually on disk. The pip package being
+    importable is NOT enough -- `playwright install chromium` must have downloaded the browser, or a
+    run fails at launch. Filesystem check only (no driver spawn -> safe in an async request)."""
+    import glob
+    base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    roots = [base] if base else [
+        os.path.expanduser("~/.cache/ms-playwright"),                 # Linux (Railway)
+        os.path.expanduser("~/Library/Caches/ms-playwright"),         # macOS
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright"),  # Windows
+    ]
+    return any(r and glob.glob(os.path.join(r, "chromium-*")) for r in roots)
+
+
 def _playwright_available() -> bool:
     try:
         import playwright.sync_api  # noqa: F401
-        return True
-    except Exception:  # noqa: BLE001 -- not installed / browser binary missing
+    except Exception:  # noqa: BLE001 -- package not installed
         return False
+    # The docstring/promise is "gated on the Chromium binary" -- honor it, so configured() doesn't
+    # report LIVE when only the pip package is present and a run would fail at browser launch.
+    return _chromium_installed()
 
 
 def configured() -> bool:

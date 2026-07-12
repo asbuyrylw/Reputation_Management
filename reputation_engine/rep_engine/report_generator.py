@@ -149,16 +149,16 @@ def _load(business_id: int) -> dict:
             assets_n = conn.execute(
                 "SELECT COUNT(*) n FROM assets WHERE business_id=%s", (business_id,)
             ).fetchone()["n"]
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 -- don't let a client report silently show 0 assets as fact
+            log.warning("report_generator: work-order/asset stats query failed (%s) -- report may under-report.", e)
         try:
             month_cost = float(conn.execute(
                 "SELECT COALESCE(SUM(est_cost_usd),0) s FROM cost_ledger "
                 "WHERE business_id=%s AND created_at >= date_trunc('month', now())",
                 (business_id,),
             ).fetchone()["s"])
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            log.warning("report_generator: month-cost query failed (%s) -- report may show $0 spend.", e)
         attr = conn.execute(
             "SELECT metric, delta, assets_in_window FROM attribution "
             "WHERE business_id=%s ORDER BY id DESC LIMIT 3", (business_id,),

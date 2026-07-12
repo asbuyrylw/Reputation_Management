@@ -429,7 +429,8 @@ def generate_video_brief(business_id: int, topic: str, *, work_order_id: Optiona
     except ImportError:  # pragma: no cover
         import content_generator as cg  # type: ignore
     brief = cg.llm.orchestrator_json(_VIDEO_BRIEF_SYSTEM,
-                                     json.dumps({"topic": topic, "business_id": business_id}), tier="mid")
+                                     json.dumps({"topic": topic, "business_id": business_id}), tier="mid",
+                                     bill={"business_id": business_id, "operation": "video_brief"})
     if not brief:
         return {"skipped": True, "reason": "LLM unavailable for video brief"}
     vid = _persist(business_id, kind="video_brief", provider="llm", model="orchestrator",
