@@ -215,7 +215,10 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
     if not image_configured():
         return {"skipped": True, "reason": "no image provider key set (IMAGE_API_KEY / OPENAI_API_KEY)"}
     policy, note = _image_policy(business_id)
-    ground = _brand_grounding(business_id)
+    # Small grounding budget for images: Imagen has a ~480-token prompt cap, and the user prompt +
+    # compliance policy already consume some of it — an over-long brand block made the image request
+    # 400 exactly when brand material was configured. Video (below) can afford the larger default.
+    ground = _brand_grounding(business_id, max_tokens=180)
     full_prompt = ((ground + "\n\n") if ground else "") + (prompt or "").strip() + policy
     provider, model = _image_provider(), _image_model()
     try:
@@ -280,7 +283,10 @@ def _download_bytes(url: str, *, timeout: int = 60) -> Optional[bytes]:
     import requests
     try:
         r = requests.get(url, timeout=timeout, allow_redirects=False)
-        return r.content if r.ok else None
+        # Gate on 200, NOT r.ok: requests' r.ok is True for 3xx too, so a redirect (allow_redirects
+        # is off for SSRF safety) would otherwise return the redirect STUB body as if it were the
+        # image -> a corrupt file persisted as a false success. A real redirect => treat as failure.
+        return r.content if r.status_code == 200 else None
     except Exception as e:  # noqa: BLE001
         log.warning("image download failed: %s", e)
         return None
@@ -428,9 +434,13 @@ def generate_video_brief(business_id: int, topic: str, *, work_order_id: Optiona
         from . import content_generator as cg
     except ImportError:  # pragma: no cover
         import content_generator as cg  # type: ignore
-    brief = cg.llm.orchestrator_json(_VIDEO_BRIEF_SYSTEM,
-                                     json.dumps({"topic": topic, "business_id": business_id}), tier="mid",
-                                     bill={"business_id": business_id, "operation": "video_brief"})
+    # Ground the on-screen script in the brand rules + source facts, like generate_image/video do —
+    # otherwise the caption/script can drift off-brand (e.g. surface 'Primerica') or invent facts.
+    ground = _brand_grounding(business_id, max_tokens=800)
+    brief = cg.llm.orchestrator_json(
+        _VIDEO_BRIEF_SYSTEM,
+        json.dumps({"topic": topic, "business_id": business_id, "brand_grounding": ground}),
+        tier="mid", bill={"business_id": business_id, "operation": "video_brief"})
     if not brief:
         return {"skipped": True, "reason": "LLM unavailable for video brief"}
     vid = _persist(business_id, kind="video_brief", provider="llm", model="orchestrator",
@@ -463,7 +473,10 @@ def _download_video_bytes(uri: str, *, timeout: int = 120) -> Optional[bytes]:
     import requests
     try:
         r = requests.get(uri, headers={"x-goog-api-key": _video_key()}, timeout=timeout, allow_redirects=False)
-        return r.content if r.ok else None
+        # Gate on 200, NOT r.ok (True for 3xx): with allow_redirects off, a redirect would otherwise
+        # return the redirect stub body as if it were the mp4 -> a corrupt video persisted + billed
+        # as a false success. A real redirect => treat as a failed download.
+        return r.content if r.status_code == 200 else None
     except Exception as e:  # noqa: BLE001
         log.warning("video download failed: %s", e)
         return None

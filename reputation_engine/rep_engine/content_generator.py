@@ -104,6 +104,15 @@ TITLE_HINTS = [
     ("infographic", "infographic"), ("explainer", "explainer_video"),
 ]
 
+# When the user EXPLICITLY picks a content_type in "Create Content", map it straight to the
+# generation asset_type — bypassing the title-keyword guesser (TITLE_HINTS), which mis-routed
+# 'Blog post: ...' to gbp_post and collapsed white_paper/landing_page unpredictably. Only text
+# content_types need this; rich-media types are selected directly in generate_for_wo's rich branch.
+_CT_ASSET_OVERRIDE = {
+    "article": "article", "blog": "article", "white_paper": "article", "landing_page": "article",
+    "faq": "faq", "local_page": "local_page",
+}
+
 
 
 
@@ -434,6 +443,11 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         "these and do not contradict them:",
         grounding.get("site_facts") or "(no site crawl available — use [INSERT: ...] for unknown facts)",
         "",
+        # Owner-provided brand rules (ABSOLUTE) + uploaded source material (authoritative facts). This
+        # is the client's own material — obey the rules and ground the content in these facts.
+        ("CLIENT BRAND RULES + UPLOADED SOURCE MATERIAL (authoritative — the rules are ABSOLUTE and "
+         "override everything; ground your facts in this material and do not contradict it):\n"
+         + grounding["client_material"] + "\n") if grounding.get("client_material") else "",
         "WHAT AI CURRENTLY GETS WRONG / THE GAP THIS CONTENT MUST CLOSE:",
         grounding.get("gap_focus") or "(general trust & visibility)",
         "",
@@ -721,7 +735,11 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             from . import rich_media_generator as _rmg
         except ImportError:  # pragma: no cover -- loose-script fallback
             import rich_media_generator as _rmg  # type: ignore
-        rm_types = _RICH_MEDIA_CAP_MAP[cap]
+        # When the user picked ONE specific rich type (Create Content), generate ONLY that — not the
+        # cap's full spread. Otherwise deep_content emits deep_article+blog_series+newsletter for a
+        # single 'newsletter' request (3 drafts + 3x spend, selection ignored).
+        _ct = (content_type or "").lower()
+        rm_types = [_ct] if _ct in _RICH_MEDIA_CAP_MAP[cap] else _RICH_MEDIA_CAP_MAP[cap]
         # Steer rich media to what THIS work order is about (the user's "Create content" description
         # lands in the instruction; fall back to the title) instead of a generic corpus synthesis.
         rm_topic = (wo.get("instruction") or "").strip() or topic
@@ -730,7 +748,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                  wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
         return ids[0] if ids else None
 
-    asset_type = _asset_type_for(wo)
+    # Prefer the EXPLICIT content_type the user picked (Create Content) over title-keyword guessing.
+    # TITLE_HINTS mis-routed 'Blog post: ...' -> gbp_post (80-150w GBP post) and flipped on stray
+    # words in the description; an explicit content_type resolves the asset_type deterministically.
+    asset_type = _CT_ASSET_OVERRIDE.get((content_type or "").lower()) or _asset_type_for(wo)
     if not asset_type:
         log.info("WO %s not a generatable content type; skipping.", wo.get("wo_code") or wo.get("wo_id"))
         return None
@@ -791,13 +812,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001
         log.debug("writing-style voice unavailable: %s", e)
     # Brand guardrails (e.g. "always Team Unstoppable, never Primerica") + the owner's uploaded source
-    # material — prepended so EVERY draft is on-brand and grounded in the client's real facts. The
-    # guardrails are ABSOLUTE (they lead the prompt). Best-effort; empty when nothing is configured.
+    # material. These are AUTHORITATIVE (absolute rules + real client facts), so they go into the
+    # grounding as facts — NOT into `voice`, which _gen_prompt frames as "tone/cadence only, do not
+    # copy facts" (that framing actively told the model NOT to use the client's uploaded facts).
     try:
         from . import source_material as _sm
         _brand = _sm.grounding_block(business_id)
         if _brand:
-            voice = (_brand + "\n\n" + (voice or "")).strip()
+            grounding["client_material"] = _brand
     except Exception as e:  # noqa: BLE001
         log.debug("brand/source grounding unavailable: %s", e)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
@@ -1048,7 +1070,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     return row["id"]
 
 
-def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
+def generate(business_id: int, only_wo: Optional[int] = None,
+             content_type: Optional[str] = None) -> list[int]:
     """Generate drafts for the auto content work orders of the latest plan.
     Pulls work orders from the tracking table if present, else from the plan JSON."""
     with db() as conn:
@@ -1108,7 +1131,10 @@ def generate(business_id: int, only_wo: Optional[int] = None) -> list[int]:
             budget_stopped = True
             break
         eligible += 1
-        did = generate_for_wo(business_id, wo, biz)
+        # The explicit content_type (from Create Content) applies to the single targeted WO so its
+        # asset_type/rich-type is resolved deterministically instead of guessed from the title.
+        did = generate_for_wo(business_id, wo, biz,
+                              content_type=(content_type if only_wo and wo.get("_db_id") == only_wo else None))
         if did:
             created.append(did)
     log.info("Generated %d draft(s) for business %d (%d eligible content WO(s))",

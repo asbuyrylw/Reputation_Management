@@ -220,13 +220,28 @@ def content_types(business_id: int = Depends(authorize_business)):
         import visual_content as _vc  # type: ignore
         import rich_media_generator as _rmg  # type: ignore
     img_ok, vid_ok = _vc.image_configured(), _vc.video_configured()
-    rm_ok = _rmg.configured()  # NotebookLM audio; text rich-media always works via LLM fallback
+    # Whether a REAL NotebookLM-grade provider (that renders audio/slides/etc.) is wired. False by
+    # default: the in-house LLM always produces a text SCRIPT/BRIEF, but no rendered audio/slide/
+    # infographic file. Be honest about that instead of advertising these as finished media.
+    nlm_live = _rmg._notebooklm_live() if hasattr(_rmg, "_notebooklm_live") else False
     def _fam(ct: str) -> str:
         if ct in _CONTENT_TYPE_VISUAL:
             return "visual"
         cap = _CONTENT_TYPE_CAP.get(ct)
         return "rich_media" if cap in ("podcast_creation", "slide_deck", "infographic",
                                        "explainer_video", "research_brief", "deep_content") else "text"
+    # What the in-house LLM path actually PRODUCES for each rich type (honest, since the real
+    # NotebookLM renderer is dormant): a text script/brief, not a finished audio/slide/graphic file.
+    _RICH_PRODUCES = {
+        "podcast": "a two-host podcast SCRIPT (text). Rendered audio needs a NotebookLM/AutoContent provider.",
+        "explainer_video": "a video SCRIPT (text). A rendered video needs the Video type (Veo) or a NotebookLM provider.",
+        "slide_deck": "a slide-deck BRIEF (text outline). Rendered slides need a NotebookLM/AutoContent provider.",
+        "infographic": "an infographic BRIEF for a designer (text). A rendered graphic needs a NotebookLM/AutoContent provider.",
+        "research_brief": "a research briefing document (text).",
+        "deep_article": "a long-form article (text).",
+        "newsletter": "a newsletter brief (text).",
+        "blog_series": "a set of blog outlines (text).",
+    }
     out = []
     for ct, label in _TYPE_LABELS.items():
         fam = _fam(ct)
@@ -235,11 +250,15 @@ def content_types(business_id: int = Depends(authorize_business)):
             ready, need = False, "Set VIDEO_PROVIDER=veo + a Gemini/Veo key to render video."
         elif ct == "image" and not img_ok:
             ready, need = False, "Set an image provider key (GEMINI_API_KEY / IMAGE_API_KEY)."
-        elif ct == "podcast" and not rm_ok:
-            need = "Audio needs a NotebookLM key; without it a podcast SCRIPT is produced instead."
+        elif fam == "rich_media":
+            # Rich media always produces a real deliverable (the LLM script/brief), so ready=True;
+            # the `needs` explains it's TEXT unless a real rendering provider is wired.
+            produces = _RICH_PRODUCES.get(ct)
+            if produces and not nlm_live:
+                need = f"Produces {produces}"
         out.append({"content_type": ct, "label": label, "family": fam, "ready": ready, "needs": need})
     return {"types": out, "image_configured": img_ok, "video_configured": vid_ok,
-            "notebooklm_configured": rm_ok}
+            "notebooklm_live": nlm_live}
 
 
 @router.post("/custom-content", status_code=202)
@@ -285,11 +304,28 @@ def create_custom_content(body: CustomContentBody, background: BackgroundTasks,
             args["text"] = desc
         job_id, active = _jobs.enqueue(business_id, "generate_visual", args=args, requested_by=user["id"])
     else:
-        job_id, active = _jobs.enqueue(business_id, "generate_drafts", args={"only_wo": wid},
+        # Forward the explicit content_type so the generator resolves the asset_type deterministically
+        # (fixes 'blog' -> gbp_post misclassification and deep_content emitting all 3 sub-types).
+        job_id, active = _jobs.enqueue(business_id, "generate_drafts",
+                                       args={"only_wo": wid, "content_type": ct},
                                        requested_by=user["id"])
     if job_id is None:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"A generation job is already running (#{active}) — it'll pick this up; try again in a moment.")
+        # A generate job scoped to a DIFFERENT work order is in flight; the per-(business,job_type)
+        # dedup means it will NOT pick ours up (it targets its own only_wo). Rather than strand this
+        # WO behind a false "it'll pick this up" 409, run THIS piece's generation directly in the
+        # background on its own work order. It produces the same human-gated draft; it just isn't
+        # tracked as a separate runs-list row. The request was already rate- + billing-gated above.
+        _adhoc_args = args if is_visual else {"only_wo": wid, "content_type": ct}
+        def _adhoc_run():
+            try:
+                _jobs.JOB_DISPATCH[job_type](business_id, _adhoc_args)
+            except Exception:  # noqa: BLE001
+                import logging as _lg
+                _lg.getLogger("api.content").exception("ad-hoc custom-content generation failed (wo %s)", wid)
+        background.add_task(_adhoc_run)
+        return JSONResponse(status_code=202, content={"job_id": None, "job_type": job_type,
+                            "work_order_id": wid, "family": "visual" if is_visual else "content",
+                            "content_type": ct, "status": "queued"})
     if api_settings().job_worker == "inline":
         background.add_task(_jobs.run_job, job_id)
     return JSONResponse(status_code=202, content={"job_id": job_id, "job_type": job_type,

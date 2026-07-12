@@ -158,7 +158,8 @@ def _run_generate_drafts(business_id: int, args: dict):
     # "Generate draft" button) instead of the whole batch. Return the created draft ids so the
     # produced_count convention (rec 12) sees a real count -- generate() raises on a 0-draft batch,
     # so a returned list is always non-empty, giving observability without a false 'empty' flag.
-    created = _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"))
+    created = _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"),
+                                                  content_type=args.get("content_type"))
     return {"created": created or []}
 
 
@@ -371,18 +372,27 @@ def _run_generate_visual(business_id: int, args: dict):
     kind = (args.get("kind") or "image").lower()
     wo = args.get("work_order_id")
     if kind == "quote_card":
-        return vc.generate_quote_card(business_id, args.get("text") or args.get("prompt") or "",
-                                      attribution=args.get("attribution"), work_order_id=wo)
-    if kind == "video_brief":
-        return vc.generate_video_brief(business_id, args.get("topic") or args.get("prompt") or "",
-                                       work_order_id=wo)
-    if kind == "video":
-        return vc.generate_video(business_id, args.get("prompt") or args.get("topic") or "",
-                                 work_order_id=wo, draft_id=args.get("draft_id"),
-                                 aspect_ratio=args.get("aspect_ratio") or "16:9")
-    return vc.generate_image(business_id, args.get("prompt") or "", kind=kind,
-                             size=args.get("size") or "1024x1024", work_order_id=wo,
-                             draft_id=args.get("draft_id"))
+        res = vc.generate_quote_card(business_id, args.get("text") or args.get("prompt") or "",
+                                     attribution=args.get("attribution"), work_order_id=wo)
+    elif kind == "video_brief":
+        res = vc.generate_video_brief(business_id, args.get("topic") or args.get("prompt") or "",
+                                      work_order_id=wo)
+    elif kind == "video":
+        res = vc.generate_video(business_id, args.get("prompt") or args.get("topic") or "",
+                                work_order_id=wo, draft_id=args.get("draft_id"),
+                                aspect_ratio=args.get("aspect_ratio") or "16:9")
+    else:
+        res = vc.generate_image(business_id, args.get("prompt") or "", kind=kind,
+                                size=args.get("size") or "1024x1024", work_order_id=wo,
+                                draft_id=args.get("draft_id"))
+    # Surface a skipped/failed generation as a FAILED job. Unlike the text/rich path (which raises a
+    # 0-draft RuntimeError), the visual generators RETURN {skipped}/{ok:False} dicts, which run_job
+    # would otherwise record as a green 'complete' with no asset -- a silent failure. Raise so the
+    # job is marked failed with the real reason. quote_card always renders locally (never skips).
+    if isinstance(res, dict) and (res.get("skipped") or res.get("ok") is False):
+        reason = res.get("reason") or res.get("error") or "generation produced no asset"
+        raise RuntimeError(f"{kind} generation failed: {reason}")
+    return res
 
 
 def _run_katteb_seo(business_id: int, args: dict):

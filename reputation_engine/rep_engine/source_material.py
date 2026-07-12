@@ -145,21 +145,26 @@ def grounding_block(business_id: int, max_tokens: int = 4500) -> str:
     return "\n\n".join(out).strip()
 
 
-def visual_grounding(business_id: int, max_tokens: int = 500) -> str:
-    """A COMPACT grounding block for IMAGE/VIDEO prompts (Gemini/Imagen/Veo), which need short
-    prompts — not the full text corpus. Brand rules in full (branding/compliance is non-negotiable,
-    e.g. 'always Team Unstoppable, never Primerica') + a brief source snippet so on-screen text /
-    narration stays on the client's real facts. Empty string when nothing is configured."""
-    g = guardrails(business_id)
-    c = corpus(business_id, max_tokens=max_tokens)
-    if not g and not c:
-        return ""
-    out = []
+def visual_grounding(business_id: int, max_tokens: int = 400) -> str:
+    """A COMPACT grounding block for IMAGE/VIDEO prompts (Gemini/Imagen/Veo), which need SHORT
+    prompts — image models like Imagen have a hard prompt cap (~480 tokens), so the whole block must
+    fit a tight budget shared with the user prompt + compliance policy. Brand rules come FIRST (they
+    are short + non-negotiable, e.g. 'always Team Unstoppable, never Primerica'); the source snippet
+    fills whatever budget remains. Empty string when nothing is configured. Callers pass a small
+    max_tokens for Imagen (e.g. 180) and a larger one for video prompts."""
+    budget_chars = max(80, int(max_tokens) * 4)
+    g = (guardrails(business_id) or "").strip()
+    out, used = [], 0
     if g:
-        out.append("BRAND RULES (absolute): " + g)
-    if c:
-        snippet = " ".join(c.split())[: max_tokens * 4]
-        out.append("Stay consistent with these brand facts: " + snippet)
+        gg = g[:budget_chars]                      # brand rules take priority within the budget
+        out.append("BRAND RULES (absolute): " + gg)
+        used += len(gg)
+    remaining = budget_chars - used
+    if remaining > 200:
+        c = corpus(business_id, max_tokens=max(1, remaining // 4))
+        if c:
+            snippet = " ".join(c.split())[:remaining]
+            out.append("Stay consistent with these brand facts: " + snippet)
     return "\n".join(out).strip()
 
 

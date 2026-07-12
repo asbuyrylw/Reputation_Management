@@ -1940,7 +1940,7 @@ export interface ContentTypeCatalogue {
   types: ContentTypeOption[];
   image_configured: boolean;
   video_configured: boolean;
-  notebooklm_configured: boolean;
+  notebooklm_live: boolean;
 }
 export interface CustomContentResult {
   job_id: number | null;

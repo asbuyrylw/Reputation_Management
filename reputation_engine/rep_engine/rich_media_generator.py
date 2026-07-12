@@ -118,6 +118,9 @@ def _ensure_table() -> None:
                 updated_at        TIMESTAMPTZ DEFAULT now()
             )
         """)
+        # Provenance: which engine actually produced this asset (notebooklm | llm). Honest disclosure
+        # so a draft is never misrepresented as NotebookLM output when it was the in-house LLM.
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS generator TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_rmedia_biz "
             "ON rich_media_drafts(business_id, status)"
@@ -260,20 +263,40 @@ def _api_key() -> str:
     return _nlm._api_key()
 
 
+def _notebooklm_live() -> bool:
+    """Whether to ATTEMPT the real NotebookLM generation API. OFF by default: the endpoints this
+    client targets on generativelanguage.googleapis.com (:generateDiscussion / :generateNote) are
+    NOT functional public methods (NotebookLM's real API is the OAuth-gated Enterprise API, or a
+    third-party like AutoContent), so by default we skip the dead round-trip and use the in-house
+    LLM. Set NOTEBOOKLM_ENABLED=1 (with a working provider wired) to attempt the real API first."""
+    import os
+    flag = (os.getenv("NOTEBOOKLM_ENABLED", "0") or "").strip().lower() in ("1", "true", "yes", "on")
+    return flag and bool(_api_key())
+
+
 def _generate_audio(
     asset_type: str, biz: dict, sources: list[dict], business_id: int
 ) -> Optional[dict]:
-    """Generate an Audio Overview via the NotebookLM API."""
-    key = _api_key()
-    if not key:
-        log.info("rich_media: NotebookLM key not set — skipping %s", asset_type)
-        return None
-    title = f"{biz.get('name', 'Business')} — {asset_type.replace('_', ' ').title()}"
-    style = "briefing" if asset_type == "report_audio" else "podcast"
+    """Produce an audio-overview asset. Tries the real NotebookLM API only when NOTEBOOKLM_ENABLED
+    (dormant by default); otherwise — and on any failure — produces an in-house LLM two-host podcast
+    SCRIPT so the type still yields a real, usable deliverable (a transcript; no audio file). This
+    replaces the old behavior where podcast/report_audio silently produced NOTHING."""
     if _tools.over_budget(business_id):
         raise _tools.BudgetExceededError(f"business {business_id} is over monthly budget")
-    result = _nlm.synthesise_audio(sources, title, key, style=style)
-    return result
+    title = f"{biz.get('name', 'Business')} — {asset_type.replace('_', ' ').title()}"
+    style = "briefing" if asset_type == "report_audio" else "podcast"
+    if _notebooklm_live():
+        result = _nlm.synthesise_audio(sources, title, _api_key(), style=style)
+        if result and (result.get("audio_url") or result.get("transcript")):
+            result["generator"] = "notebooklm"
+            return result
+        log.warning("rich_media: NotebookLM audio unavailable for %s — falling back to an LLM "
+                    "podcast script", asset_type)
+    # LLM fallback: a spoken-style script (transcript), no rendered audio file.
+    script = _fallback_llm(asset_type, biz, sources, business_id)
+    if not script:
+        return None
+    return {"transcript": script, "audio_url": None, "duration_seconds": None, "generator": "llm"}
 
 
 _NOTE_TYPE_MAP = {
@@ -284,6 +307,20 @@ _NOTE_TYPE_MAP = {
 }
 
 _LLM_PROMPTS = {
+    "podcast": (
+        "Write a natural, engaging TWO-HOST podcast SCRIPT (~600-900 words, ~5 minutes) about "
+        "{name}, in the style of a NotebookLM Audio Overview: two hosts (label them 'Host A:' and "
+        "'Host B:') in warm back-and-forth dialogue that explains the topic clearly for a general "
+        "audience. Ground every claim in the provided context — do NOT fabricate facts, use "
+        "[INSERT: ...] placeholders for anything you lack. No guaranteed returns, no 'risk-free', "
+        "no '#1'/'best'. Output ONLY the script with speaker labels."
+    ),
+    "report_audio": (
+        "Write a single-narrator AUDIO BRIEFING SCRIPT (~500-700 words) that summarizes the key "
+        "points about {name} for a spoken monthly report. Warm, credible, factual, easy to read "
+        "aloud. Ground in the provided context; use [INSERT: ...] for unknowns. No "
+        "guaranteed-return language or unverifiable superlatives. Output ONLY the narration script."
+    ),
     "deep_article": (
         "Write a long-form thought-leadership article (1 500-2 500 words) in markdown with "
         "a clear H1, H2 subheadings, and a concrete conclusion. The article should help "
@@ -312,23 +349,19 @@ _LLM_PROMPTS = {
 def _generate_note_asset(
     asset_type: str, biz: dict, sources: list[dict], business_id: int
 ) -> Optional[str]:
-    """Generate a note-type asset via NotebookLM, then post-process for the specific format."""
-    key = _api_key()
-    note_type = _NOTE_TYPE_MAP.get(asset_type, "briefing_doc")
-    title = f"{biz.get('name', 'Business')} — {note_type.replace('_', ' ').title()}"
-
-    if not key:
-        log.info("rich_media: NotebookLM key not set — falling back to LLM for %s", asset_type)
-        return _fallback_llm(asset_type, biz, sources, business_id)
-
+    """Generate a note-type asset. Tries the real NotebookLM note API only when NOTEBOOKLM_ENABLED
+    (dormant by default); otherwise, and on any failure, uses the in-house LLM. Returns markdown."""
     if _tools.over_budget(business_id):
         raise _tools.BudgetExceededError(f"business {business_id} is over monthly budget")
-
-    raw = _nlm.synthesise_note(sources, title, note_type, key)
-    if not raw:
+    if _notebooklm_live():
+        note_type = _NOTE_TYPE_MAP.get(asset_type, "briefing_doc")
+        title = f"{biz.get('name', 'Business')} — {note_type.replace('_', ' ').title()}"
+        raw = _nlm.synthesise_note(sources, title, note_type, _api_key())
+        if raw:
+            return raw
         log.warning("rich_media: NotebookLM returned no note for %s, falling back to LLM",
                     asset_type)
-        return _fallback_llm(asset_type, biz, sources, business_id)
+    return _fallback_llm(asset_type, biz, sources, business_id)
 
     # Post-process: wrap raw note into the target format.
     return _format_note(asset_type, raw, biz)
@@ -386,9 +419,11 @@ def _fallback_llm(
         "or 'best' as stated fact. Output ONLY the asset content in markdown."
     )
     prompt_text = template.format(name=biz.get("name", "the business"))
-    # Add source context (truncated to fit mid-tier context window).
+    # Add source context. The client's own material (Business Profile, Requested Focus, BRAND RULES,
+    # Client Source Material) leads the sources list, so keep the first 6 and allow a generous
+    # per-source budget — the old 5x3000-char cap dropped ~90% of a large uploaded corpus.
     context = "\n\n---\n\n".join(
-        f"## {s['title']}\n{s['text'][:3_000]}" for s in sources[:5]
+        f"## {s['title']}\n{s['text'][:6_000]}" for s in sources[:6]
     )
     user = f"{prompt_text}\n\n# Context\n\n{context}"
     try:
@@ -432,21 +467,22 @@ def _persist(
     sources_used: list | None = None,
     compliance_pass: Optional[bool] = None,
     compliance_flags: list | None = None,
+    generator: str = "llm",
 ) -> int:
     with db() as conn:
         row = conn.execute(
             """INSERT INTO rich_media_drafts
                (business_id, asset_type, title, body, audio_url, transcript,
-                duration_secs, sources_used, compliance_pass, compliance_flags, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
+                duration_secs, sources_used, compliance_pass, compliance_flags, generator, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
             (business_id, asset_type, title,
              body, audio_url, transcript, duration_secs,
              json.dumps(sources_used or []),
-             compliance_pass, json.dumps(compliance_flags or [])),
+             compliance_pass, json.dumps(compliance_flags or []), generator),
         ).fetchone()
         conn.commit()
-    log.info("rich_media: saved draft %d (%s, compliance=%s)", row["id"],
-             asset_type, compliance_pass)
+    log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s)", row["id"],
+             asset_type, generator, compliance_pass)
     return row["id"]
 
 
@@ -527,6 +563,7 @@ def generate(
                     sources_used=source_titles,
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
+                    generator=result.get("generator") or "llm",
                 )
                 created.append(draft_id)
 
@@ -542,6 +579,7 @@ def generate(
                     sources_used=source_titles,
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
+                    generator="notebooklm" if _notebooklm_live() else "llm",
                 )
                 created.append(draft_id)
 
@@ -557,27 +595,14 @@ def generate(
                     sources_used=source_titles,
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
+                    generator="llm",
                 )
                 created.append(draft_id)
 
-            # itemized cost for this rich-media piece (best-effort). Category + api reflect the path
-            # taken — NotebookLM (audio/note) vs the in-house LLM fallback — so "Google vs NotebookLM"
-            # spend is visible. Audio billed per-minute (est.), text as one asset.
-            try:
-                from . import cost as _cost
-                is_audio = method == "notebooklm_audio"
-                api = "notebooklm" if method in ("notebooklm_audio", "notebooklm_note") else "llm"
-                # Only flat-record the NotebookLM API paths (audio per-minute + note). The
-                # in-house LLM fallback (llm_structured, and note-when-NotebookLM-is-down) is
-                # already token-metered inside _fallback_llm via agent_tools._record, so a flat
-                # record here would DOUBLE-count it.
-                if api == "notebooklm":
-                    _cost.record_cost(business_id, None, "audio" if is_audio else "llm_content", api,
-                                      f"rich_media:{asset_type}", units=5 if is_audio else 1,
-                                      unit_label="minutes" if is_audio else "assets",
-                                      detail={"content_type": asset_type, "api": api})
-            except Exception:  # noqa: BLE001
-                pass
+            # NOTE: no flat per-asset cost record here. Every path now routes LLM generation through
+            # _fallback_llm -> agent_tools.llm_text, which token-meters the spend to the ledger. A
+            # flat record here would DOUBLE-count it (the old code did, for note-fallback pieces).
+            # When a real NotebookLM/AutoContent provider is wired, its adapter records its own cost.
 
         except _tools.BudgetExceededError:
             log.warning("rich_media: budget exceeded mid-run; stopping at %s", asset_type)
