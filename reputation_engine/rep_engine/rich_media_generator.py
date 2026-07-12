@@ -264,14 +264,18 @@ def _api_key() -> str:
 
 
 def _notebooklm_live() -> bool:
-    """Whether to ATTEMPT the real NotebookLM generation API. OFF by default: the endpoints this
-    client targets on generativelanguage.googleapis.com (:generateDiscussion / :generateNote) are
-    NOT functional public methods (NotebookLM's real API is the OAuth-gated Enterprise API, or a
-    third-party like AutoContent), so by default we skip the dead round-trip and use the in-house
-    LLM. Set NOTEBOOKLM_ENABLED=1 (with a working provider wired) to attempt the real API first."""
-    import os
-    flag = (os.getenv("NOTEBOOKLM_ENABLED", "0") or "").strip().lower() in ("1", "true", "yes", "on")
-    return flag and bool(_api_key())
+    """Whether a REAL NotebookLM provider can actually run. True only when the Enterprise adapter is
+    configured (NOTEBOOKLM_ENABLED + a service account + project number) — an `AIza` API key against
+    the dead generativelanguage endpoints does NOT count. Off by default -> the in-house LLM produces
+    the script/brief, which is the honest current behavior."""
+    try:
+        from . import notebooklm_enterprise as _nle
+    except ImportError:  # pragma: no cover
+        import notebooklm_enterprise as _nle  # type: ignore
+    try:
+        return _nle.configured()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _generate_audio(
@@ -286,12 +290,18 @@ def _generate_audio(
     title = f"{biz.get('name', 'Business')} — {asset_type.replace('_', ' ').title()}"
     style = "briefing" if asset_type == "report_audio" else "podcast"
     if _notebooklm_live():
-        result = _nlm.synthesise_audio(sources, title, _api_key(), style=style)
+        try:
+            from . import notebooklm_enterprise as _nle
+        except ImportError:  # pragma: no cover
+            import notebooklm_enterprise as _nle  # type: ignore
+        result = _nle.synthesise_audio(sources, title, style=style, focus=title)
+        # Only use the Enterprise result if it produced something usable (a rendered audio URL or a
+        # transcript). If retrieval isn't ready, fall through to the LLM script so nothing empty is
+        # stored as a "podcast".
         if result and (result.get("audio_url") or result.get("transcript")):
-            result["generator"] = "notebooklm"
             return result
-        log.warning("rich_media: NotebookLM audio unavailable for %s — falling back to an LLM "
-                    "podcast script", asset_type)
+        log.warning("rich_media: NotebookLM Enterprise audio not usable yet for %s — falling back "
+                    "to an LLM podcast script", asset_type)
     # LLM fallback: a spoken-style script (transcript), no rendered audio file.
     script = _fallback_llm(asset_type, biz, sources, business_id)
     if not script:
@@ -349,18 +359,12 @@ _LLM_PROMPTS = {
 def _generate_note_asset(
     asset_type: str, biz: dict, sources: list[dict], business_id: int
 ) -> Optional[str]:
-    """Generate a note-type asset. Tries the real NotebookLM note API only when NOTEBOOKLM_ENABLED
-    (dormant by default); otherwise, and on any failure, uses the in-house LLM. Returns markdown."""
+    """Generate a note-type asset (explainer script / slide-deck brief / infographic brief /
+    research brief). There is no working NotebookLM NOTE provider — Enterprise exposes audio
+    overviews, and the old public note endpoint is dead — so these are produced by the in-house LLM.
+    Returns markdown."""
     if _tools.over_budget(business_id):
         raise _tools.BudgetExceededError(f"business {business_id} is over monthly budget")
-    if _notebooklm_live():
-        note_type = _NOTE_TYPE_MAP.get(asset_type, "briefing_doc")
-        title = f"{biz.get('name', 'Business')} — {note_type.replace('_', ' ').title()}"
-        raw = _nlm.synthesise_note(sources, title, note_type, _api_key())
-        if raw:
-            return raw
-        log.warning("rich_media: NotebookLM returned no note for %s, falling back to LLM",
-                    asset_type)
     return _fallback_llm(asset_type, biz, sources, business_id)
 
     # Post-process: wrap raw note into the target format.
@@ -579,7 +583,7 @@ def generate(
                     sources_used=source_titles,
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
-                    generator="notebooklm" if _notebooklm_live() else "llm",
+                    generator="llm",
                 )
                 created.append(draft_id)
 
