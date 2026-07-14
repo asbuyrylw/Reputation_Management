@@ -552,7 +552,11 @@ def generate(
 
         method, description = RICH_TYPES[asset_type]
         log.info("rich_media: generating %s (%s)", asset_type, description)
-        title = (f"{biz.get('name', 'Business')} — {topic[:80]}" if topic
+        # A real user focus makes a good title; a leaked task/dev signature does NOT. Only put `topic`
+        # in the title when it reads like a genuine topic (no code signature) -- else title by type.
+        _clean_topic = topic if (topic and "rich_media_generator" not in topic
+                                 and "generate([" not in topic) else ""
+        title = (f"{biz.get('name', 'Business')} — {_clean_topic[:80]}" if _clean_topic
                  else f"{biz.get('name', 'Business')} — {asset_type.replace('_', ' ').title()}")
 
         try:

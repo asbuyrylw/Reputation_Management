@@ -109,7 +109,10 @@ TITLE_HINTS = [
 # 'Blog post: ...' to gbp_post and collapsed white_paper/landing_page unpredictably. Only text
 # content_types need this; rich-media types are selected directly in generate_for_wo's rich branch.
 _CT_ASSET_OVERRIDE = {
-    "article": "article", "blog": "article", "white_paper": "article", "landing_page": "article",
+    # blog + white_paper map to their OWN asset_type (not "article") so each gets a DISTINCT
+    # generation spec -- otherwise a gap's multi-type batch (article+blog+white_paper) produced three
+    # near-identical "about" pages (duplicate content). See the per-type specs in _gen_prompt().
+    "article": "article", "blog": "blog", "white_paper": "white_paper", "landing_page": "article",
     "faq": "faq", "local_page": "local_page",
 }
 
@@ -200,24 +203,44 @@ GEN_SYSTEM = (
     "page, insert a markdown image with DESCRIPTIVE alt text as ![alt describing the image](IMAGE: "
     "short generation prompt) so a hero/explainer image + alt text can be produced; (7) add a visible "
     "'Last updated: [INSERT: month year]' line for freshness. "
-    "Naturally weave in the target search keywords where they fit (never keyword-stuff). Directly "
-    "address the gap / narrative the content is meant to fix. Never fabricate facts, credentials, "
-    "reviews, or statistics. Write in a warm, trustworthy, plain tone. Output ONLY the asset "
-    "content -- no preamble."
+    "Naturally weave in the target search keywords where they fit (never keyword-stuff). Only cover "
+    "topics and FAQ questions that are SPECIFIC to this business and directly serve THIS page's "
+    "stated purpose and the business's actual services -- do NOT pad the page with generic industry "
+    "questions that don't fit it (e.g. broad medical-underwriting eligibility questions, or unrelated "
+    "career/licensing-exam trivia); drop any provided keyword that doesn't genuinely belong here. "
+    "Directly address the gap / narrative the content is meant to fix. Never fabricate facts, "
+    "credentials, reviews, or statistics. Write in a warm, trustworthy, plain tone. Output ONLY the "
+    "asset content -- no preamble."
 )
 
 
+# Common words that must NOT count as topical relevance in keyword scoping. Without this, a shared
+# STOPWORD gives a false overlap -- e.g. "About / Entity Disambiguation page WITH regulatory
+# credentials" matched "life insurance WITH lupus" on the single token "with", pulling generic
+# off-topic questions (medical-underwriting, unrelated career FAQs) onto an entity page.
+_KW_STOPWORDS = frozenset(
+    "the a an and or but for with without your you our their they them this that these those from into "
+    "out over can could will would should may might get got how what why who when where which does did "
+    "are is was were be been being have has had not no yes all any one two some more most best top near "
+    "about of to in on at by as it its we us my me do if so than then he she his her".split())
+
+
+def _kw_tokens(text: str) -> set:
+    """Content tokens for relevance scoring: >=3 chars, minus stopwords."""
+    return {t for t in re.findall(r"[a-z0-9]{3,}", (text or "").lower()) if t not in _KW_STOPWORDS}
+
+
 def _scope_keywords(allkw: list, target_query: str | None, limit: int = 12) -> list:
-    """Rank the business's keyword set by relevance to THIS piece (token overlap with its target
-    query/topic) so two different pieces get different, on-topic keywords instead of the same
-    business-wide top-15 on every draft. reputation_defense terms are always kept (they matter on
-    every piece). No target query -> fall back to top-priority."""
+    """Rank the business's keyword set by relevance to THIS piece (CONTENT-token overlap with its
+    target query/topic, stopwords excluded) so two different pieces get different, on-topic keywords
+    instead of the same business-wide top-15 on every draft. reputation_defense terms are always kept
+    (they matter on every piece). No target query -> fall back to top-priority."""
     if not target_query:
         return allkw[:15]
-    qtoks = set(re.findall(r"[a-z0-9]{3,}", (target_query or "").lower()))
+    qtoks = _kw_tokens(target_query)
     scored = []
     for k in allkw:
-        kt = set(re.findall(r"[a-z0-9]{3,}", str(k.get("keyword") or "").lower()))
+        kt = _kw_tokens(str(k.get("keyword") or ""))
         scored.append((len(qtoks & kt), 1 if k.get("kind") == "reputation_defense" else 0,
                        k.get("priority") or 0, k))
     scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
@@ -402,9 +425,22 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         "schema": "Output ONLY valid JSON-LD schema markup (no prose) appropriate to the "
                   "page -- choose from Organization, LocalBusiness, FAQPage, Person, Review. "
                   "Populate it with the REAL business facts provided above.",
-        "article": "Write a 600-900 word helpful, locally-relevant article in markdown with a "
-                   "clear H1 and subheadings, answering the target question accurately and "
-                   "working in the target keywords naturally.",
+        "article": "Write the DEFINITIVE, canonical 600-900 word page on this topic in markdown "
+                   "(this is the authoritative reference page) with a clear H1 and question-style "
+                   "subheadings, answering the target question accurately and working in the target "
+                   "keywords naturally.",
+        "blog": "Write an ~800 word blog post in markdown that takes ONE specific, focused angle on "
+                "the topic — a single question, a short how-to, or a timely take. Do NOT write a broad "
+                "'about/overview/who-we-are' page (that is the canonical article's job). Open "
+                "answer-first, use scannable H2 sections each ending in a takeaway, and add a short "
+                "FAQ. Where the definitive company page already covers the basics, briefly reference "
+                "it rather than restating it, so this reads as a complementary piece, not a duplicate.",
+        "white_paper": "Write an in-depth white paper (1,200-1,800 words) in markdown for a "
+                       "sophisticated reader: an executive summary, several evidence- and data-backed "
+                       "sections that each cite a source, and a conclusion with a CTA. Go materially "
+                       "DEEPER and more formal than a web article — this is a distinct, cited format, "
+                       "NOT a longer restatement of the 'about' page. Use [INSERT: ...] placeholders "
+                       "for facts you don't have; never fabricate data or citations.",
         "bio": "Write a professional bio page in markdown (250-400 words) establishing "
                "authority and trust, grounded in the real facts above.",
         "gbp_post": "Write a short Google Business Profile post (80-150 words), friendly and "
@@ -472,7 +508,7 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
 
 
 # Marquee long-form assets get the best model; short/structured assets stay on the mid tier.
-_ASSET_TIER = {"article": "full", "faq": "full", "bio": "full"}
+_ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "full"}
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
@@ -740,9 +776,15 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         # single 'newsletter' request (3 drafts + 3x spend, selection ignored).
         _ct = (content_type or "").lower()
         rm_types = [_ct] if _ct in _RICH_MEDIA_CAP_MAP[cap] else _RICH_MEDIA_CAP_MAP[cap]
-        # Steer rich media to what THIS work order is about (the user's "Create content" description
-        # lands in the instruction; fall back to the title) instead of a generic corpus synthesis.
-        rm_topic = (wo.get("instruction") or "").strip() or topic
+        # Steer rich media to what THIS work order is about. A custom "Create content" WO puts the
+        # user's real focus in `instruction`; a STRATEGY-generated WO puts a developer signature there
+        # ("rich_media_generator.generate([...]): ...") which must NOT become the piece's focus OR leak
+        # into its title. Use the instruction only when it's a real focus, else None so the generator
+        # synthesizes from the corpus and titles the piece by its type.
+        _instr = (wo.get("instruction") or "").strip()
+        if "rich_media_generator.generate(" in _instr or _instr.startswith("rich_media_generator"):
+            _instr = ""
+        rm_topic = _instr or None
         ids = _rmg.generate(business_id, rm_types, topic=rm_topic)
         log.info("WO %s (cap=%s) -> rich_media_generator(%s): created %s",
                  wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
