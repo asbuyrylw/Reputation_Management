@@ -1892,6 +1892,8 @@ export interface RichMediaDraft {
   asset_type: string;   // podcast | slide_deck | infographic | explainer_video | research_brief | deep_article | blog_series | newsletter | report_audio
   title: string | null;
   audio_url: string | null;
+  notebook_url?: string | null;   // deep link to NotebookLM Studio (assisted podcast) — listen/download there
+  generator?: string | null;      // notebooklm | llm — which engine produced it
   transcript?: string | null;
   duration_secs: number | null;
   status: string;       // pending_review | approved | rejected

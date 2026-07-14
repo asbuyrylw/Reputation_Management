@@ -1,4 +1,4 @@
-## vexp <!-- vexp v2.1.5 -->
+## vexp <!-- vexp v2.1.6 -->
 
 **MANDATORY: use `run_pipeline` - do NOT grep or glob the codebase.**
 vexp returns pre-indexed, graph-ranked context in a single call.

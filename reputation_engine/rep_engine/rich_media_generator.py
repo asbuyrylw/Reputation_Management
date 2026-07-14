@@ -121,6 +121,9 @@ def _ensure_table() -> None:
         # Provenance: which engine actually produced this asset (notebooklm | llm). Honest disclosure
         # so a draft is never misrepresented as NotebookLM output when it was the in-house LLM.
         conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS generator TEXT")
+        # Deep link to open the piece in an external tool (e.g. the NotebookLM Studio page where the
+        # owner listens to / downloads the generated podcast, since Google exposes no audio-download API).
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS notebook_url TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_rmedia_biz "
             "ON rich_media_drafts(business_id, status)"
@@ -472,17 +475,19 @@ def _persist(
     compliance_pass: Optional[bool] = None,
     compliance_flags: list | None = None,
     generator: str = "llm",
+    notebook_url: Optional[str] = None,
 ) -> int:
     with db() as conn:
         row = conn.execute(
             """INSERT INTO rich_media_drafts
                (business_id, asset_type, title, body, audio_url, transcript,
-                duration_secs, sources_used, compliance_pass, compliance_flags, generator, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
+                duration_secs, sources_used, compliance_pass, compliance_flags, generator,
+                notebook_url, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
             (business_id, asset_type, title,
              body, audio_url, transcript, duration_secs,
              json.dumps(sources_used or []),
-             compliance_pass, json.dumps(compliance_flags or []), generator),
+             compliance_pass, json.dumps(compliance_flags or []), generator, notebook_url),
         ).fetchone()
         conn.commit()
     log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s)", row["id"],
@@ -568,6 +573,7 @@ def generate(
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
                     generator=result.get("generator") or "llm",
+                    notebook_url=result.get("notebook_url"),
                 )
                 created.append(draft_id)
 
@@ -650,7 +656,7 @@ def api_list(business_id: int, asset_type: Optional[str] = None, status: Optiona
     Returns lightweight rows (no full body) + flags for what viewer to use. Dormant-safe."""
     _ensure_table()
     q = ("SELECT id, asset_type, title, audio_url, duration_secs, status, compliance_pass, "
-         "compliance_flags, created_at, updated_at, "
+         "compliance_flags, created_at, updated_at, generator, notebook_url, "
          "(body IS NOT NULL AND length(body) > 0) AS has_body, "
          "(transcript IS NOT NULL AND length(transcript) > 0) AS has_transcript "
          "FROM rich_media_drafts WHERE business_id=%s")

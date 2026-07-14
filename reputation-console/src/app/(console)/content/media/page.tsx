@@ -21,6 +21,7 @@ type MediaItem = {
   key: string; source: "visual" | "rich"; id: number; kind: Kind;
   title: string; assetType: string; status: string;
   fileUrl?: string; audioUrl?: string | null; durationSecs?: number | null;
+  notebookUrl?: string | null; generator?: string | null;
   createdAt?: string | null;
 };
 
@@ -112,11 +113,24 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
           )}
           {item.kind === "podcast" && (
             <div className="space-y-3">
-              {item.audioUrl ? <audio src={item.audioUrl} controls className="w-full" /> :
-                <div className="rounded-[10px] border border-line bg-paper p-3 text-[13px] text-ink-3">Audio isn&apos;t available for this draft (generated as a script/transcript). Connect the NotebookLM audio path to render the podcast.</div>}
-              {detail.isLoading ? <Spinner /> : d?.transcript ? (
-                <div><div className="mb-1 font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Transcript</div><MarkdownBody text={d.transcript} className="text-[13.5px] leading-relaxed text-ink-2" /></div>
-              ) : null}
+              {item.audioUrl ? (
+                <audio src={item.audioUrl} controls className="w-full" />
+              ) : item.notebookUrl ? (
+                <>
+                  <a href={item.notebookUrl} target="_blank" rel="noreferrer"
+                    className="flex items-center justify-center gap-2 rounded-[12px] bg-indigo px-4 py-3 text-[14.5px] font-semibold text-white shadow-sm hover:bg-indigo-strong">
+                    <span aria-hidden>▶</span> Open in NotebookLM to listen &amp; download
+                  </a>
+                  <p className="text-[12px] leading-relaxed text-ink-4">Generated in NotebookLM under your Gemini Enterprise account. Google doesn&apos;t offer an audio-download API, so the finished episode plays and downloads from NotebookLM Studio.</p>
+                </>
+              ) : (
+                <div className="rounded-[10px] border border-line bg-paper p-3 text-[13px] text-ink-3">This is an AI-generated podcast <b>script</b> (no rendered audio).</div>
+              )}
+              {/* Script/transcript — for the LLM-script drafts. NotebookLM drafts carry only the link
+                  message in the body, so we skip it there (the button above is the deliverable). */}
+              {!item.notebookUrl && (detail.isLoading ? <Spinner /> : d?.transcript ? (
+                <div><div className="mb-1 font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Script</div><MarkdownBody text={d.transcript} className="text-[13.5px] leading-relaxed text-ink-2" /></div>
+              ) : null)}
             </div>
           )}
           {(item.kind === "deck" || item.kind === "infographic" || item.kind === "text") && (
@@ -157,7 +171,8 @@ export default function MediaPage() {
     for (const r of rich.data?.drafts ?? []) {
       const k = richKind(r.asset_type);
       out.push({ key: `r${r.id}`, source: "rich", id: r.id, kind: k, title: r.title || titleCase(r.asset_type),
-        assetType: r.asset_type, status: r.status, audioUrl: r.audio_url, durationSecs: r.duration_secs, createdAt: r.created_at });
+        assetType: r.asset_type, status: r.status, audioUrl: r.audio_url, durationSecs: r.duration_secs,
+        notebookUrl: r.notebook_url, generator: r.generator, createdAt: r.created_at });
     }
     out.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
     return out;
