@@ -23,6 +23,7 @@ import argparse
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -168,6 +169,56 @@ def _competitor_urls(business_id: int, conn, limit: int) -> list[str]:
         return []
 
 
+# Non-content system/asset URLs the crawl may surface (feeds/admin/media) that we should never
+# spend a PageSpeed grade on. Mirrors site_crawl's artifact filter without importing that module.
+_ARTIFACT_RE = re.compile(
+    r"(/feed/?$|/wp-json|/xmlrpc|/wp-admin|/wp-includes|/wp-content/|\.(?:xml|json|rss|atom|"
+    r"png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|gz|mp4|mp3|woff2?|ttf)(?:\?|$))", re.I)
+
+
+def _owned_site_urls(business_id: int, conn, limit: int) -> list[str]:
+    """The business's OWN live website pages to grade -- even before anything has been 'published'
+    through the tool: the homepage(s) from the business domain + owned_domains, plus the content
+    pages the site crawl discovered. Without this, a fresh account with no published assets would
+    have nothing to grade and PageSpeed would silently skip (the technical-SEO layer stays empty)."""
+    urls: list[str] = []
+
+    def _norm(d: str) -> str:
+        d = (d or "").strip().rstrip("/")
+        if not d:
+            return ""
+        return d if d.startswith(("http://", "https://")) else f"https://{d}"
+
+    row = conn.execute("SELECT domain, owned_domains FROM businesses WHERE id=%s",
+                       (business_id,)).fetchone()
+    if row:
+        domains = [row.get("domain")] + re.split(r"[,\s]+", row.get("owned_domains") or "")
+        for d in domains:
+            u = _norm(d)
+            if u:
+                urls.append(u)
+    # content pages discovered by the latest site crawl (skip system/asset artifacts)
+    try:
+        sa = conn.execute("SELECT summary FROM site_audits WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+                          (business_id,)).fetchone()
+        if sa and sa.get("summary"):
+            summary = sa["summary"] if isinstance(sa["summary"], dict) else json.loads(sa["summary"])
+            for p in (summary.get("pages") or []):
+                u = (p.get("url") or "").strip()
+                if u and not _ARTIFACT_RE.search(u):
+                    urls.append(u.rstrip("/"))
+    except Exception:  # noqa: BLE001 -- site_audits optional / best-effort
+        pass
+    # dedupe, preserve order (homepage first)
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out[:limit]
+
+
 def ingest(business_id: int, urls: Optional[list[str]] = None, strategy: Optional[str] = None) -> dict:
     """Grade owned (+ some competitor) URLs and store results. Returns a summary.
     Dormant-safe: no-op when PAGESPEED_ENABLED is off."""
@@ -175,17 +226,30 @@ def ingest(business_id: int, urls: Optional[list[str]] = None, strategy: Optiona
         return {"skipped": True, "reason": "PAGESPEED_ENABLED is off"}
     _ensure_table()
     strat = (strategy or _STRATEGY or "mobile").lower()
+    owned_extra: list[str] = []
     with db() as conn:
         ours = _our_urls(business_id, conn)
         target = list(urls) if urls else list(ours.keys())
         if not urls:
-            # top up with competitor pages if we have room, so the gap model can compare
+            # grade the business's OWN live site (homepage + crawled pages) so the technical-SEO
+            # layer has data from day one, not only after we've published assets through the tool.
             room = max(0, _MAX_URLS - len(target))
             if room:
-                target += [u for u in _competitor_urls(business_id, conn, room) if u not in ours]
+                owned_extra = [u for u in _owned_site_urls(business_id, conn, room)
+                               if u not in ours and u not in target]
+                target += owned_extra
+            # then top up with competitor pages if we still have room, so the gap model can compare
+            room = max(0, _MAX_URLS - len(target))
+            if room:
+                target += [u for u in _competitor_urls(business_id, conn, room)
+                           if u not in ours and u not in target]
     target = target[:_MAX_URLS]
     if not target:
-        return {"skipped": True, "reason": "no owned URLs to grade yet (publish content first)"}
+        return {"skipped": True,
+                "reason": "no URLs to grade (set the business domain, or run the site crawl first)"}
+    # URLs that are OURS (published assets + our own live site) vs competitor pages, so CWV/perf
+    # findings attribute to the right side even when there's no asset_id.
+    owned_set = set(ours.keys()) | set(owned_extra)
 
     graded, failed = 0, []
     for u in target:
@@ -194,6 +258,7 @@ def ingest(business_id: int, urls: Optional[list[str]] = None, strategy: Optiona
             failed.append({"url": u, "error": r.get("error")})
             continue
         aid = ours.get(u)
+        is_ours = (u in owned_set) or (aid is not None)
         with db() as conn:
             conn.execute(
                 "INSERT INTO pagespeed_scores (business_id, url, strategy, performance, seo, "
@@ -202,7 +267,7 @@ def ingest(business_id: int, urls: Optional[list[str]] = None, strategy: Optiona
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (business_id, u, strat, r["performance"], r["seo"], r["accessibility"],
                  r["best_practices"], r["lcp_ms"], r["cls"], r["tbt_ms"], r["field_lcp_ms"],
-                 r["field_inp_ms"], r["field_cls"], r["cwv_pass"], aid is not None, aid))
+                 r["field_inp_ms"], r["field_cls"], r["cwv_pass"], is_ours, aid))
             conn.commit()
         graded += 1
     log.info("pagespeed biz %d: graded %d/%d urls (%s)", business_id, graded, len(target), strat)
