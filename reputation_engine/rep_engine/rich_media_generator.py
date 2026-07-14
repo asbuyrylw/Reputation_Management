@@ -212,7 +212,7 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
 
         # Recent audit answer samples (trusted engine output, not the raw AI answers)
         answers = conn.execute(
-            """SELECT prompt, engine, answer_text, goal_alignment_score
+            """SELECT prompt, engine, answer_text, goal_alignment
                FROM answers
                WHERE business_id=%s AND answer_text IS NOT NULL
                ORDER BY id DESC LIMIT 30""",
@@ -221,7 +221,7 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
         if answers:
             samples = "\n\n".join(
                 f"Q ({a['engine']}): {a['prompt']}\n"
-                f"Score: {a['goal_alignment_score']}\n"
+                f"Score: {a['goal_alignment']}\n"
                 f"A: {(a['answer_text'] or '')[:400]}"
                 for a in answers
             )
@@ -229,12 +229,12 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
 
         # Competitor context — third-party → fence.
         comps = conn.execute(
-            "SELECT name, notes FROM competitors WHERE business_id=%s LIMIT 5",
+            "SELECT name, domain FROM competitors WHERE business_id=%s LIMIT 5",
             (business_id,),
         ).fetchall()
         if comps:
             comp_text = "\n".join(
-                f"Competitor: {c['name']} — {(c.get('notes') or '')[:300]}"
+                f"Competitor: {c['name']} ({(c.get('domain') or 'n/a')})"
                 for c in comps
             )
             fenced_comp = (
