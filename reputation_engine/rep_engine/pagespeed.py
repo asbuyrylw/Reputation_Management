@@ -192,8 +192,15 @@ def _owned_site_urls(business_id: int, conn, limit: int) -> list[str]:
     row = conn.execute("SELECT domain, owned_domains FROM businesses WHERE id=%s",
                        (business_id,)).fetchone()
     if row:
-        domains = [row.get("domain")] + re.split(r"[,\s]+", row.get("owned_domains") or "")
-        for d in domains:
+        # owned_domains may be a JSONB array (psycopg -> list), a comma/space string, or null.
+        owned = row.get("owned_domains")
+        if isinstance(owned, str):
+            extra = re.split(r"[,\s]+", owned)
+        elif isinstance(owned, (list, tuple)):
+            extra = [str(x) for x in owned]
+        else:
+            extra = []
+        for d in [row.get("domain"), *extra]:
             u = _norm(d)
             if u:
                 urls.append(u)
