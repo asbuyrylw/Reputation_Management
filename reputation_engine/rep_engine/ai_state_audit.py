@@ -123,7 +123,14 @@ GAP_MODEL_TIER = os.getenv("GAP_MODEL_TIER", "mid")
 # pathological tail where a stalled call retries 3x its 240s timeout (~12 min); a normal call
 # (~2-4 min, succeeds on the first attempt) is unaffected. On exhaustion the call fails and the
 # previous good gap model is preserved (fail-safe). Override with GAP_MODEL_DEADLINE.
-GAP_MODEL_DEADLINE = int(os.getenv("GAP_MODEL_DEADLINE", "300"))
+GAP_MODEL_DEADLINE = int(os.getenv("GAP_MODEL_DEADLINE", "900"))
+
+# Per-call READ timeout (seconds) for the gap synthesis + critic passes. Each generates a LARGE
+# structured object (~11-12k output tokens over the whole coverage schema); measured live at ~243s
+# end-to-end, which overran the previous 240s read timeout by a hair -> the whole gap model failed
+# with 'Read timed out' and the content pipeline cascade-failed. 480 gives a comfortable margin
+# above the observed generation time; GAP_MODEL_DEADLINE (above) still caps the total across retries.
+GAP_MODEL_TIMEOUT = int(os.getenv("GAP_MODEL_TIMEOUT", "480"))
 
 # Cap + length-bound the per-answer EVIDENCE fed into gap synthesis. A full battery can be
 # ~300 answers x ~2.7k chars = ~350k INPUT tokens, which overruns the synthesis model's context
@@ -1747,7 +1754,7 @@ def _gap_critic_refine(draft: dict, first_party_signals: dict,
                                 "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str)
         crit = orchestrator_json(
             GAP_CRITIC_SYSTEM, crit_user,
-            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
+            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
         # Ledger the critic pass spend too (rec 10b) -- best-effort, never breaks the refine.
         if business_id is not None:
             try:
@@ -2178,7 +2185,7 @@ def build_gap_model(business_id: int) -> dict:
         # and site_technical_gaps, so the JSON runs longer -- too small a cap truncates it
         # mid-object and the synthesis is discarded as unparseable.
         model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
-                                  max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
+                                  max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
         # Ledger the synthesis spend (rec 10b) so the gap model's cost is visible in COGS and counts
         # against the monthly cap, like audit answers do. Recorded even on a failed/empty synthesis:
         # we still paid for the input tokens, and honest budgeting must not omit that. Estimated
