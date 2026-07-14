@@ -125,6 +125,16 @@ GAP_MODEL_TIER = os.getenv("GAP_MODEL_TIER", "mid")
 # previous good gap model is preserved (fail-safe). Override with GAP_MODEL_DEADLINE.
 GAP_MODEL_DEADLINE = int(os.getenv("GAP_MODEL_DEADLINE", "300"))
 
+# Cap + length-bound the per-answer EVIDENCE fed into gap synthesis. A full battery can be
+# ~300 answers x ~2.7k chars = ~350k INPUT tokens, which overruns the synthesis model's context
+# window (the call returns empty/'{}' -> the whole gap model fails to parse -> the content pipeline
+# cascade-fails) and costs ~$1/call in input alone. We instead feed the MOST gap-relevant answers
+# (negatives / contested / unowned / low-alignment first), each truncated: the aggregate picture is
+# already carried by challenge_profile + external_signals, so the raw answers only need to give the
+# model concrete, representative evidence per gap -- not the entire transcript.
+GAP_MAX_ANSWERS = int(os.getenv("GAP_MAX_ANSWERS", "90"))
+GAP_ANSWER_CHARS = int(os.getenv("GAP_ANSWER_CHARS", "800"))
+
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
 # Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
@@ -1942,6 +1952,48 @@ def _link_weak_queries(model: dict) -> None:
             w["addressed_by"] = best_label
 
 
+def _gap_answer_priority(a: dict) -> tuple:
+    """Sort key (ascending) -> MOST gap-relevant answers first. Negative / contested / unowned /
+    low-alignment answers are the evidence a gap model is built from; positive, on-message answers
+    are kept only to fill the cap. Ties break by lowest goal_alignment (weakest answers first)."""
+    sent = (a.get("sentiment") or "").lower()
+    ga = a.get("goal_alignment")
+    ga = float(ga) if isinstance(ga, (int, float)) else 0.5
+    aw = a.get("awareness")
+    aw = float(aw) if isinstance(aw, (int, float)) else 1.0
+    problem = (
+        (2 if sent == "negative" else 1 if sent in ("mixed", "neutral") else 0)
+        + (1 if a.get("mentions_contested") else 0)
+        + (1 if a.get("surfaces_owned") is False else 0)
+        + (1 if ga < 0.5 else 0)
+        + (1 if aw < 0.5 else 0)
+    )
+    return (-problem, ga)
+
+
+def _prioritize_gap_answers(rows, cap: int) -> list:
+    """Return at most `cap` answers, most gap-relevant first, guaranteeing at least one answer per
+    engine (so the sample isn't dominated by a single assistant) before filling by priority.
+    Returns every row (as dicts) unchanged when already under the cap."""
+    rows = [dict(r) for r in rows]
+    if cap <= 0 or len(rows) <= cap:
+        return rows
+    order = sorted(range(len(rows)), key=lambda i: _gap_answer_priority(rows[i]))
+    picked: list[int] = []
+    picked_set: set[int] = set()
+    seen_eng: set = set()
+    for i in order:                      # coverage pass: one per engine
+        eng = rows[i].get("engine")
+        if eng not in seen_eng:
+            picked.append(i); picked_set.add(i); seen_eng.add(eng)
+    for i in order:                      # fill by priority
+        if len(picked) >= cap:
+            break
+        if i not in picked_set:
+            picked.append(i); picked_set.add(i)
+    return [rows[i] for i in sorted(picked[:cap])]
+
+
 def build_gap_model(business_id: int) -> dict:
     with db() as conn:
         b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
@@ -1979,10 +2031,16 @@ def build_gap_model(business_id: int) -> dict:
         # they are equally untrusted and fenced too, lest a hostile answer launder an
         # instruction into the strategy synthesis. The remaining columns are
         # first-party numeric/categorical scores and pass through unchanged.
+        # Feed a gap-relevant, length-bounded SAMPLE (not the whole transcript) so the synthesis
+        # input can't overrun the model's context window -> empty output -> a failed gap model that
+        # cascade-fails the content pipeline. The aggregate picture is carried by challenge_profile +
+        # external_signals below; these raw answers are per-gap EVIDENCE, so a capped/truncated set
+        # is sufficient (and ~10x cheaper).
+        gap_answers = _prioritize_gap_answers(answers, GAP_MAX_ANSWERS)
         fenced_answers = []
-        for a in answers:
+        for a in gap_answers:
             row = dict(a)
-            row["answer_text"] = _fence_untrusted(row.get("answer_text", ""))
+            row["answer_text"] = _fence_untrusted((row.get("answer_text") or "")[:GAP_ANSWER_CHARS])
             row["cited_sources"] = _fence_untrusted(json.dumps(row.get("cited_sources", []), default=str))
             row["key_sources"] = _fence_untrusted(json.dumps(row.get("key_sources") or [], default=str))
             row["missing"] = _fence_untrusted(json.dumps(row.get("missing") or [], default=str))
