@@ -198,9 +198,13 @@ def _normalize(channel: str, it: dict) -> dict | None:
 # ----------------------------------------------------------------------------
 def _generate(channel: str, system: str, user: str, business_id: int, limit: int) -> list:
     try:
+        # A briefs object holds "a few" items x ~13 fields each -> ~3-4k output tokens; the default
+        # 2000-token cap truncated it mid-JSON so it parsed to {} and produced ZERO briefs. Give it
+        # real headroom (and a longer timeout for the bigger generation).
         res = tools.llm_json(system + "\n" + tools.UNTRUSTED_INSTRUCTION, user,
                              business_id=business_id, tier="mid",
-                             operation=f"production_brief_{channel}")
+                             operation=f"production_brief_{channel}",
+                             max_tokens=5000, timeout=180)
     except tools.BudgetExceededError:
         log.warning("production_brief: over budget -- skipping %s briefs", channel)
         return []

@@ -77,11 +77,21 @@ def llm_text(system: str, user: str, *, business_id: int, tier: str = "full",
 
 
 def llm_json(system: str, user: str, *, business_id: int, tier: str = "full",
-             operation: str = "agent") -> dict:
-    """Budget-gated JSON LLM call routed through the verified orchestrator."""
+             operation: str = "agent", max_tokens: Optional[int] = None,
+             timeout: Optional[int] = None) -> dict:
+    """Budget-gated JSON LLM call routed through the verified orchestrator. max_tokens lets a caller
+    whose JSON object is larger than orchestrator_json's 2000-token default raise the cap so the
+    output isn't truncated mid-JSON -> unparseable -> {} (e.g. a multi-item production-brief object
+    ran ~3.7k tokens and silently returned nothing at the default); timeout accommodates the longer
+    generation."""
     if _cost.over_budget(business_id):
         raise BudgetExceededError(f"business {business_id} is over its monthly budget")
-    out = _audit.orchestrator_json(system, user, tier=tier)
+    kw: dict = {}
+    if max_tokens is not None:
+        kw["max_tokens"] = max_tokens
+    if timeout is not None:
+        kw["timeout"] = timeout
+    out = _audit.orchestrator_json(system, user, tier=tier, **kw)
     if out:  # only bill a call that actually returned output -- no phantom cost on a failed call
         _record(business_id, tier, operation, system + user, json.dumps(out, default=str))
     return out
