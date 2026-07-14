@@ -211,7 +211,10 @@ def _node_synthesize(state: RCState) -> dict:
                         # pages -- fence it as untrusted so an instruction the analyst
                         # quoted from a hostile page can't steer the synthesis.
                         "analyzed_sources": tools.fence(json.dumps(analyzed, default=str))}),
-            business_id=state["business_id"], tier="full", operation="rootcause_synth")
+            business_id=state["business_id"], tier="full", operation="rootcause_synth",
+            # summary + primary_sources/missing/counters arrays: usually <2000 but grows with the
+            # analyzed-source count -- a modest headroom bump avoids a truncated-JSON -> {} synthesis.
+            max_tokens=4000)
     except tools.BudgetExceededError:
         rc = {"summary": "Synthesis skipped: over monthly budget.", "primary_sources": [],
               "why_it_ranks": "", "missing_owned_assets": [], "recommended_counters": []}
