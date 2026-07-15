@@ -250,11 +250,24 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
 # Compliance gate (reuses Module 6 pattern)
 # ---------------------------------------------------------------------------
 
+_NEGATION_RE = re.compile(r"\b(no|not|never|without|none|don'?t|do not|cannot|can'?t|n'?t|makes? no|"
+                          r"make no|zero)\b", re.I)
+
+
 def _compliance_check(text: str) -> tuple[Optional[bool], list[str]]:
-    """Deterministic compliance screen. Returns (pass, flags)."""
+    """Deterministic compliance screen. Returns (pass, flags). A match immediately preceded by a
+    NEGATION ('no guaranteed returns', 'there are no guarantees of income') is a compliant DISCLAIMER,
+    not a violation -- skip it (this was falsely failing scripts that CONTAIN the required disclosure)."""
     if not text:
         return None, ["no content to screen"]
-    flags = [msg for pat, msg in _COMPLIANCE_PATTERNS if pat.search(text)]
+    flags: list[str] = []
+    for pat, msg in _COMPLIANCE_PATTERNS:
+        for m in pat.finditer(text):
+            if _NEGATION_RE.search(text[max(0, m.start() - 28):m.start()]):
+                continue
+            flags.append(msg)
+            break
+    flags = list(dict.fromkeys(flags))
     return (False if flags else True), flags
 
 

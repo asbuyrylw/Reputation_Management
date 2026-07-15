@@ -47,6 +47,23 @@ def _terms(q: str) -> list[str]:
     return [t for t in re.findall(r"[a-z0-9]+", (q or "").lower()) if len(t) > 2]
 
 
+def _first_answer_para(body: str) -> str:
+    """The first PROSE paragraph -- what 'answer-first' actually measures. Skips a leading H1/heading,
+    a 'Last updated' freshness line, a hero image, and a short emphasis/quote meta line, so the check
+    reads the real opening ANSWER (which conventionally sits right after the H1), not the title."""
+    for b in re.split(r"\n\s*\n", (body or "").strip()):
+        s = b.strip()
+        if not s or s.startswith("#") or s.startswith("!["):
+            continue
+        if re.match(r"^[*_\s]*last\s+(updated|reviewed)\b", s, re.I):
+            continue
+        if s[0] in "*_>" and len(_words(s)) < 12:      # short emphasis/quote meta line
+            continue
+        return s
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", (body or "").strip()) if b.strip()]
+    return blocks[0] if blocks else ""
+
+
 def _avg_sentence_len(body: str) -> float:
     text = re.sub(r"[#*_>`\-]", " ", body or "")
     sents = [s for s in _SENT.split(text) if s.strip()]
@@ -108,7 +125,7 @@ def on_page_score(body: str, target_query: str = "", keywords: Optional[list[str
 def citation_ready(body: str, target_query: str = "") -> dict:
     body = body or ""
     headings = [h for h in _HEADING.findall(body)]
-    first_para = (re.split(r"\n\s*\n", body.strip(), 1)[0] if body.strip() else "")
+    first_para = _first_answer_para(body)
     qterms = _terms(target_query)
     crisp_answer = bool(qterms) and sum(t in first_para.lower() for t in qterms) >= max(1, len(qterms) // 2) \
         and len(_words(first_para)) >= 15
@@ -278,7 +295,7 @@ def term_coverage(body: str, terms: Optional[list[str]] = None) -> dict:
 def aeo_score(body: str, target_query: str = "", business_name: str = "", geo: str = "") -> dict:
     body = body or ""
     headings = _HEADING.findall(body)
-    first_para = (re.split(r"\n\s*\n", body.strip(), 1)[0] if body.strip() else "")
+    first_para = _first_answer_para(body)
     qterms = _terms(target_query)
     crisp = bool(qterms) and sum(t in first_para.lower() for t in qterms) >= max(1, len(qterms) // 2) \
         and 15 <= len(_words(first_para)) <= 90
@@ -350,7 +367,7 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     words = _words(body)
     wc = max(1, len(words))
     headings = _HEADING.findall(body)
-    first_para = (re.split(r"\n\s*\n", body.strip(), 1)[0] if body.strip() else "")
+    first_para = _first_answer_para(body)
     qterms = _terms(target_query)
     low = body.lower()
     # answer-first: crisp, query-relevant opener of the right length

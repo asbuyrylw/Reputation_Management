@@ -212,18 +212,27 @@ GEN_SYSTEM = (
     "'before publication...', 'in this draft', 'verify before publishing', 'do not publish this "
     "section', 'add verified URLs here', 'set a calendar reminder to re-verify'). Any required "
     "legal/compliance disclaimer goes in ONE short block at the very END of the page, NEVER at the top. "
-    "STRUCTURE FOR AI CITATION (this is what gets the content quoted by answer engines): "
+    "YOUR PRIMARY GOAL is to make this content maximally CITABLE by AI answer engines (ChatGPT, "
+    "Perplexity, Gemini, Google AI Overviews) -- getting the AI to surface accurate facts about this "
+    "business is what this content is FOR; SEO/keyword ranking is only a secondary benefit. STRUCTURE "
+    "EVERY PIECE FOR AI CITATION: "
     "(1) The page MUST OPEN, immediately after the H1, with a crisp 40-60 word DIRECT ANSWER to the "
-    "core question (front-load the key fact -- most AI citations come from the top of the page). Do NOT "
-    "put any disclaimer, disclosure, or caveat before that answer; (2) use clear H2/H3 headings phrased as the "
-    "questions a reader would ask; (3) include a short FAQ / Q&A section near the end; (4) give one "
-    "quotable, attributable statistic or definitive sentence per section; (5) name the business + "
-    "city + service explicitly and consistently (entity clarity); (6) where an image strengthens the "
-    "page, insert a markdown image with DESCRIPTIVE alt text as ![alt describing the image](IMAGE: "
-    "short generation prompt) so a hero/explainer image + alt text can be produced; (7) add a visible "
-    "'Last updated: <MONTH YEAR>' line for freshness, using the CURRENT month and year given in the "
-    "context below (a real date, never a placeholder). "
-    "Naturally weave in the target search keywords where they fit (never keyword-stuff). Only cover "
+    "core question (front-load the key fact -- most AI citations come from the top of the page), and "
+    "OPEN EACH H2 SECTION the same way -- a self-contained 1-2 sentence answer an AI can lift out of "
+    "context. Do NOT put any disclaimer, disclosure, or caveat before that answer; (2) phrase H2/H3 "
+    "headings AS the real questions a reader would ask (they map to AI prompts); (3) include a short "
+    "FAQ / Q&A section near the end; (4) give a concrete, ATTRIBUTABLE statistic roughly every 150-200 "
+    "words -- use ONLY real numbers you can source (industry data, official/regulatory figures, the "
+    "parent company's public data) and NEVER invent one; (5) CITE authoritative primary sources INLINE "
+    "as markdown links (.gov/.edu/official -- e.g. the state regulator, SEC/EDGAR, the parent company's "
+    "investor page): inline citations to authoritative sources are the single biggest AI-citation "
+    "lever; (6) name the business + city + service explicitly and consistently (entity clarity); "
+    "(7) keep sections ~200-400 words with bullets/tables so a passage lifts cleanly; (8) where an "
+    "image strengthens the page, insert a markdown image with DESCRIPTIVE alt text as ![alt describing "
+    "the image](IMAGE: short generation prompt); (9) add a visible 'Last updated: <MONTH YEAR>' line "
+    "using the CURRENT month and year given in the context below (a real date, never a placeholder). "
+    "Weave in the target search keywords ONLY where they fit naturally (secondary to the above; never "
+    "keyword-stuff). Only cover "
     "topics and FAQ questions that are SPECIFIC to this business and directly serve THIS page's "
     "stated purpose and the business's actual services -- do NOT pad the page with generic industry "
     "questions that don't fit it (e.g. broad medical-underwriting eligibility questions, or unrelated "
@@ -659,11 +668,25 @@ _COMPLIANCE_RULES: list[tuple[str, str]] = [
 _COMPLIANCE_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _COMPLIANCE_RULES]
 
 
+_NEGATION_RE = re.compile(r"\b(no|not|never|without|none|don'?t|do not|cannot|can'?t|are ?n'?t|is ?n'?t|"
+                          r"n'?t|makes? no|make no|zero)\b", re.I)
+
+
 def _deterministic_compliance(body: str) -> list[str]:
     """Non-LLM, non-prompt-injectable screen for hard financial-marketing rules.
-    Returns the list of triggered-rule descriptions (empty == nothing tripped)."""
+    Returns the list of triggered-rule descriptions (empty == nothing tripped). A match immediately
+    preceded by a NEGATION ('no guarantees of income', 'we do not guarantee returns', 'no guaranteed
+    returns') is a compliant DISCLAIMER, not a violation -- skip it (this was falsely failing the exact
+    disclosure language compliance requires)."""
     text = body or ""
-    return [msg for pat, msg in _COMPLIANCE_PATTERNS if pat.search(text)]
+    flags: list[str] = []
+    for pat, msg in _COMPLIANCE_PATTERNS:
+        for m in pat.finditer(text):
+            if _NEGATION_RE.search(text[max(0, m.start() - 28):m.start()]):
+                continue   # negated -> disclaimer, not a violation
+            flags.append(msg)
+            break
+    return list(dict.fromkeys(flags))
 
 
 def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = False) -> dict:
@@ -835,6 +858,73 @@ def _ensure_freshness(body: str, when: str) -> str:
             lines[i : i + 1] = [ln, "", line]
             return "\n".join(lines)
     return line + "\n\n" + body
+
+
+def _scoring_query(wo: dict, business_name: str = "", geo: str = "") -> str:
+    """A REAL user query for AEO/GEO scoring + optimization. The gap model's topic is an internal LABEL
+    ('Entity Disambiguation Asset: ...', 'Legitimacy & Transparency Hub page') whose scaffolding words
+    ('asset', 'page', 'hub') never appear in natural copy -- so scoring answer-first against it
+    auto-fails. Strip the label wrapper and anchor with the business name + city, which the content
+    always contains, so the citability checks map to what a reader/AI actually asks."""
+    tq = (wo.get("target_query") or (wo.get("gap_specifics") or {}).get("source_query")
+          or wo.get("title") or "").strip()
+    q = re.sub(r"\([^)]*\)", " ", tq)                                          # drop parentheticals (URLs)
+    q = re.sub(r"^.*?\b(?:asset|page|section|hub|brief|doc(?:ument)?)\b\s*[:\-–—]\s*", "", q, flags=re.I)
+    q = re.sub(r"\b(?:asset|section|hub|brief|landing\s+page|document|page)\b", " ", q, flags=re.I)  # stray label words
+    q = re.sub(r"[\"'“”:]+", " ", q)
+    q = re.sub(r"\s+", " ", q).strip(" -–—&")
+    if business_name and business_name.lower() not in q.lower():
+        q = f"{business_name} {q}".strip()
+    city = (geo or "").split(",")[0].strip()
+    if city and city.lower() not in q.lower():
+        q = f"{q} {city}".strip()
+    return q or (f"{business_name} {city}".strip() or tq)
+
+
+def _maximize_geo(body: str, sq: str, content_type: str, asset_type: str,
+                  business_name: str, geo: str, *, target: int = 75, rounds: int = 2) -> str:
+    """AI-FIRST optimization: iteratively revise the draft to MAXIMIZE its GEO (AI-citability) grade --
+    the whole point of this content is to be surfaced + CITED by AI answer engines, so we optimize
+    directly against the GEO scorer. Each round revises the currently-weak signals (answer-first
+    openers, question headings, attributable stats, inline authoritative citations, FAQ, chunking) and
+    keeps the higher-scoring version; stops at `target` or when a round doesn't improve. Best-effort:
+    returns the input unchanged on any failure or non-improvement."""
+    try:
+        from . import content_quality as _cq
+    except Exception:  # noqa: BLE001
+        return body
+    best = body or ""
+    try:
+        best_g = _cq.geo_score(best, target_query=sq, content_type=content_type, asset_type=asset_type,
+                               business_name=business_name, geo=geo)
+    except Exception:  # noqa: BLE001
+        return body
+    for _ in range(max(1, rounds)):
+        if (best_g.get("score") or 0) >= target:
+            break
+        weak = [c for c in best_g.get("checks", []) if not c.get("ok") and c.get("fix")]
+        if not weak:
+            break
+        rev = _revise(best, [
+            "PRIMARY GOAL: make this content maximally CITABLE by AI answer engines (ChatGPT, "
+            "Perplexity, Gemini, Google AI Overviews). Apply each fix below WITHOUT fabricating facts "
+            "or statistics, changing the meaning, adding [INSERT] placeholders, or keyword-stuffing. "
+            "Use only real, attributable numbers (industry/official sources you can name) and inline "
+            "links to authoritative primary sources (.gov/.edu/official). Keep the answer-first opener:"
+        ] + [f"{c.get('label')}: {c.get('fix')}" for c in weak])
+        if not rev:
+            break
+        rev = _strip_placeholders(rev)   # the revision must not (re)introduce placeholders
+        try:
+            g = _cq.geo_score(rev, target_query=sq, content_type=content_type, asset_type=asset_type,
+                              business_name=business_name, geo=geo)
+        except Exception:  # noqa: BLE001
+            break
+        if (g.get("score") or 0) > (best_g.get("score") or 0):
+            best, best_g = rev, g
+        else:
+            break   # no improvement -> stop iterating
+    return best
 
 
 COMPLIANCE_FIX_SYSTEM = (
@@ -1040,6 +1130,25 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 body, coverage = fixed, recov
                 revisions += 1
 
+    # Pass 4: AI-FIRST optimization -- the PRIMARY objective of this content is to be surfaced + CITED
+    # by AI answer engines, so MAXIMIZE the GEO (AI-citability) grade directly against the scorer, using
+    # a REAL query (not the internal asset label). SEO/keyword coverage above is the secondary benefit.
+    _score_q = _scoring_query(wo, (biz.get("name") if isinstance(biz, dict) else "") or "",
+                              (biz.get("geo") if isinstance(biz, dict) else "") or "")
+    if asset_type not in ("schema", "social_post", "gbp_post", "x_post", "facebook_post",
+                          "instagram_post", "linkedin_post", "pinterest_post"):
+        _geo_before = None
+        try:
+            from . import content_quality as _cqg
+            _geo_before = (_cqg.geo_score(body, target_query=_score_q, content_type=content_type,
+                           asset_type=asset_type, business_name=(biz.get("name") or ""),
+                           geo=(biz.get("geo") or "")) or {}).get("score")
+        except Exception:  # noqa: BLE001
+            pass
+        body = _maximize_geo(body, _score_q, content_type, asset_type,
+                             (biz.get("name") if isinstance(biz, dict) else "") or "",
+                             (biz.get("geo") if isinstance(biz, dict) else "") or "")
+
     # compliance gate (firm-type-adapted)
     comp = _compliance(body, system=comp_system)
     comp_pass = comp.get("pass")
@@ -1108,7 +1217,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                     _nterms += [t.strip() for t in _v.replace("\n", ",").split(",") if len(t.strip()) > 2]
         _nterms = list(dict.fromkeys(_nterms))[:40]
         quality_notes.update(_cq.analyze_draft(
-            body, target_query=wo.get("target_query") or "", keywords=_kw,
+            body, target_query=_score_q or wo.get("target_query") or "", keywords=_kw,
             site_summary=_site, with_fact_check=True, neuron_terms=_nterms or None,
             business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
             geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
