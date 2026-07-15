@@ -153,9 +153,13 @@ LICENSE_CONTENT_POLICY = (
     "professionals'). You must NEVER include, request, recommend, or leave an [INSERT] placeholder for "
     "any SPECIFIC license identifier — no individual/agent state insurance license numbers, no FINRA "
     "CRD numbers, no NPN numbers — and NEVER create or recommend any content, page, section, FAQ, or "
-    "corroboration/proof item that depends on listing specific license numbers. Establish legitimacy "
-    "through OTHER means (a general licensing statement, regulated-affiliate disclosure, third-party "
-    "reviews/ratings, awards, transparent compensation) — never through specific license numbers."
+    "corroboration/proof item that depends on listing specific license numbers. Do NOT reference "
+    "'license number(s)' in the content AT ALL — not as a value, not as a search field, and not as a "
+    "verification step (e.g. never write 'search by license number'). A general statement that the "
+    "agents are licensed is sufficient; if you mention verification, phrase it generally (e.g. 'you "
+    "can confirm our agents are licensed through the Ohio Department of Insurance'). Establish "
+    "legitimacy through OTHER means (a general licensing statement, regulated-affiliate disclosure, "
+    "third-party reviews/ratings, awards, transparent compensation) — never through license numbers."
 )
 
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
