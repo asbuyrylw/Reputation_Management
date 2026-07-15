@@ -481,6 +481,15 @@ def _persist(
     generator: str = "llm",
     notebook_url: Optional[str] = None,
 ) -> int:
+    # Publish-ready: rich-media scripts/briefs go through the SAME placeholder strip + license-number
+    # scrub as text drafts, so a video/slide/infographic never ships with an [INSERT: ...] or a
+    # specific license number. Best-effort (lazy import avoids a load-time cycle).
+    if body:
+        try:
+            from . import content_generator as _cg
+            body = _cg._scrub_license_phrasing(_cg._strip_placeholders(body))
+        except Exception as e:  # noqa: BLE001 -- cleanup must never block persistence
+            log.debug("rich_media: body cleanup skipped: %s", e)
     with db() as conn:
         row = conn.execute(
             """INSERT INTO rich_media_drafts

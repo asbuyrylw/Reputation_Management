@@ -206,9 +206,16 @@ GEN_SYSTEM = (
     "count -- instead point readers to 'our reviews on Google' and never guess a number; reference any "
     "income-disclosure statement only in general terms. If completing a sentence would require a "
     "specific you don't have, state it generally or LEAVE THE SENTENCE OUT entirely. "
+    "WRITE AS A FINISHED, PUBLISHED PAGE in a confident voice -- state the business's facts plainly as "
+    "fact. Do NOT hedge every fact with 'at time of drafting', 'may change', 'should be independently "
+    "verified', or similar. Do NOT write any editor- or reviewer-facing notes in the body (NEVER "
+    "'before publication...', 'in this draft', 'verify before publishing', 'do not publish this "
+    "section', 'add verified URLs here', 'set a calendar reminder to re-verify'). Any required "
+    "legal/compliance disclaimer goes in ONE short block at the very END of the page, NEVER at the top. "
     "STRUCTURE FOR AI CITATION (this is what gets the content quoted by answer engines): "
-    "(1) open with a crisp 40-60 word DIRECT ANSWER to the core question (front-load the key fact -- "
-    "most AI citations come from the top of the page); (2) use clear H2/H3 headings phrased as the "
+    "(1) The page MUST OPEN, immediately after the H1, with a crisp 40-60 word DIRECT ANSWER to the "
+    "core question (front-load the key fact -- most AI citations come from the top of the page). Do NOT "
+    "put any disclaimer, disclosure, or caveat before that answer; (2) use clear H2/H3 headings phrased as the "
     "questions a reader would ask; (3) include a short FAQ / Q&A section near the end; (4) give one "
     "quotable, attributable statistic or definitive sentence per section; (5) name the business + "
     "city + service explicitly and consistently (entity clarity); (6) where an image strengthens the "
@@ -415,7 +422,10 @@ def _keyword_coverage(body: str, grounding: dict) -> dict:
             covered.append(kw)
         else:
             missing.append(kw)
-            if k.get("kind") in ("primary", "local"):
+            # reputation_defense terms (is-it-a-scam / legitimate / complaints / reviews) are the
+            # highest-leverage phrases on a defense/disambiguation page -- force them in too, not just
+            # primary/local SEO terms.
+            if k.get("kind") in ("primary", "local", "reputation_defense"):
                 important_missing.append(kw)
     total = len(covered) + len(missing)
     return {"covered": covered, "missing": missing, "important_missing": important_missing,
@@ -730,37 +740,55 @@ def _extract_placeholders(body: str) -> list[str]:
     return out
 
 
-_INSERT_TOKEN_RE = re.compile(r"\[INSERT[:\s][^\]]*\]", re.I)
+# A COMPLETE [INSERT ...] token, which may span multiple lines (a common Opus habit -- the opener and
+# the closing ']' land on different lines). DOTALL so `.`/[^]] cross newlines up to the first ']'.
+_INSERT_TOKEN_RE = re.compile(r"\[INSERT\b[^\]]*\]", re.I | re.S)
+_INSERT_OPEN_RE = re.compile(r"\[INSERT\b", re.I)
 
 
 def _strip_placeholders(body: str) -> str:
     """Publish-ready GUARANTEE: remove any [INSERT: ...] marker the writer still left despite the
-    prompt (the full/Opus tier is over-cautious about regulated specifics and occasionally placeholders
-    a broker-dealer name / review count / income-disclosure link). Drop the SMALLEST clean unit: a
-    bullet/label/table line that was essentially just the placeholder is dropped whole; otherwise only
-    the SENTENCE containing the marker is dropped, keeping the rest of the line. Nothing unfillable
-    reaches a published draft. Idempotent + safe on content with no markers."""
+    prompt. Remove COMPLETE tokens first (incl. multi-line ones, so no tail line survives), then per
+    line: drop a bullet/label line that existed only to carry the placeholder, drop just the SENTENCE
+    for an inline leftover, and clean an orphan closing bracket left by a removed multi-line token.
+    Idempotent + safe on content with no markers."""
     if not body or "[INSERT" not in body.upper():
         return body
+    body = _INSERT_TOKEN_RE.sub("", body)   # complete tokens, even across newlines
     out_lines: list[str] = []
     for line in body.split("\n"):
-        if "[INSERT" not in line.upper():
-            out_lines.append(line)
+        if _INSERT_OPEN_RE.search(line):    # a leftover UNCLOSED opener on this line
+            without = _INSERT_OPEN_RE.sub("", line)
+            core = re.sub(r"^[\s>#|*\-]+", "", without)
+            core = re.sub(r"^\*\*[^*]*\*\*\s*[:：]?\s*", "", core).strip(" :|*-—–\t")
+            if len(core) < 25:
+                continue
+            line = " ".join(s for s in re.split(r"(?<=[.!?])\s+", line)
+                            if not _INSERT_OPEN_RE.search(s)).strip()
+            if not line:
+                continue
+        if line.count("]") > line.count("["):   # orphan ']' / ']*' from a removed multi-line token
+            line = re.sub(r"\s*\][*_]*\s*$", "", line)
+        if _dangling_after_strip(line):         # empty list-item value / lone emphasis marker left over
             continue
-        # What remains of the line once the placeholder(s) are removed, minus markdown scaffolding
-        # (bullet/heading/quote/table markers + a leading **bold label:**). If little is left, the
-        # line existed only to carry the placeholder -> drop it.
-        without = _INSERT_TOKEN_RE.sub("", line)
-        core = re.sub(r"^[\s>#|*\-]+", "", without)
-        core = re.sub(r"^\*\*[^*]*\*\*\s*[:：]?\s*", "", core).strip(" :|*-—–\t")
-        if len(core) < 25:
-            continue
-        # Otherwise keep only the sentences that have no marker.
-        kept = [s for s in re.split(r"(?<=[.!?])\s+", line) if "[INSERT" not in s.upper()]
-        rebuilt = " ".join(kept).strip()
-        if rebuilt:
-            out_lines.append(rebuilt)
+        out_lines.append(line)
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out_lines)).strip()
+
+
+def _dangling_after_strip(line: str) -> bool:
+    """True for a line left DANGLING once a placeholder was removed -- a list item whose value is now
+    empty ('- **Broker-dealer:** ') or a lone emphasis marker ('**'). Deliberately narrow (list items
+    + stray markers only) so it NEVER drops a legit section-intro label like '**What the team does:**'."""
+    s = line.strip()
+    if not s:
+        return False
+    if re.fullmatch(r"[*_]{1,3}", s):           # lone '**' / '*' / '__'
+        return True
+    m = re.match(r"^[-*+]\s+(.*)$", s)          # must be a list item
+    if not m:
+        return False
+    rest = re.sub(r"^\*{1,2}[^*]+\*{1,2}\s*[:：]?\s*", "", m.group(1))   # strip a leading bold label:
+    return len(rest.strip(" *_:|—–-\t")) == 0
 
 
 # Owner policy: 'license number' must not appear in content at all. The writer keeps slipping it in as
@@ -782,15 +810,38 @@ def _scrub_license_phrasing(body: str) -> str:
     return _LICNUM_RE.sub("license status", body)
 
 
+_FRESH_RE = re.compile(r"last\s+(updated|reviewed)\b", re.I)
+
+
+def _ensure_freshness(body: str, when: str) -> str:
+    """Guarantee a visible 'Last updated: <Month Year>' line -- a real AEO freshness signal (citations
+    ~2x more likely when content looks current). The prompt asks for it, but the full tier often omits
+    it, so inject it under the first H1 (or prepend) when missing. `when` = current 'Month YYYY'."""
+    if not body or _FRESH_RE.search(body):
+        return body
+    line = f"*Last updated: {when}*"
+    lines = body.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("# "):
+            lines[i : i + 1] = [ln, "", line]
+            return "\n".join(lines)
+    return line + "\n\n" + body
+
+
 COMPLIANCE_FIX_SYSTEM = (
     "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
     "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
     "(guaranteed/implied returns, performance promises, 'risk-free', unverifiable superlatives "
     "like 'best'/'#1' stated as fact). ADD any missing required disclosures -- e.g. the "
     "broker-dealer / representative relationship where financial products are marketed, and that "
-    "any testimonials are individual experiences and not typical results. Do NOT fabricate facts: "
-    "use a [INSERT: ...] placeholder for any specific detail you don't have (a license number, an "
-    "affiliated firm name). Output ONLY the revised content, no preamble."
+    "any testimonials are individual experiences and not typical results. Do NOT fabricate facts, "
+    "and do NOT use [INSERT: ...] placeholders or add specific license numbers -- write around "
+    "anything you don't have with accurate general wording (e.g. 'the affiliated broker-dealer'). "
+    "Put ALL added disclosures/disclaimers in ONE short block at the very END of the content -- NEVER "
+    "before the page's opening answer, and keep that answer-first opening intact. Do NOT hedge every "
+    "fact or add editor-facing notes ('before publication...', 'verify before publishing'). Output "
+    "ONLY the revised content, no preamble."
+    + llm.LICENSE_CONTENT_POLICY
 )
 
 
@@ -1006,6 +1057,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # placeholder a disclosure auto-fix introduced.
     body = _strip_placeholders(body)
     body = _scrub_license_phrasing(body)
+    # Guarantee the freshness line the AEO scorer looks for (full tier often omits it despite the prompt).
+    if asset_type not in ("schema", "social_post", "gbp_post", "x_post", "facebook_post", "instagram_post"):
+        body = _ensure_freshness(body, f"{datetime.now(timezone.utc):%B %Y}")
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
