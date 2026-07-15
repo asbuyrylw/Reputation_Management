@@ -810,15 +810,24 @@ def _scrub_license_phrasing(body: str) -> str:
     return _LICNUM_RE.sub("license status", body)
 
 
-_FRESH_RE = re.compile(r"last\s+(updated|reviewed)\b", re.I)
+# 'Last updated'/'Last reviewed' label + an OPTIONAL real 'Month YYYY' after it. Group 2 present ==
+# already dated; absent == the writer left the date blank (e.g. '*Last updated: *') and we must fill it.
+_FRESH_RE = re.compile(r"last[ \t]+(?:updated|reviewed)[ \t]*[:\-]?[ \t]*(\*{0,2})([A-Za-z]+[ \t]+\d{4})?", re.I)
 
 
 def _ensure_freshness(body: str, when: str) -> str:
-    """Guarantee a visible 'Last updated: <Month Year>' line -- a real AEO freshness signal (citations
-    ~2x more likely when content looks current). The prompt asks for it, but the full tier often omits
-    it, so inject it under the first H1 (or prepend) when missing. `when` = current 'Month YYYY'."""
-    if not body or _FRESH_RE.search(body):
+    """Guarantee a visible 'Last updated: <Month Year>' line WITH a real date -- an AEO freshness
+    signal (citations ~2x more likely when content looks current). The full tier often omits it or
+    leaves the date blank, so: fill a dateless 'Last updated:' line, else inject one under the first
+    H1 (or prepend). `when` = current 'Month YYYY'."""
+    if not body:
         return body
+    m = _FRESH_RE.search(body)
+    if m:
+        if m.group(2):                 # already has a real 'Month YYYY'
+            return body
+        # dateless label ('Last updated: ') -> fill the date in place, preserving any '*' emphasis
+        return body[:m.start()] + f"Last updated: {when}{m.group(1)}" + body[m.end():]
     line = f"*Last updated: {when}*"
     lines = body.split("\n")
     for i, ln in enumerate(lines):
