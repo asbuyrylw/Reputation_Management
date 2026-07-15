@@ -763,6 +763,25 @@ def _strip_placeholders(body: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out_lines)).strip()
 
 
+# Owner policy: 'license number' must not appear in content at all. The writer keeps slipping it in as
+# a verification search-field ("search by name or license number") despite the prompt, so enforce it
+# deterministically: drop it as an "... or license number" alternative, then generalize any standalone
+# remainder to "license status".
+_LICNUM_ALT_RE = re.compile(
+    r"\s*,?\s+(?:and\s*/\s*or|and|or)\s+(?:the\s+|an?\s+)?(?:agent'?s?\s+|individual\s+|their\s+)?"
+    r"licen[sc]e\s+numbers?", re.I)
+_LICNUM_RE = re.compile(r"\blicen[sc]e\s+numbers?\b", re.I)
+
+
+def _scrub_license_phrasing(body: str) -> str:
+    """Remove any 'license number' reference from content (owner policy). Idempotent; safe on content
+    that has none."""
+    if not body or "licen" not in body.lower():
+        return body
+    body = _LICNUM_ALT_RE.sub("", body)
+    return _LICNUM_RE.sub("license status", body)
+
+
 COMPLIANCE_FIX_SYSTEM = (
     "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
     "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
@@ -986,6 +1005,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # placeholders a regulated specific anyway). Runs AFTER the compliance gate so it also cleans any
     # placeholder a disclosure auto-fix introduced.
     body = _strip_placeholders(body)
+    body = _scrub_license_phrasing(body)
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
