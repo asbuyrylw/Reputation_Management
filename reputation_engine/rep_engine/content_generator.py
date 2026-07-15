@@ -199,7 +199,13 @@ GEN_SYSTEM = (
     "PUBLISH-READY AS-IS: do NOT leave [INSERT: ...] placeholders, 'coming soon', or 'to be confirmed' "
     "stubs in the body. If a specific detail is NOT available from the website/profile, WRITE AROUND "
     "it -- omit it gracefully, use accurate general wording, or point the reader to the website / "
-    "contact form -- rather than inserting a placeholder or inventing the detail. "
+    "contact form -- rather than inserting a placeholder or inventing the detail. NEVER output the "
+    "literal characters '[INSERT'. Handle the common cases WITHOUT a placeholder: for a "
+    "securities/broker-dealer disclosure, name the affiliate by its known public name from the context "
+    "or say 'the affiliated broker-dealer' generally; do NOT state a specific star rating or review "
+    "count -- instead point readers to 'our reviews on Google' and never guess a number; reference any "
+    "income-disclosure statement only in general terms. If completing a sentence would require a "
+    "specific you don't have, state it generally or LEAVE THE SENTENCE OUT entirely. "
     "STRUCTURE FOR AI CITATION (this is what gets the content quoted by answer engines): "
     "(1) open with a crisp 40-60 word DIRECT ANSWER to the core question (front-load the key fact -- "
     "most AI citations come from the top of the page); (2) use clear H2/H3 headings phrased as the "
@@ -724,6 +730,39 @@ def _extract_placeholders(body: str) -> list[str]:
     return out
 
 
+_INSERT_TOKEN_RE = re.compile(r"\[INSERT[:\s][^\]]*\]", re.I)
+
+
+def _strip_placeholders(body: str) -> str:
+    """Publish-ready GUARANTEE: remove any [INSERT: ...] marker the writer still left despite the
+    prompt (the full/Opus tier is over-cautious about regulated specifics and occasionally placeholders
+    a broker-dealer name / review count / income-disclosure link). Drop the SMALLEST clean unit: a
+    bullet/label/table line that was essentially just the placeholder is dropped whole; otherwise only
+    the SENTENCE containing the marker is dropped, keeping the rest of the line. Nothing unfillable
+    reaches a published draft. Idempotent + safe on content with no markers."""
+    if not body or "[INSERT" not in body.upper():
+        return body
+    out_lines: list[str] = []
+    for line in body.split("\n"):
+        if "[INSERT" not in line.upper():
+            out_lines.append(line)
+            continue
+        # What remains of the line once the placeholder(s) are removed, minus markdown scaffolding
+        # (bullet/heading/quote/table markers + a leading **bold label:**). If little is left, the
+        # line existed only to carry the placeholder -> drop it.
+        without = _INSERT_TOKEN_RE.sub("", line)
+        core = re.sub(r"^[\s>#|*\-]+", "", without)
+        core = re.sub(r"^\*\*[^*]*\*\*\s*[:：]?\s*", "", core).strip(" :|*-—–\t")
+        if len(core) < 25:
+            continue
+        # Otherwise keep only the sentences that have no marker.
+        kept = [s for s in re.split(r"(?<=[.!?])\s+", line) if "[INSERT" not in s.upper()]
+        rebuilt = " ".join(kept).strip()
+        if rebuilt:
+            out_lines.append(rebuilt)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out_lines)).strip()
+
+
 COMPLIANCE_FIX_SYSTEM = (
     "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
     "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
@@ -942,6 +981,11 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 comp_pass = recheck.get("pass")
                 comp_flags = list(recheck.get("flags", []))
 
+    # Publish-ready guarantee: strip any residual [INSERT] the writer/compliance-fix still left, so the
+    # stored draft is publishable as-is (the prompt asks for this, but the full tier occasionally
+    # placeholders a regulated specific anyway). Runs AFTER the compliance gate so it also cleans any
+    # placeholder a disclosure auto-fix introduced.
+    body = _strip_placeholders(body)
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
