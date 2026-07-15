@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -192,8 +193,13 @@ GEN_SYSTEM = (
     "a reputation program that publishes ACCURATE, helpful, well-structured content so it becomes "
     "what AI assistants (ChatGPT, Perplexity, Gemini, Google AI Overview) and Google surface about a "
     "business. GROUND every claim in the REAL facts provided (the business's crawled website + "
-    "profile); prefer those facts over placeholders. Only use a clearly-labeled [INSERT: ...] "
-    "placeholder for a specific fact that is genuinely NOT provided. "
+    "profile) and use them CONFIDENTLY -- the business's OWN website is authoritative for its name, "
+    "address, phone, email, services, and hours, so state those plainly and NEVER add "
+    "'unverified'/'to be confirmed' caveats to the business's own facts. The output MUST be "
+    "PUBLISH-READY AS-IS: do NOT leave [INSERT: ...] placeholders, 'coming soon', or 'to be confirmed' "
+    "stubs in the body. If a specific detail is NOT available from the website/profile, WRITE AROUND "
+    "it -- omit it gracefully, use accurate general wording, or point the reader to the website / "
+    "contact form -- rather than inserting a placeholder or inventing the detail. "
     "STRUCTURE FOR AI CITATION (this is what gets the content quoted by answer engines): "
     "(1) open with a crisp 40-60 word DIRECT ANSWER to the core question (front-load the key fact -- "
     "most AI citations come from the top of the page); (2) use clear H2/H3 headings phrased as the "
@@ -202,7 +208,8 @@ GEN_SYSTEM = (
     "city + service explicitly and consistently (entity clarity); (6) where an image strengthens the "
     "page, insert a markdown image with DESCRIPTIVE alt text as ![alt describing the image](IMAGE: "
     "short generation prompt) so a hero/explainer image + alt text can be produced; (7) add a visible "
-    "'Last updated: [INSERT: month year]' line for freshness. "
+    "'Last updated: <MONTH YEAR>' line for freshness, using the CURRENT month and year given in the "
+    "context below (a real date, never a placeholder). "
     "Naturally weave in the target search keywords where they fit (never keyword-stuff). Only cover "
     "topics and FAQ questions that are SPECIFIC to this business and directly serve THIS page's "
     "stated purpose and the business's actual services -- do NOT pad the page with generic industry "
@@ -469,6 +476,9 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         kw_line = ("Target search keywords to weave in NATURALLY (do not keyword-stuff): "
                    + ", ".join(str(k.get("keyword")) for k in kw if k.get("keyword")) + "\n")
     parts = [
+        # Real current date so the writer can stamp a 'Last updated' freshness line with an actual
+        # month/year (a real freshness marker, ~2x more citable) instead of an [INSERT] placeholder.
+        f"Current date (use for any 'Last updated' line): {datetime.now(timezone.utc):%B %Y}",
         f"Business: {name}",
         f"Industry: {industry}" if industry else "",
         f"Location / areas served: {geo}" if geo else "",

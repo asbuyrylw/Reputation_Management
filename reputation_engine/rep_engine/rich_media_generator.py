@@ -421,7 +421,10 @@ def _fallback_llm(
     system = (
         "You are an expert reputation marketing strategist. Write structured, accurate "
         "content for reputation management. Never fabricate statistics, credentials, or "
-        "performance data — use [INSERT: ...] placeholders for unknown facts. Apply "
+        "performance data; the business's own website/profile (in the context) is authoritative "
+        "for its name, address, services, and website URL -- use those real facts and WRITE AROUND "
+        "anything unknown (omit it or use general wording / point to the website) instead of leaving "
+        "[INSERT] placeholders. Apply "
         "financial-marketing compliance: no guaranteed returns, no 'risk-free', no '#1' "
         "or 'best' as stated fact. Output ONLY the asset content in markdown."
         + _tools.LICENSE_CONTENT_POLICY

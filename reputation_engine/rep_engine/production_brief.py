@@ -70,7 +70,7 @@ SOCIAL_SYSTEM = (
     "would be ACCURATE owned content supporting the target queries. You are NOT writing the "
     "final copy -- you are writing a PRODUCTION BRIEF a social manager can create from. Never "
     "fabricate facts or make compliance-risky claims (guarantees, '#1'/'best', 'risk-free'); "
-    "use [INSERT: ...] placeholders for facts you lack. Respond with ONE minified JSON object "
+    "use the business's REAL details (name, website, services from the context) and WRITE AROUND anything unknown -- omit it or use general wording / point to the website -- rather than leaving [INSERT] placeholders. Respond with ONE minified JSON object"
     "and nothing else: "
     '{"briefs":[{"title":"..","platform":"x|linkedin|facebook|instagram|reddit|threads",'
     '"format":"single-image|carousel|short-video|text|thread","target_length":"e.g. 5-slide '
