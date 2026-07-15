@@ -341,7 +341,7 @@ def _narrative(business_id: int, goal: dict, overall: dict, gaps: list[dict],
     deterministic fallback sentence if the LLM path is unavailable or fails."""
     fallback = _fallback_narrative(goal, overall, recs)
     try:
-        from .ai_state_audit import orchestrator_json
+        from .ai_state_audit import LICENSE_CONTENT_POLICY, orchestrator_json
     except Exception:  # noqa: BLE001
         return fallback
     payload = json.dumps({"goal": goal, "overall": overall,
@@ -357,7 +357,8 @@ def _narrative(business_id: int, goal: dict, overall: dict, gaps: list[dict],
         "and recommended actions (all pre-computed from real data), write a concise, decisive briefing "
         "(120-180 words) for the business owner: are we winning, what's working, what's stalled, and "
         "the 2-3 highest-leverage moves next. Reference the ACTUAL numbers. No hype, no guarantees, no "
-        "invented facts. Return ONE JSON object: {\"briefing\": \"...\"}.")
+        "invented facts. Return ONE JSON object: {\"briefing\": \"...\"}."
+        + LICENSE_CONTENT_POLICY)
     try:
         out = orchestrator_json(system, payload, tier="cheap", max_tokens=700, timeout=90,
                                 bill={"business_id": business_id, "operation": "advisor"})

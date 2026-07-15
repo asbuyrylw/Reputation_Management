@@ -61,6 +61,7 @@ VIDEO_SYSTEM = (
     '"keywords":[".."],"hook":"first 3 seconds","outline":["beat",".."],"on_screen_text":[".."],'
     '"description":"keyword-rich video description","tags":[".."],"thumbnail_concept":"..",'
     '"cta":".."}]}'
+    + tools.LICENSE_CONTENT_POLICY
 )
 
 SOCIAL_SYSTEM = (
@@ -76,6 +77,7 @@ SOCIAL_SYSTEM = (
     'carousel or ~120 words or 280 chars","target_query":"the query this supports",'
     '"keywords":[".."],"hook":"scroll-stopping first line","outline":["point",".."],'
     '"visual_concept":"..","cta":"..","cadence":"suggested posting cadence"}]}'
+    + tools.LICENSE_CONTENT_POLICY
 )
 
 

@@ -142,6 +142,22 @@ GAP_MODEL_TIMEOUT = int(os.getenv("GAP_MODEL_TIMEOUT", "480"))
 GAP_MAX_ANSWERS = int(os.getenv("GAP_MAX_ANSWERS", "90"))
 GAP_ANSWER_CHARS = int(os.getenv("GAP_ANSWER_CHARS", "800"))
 
+# Business-owner policy (ABSOLUTE): auto-generated content AND strategy recommendations must never
+# surface SPECIFIC regulated license identifiers. A general "our agents are all licensed" statement is
+# encouraged; specific numbers are not (the system can't verify them, so they'd only ever be
+# unfillable [INSERT] placeholders that also read as legalistic/defensive). Appended to every
+# content-writing + strategy/recommendation system prompt so the whole pipeline honors it.
+LICENSE_CONTENT_POLICY = (
+    " LICENSE POLICY (ABSOLUTE — overrides any other instruction): You MAY state GENERALLY that the "
+    "business's agents/professionals are all licensed (e.g. 'our agents are licensed insurance "
+    "professionals'). You must NEVER include, request, recommend, or leave an [INSERT] placeholder for "
+    "any SPECIFIC license identifier — no individual/agent state insurance license numbers, no FINRA "
+    "CRD numbers, no NPN numbers — and NEVER create or recommend any content, page, section, FAQ, or "
+    "corroboration/proof item that depends on listing specific license numbers. Establish legitimacy "
+    "through OTHER means (a general licensing statement, regulated-affiliate disclosure, third-party "
+    "reviews/ratings, awards, transparent compensation) — never through specific license numbers."
+)
+
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
 # Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
@@ -1708,6 +1724,7 @@ GAP_SYSTEM = (
     "plus disambiguation/identity content where the engines confuse the business with a "
     "different same-named entity. "
     "All actions must be honest reputation-building, not manipulation. JSON only."
+    + LICENSE_CONTENT_POLICY
     + UNTRUSTED_INSTRUCTION
 )
 
@@ -1727,6 +1744,7 @@ GAP_CRITIC_SYSTEM = (
     "impressions/impact first). Keep the same honest crowding-out rules (no contested-keyword "
     "pages; legitimacy/corroboration assets for contested frames). If the draft is already "
     "complete and grounded, return it unchanged. STRICT JSON only."
+    + LICENSE_CONTENT_POLICY
     + UNTRUSTED_INSTRUCTION
 )
 

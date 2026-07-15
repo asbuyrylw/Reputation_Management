@@ -88,6 +88,7 @@ DRAFT_SYSTEM = (
     "and questions). For social_post: short and platform-appropriate. For landing_page: a headline plus a "
     "few sections. For video_script: a short spoken script. Never fabricate and never make compliance-risky "
     "claims (guarantees of results, '#1'/'best', 'risk-free'). Output ONLY the asset body as plain text."
+    + tools.LICENSE_CONTENT_POLICY
 )
 
 LINKS_SYSTEM = (

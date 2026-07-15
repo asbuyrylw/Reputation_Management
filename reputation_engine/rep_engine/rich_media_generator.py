@@ -424,6 +424,7 @@ def _fallback_llm(
         "performance data — use [INSERT: ...] placeholders for unknown facts. Apply "
         "financial-marketing compliance: no guaranteed returns, no 'risk-free', no '#1' "
         "or 'best' as stated fact. Output ONLY the asset content in markdown."
+        + _tools.LICENSE_CONTENT_POLICY
     )
     prompt_text = template.format(name=biz.get("name", "the business"))
     # Add source context. The client's own material (Business Profile, Requested Focus, BRAND RULES,

@@ -41,6 +41,9 @@ log = logging.getLogger("agent_tools")
 # Re-export so graph nodes fence with the exact same delimiter/instruction the
 # audit + content paths use.
 UNTRUSTED_INSTRUCTION = _audit.UNTRUSTED_INSTRUCTION
+# Re-export so content/brief generators (production_brief, rich_media, agent_content) can append the
+# owner's "no specific license numbers in content" policy to their prompts from one source of truth.
+LICENSE_CONTENT_POLICY = _audit.LICENSE_CONTENT_POLICY
 
 
 class BudgetExceededError(RuntimeError):

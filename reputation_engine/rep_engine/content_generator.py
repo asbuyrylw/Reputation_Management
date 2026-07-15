@@ -211,6 +211,7 @@ GEN_SYSTEM = (
     "Directly address the gap / narrative the content is meant to fix. Never fabricate facts, "
     "credentials, reviews, or statistics. Write in a warm, trustworthy, plain tone. Output ONLY the "
     "asset content -- no preamble."
+    + llm.LICENSE_CONTENT_POLICY
 )
 
 
