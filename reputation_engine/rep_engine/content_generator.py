@@ -824,9 +824,9 @@ def _ensure_freshness(body: str, when: str) -> str:
         return body
     m = _FRESH_RE.search(body)
     if m:
-        if m.group(2):                 # already has a real 'Month YYYY'
-            return body
-        # dateless label ('Last updated: ') -> fill the date in place, preserving any '*' emphasis
+        # Normalize the date to the REAL current month/year -- fills a blank one AND corrects a wrong/
+        # stale date the writer sometimes invents (e.g. 'January 2025'), since 'last updated' must equal
+        # when this content was actually produced. Preserves any '*' emphasis after the colon.
         return body[:m.start()] + f"Last updated: {when}{m.group(1)}" + body[m.end():]
     line = f"*Last updated: {when}*"
     lines = body.split("\n")
