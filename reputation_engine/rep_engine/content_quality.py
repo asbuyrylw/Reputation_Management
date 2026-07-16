@@ -420,12 +420,12 @@ _ATTRIB = re.compile(
 
 # Per-content-type weight profiles (each sums to 100). Keys must exist in _geo_signal_score() below.
 _GEO_PROFILES: dict[str, dict[str, int]] = {
-    "blog":        {"answer_first": 16, "quotation": 12, "question_headings": 12, "stat_density": 14, "citation_density": 16, "schema": 6, "entity": 10, "freshness": 6, "chunkability": 8},
-    "article":     {"answer_first": 16, "quotation": 12, "question_headings": 12, "stat_density": 14, "citation_density": 16, "schema": 6, "entity": 10, "freshness": 6, "chunkability": 8},
-    "faq":         {"answer_first": 20, "question_headings": 20, "quotation": 8, "stat_density": 10, "citation_density": 12, "schema": 10, "entity": 10, "freshness": 4, "chunkability": 6},
-    "white_paper": {"answer_first": 12, "quotation": 12, "stat_density": 18, "citation_density": 20, "entity": 10, "chunkability": 10, "schema": 6, "freshness": 6, "question_headings": 6},
-    "landing_page":{"answer_first": 20, "comparison": 14, "entity": 14, "quotation": 8, "schema": 8, "question_headings": 12, "citation_density": 10, "freshness": 6, "chunkability": 8},
-    "local_page":  {"nap": 20, "entity": 16, "answer_first": 16, "quotation": 6, "schema": 10, "reviews": 10, "freshness": 8, "question_headings": 8, "citation_density": 6},
+    "blog":        {"answer_first": 15, "quotation": 12, "question_headings": 10, "stat_density": 13, "citation_density": 15, "fluency": 8, "schema": 5, "entity": 9, "freshness": 5, "chunkability": 8},
+    "article":     {"answer_first": 15, "quotation": 12, "question_headings": 10, "stat_density": 13, "citation_density": 15, "fluency": 8, "schema": 5, "entity": 9, "freshness": 5, "chunkability": 8},
+    "faq":         {"answer_first": 20, "question_headings": 18, "quotation": 8, "stat_density": 10, "citation_density": 12, "fluency": 8, "schema": 8, "entity": 8, "freshness": 4, "chunkability": 4},
+    "white_paper": {"answer_first": 12, "quotation": 12, "stat_density": 16, "citation_density": 18, "fluency": 8, "entity": 8, "chunkability": 8, "schema": 6, "freshness": 6, "question_headings": 6},
+    "landing_page":{"answer_first": 18, "comparison": 12, "entity": 12, "quotation": 8, "fluency": 8, "schema": 8, "question_headings": 10, "citation_density": 10, "freshness": 6, "chunkability": 8},
+    "local_page":  {"nap": 18, "entity": 14, "answer_first": 16, "quotation": 6, "fluency": 6, "schema": 8, "reviews": 10, "freshness": 8, "question_headings": 8, "citation_density": 6},
 }
 # Social posts are a DISTRIBUTION/authority signal, not a citable document -- graded on their own
 # lightweight rubric (see _geo_social), never the citability rubric.
@@ -465,6 +465,18 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     # Count quoted passages AND source attributions; reward ~1 per 400 words (2+ on long-form).
     quotes = len(_QUOTE_STR.findall(body)) + len(_ATTRIB.findall(body))
     quotation = min(1.0, quotes / max(1.0, wc / 400.0))
+    # fluency/readability: shorter sentences + lower reading grade get cited MORE (Princeton GEO
+    # "fluency optimization", +29%; NN/g: concise copy tested +58% usability). Dense grade-16 prose
+    # reads as generic and lifts poorly. Reward grade <=9 and avg sentence <=20 words.
+    try:
+        _rd = readability_score(body)
+        _grade = _rd.get("grade") if _rd.get("grade") is not None else 12
+        _avg_sent = _rd.get("avg_sentence_len") or 20
+    except Exception:  # noqa: BLE001
+        _grade, _avg_sent = 12, 20
+    _g_ok = 1.0 if _grade <= 9 else 0.65 if _grade <= 11 else 0.35 if _grade <= 13 else 0.0
+    _s_ok = 1.0 if _avg_sent <= 20 else 0.6 if _avg_sent <= 24 else 0.2
+    fluency = round(_g_ok * 0.6 + _s_ok * 0.4, 3)
     # citation density: external links per ~300 words, authoritative sources bonus
     ext = _EXT_LINK.findall(body)
     auth = len(_AUTH.findall(body))
@@ -491,7 +503,7 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     return {"answer_first": answer_first, "question_headings": question_headings, "stat_density": stat_density,
             "citation_density": citation_density, "schema": schema, "entity": entity, "freshness": freshness,
             "chunkability": chunkability, "nap": nap, "reviews": reviews, "comparison": comparison,
-            "quotation": quotation,
+            "quotation": quotation, "fluency": fluency,
             "_suggested_schema": ("LocalBusiness" if nap >= 0.5 else "FAQPage" if qh else "Article")}
 
 
@@ -500,6 +512,7 @@ _GEO_FIX = {
     "question_headings": "Phrase H2/H3s as the real questions people ask (they map to AI prompts).",
     "stat_density": "Add a concrete, attributable statistic roughly every 150–200 words.",
     "quotation": "Quote a real statistic or authority verbatim with attribution (e.g. “…,” according to LIMRA) — attributed quotations are the strongest measured AI-citation lever (+41%).",
+    "fluency": "Shorten sentences (aim 15–20 words) and simplify wording to a grade 6–8 reading level — dense prose is cited less (Princeton fluency +29%; NN/g concise copy +58% usability).",
     "citation_density": "Cite authoritative primary sources inline (.gov/.edu/official) — the single biggest citation lever.",
     "schema": "Mark up as FAQPage/Article (LocalBusiness for a location page).",
     "entity": "Name the business + city explicitly and consistently; define who you are on first use.",
