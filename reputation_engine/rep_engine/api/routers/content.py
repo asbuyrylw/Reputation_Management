@@ -548,6 +548,11 @@ class BatchGenerateRequest(BaseModel):
     content_types: Optional[list[str]] = None
 
 
+class ClusterGenerateRequest(BaseModel):
+    max_clusters: Optional[int] = 1          # topic clusters (pillar+spokes) to build; default 1 (a hub is ~5 pieces)
+    max_spokes: Optional[int] = 4            # spoke pages per pillar
+
+
 @router.get("/content-batches")
 def content_batches(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """Every gap-driven content batch: its pieces (per type, with grade + status) and the latest
@@ -592,6 +597,30 @@ def generate_content_batches(payload: BatchGenerateRequest, background: Backgrou
                                    requested_by=user["id"])
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a content batch job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
+
+
+@router.post("/content-clusters/generate", status_code=202)
+def generate_content_clusters(payload: ClusterGenerateRequest, background: BackgroundTasks,
+                              business_id: int = Depends(require_business_editor),
+                              user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Kick off CLUSTER-DRIVEN content: build the highest-leverage uncovered topic clusters as
+    connected hubs (a comprehensive pillar page + focused, cross-linked spoke pages). The research-
+    backed alternative to one-off pieces — internal linking + full topic coverage build the topical
+    authority AI answer engines reward. Enqueued so the minutes of LLM work run off the request path."""
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "generate_clusters")
+    if not ok:
+        raise HTTPException(code, reason)
+    if not _jobs.rate_ok(business_id, "generate_clusters"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're starting cluster generation too often — give it a little while.")
+    args = {k: v for k, v in payload.model_dump().items() if v is not None}
+    args["requested_by"] = user["id"]
+    job_id, active = _jobs.enqueue(business_id, "generate_clusters", args=args, requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a cluster job is already running (#{active})")
     if api_settings().job_worker == "inline":
         background.add_task(_jobs.run_job, job_id)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})

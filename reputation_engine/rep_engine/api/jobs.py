@@ -180,6 +180,15 @@ def _run_generate_content_batches(business_id: int, args: dict):
     return cb.generate_all_gaps(business_id, max_gaps=args.get("max_gaps"), created_by=created_by)
 
 
+def _run_generate_clusters(business_id: int, args: dict):
+    """Cluster-driven content: plan the highest-leverage uncovered TOPIC CLUSTERS (pillar + spokes,
+    cross-linked) from the topical-authority planner and generate each as a connected hub."""
+    cb = _imp("content_batch")
+    return cb.generate_clusters(business_id, max_clusters=args.get("max_clusters"),
+                                max_spokes=args.get("max_spokes") or 4,
+                                created_by=args.get("requested_by"))
+
+
 def _run_measure_content_impact(business_id: int, args: dict):
     """Measure how far each content batch moved the gap it targets (SoV + alignment delta, % gap
     closed) against the latest audit. DB-only; safe to run after every audit."""
@@ -445,7 +454,8 @@ JOB_DISPATCH = {
     "plan": _run_plan,
     "sync_plan": _run_sync_plan,
     "generate_drafts": _run_generate_drafts,
-    "generate_content_batches": _run_generate_content_batches,   # multi-type content per gap
+    "generate_content_batches": _run_generate_content_batches,
+    "generate_clusters": _run_generate_clusters,   # multi-type content per gap
     "measure_content_impact": _run_measure_content_impact,       # did the content move the gap?
     "report": _run_report,
     "cycle": _run_cycle,

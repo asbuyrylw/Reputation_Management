@@ -955,6 +955,34 @@ def _ensure_readability(body: str, asset_type: str, sq: str, content_type: str,
     return body
 
 
+def _slugify(text: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:60] or "page"
+
+
+def _add_cluster_links(body: str, cluster: dict | None) -> str:
+    """Topic-cluster internal linking. Research (HubSpot): more internal links between related pages
+    lift rankings + build the topical authority AI answer engines reward. Deterministically add the
+    pillar<->spoke cross-links so a generated cluster reads as ONE connected hub, not isolated pages:
+    a PILLAR gets an 'Explore this guide' list linking each spoke; a SPOKE gets a link back UP to the
+    pillar. Slug-based relative URLs ('/slug') resolve on the business's site at publish (the publisher
+    can rewrite to real URLs). Best-effort; idempotent; skipped without a cluster."""
+    if not body or not isinstance(cluster, dict):
+        return body
+    role = cluster.get("role")
+    if role == "spoke" and cluster.get("pillar_title"):
+        ptitle = cluster["pillar_title"]
+        pslug = cluster.get("pillar_slug") or _slugify(ptitle)
+        if f"/{pslug}" not in body:
+            body = body.rstrip() + f"\n\n*Part of our complete guide: [{ptitle}](/{pslug}).*\n"
+    elif role == "pillar":
+        spokes = [s for s in (cluster.get("spokes") or []) if isinstance(s, dict) and s.get("title")][:8]
+        if spokes and "## Explore this guide" not in body:
+            items = "\n".join(f"- [{s['title']}](/{s.get('slug') or _slugify(s['title'])})" for s in spokes)
+            body = body.rstrip() + f"\n\n## Explore this guide\n\n{items}\n"
+    return body
+
+
 _BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed by )", re.I | re.M)
 
 
@@ -1309,6 +1337,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         body = _ensure_readability(body, asset_type, _score_q, content_type,
                                    (biz.get("name") if isinstance(biz, dict) else "") or "",
                                    (biz.get("geo") if isinstance(biz, dict) else "") or "")
+        # Topic-cluster internal linking: cross-link this piece to its pillar/spokes (added LAST so the
+        # readability rewrite can't mangle the links). No-op unless the WO carries a `cluster` plan.
+        body = _add_cluster_links(body, wo.get("cluster") if isinstance(wo, dict) else None)
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
@@ -1375,6 +1406,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         _tq = wo.get("target_query") or ""
         quality_notes["topic_coverage"] = _ta.score_draft_topic_coverage(business_id, body, _tq)
         quality_notes["suggested_links"] = _il.suggest_internal_links_for_draft(business_id, body, _tq)
+        # Topic-cluster role/relationships (pillar or spoke, and the sibling pieces) so the review UI +
+        # publisher understand the hub structure this piece belongs to.
+        if isinstance(wo.get("cluster"), dict):
+            _cl = wo["cluster"]
+            quality_notes["cluster"] = {"role": _cl.get("role"), "pillar_title": _cl.get("pillar_title"),
+                                        "pillar_slug": _cl.get("pillar_slug"),
+                                        "spokes": [s.get("title") for s in (_cl.get("spokes") or [])
+                                                   if isinstance(s, dict) and s.get("title")]}
     except Exception as e:  # noqa: BLE001
         log.debug("topic/link enrichment skipped: %s", e)
 

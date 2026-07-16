@@ -429,6 +429,111 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
             "errors": errors, "baseline": baseline}
 
 
+def generate_cluster(business_id: int, cluster: dict, *, max_spokes: int = 4,
+                     created_by: Optional[int] = None) -> dict:
+    """Generate a topic CLUSTER as a connected hub: one comprehensive PILLAR page for the cluster's
+    core topic + a focused SPOKE page per subtopic, CROSS-LINKED (pillar<->spokes). This is the
+    research-backed content model — a pillar/cluster architecture with internal linking builds the
+    topical authority AI answer engines reward (HubSpot: more internal links -> better rankings), vs.
+    isolated one-off pieces. Each piece carries the pipeline's info-gain differentiators (real
+    attributed stats + expert quotes + business specifics). Fail-loud if EVERY piece fails."""
+    _budget_or_raise(business_id)
+    pillar_topic = (cluster.get("pillar") or cluster.get("topic") or "").strip()
+    if not pillar_topic:
+        raise ValueError("cluster has no pillar topic")
+    spoke_topics = [s.strip() for s in (cluster.get("spokes") or []) if s and str(s).strip()][:max_spokes]
+    with db() as conn:
+        biz_row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not biz_row:
+            raise SystemExit(f"No business id {business_id}")
+        biz = dict(biz_row)
+        pillar_slug = _cg._slugify(pillar_topic)
+        spoke_plan = [{"title": st, "slug": _cg._slugify(st), "query": st} for st in spoke_topics]
+        b = conn.execute(
+            "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
+            "target_prompts, content_types, baseline, status, created_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating',%s) RETURNING id",
+            (business_id, f"cluster:{pillar_slug}", "topical_authority",
+             f"Topic cluster: {pillar_topic}", pillar_topic, json.dumps([]),
+             json.dumps(["article"] + ["blog"] * len(spoke_plan)), json.dumps({}), created_by)).fetchone()
+        batch_id = b["id"]
+        conn.commit()
+
+    made, errors = [], []
+    # PILLAR first: a comprehensive page that links DOWN to each planned spoke.
+    pillar_wo = {
+        "title": pillar_topic, "capability": "content_writing", "execution": "auto",
+        "target_query": pillar_topic, "content_type": "article",
+        "instruction": (f"Comprehensive PILLAR page for the topic cluster '{pillar_topic}'. Cover the core "
+                        f"topic thoroughly and orient the reader to its sub-topics: "
+                        f"{', '.join(spoke_topics) or 'n/a'}."),
+        "gap_specifics": {"source_query": pillar_topic},
+        "cluster": {"role": "pillar", "pillar_title": pillar_topic, "pillar_slug": pillar_slug,
+                    "spokes": spoke_plan},
+    }
+    try:
+        did = _cg.generate_for_wo(business_id, pillar_wo, biz, content_type="article", batch_id=batch_id)
+        if did:
+            made.append({"draft_id": did, "content_type": "article", "role": "pillar"})
+        else:
+            errors.append({"role": "pillar", "reason": "skipped (already covered / empty)"})
+    except Exception as e:  # noqa: BLE001
+        log.warning("cluster %d: pillar failed: %s", batch_id, e)
+        errors.append({"role": "pillar", "reason": str(e)[:200]})
+    # SPOKES: one focused blog per subtopic, each linking UP to the pillar.
+    for sp in spoke_plan:
+        spoke_wo = {
+            "title": sp["title"], "capability": "content_writing", "execution": "auto",
+            "target_query": sp["query"], "content_type": "blog",
+            "instruction": (f"Focused SPOKE page on '{sp['title']}', a sub-topic of the pillar guide "
+                            f"'{pillar_topic}'. Go deep on this one angle only."),
+            "gap_specifics": {"source_query": sp["query"]},
+            "cluster": {"role": "spoke", "pillar_title": pillar_topic, "pillar_slug": pillar_slug},
+        }
+        try:
+            did = _cg.generate_for_wo(business_id, spoke_wo, biz, content_type="blog", batch_id=batch_id)
+            if did:
+                made.append({"draft_id": did, "content_type": "blog", "role": "spoke", "topic": sp["title"]})
+            else:
+                errors.append({"role": f"spoke:{sp['title']}", "reason": "skipped (already covered / empty)"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("cluster %d: spoke '%s' failed: %s", batch_id, sp["title"], e)
+            errors.append({"role": f"spoke:{sp['title']}", "reason": str(e)[:200]})
+
+    status = "drafted" if made else "failed"
+    with db() as conn:
+        conn.execute("UPDATE content_batches SET status=%s, updated_at=now() WHERE id=%s", (status, batch_id))
+        conn.commit()
+    if not made:
+        raise RuntimeError(f"topic cluster '{pillar_topic}' produced 0 pieces: {errors}")
+    log.info("cluster %d '%s': pillar + %d spoke(s) -> %d pieces", batch_id, pillar_topic,
+             len(spoke_plan), len(made))
+    return {"batch_id": batch_id, "pillar": pillar_topic, "spokes": spoke_topics,
+            "pieces": len(made), "produced": made, "errors": errors}
+
+
+def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *, max_spokes: int = 4,
+                      created_by: Optional[int] = None) -> dict:
+    """Plan + generate the highest-leverage UNCOVERED topic clusters (pillar-first), using the
+    topical-authority planner. This is the CLUSTER-DRIVEN content pipeline (vs. one-off gap pieces):
+    it only builds real hubs (a pillar WITH subtopics), not lone keywords."""
+    try:
+        from . import topical_authority as _ta
+    except ImportError:  # pragma: no cover
+        import topical_authority as _ta  # type: ignore
+    cl = _ta.clusters(business_id).get("clusters", [])
+    targets = [c for c in cl if c.get("needs_content") and c.get("spokes")][:(max_clusters or 3)]
+    results, errors = [], []
+    for c in targets:
+        try:
+            results.append(generate_cluster(business_id, c, max_spokes=max_spokes, created_by=created_by))
+        except Exception as e:  # noqa: BLE001
+            log.warning("generate_clusters: cluster '%s' failed: %s", c.get("topic"), e)
+            errors.append({"cluster": c.get("topic"), "reason": str(e)[:200]})
+    return {"clusters_generated": len(results), "planned": [c.get("topic") for c in targets],
+            "results": results, "errors": errors}
+
+
 def _over_budget(business_id: int) -> bool:
     try:
         from . import ai_state_audit as _llm
