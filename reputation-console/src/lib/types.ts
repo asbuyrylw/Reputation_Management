@@ -336,6 +336,7 @@ export interface ContentDraft {
         structure?: DraftStructure;
         keyword_density?: DraftKeywordDensity;
         readability?: DraftReadability;
+        distinctiveness?: DraftDistinctiveness;
         aeo?: DraftAeo;
         geo?: DraftGeo;
         serp?: DraftSerp;
@@ -1575,6 +1576,14 @@ export interface DraftReadability {
   passive_hits: number;
   target?: string;
   issues: { label: string; fix: string }[];
+}
+export interface DraftDistinctiveness {
+  score: number; // 0..100, 100 = clean (no generic "AI slop" tells)
+  band: string;
+  tells: number;
+  distinct_tells: number;
+  examples: string[];
+  fix?: string;
 }
 export interface DraftAeo {
   score: number; // 0..100 across pillars

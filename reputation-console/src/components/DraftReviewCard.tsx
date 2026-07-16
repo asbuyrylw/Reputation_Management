@@ -48,18 +48,22 @@ const G_CHIP: Record<"good" | "amber" | "alert", string> = {
 // keyword density, and search-intent shape. A scannable chip strip that expands to the detail +
 // the specific fixes, so a reviewer can grade a draft the way NeuronWriter grades a page.
 function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> }) {
-  const { structure, aeo, geo, serp, readability, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
-  if (!structure && !aeo && !geo && !serp && !readability && !term && !intent) return null;
+  const { structure, aeo, geo, serp, readability, distinctiveness: distinct, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
+  if (!structure && !aeo && !geo && !serp && !readability && !distinct && !term && !intent) return null;
   const geoWeak = (geo?.checks ?? []).filter((c) => !c.ok);
   const chips = [
     geo && typeof geo.score === "number" && { k: "GEO", v: `${geo.score}/100`, tone: gTone(geo.score) },
     !serp?.skipped && typeof serp?.score === "number" && { k: "vs SERP", v: `${serp.score}/100`, tone: gTone(serp.score) },
     structure && { k: "Structure", v: `${structure.score}/100`, tone: gTone(structure.score) },
     aeo && { k: "AEO", v: `${aeo.score}/100`, tone: gTone(aeo.score) },
+    distinct && typeof distinct.score === "number" && { k: "Distinctiveness", v: `${distinct.score}/100`, tone: gTone(distinct.score) },
     readability?.grade != null && { k: "Readability", v: `grade ${readability.grade}`, tone: (readability.grade <= 10 ? "good" : readability.grade <= 12 ? "amber" : "alert") as "good" | "amber" | "alert" },
     term?.covered_pct != null && { k: "SERP terms", v: `${term.covered_pct}%`, tone: gTone(term.covered_pct) },
   ].filter(Boolean) as { k: string; v: string; tone: "good" | "amber" | "alert" }[];
-  const fixes = [...(structure?.issues ?? []), ...(aeo?.tips ?? []), ...(readability?.issues ?? []), ...(density?.issues ?? [])];
+  const distinctFix = distinct && distinct.score < 80 && distinct.fix
+    ? [{ label: `Generic phrasing (${distinct.tells} AI-slop tells: ${(distinct.examples ?? []).slice(0, 4).join(", ")})`, fix: distinct.fix }]
+    : [];
+  const fixes = [...(structure?.issues ?? []), ...(aeo?.tips ?? []), ...distinctFix, ...(readability?.issues ?? []), ...(density?.issues ?? [])];
 
   return (
     <details className="mt-2 rounded-[12px] border border-line bg-paper/60 p-2.5 text-xs">
