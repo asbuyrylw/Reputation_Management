@@ -348,18 +348,35 @@ _NOTE_TYPE_MAP = {
 }
 
 _LLM_PROMPTS = {
+    "explainer_video": (
+        "Write a spoken EXPLAINER VIDEO SCRIPT for {name}. This script IS the transcript, and AI answer "
+        "engines (ChatGPT, Perplexity, Google AI Overviews) cite the TRANSCRIPT — YouTube is the most-"
+        "cited domain in AI Overviews, via its captions — so it must be answer-first and entity-clear. "
+        "Requirements: (1) TOTAL ~250-300 words = UNDER 2 minutes of narration (viewer retention drops "
+        "sharply past 2:00). (2) HOOK in the first 1-2 sentences (0-5 seconds) stating who {name} is, the "
+        "city, and the single key point — most viewers decide in 5 seconds and AI lifts the opening. "
+        "(3) Then 3-5 short talking points, each OPENING with a self-contained one-sentence answer an AI "
+        "can quote, phrased around the real question a viewer asks. (4) Name {name} + the city + the "
+        "service explicitly and consistently. (5) Quote at least one REAL, attributed statistic from the "
+        "provided authoritative sources (e.g. \"About 51% of U.S. adults own life insurance,\" according "
+        "to LIMRA's 2024 study) — never invent a number. (6) End with ONE clear call to action. Use PLAIN "
+        "SPOKEN language (grade 6-8, short sentences). Format each segment as a line '[m:ss] narration' "
+        "followed by an '(On-screen: ...)' text cue. Ground every claim in the context; WRITE AROUND "
+        "anything unknown (no [INSERT] placeholders). No guaranteed returns, no 'risk-free', no "
+        "'#1'/'best'. Output ONLY the script."
+    ),
     "podcast": (
         "Write a natural, engaging TWO-HOST podcast SCRIPT (~600-900 words, ~5 minutes) about "
         "{name}, in the style of a NotebookLM Audio Overview: two hosts (label them 'Host A:' and "
         "'Host B:') in warm back-and-forth dialogue that explains the topic clearly for a general "
-        "audience. Ground every claim in the provided context — do NOT fabricate facts, use "
-        "[INSERT: ...] placeholders for anything you lack. No guaranteed returns, no 'risk-free', "
+        "audience. Ground every claim in the provided context — do NOT fabricate facts; write around "
+        "anything you lack (omit it or use general wording). No guaranteed returns, no 'risk-free', "
         "no '#1'/'best'. Output ONLY the script with speaker labels."
     ),
     "report_audio": (
         "Write a single-narrator AUDIO BRIEFING SCRIPT (~500-700 words) that summarizes the key "
         "points about {name} for a spoken monthly report. Warm, credible, factual, easy to read "
-        "aloud. Ground in the provided context; use [INSERT: ...] for unknowns. No "
+        "aloud. Ground in the provided context; write around unknowns (omit or general wording). No "
         "guaranteed-return language or unverifiable superlatives. Output ONLY the narration script."
     ),
     "deep_article": (
@@ -367,21 +384,21 @@ _LLM_PROMPTS = {
         "a clear H1, H2 subheadings, and a concrete conclusion. The article should help "
         "{name} establish authority by addressing the contested narrative head-on with accurate "
         "facts, expert tone, and verifiable claims. Do NOT fabricate statistics or quotes — "
-        "use [INSERT: ...] placeholders for facts you lack. Do not include guarantees, "
+        "write around facts you lack (omit or general wording). Do not include guarantees, "
         "'#1'/'best', or any performance promises."
     ),
     "blog_series": (
         "Generate outlines for THREE related blog posts for {name}. Each outline must include: "
         "title, target AI/search query it should win, 5-7 heading structure, key points under "
         "each heading, recommended word count, and a CTA. Format each outline clearly in "
-        "markdown. Do NOT fabricate facts — use [INSERT: ...] placeholders. No performance "
+        "markdown. Do NOT fabricate facts — write around anything you lack (omit or general wording). No performance "
         "promises, no 'best'/'#1'/'risk-free' claims."
     ),
     "newsletter": (
         "Write a newsletter brief (400-600 words) for {name}'s monthly client or community "
         "newsletter. Include: subject-line options (3), preview text, intro paragraph, 3-4 "
         "content sections with headers, key takeaway, and a CTA. Tone: warm, credible, "
-        "informative. Use [INSERT: ...] placeholders for specific facts/figures you lack. "
+        "informative. Write around specific facts/figures you lack (omit or general wording). "
         "No guaranteed-return language or unverifiable superlatives."
     ),
 }
@@ -534,6 +551,23 @@ def _persist(
                                  asset_type=asset_type)
             quality_notes, geo_grade = vg, vg.get("score")
             duration_secs = duration_secs or (vg.get("runtime_secs") or None)
+            # Citability layer (no render needed): AI cites a video via its CAPTIONS/transcript, so
+            # attach an SRT caption sidecar + a VideoObject JSON-LD (transcript-carrying) to the draft.
+            # contentUrl fills in later once a real video is rendered/published.
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                _srt = _cq.to_srt(body)
+                _spoken = _cq._spoken_only(body).strip()
+                _schema = _cq.video_object_schema(
+                    title=title, description=(_spoken[:300] or title), transcript=(transcript or _spoken),
+                    duration_secs=int(duration_secs or 0), business_name=business_name, geo=geo,
+                    upload_date=f"{_dt.now(_tz.utc):%Y-%m-%d}")
+                quality_notes = dict(vg); quality_notes["captions_srt"] = _srt
+                quality_notes["video_schema"] = _schema
+                if not transcript:
+                    transcript = _spoken
+            except Exception as e2:  # noqa: BLE001
+                log.debug("rich_media: caption/schema build skipped: %s", e2)
         except Exception as e:  # noqa: BLE001 -- grading must never block persistence
             log.debug("rich_media: video grading skipped: %s", e)
     with db() as conn:

@@ -589,11 +589,71 @@ def _spoken_only(body: str) -> str:
     """Just the narration -- strip [stage directions], ## headings, and speaker labels -- because that
     is the TRANSCRIPT an AI answer engine actually reads and can cite."""
     t = re.sub(r"\[[^\]]*\]", " ", body or "")          # [ON SCREEN: ...] stage directions
+    t = re.sub(r"\((?:on[-\s]?screen|visual|b-?roll|text|graphic|footage)[^)]*\)", " ", t, flags=re.I)  # (On-screen: ...) cues
     t = re.sub(r"^\s*#{1,6}.*$", " ", t, flags=re.M)     # segment headings
     t = re.sub(r"^\s*\|.*$", " ", t, flags=re.M)         # tables (production briefs)
     t = re.sub(r"^\s*\*{0,2}(?:narrator|v\.?o\.?|on[-\s]?camera|host|speaker|talent)[^:\n]{0,30}:\*{0,2}",
                " ", t, flags=re.I | re.M)                # speaker labels
     return t
+
+
+def to_srt(script: str) -> str:
+    """Build an SRT caption block from a timestamped video SCRIPT. AI answer engines cite a video via
+    its CAPTIONS/transcript (YouTube is the most-cited AI-Overview domain, read through its captions),
+    so a clean caption sidecar is the highest-value, no-render part of video citability. Parses
+    '[m:ss] narration' lines; each cue runs to the next timestamp (last +4s). '' if no timestamps."""
+    if not script:
+        return ""
+    cues = []
+    for line in script.splitlines():
+        m = re.match(r"\s*\[?(\d{1,2}):([0-5]\d)\]?\s*(.*)", line)
+        if not m:
+            continue
+        secs = int(m.group(1)) * 60 + int(m.group(2))
+        text = re.sub(r"\((?:on[-\s]?screen|visual)[^)]*\)", "", m.group(3), flags=re.I)
+        text = re.sub(r"\[[^\]]*\]", "", text).strip()      # strip stage directions
+        if text:
+            cues.append((secs, text))
+    if not cues:
+        return ""
+    def _fmt(s: int) -> str:
+        return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d},000"
+    out = []
+    for i, (secs, text) in enumerate(cues):
+        end = cues[i + 1][0] if i + 1 < len(cues) else secs + 4
+        if end <= secs:
+            end = secs + 4
+        out.append(f"{i + 1}\n{_fmt(secs)} --> {_fmt(end)}\n{text}\n")
+    return "\n".join(out)
+
+
+def video_object_schema(*, title: str, description: str, transcript: str, duration_secs: int = 0,
+                        business_name: str = "", geo: str = "", upload_date: str = "",
+                        content_url: str = "", thumbnail_url: str = "") -> dict:
+    """A schema.org VideoObject (JSON-LD). VideoObject + transcript is a strong AI/Google video-
+    discovery signal. contentUrl/thumbnailUrl fill in once a real video is rendered/published; until
+    then the object still carries name/description/transcript so the hosting page is understood."""
+    obj = {
+        "@context": "https://schema.org",
+        "@type": "VideoObject",
+        "name": (title or "").strip()[:110] or "Explainer video",
+        "description": (description or "").strip()[:320],
+        "transcript": (transcript or "").strip(),
+    }
+    if upload_date:
+        obj["uploadDate"] = upload_date
+    if duration_secs:
+        obj["duration"] = f"PT{duration_secs // 60}M{duration_secs % 60}S"
+    if content_url:
+        obj["contentUrl"] = content_url
+    if thumbnail_url:
+        obj["thumbnailUrl"] = thumbnail_url
+    if business_name:
+        pub = {"@type": "Organization", "name": business_name}
+        if geo:
+            pub["areaServed"] = geo
+        obj["publisher"] = pub
+    return obj
 
 
 def _dim(checks: list[tuple]) -> dict:
