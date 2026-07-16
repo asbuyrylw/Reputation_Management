@@ -2028,8 +2028,9 @@ export function useRejectRichMedia(businessId: number | null) {
 export function useRenderRichMediaVideo(businessId: number | null) {
   const qc = useQueryClient();
   return useMutation({
-    // provider: undefined -> server default (HeyGen, verbatim narration); "veo" -> generative clip/B-roll.
-    mutationFn: ({ draftId, provider }: { draftId: number; provider?: "heygen" | "veo" }) =>
+    // provider: undefined -> server default (HeyGen verbatim); "heygen_agent" -> v3 Video Agent
+    // (produced: B-roll + motion graphics, non-verbatim); "veo" -> Google generative clip/B-roll.
+    mutationFn: ({ draftId, provider }: { draftId: number; provider?: "heygen" | "heygen_agent" | "veo" }) =>
       apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/render-video`, { method: "POST", body: provider ? { provider } : {} }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["rich-media", businessId] }); qc.invalidateQueries({ queryKey: ["visuals", businessId] }); },
   });

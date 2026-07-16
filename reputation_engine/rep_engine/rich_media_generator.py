@@ -828,8 +828,20 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
     if not _hg.configured():
         return {"skipped": True,
                 "reason": "HeyGen not configured — set HEYGEN_API_KEY on the worker (or choose the Veo renderer)"}
-    res = _hg.render(business_id, script, title=(d.get("title") or "Explainer video"),
-                     work_order_id=d.get("work_order_id"))
+    title = d.get("title") or "Explainer video"
+    if which in ("heygen_agent", "agent", "video_agent", "produced"):
+        # v3 Video Agent (produced: B-roll + motion graphics). Non-verbatim -> load the business
+        # name/geo for the structured, compliance-constrained prompt; human-reviewed before publish.
+        with db() as conn:
+            b = conn.execute("SELECT name, geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        res = _hg.render_agent(business_id, script, title=title,
+                               business_name=(b or {}).get("name") or "",
+                               geo=(b or {}).get("geo") or "", work_order_id=d.get("work_order_id"))
+        if res.get("ok"):
+            _record_rendered_video(business_id, draft_id, d, res, "heygen_agent")
+            log.info("rendered HeyGen Video Agent for draft %s (visual %s)", draft_id, res.get("visual_id"))
+        return res
+    res = _hg.render(business_id, script, title=title, work_order_id=d.get("work_order_id"))
     if res.get("ok"):
         _record_rendered_video(business_id, draft_id, d, res, "heygen")
         log.info("rendered HeyGen video for rich-media draft %s (visual %s)", draft_id, res.get("visual_id"))

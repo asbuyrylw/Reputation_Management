@@ -43,6 +43,22 @@ _DEFAULT_AVATAR = "Abigail_standing_office_front"        # professional office-s
 _DEFAULT_VOICE = "97dd67ab8ce242b6a9e7689cb00c6414"      # clear English (female) voice
 
 
+# v3 Video Agent (produced pipeline: avatar + B-roll + motion graphics + styled scenes from ONE
+# structured prompt). Reachable via raw REST (verified against HeyGen's open-source CLI). ~20-45 min
+# per render, so we poll on a long deadline. Overridable for a future webhook/callback flow.
+_AGENT_CREATE = os.getenv("HEYGEN_AGENT_URL", f"{_API_BASE}/v3/video-agents")
+_VIDEO_GET = f"{_API_BASE}/v3/videos"
+_AGENT_MAX_POLLS = int(os.getenv("HEYGEN_AGENT_MAX_POLLS", "95"))       # ~48 min at 30s
+_AGENT_POLL_SECONDS = int(os.getenv("HEYGEN_AGENT_POLL_SECONDS", "30"))
+# HeyGen team's "catchall" style block (from the official Video Agent prompt guide) — clean corporate
+# look that suits financial-services explainers.
+_STYLE_CATCHALL = (
+    "Use minimal, clean styled visuals. Blue, black, and white as the main colors. Leverage motion "
+    "graphics as B-rolls and A-roll overlays for stats and key points. Use Stock Media for real-world "
+    "footage (families, offices, Cincinnati). Include an intro sequence, an outro sequence, and chapter "
+    "breaks using Motion Graphics.")
+
+
 def configured() -> bool:
     """Only the API key is required — a validated default avatar + voice are used unless overridden."""
     return bool(os.getenv("HEYGEN_API_KEY"))
@@ -176,3 +192,149 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
         pass
     return {"ok": True, "visual_id": visual_id, "video_url": video_url, "srt": srt,
             "duration": duration, "file_path": path}
+
+
+# ---------------------------------------------------------------------------
+# v3 Video Agent (PRODUCED video) -- structured prompt per HeyGen's official guide
+# ---------------------------------------------------------------------------
+_STAT_RE = re.compile(r"(\$[\d,]+(?:\.\d+)?[KMB%+]?|\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\s?%|\b\d{2,}(?:,\d{3})+\b)")
+
+
+def _critical_onscreen_text(narration: str, business_name: str, geo: str) -> list[str]:
+    """Every literal string Video Agent must render EXACTLY (else it summarizes/rounds numbers): the
+    business name + city, and each hard statistic/dollar figure/percentage in the narration."""
+    out: list[str] = []
+    if business_name:
+        out.append(business_name + (f" — {geo.split(',')[0].strip()}" if geo else ""))
+    seen = set()
+    for m in _STAT_RE.findall(narration or ""):
+        s = m.strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out[:8]
+
+
+def build_video_agent_prompt(narration: str, *, business_name: str, geo: str, title: str = "",
+                             seconds: int = 90) -> str:
+    """Assemble a HeyGen Video Agent prompt per the official guide: FORMAT/TONE + AVATAR framing +
+    the message + a CRITICAL ON-SCREEN TEXT block + a COMPLIANCE-CONSTRAINED faithfulness directive
+    (regulated finance: the Agent may enrich VISUALS but must not invent spoken claims) + the style
+    block LAST. Content first, technical directives (English) at the end."""
+    city = (geo or "").split(",")[0].strip()
+    onscreen = _critical_onscreen_text(narration, business_name, geo)
+    parts = [
+        f"FORMAT: A ~{seconds}-second professional explainer video for {business_name}"
+        + (f", a financial-services team in {city}" if city else "") + ". Landscape. "
+        "Confident, warm, and trustworthy tone — credible, not hypey.",
+        "AVATAR: The selected presenter delivers the narration on camera; intercut with B-roll and "
+        "motion-graphic overlays.",
+        "",
+        "MESSAGE TO CONVEY:",
+        narration.strip(),
+    ]
+    if onscreen:
+        parts += ["", "CRITICAL ON-SCREEN TEXT (display these literally, do not rephrase or round):"]
+        parts += [f"- {s}" for s in onscreen]
+    parts += [
+        "",
+        # The skill's default directive grants "full creative freedom to expand/add examples" — for
+        # regulated financial content that is unsafe, so we CONSTRAIN it to visuals only.
+        "FAITHFULNESS (regulated financial content — follow exactly): Convey the message above "
+        "faithfully. You MAY enrich the VISUALS (B-roll, motion graphics, chapter cards) and improve "
+        "pacing, but do NOT add, remove, or alter any financial claim, statistic, figure, product "
+        "detail, or statement in the spoken narration — the narration must convey exactly this vetted "
+        "message. Do NOT invent new financial facts, figures, testimonials, or advice. No guaranteed "
+        "returns, no performance promises, no '#1'/'best'. Front-load the hook in the first 5 seconds. "
+        "Do not pad with silence.",
+        "",
+        f"STYLE: {_STYLE_CATCHALL}",
+    ]
+    return "\n".join(parts)
+
+
+def render_agent(business_id: int, script: str, *, title: str = "", business_name: str = "",
+                 geo: str = "", work_order_id: Optional[int] = None, draft_id: Optional[int] = None,
+                 avatar_id: Optional[str] = None, voice_id: Optional[str] = None,
+                 orientation: str = "landscape") -> dict:
+    """Render a PRODUCED video via the v3 Video Agent (POST /v3/video-agents): avatar + B-roll +
+    motion graphics + styled scenes from one structured, compliance-constrained prompt. Polls the
+    session (~20-45 min) then fetches the MP4 + SRT and stores a `video` visual_asset. Dormant-safe;
+    never raises. NOTE: the Agent EXPANDS the script (non-verbatim) — the video is human-reviewed
+    before publish, and the prompt constrains it to visuals-only enrichment for compliance."""
+    if not configured():
+        return {"skipped": True, "reason": "HeyGen not configured (set HEYGEN_API_KEY)"}
+    narration = narration_from_script(script)[:_MAX_CHARS]
+    if not narration:
+        return {"ok": False, "error": "no narration text found in the script"}
+    prompt = build_video_agent_prompt(narration, business_name=business_name or title,
+                                      geo=geo, title=title)
+    hdr = {"X-Api-Key": _key(), "Content-Type": "application/json"}
+    body = {"prompt": prompt, "avatar_id": (avatar_id or os.getenv("HEYGEN_AVATAR_ID") or _DEFAULT_AVATAR),
+            "voice_id": (voice_id or os.getenv("HEYGEN_VOICE_ID") or _DEFAULT_VOICE),
+            "orientation": orientation, "mode": "generate"}
+    sid_style = os.getenv("HEYGEN_STYLE_ID")
+    if sid_style:
+        body["style_id"] = sid_style
+    start = _http.request_json("POST", _AGENT_CREATE, headers=hdr, json=body, timeout=60,
+                               max_retries=2, guard_redirects=True)
+    if start.failed or not isinstance(start.data, dict):
+        return {"ok": False, "error": start.error or "Video Agent create failed"}
+    data = start.data.get("data") if isinstance(start.data.get("data"), dict) else start.data
+    session_id = data.get("session_id")
+    if not session_id:
+        return {"ok": False, "error": f"no session_id from Video Agent: {str(start.data)[:200]}"}
+
+    video_id = data.get("video_id")
+    for _ in range(_AGENT_MAX_POLLS):
+        time.sleep(_AGENT_POLL_SECONDS)
+        st = _http.request_json("GET", f"{_AGENT_CREATE}/{session_id}", headers=hdr,
+                                timeout=30, max_retries=2, guard_redirects=True)
+        if st.failed or not isinstance(st.data, dict):
+            continue
+        d = st.data.get("data") or {}
+        status = (d.get("status") or "").lower()
+        video_id = d.get("video_id") or video_id
+        if status in ("completed", "success", "done"):
+            break
+        if status in ("failed", "error"):
+            return {"ok": False, "error": f"Video Agent failed: {d.get('failure_message') or str(d)[:200]}"}
+    if not video_id:
+        return {"ok": False, "error": "Video Agent timed out or produced no video"}
+
+    vg = _http.request_json("GET", f"{_VIDEO_GET}/{video_id}", headers=hdr, timeout=30,
+                            max_retries=2, guard_redirects=True)
+    vd = (vg.data.get("data") if isinstance(vg.data, dict) else {}) or {}
+    video_url = vd.get("video_url") or vd.get("captioned_video_url")
+    srt_url = vd.get("subtitle_url")
+    duration = vd.get("duration")
+    if not video_url:
+        return {"ok": False, "error": "Video Agent completed but no video_url"}
+    raw = _download_binary(video_url)
+    if not raw:
+        return {"ok": False, "error": "could not download the Video Agent MP4"}
+    srt = ""
+    if srt_url:
+        sb = _download_binary(srt_url, timeout=60)
+        srt = sb.decode("utf-8", "replace") if sb else ""
+    try:
+        from . import visual_content as _vc
+    except ImportError:  # pragma: no cover
+        import visual_content as _vc  # type: ignore
+    path = _vc._save_png(business_id, raw, ext="mp4")
+    visual_id = _vc._persist(
+        business_id, kind="video", provider="heygen_agent", model="video_agent_v3",
+        prompt=prompt[:500], file_path=path, url=video_url,
+        compliance_note="Produced by HeyGen Video Agent (non-verbatim; visuals-constrained prompt) — review narration before publish.",
+        work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4",
+        meta={"source": "heygen_agent", "srt": srt, "duration": duration, "session_id": session_id})
+    try:
+        from . import cost as _cost
+        secs = float(duration or 0) or (len(narration) / 14.0)
+        _cost.record_cost(business_id, None, "video", "heygen", "render_agent",
+                          units=secs, unit_label="seconds", model="video_agent_v3",
+                          detail={"content_type": "video", "api": "heygen_video_agent"})
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "visual_id": visual_id, "video_url": video_url, "srt": srt,
+            "duration": duration, "file_path": path, "session_id": session_id}

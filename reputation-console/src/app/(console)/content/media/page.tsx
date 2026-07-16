@@ -144,14 +144,21 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
         </div>
 
         {isVideoScript && (
-          <div className="flex items-center justify-between gap-2 border-t border-line p-3">
-            <span className="text-[12px] leading-snug text-ink-4">Turn this vetted script into a real video. <b>Render video</b> = HeyGen avatar speaks it verbatim (brand-safe). <b>Veo clip</b> = Google generative video (short, cinematic).</span>
-            <div className="flex shrink-0 items-center gap-2">
-              <button onClick={() => renderVideo.mutate({ draftId: item.id, provider: "veo" })} disabled={renderVideo.isPending || renderVideo.isSuccess}
-                className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-paper disabled:opacity-60">Veo clip</button>
+          <div className="space-y-2 border-t border-line p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[12px] leading-snug text-ink-4"><b>Render video</b> = HeyGen avatar speaks the script <b>verbatim</b> (brand-safe — recommended for financial content).</span>
               <button onClick={() => renderVideo.mutate({ draftId: item.id })} disabled={renderVideo.isPending || renderVideo.isSuccess}
-                className="rounded-[10px] bg-indigo px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
+                className="shrink-0 rounded-[10px] bg-indigo px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
                 {renderVideo.isPending ? "Starting…" : renderVideo.isSuccess ? "Rendering…" : "▶ Render video"}</button>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11.5px] leading-snug text-ink-4"><b>Produced</b> = HeyGen Video Agent adds B-roll + motion graphics (~20–45 min; AI-expands narration — review before publishing). <b>Veo clip</b> = short generative clip.</span>
+              <div className="flex shrink-0 items-center gap-2">
+                <button onClick={() => renderVideo.mutate({ draftId: item.id, provider: "heygen_agent" })} disabled={renderVideo.isPending || renderVideo.isSuccess}
+                  className="rounded-[10px] border border-indigo/40 bg-indigo-050 px-3 py-1.5 text-[12.5px] font-semibold text-indigo-strong hover:bg-indigo-050/70 disabled:opacity-60">✨ Produced</button>
+                <button onClick={() => renderVideo.mutate({ draftId: item.id, provider: "veo" })} disabled={renderVideo.isPending || renderVideo.isSuccess}
+                  className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[12.5px] font-semibold text-ink hover:bg-paper disabled:opacity-60">Veo clip</button>
+              </div>
             </div>
           </div>
         )}
