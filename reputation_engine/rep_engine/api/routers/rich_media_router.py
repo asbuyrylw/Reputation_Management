@@ -67,14 +67,20 @@ def reject_rich_media(draft_id: int, body: StatusUpdate = StatusUpdate(),
     return {"id": draft_id, "status": "rejected"}
 
 
+class RenderVideoRequest(BaseModel):
+    provider: Optional[str] = None   # 'heygen' (default, verbatim) | 'veo' (generative clip/B-roll)
+
+
 @router.post("/rich-media-drafts/{draft_id}/render-video", status_code=202)
 def render_rich_media_video(draft_id: int, background: BackgroundTasks,
+                            body: RenderVideoRequest = RenderVideoRequest(),
                             business_id: int = Depends(require_business_editor),
                             user: dict = Depends(get_current_user)):
-    """Render a REAL MP4 for an explainer_video / video_script draft via HeyGen — the avatar speaks the
-    already-approved script VERBATIM (brand-safe; no generated/hallucinated speech). Explicit action
-    (cost per render). Enqueued off the request path (a render takes minutes). 409 if the draft isn't a
-    video script; the job returns {skipped} until the owner configures HEYGEN_API_KEY + HEYGEN_AVATAR_ID."""
+    """Render a REAL MP4 for an explainer_video / video_script draft. Renderer = body.provider
+    ('heygen' default — the avatar speaks the vetted script VERBATIM, brand-safe; or 'veo' — Google's
+    generative video, best for a short cinematic clip/B-roll, narration is generated not verbatim).
+    Explicit action (cost per render). Enqueued off the request path. 409 if the draft isn't a video
+    script; the job returns {skipped} until the chosen renderer's keys are configured."""
     d = _rmg.api_get(business_id, draft_id)
     if not d:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
@@ -85,7 +91,8 @@ def render_rich_media_video(draft_id: int, background: BackgroundTasks,
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "You're rendering videos too often — give it a little while.")
     job_id, active = _jobs.enqueue(business_id, "render_video",
-                                   args={"draft_id": draft_id}, requested_by=(user or {}).get("id"))
+                                   args={"draft_id": draft_id, "provider": body.provider},
+                                   requested_by=(user or {}).get("id"))
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a video render is already running (#{active})")
     if api_settings().job_worker == "inline":

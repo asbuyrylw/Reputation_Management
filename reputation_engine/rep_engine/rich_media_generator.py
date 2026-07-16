@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -793,13 +794,55 @@ def set_status(business_id: int, draft_id: int, status: str, reviewer: Optional[
     return bool(r)
 
 
-def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[str] = None) -> dict:
-    """Render a REAL MP4 for an explainer_video/video_script draft via HeyGen — the avatar speaks the
-    already-vetted script VERBATIM (deterministic + brand-safe; no generated/hallucinated speech, which
-    is why HeyGen beats Veo/Sora for regulated financial content). Stores the video as a `video`
-    visual_asset (shows in the Media gallery's player + is uploadable to YouTube) and records the
-    reference on the draft. Explicit owner action (cost per render). Dormant-safe: {skipped} without a
-    HeyGen key. Never raises."""
+def _record_rendered_video(business_id: int, draft_id: int, d: dict, res: dict, provider: str) -> None:
+    """Store the rendered-video reference on the draft (so the review UI links the draft to its video)."""
+    with db() as conn:
+        qn = d.get("quality_notes") if isinstance(d.get("quality_notes"), dict) else {}
+        qn = dict(qn or {})
+        qn["rendered_video"] = {"visual_id": res.get("visual_id"), "video_url": res.get("video_url"),
+                                "duration": res.get("duration"), "provider": provider}
+        conn.execute("UPDATE rich_media_drafts SET quality_notes=%s, updated_at=now() "
+                     "WHERE id=%s AND business_id=%s", (json.dumps(qn), draft_id, business_id))
+        conn.commit()
+
+
+def _render_veo(business_id: int, draft_id: int, d: dict, script: str) -> dict:
+    """Alternative renderer: Google Veo 3.1 (via the existing Gemini/Veo path in visual_content). Veo
+    GENERATES cinematic video + native audio from a prompt, so it is best for a short cinematic
+    clip / B-roll / intro — NOT verbatim narration (the compliance-safe verbatim path is HeyGen). Veo
+    caps at ~8s per clip; a full-length Veo explainer would need clip-chaining (a follow-up). Dormant-
+    safe: {skipped} without VIDEO_PROVIDER=veo + a key."""
+    try:
+        from . import visual_content as _vc, heygen_video as _hg
+    except ImportError:  # pragma: no cover
+        import visual_content as _vc  # type: ignore
+        import heygen_video as _hg  # type: ignore
+    if not _vc.video_configured():
+        return {"skipped": True,
+                "reason": "Veo not configured — set VIDEO_PROVIDER=veo + VIDEO_API_KEY (or GEMINI_API_KEY)"}
+    narration = _hg.narration_from_script(script)[:600]
+    prompt = ("A short, professional explainer clip for a trustworthy financial-services team: a warm, "
+              "credible presenter in a bright modern office, clean corporate look, no on-screen text. "
+              f"Spoken narration (say verbatim): \"{narration}\"")
+    res = _vc.generate_video(business_id, prompt, draft_id=None, work_order_id=d.get("work_order_id"))
+    if res.get("ok"):
+        _record_rendered_video(business_id, draft_id, d, {"visual_id": res.get("visual_id"),
+                               "video_url": None, "duration": None}, "veo")
+        log.info("rendered Veo clip for rich-media draft %s (visual %s)", draft_id, res.get("visual_id"))
+    return res
+
+
+def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[str] = None,
+                           provider: Optional[str] = None) -> dict:
+    """Render a REAL MP4 for an explainer_video/video_script draft. Two selectable renderers:
+      - HEYGEN (default) — an avatar speaks the already-vetted script VERBATIM (deterministic +
+        brand-safe; no generated/hallucinated speech). Best for the full narrated explainer.
+      - VEO 3.1 — Google's generative video + native audio (via the Gemini key). Best for a short
+        cinematic clip / B-roll; its narration is GENERATED (not verbatim), so it carries the usual
+        generative-content compliance caveat for regulated finance.
+    Provider comes from the `provider` arg, else VIDEO_RENDER_PROVIDER, else 'heygen'. Stores the video
+    as a `video` visual_asset (plays in the Media gallery + uploadable to YouTube) and records it on the
+    draft. Explicit owner action (cost per render). Dormant-safe. Never raises."""
     d = api_get(business_id, draft_id)
     if not d:
         return {"ok": False, "error": "draft not found"}
@@ -808,24 +851,20 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
     script = (d.get("body") or d.get("transcript") or "").strip()
     if not script:
         return {"ok": False, "error": "draft has no script to render"}
+    which = (provider or os.getenv("VIDEO_RENDER_PROVIDER", "heygen")).strip().lower()
+    if which in ("veo", "gemini"):
+        return _render_veo(business_id, draft_id, d, script)
     try:
         from . import heygen_video as _hg
     except ImportError:  # pragma: no cover
         import heygen_video as _hg  # type: ignore
     if not _hg.configured():
         return {"skipped": True,
-                "reason": "video rendering not configured — owner must set HEYGEN_API_KEY + HEYGEN_AVATAR_ID"}
+                "reason": "HeyGen not configured — set HEYGEN_API_KEY + HEYGEN_AVATAR_ID (or choose the Veo renderer)"}
     res = _hg.render(business_id, script, title=(d.get("title") or "Explainer video"),
                      work_order_id=d.get("work_order_id"))
     if res.get("ok"):
-        with db() as conn:
-            qn = d.get("quality_notes") if isinstance(d.get("quality_notes"), dict) else {}
-            qn = dict(qn or {})
-            qn["rendered_video"] = {"visual_id": res.get("visual_id"), "video_url": res.get("video_url"),
-                                    "duration": res.get("duration"), "provider": "heygen"}
-            conn.execute("UPDATE rich_media_drafts SET quality_notes=%s, updated_at=now() "
-                         "WHERE id=%s AND business_id=%s", (json.dumps(qn), draft_id, business_id))
-            conn.commit()
+        _record_rendered_video(business_id, draft_id, d, res, "heygen")
         log.info("rendered HeyGen video for rich-media draft %s (visual %s)", draft_id, res.get("visual_id"))
     return res
 

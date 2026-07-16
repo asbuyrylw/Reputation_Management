@@ -145,10 +145,14 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
 
         {isVideoScript && (
           <div className="flex items-center justify-between gap-2 border-t border-line p-3">
-            <span className="text-[12px] leading-snug text-ink-4">Turn this vetted script into a real narrated video (the avatar speaks it verbatim).</span>
-            <button onClick={() => renderVideo.mutate(item.id)} disabled={renderVideo.isPending || renderVideo.isSuccess}
-              className="shrink-0 rounded-[10px] bg-indigo px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
-              {renderVideo.isPending ? "Starting…" : renderVideo.isSuccess ? "Rendering… (appears in Media)" : "▶ Render video"}</button>
+            <span className="text-[12px] leading-snug text-ink-4">Turn this vetted script into a real video. <b>Render video</b> = HeyGen avatar speaks it verbatim (brand-safe). <b>Veo clip</b> = Google generative video (short, cinematic).</span>
+            <div className="flex shrink-0 items-center gap-2">
+              <button onClick={() => renderVideo.mutate({ draftId: item.id, provider: "veo" })} disabled={renderVideo.isPending || renderVideo.isSuccess}
+                className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-paper disabled:opacity-60">Veo clip</button>
+              <button onClick={() => renderVideo.mutate({ draftId: item.id })} disabled={renderVideo.isPending || renderVideo.isSuccess}
+                className="rounded-[10px] bg-indigo px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
+                {renderVideo.isPending ? "Starting…" : renderVideo.isSuccess ? "Rendering…" : "▶ Render video"}</button>
+            </div>
           </div>
         )}
         {item.kind === "video" && item.fileUrl && (

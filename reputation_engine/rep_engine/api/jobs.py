@@ -193,7 +193,8 @@ def _run_render_video(business_id: int, args: dict):
     """Render a real MP4 for an explainer_video/video_script rich-media draft via HeyGen (avatar speaks
     the vetted script verbatim). Stores it as a video visual_asset + links it to the draft."""
     rm = _imp("rich_media_generator")
-    return rm.render_video_for_draft(business_id, args.get("draft_id"), reviewer=args.get("requested_by"))
+    return rm.render_video_for_draft(business_id, args.get("draft_id"), reviewer=args.get("requested_by"),
+                                     provider=args.get("provider"))
 
 
 def _run_publish_youtube(business_id: int, args: dict):
