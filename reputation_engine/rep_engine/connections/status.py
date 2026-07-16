@@ -35,11 +35,27 @@ def test_connection(conn_id: int, business_id: int) -> dict:
         return _probe_gsc(conn_id, business_id, creds)
     if kind == "google_analytics":
         return _probe_ga(conn_id, business_id, creds)
+    if kind == "youtube":
+        return _probe_youtube(conn_id, business_id, creds)
     if kind == "zernia":
         return _probe_zernia(conn_id, business_id, creds)
     # Non-probeable kinds (e.g. ayrshare profile-key): trust stored state, just touch it.
     vault.touch_used(conn_id)
     return {"ok": True, "status": creds.get("status") or "active", "detail": "no live probe for this provider"}
+
+
+def _probe_youtube(conn_id: int, business_id: int, creds: dict) -> dict:
+    try:
+        from .providers import youtube as _yt
+    except ImportError:  # pragma: no cover
+        from connections.providers import youtube as _yt  # type: ignore
+    res = _yt.my_channel(creds.get("access_token") or "")
+    if res.get("ok"):
+        vault.touch_used(conn_id)
+        return {"ok": True, "status": "active", "detail": f"channel: {res.get('title')}"}
+    vault.mark_status(conn_id, "error", last_error=(res.get("error") or "probe failed")[:200],
+                      business_id=business_id)
+    return {"ok": False, "status": "error", "detail": res.get("error")}
 
 
 def _probe_wordpress(conn_id: int, business_id: int, creds: dict) -> dict:

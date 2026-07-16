@@ -189,6 +189,20 @@ def _run_generate_clusters(business_id: int, args: dict):
                                 created_by=args.get("requested_by"))
 
 
+def _run_render_video(business_id: int, args: dict):
+    """Render a real MP4 for an explainer_video/video_script rich-media draft via HeyGen (avatar speaks
+    the vetted script verbatim). Stores it as a video visual_asset + links it to the draft."""
+    rm = _imp("rich_media_generator")
+    return rm.render_video_for_draft(business_id, args.get("draft_id"), reviewer=args.get("requested_by"))
+
+
+def _run_publish_youtube(business_id: int, args: dict):
+    """Publish a rendered `video` visual_asset to the owner's YouTube channel (+ SRT captions)."""
+    yp = _imp("youtube_publish")
+    return yp.publish_video(business_id, args.get("visual_id"),
+                            privacy=args.get("privacy") or "unlisted")
+
+
 def _run_measure_content_impact(business_id: int, args: dict):
     """Measure how far each content batch moved the gap it targets (SoV + alignment delta, % gap
     closed) against the latest audit. DB-only; safe to run after every audit."""
@@ -455,7 +469,9 @@ JOB_DISPATCH = {
     "sync_plan": _run_sync_plan,
     "generate_drafts": _run_generate_drafts,
     "generate_content_batches": _run_generate_content_batches,
-    "generate_clusters": _run_generate_clusters,   # multi-type content per gap
+    "generate_clusters": _run_generate_clusters,
+    "render_video": _run_render_video,
+    "publish_youtube": _run_publish_youtube,   # multi-type content per gap
     "measure_content_impact": _run_measure_content_impact,       # did the content move the gap?
     "report": _run_report,
     "cycle": _run_cycle,

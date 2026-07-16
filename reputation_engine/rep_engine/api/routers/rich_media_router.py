@@ -11,10 +11,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..deps import authorize_business, get_current_user, require_business_editor
+from ..settings import api_settings
+from .. import jobs as _jobs
 
 try:
     from ... import rich_media_generator as _rmg
@@ -62,3 +65,30 @@ def reject_rich_media(draft_id: int, body: StatusUpdate = StatusUpdate(),
     if not _rmg.set_status(business_id, draft_id, "rejected", reviewer=(user or {}).get("email")):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
     return {"id": draft_id, "status": "rejected"}
+
+
+@router.post("/rich-media-drafts/{draft_id}/render-video", status_code=202)
+def render_rich_media_video(draft_id: int, background: BackgroundTasks,
+                            business_id: int = Depends(require_business_editor),
+                            user: dict = Depends(get_current_user)):
+    """Render a REAL MP4 for an explainer_video / video_script draft via HeyGen — the avatar speaks the
+    already-approved script VERBATIM (brand-safe; no generated/hallucinated speech). Explicit action
+    (cost per render). Enqueued off the request path (a render takes minutes). 409 if the draft isn't a
+    video script; the job returns {skipped} until the owner configures HEYGEN_API_KEY + HEYGEN_AVATAR_ID."""
+    d = _rmg.api_get(business_id, draft_id)
+    if not d:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
+    if d.get("asset_type") not in ("explainer_video", "video_script"):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"draft is a {d.get('asset_type')}, not a video script")
+    if not _jobs.rate_ok(business_id, "render_video"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're rendering videos too often — give it a little while.")
+    job_id, active = _jobs.enqueue(business_id, "render_video",
+                                   args={"draft_id": draft_id}, requested_by=(user or {}).get("id"))
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a video render is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "job_type": "render_video",
+                                                  "status": "queued", "draft_id": draft_id})

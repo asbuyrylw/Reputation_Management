@@ -12,7 +12,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from ..deps import authorize_business, get_current_user, require_business_editor
@@ -100,3 +100,28 @@ def reject_visual(visual_id: int, business_id: int = Depends(require_business_ed
     if not _vc.set_visual_status(visual_id, "rejected", _actor(user), business_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "visual not found")
     return {"ok": True, "visual_id": visual_id, "status": "rejected"}
+
+
+class YouTubePublishRequest(BaseModel):
+    privacy: str = "unlisted"   # unlisted (default, safe) | private | public
+
+
+@router.post("/visuals/{visual_id}/publish-youtube", status_code=202)
+def publish_visual_youtube(visual_id: int, body: YouTubePublishRequest = YouTubePublishRequest(),
+                           business_id: int = Depends(require_business_editor),
+                           user: dict = Depends(get_current_user)):
+    """Publish a rendered `video` visual to the owner's YouTube channel (+ SRT captions + description).
+    YouTube is the most-cited domain in Google AI Overviews (via captions), so this is the last step of
+    the video citability loop. Uploads UNLISTED by default (a human flips it public). Enqueued off the
+    request path. The job returns {skipped} until the owner connects YouTube in Integrations."""
+    from .. import jobs as _jobs
+    if not _jobs.rate_ok(business_id, "publish_youtube"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're publishing to YouTube too often — give it a little while.")
+    job_id, active = _jobs.enqueue(business_id, "publish_youtube",
+                                   args={"visual_id": visual_id, "privacy": body.privacy},
+                                   requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a YouTube publish is already running (#{active})")
+    return JSONResponse(status_code=202, content={"job_id": job_id, "job_type": "publish_youtube",
+                                                  "status": "queued", "visual_id": visual_id})

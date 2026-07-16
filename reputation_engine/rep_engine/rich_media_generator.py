@@ -793,6 +793,43 @@ def set_status(business_id: int, draft_id: int, status: str, reviewer: Optional[
     return bool(r)
 
 
+def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[str] = None) -> dict:
+    """Render a REAL MP4 for an explainer_video/video_script draft via HeyGen — the avatar speaks the
+    already-vetted script VERBATIM (deterministic + brand-safe; no generated/hallucinated speech, which
+    is why HeyGen beats Veo/Sora for regulated financial content). Stores the video as a `video`
+    visual_asset (shows in the Media gallery's player + is uploadable to YouTube) and records the
+    reference on the draft. Explicit owner action (cost per render). Dormant-safe: {skipped} without a
+    HeyGen key. Never raises."""
+    d = api_get(business_id, draft_id)
+    if not d:
+        return {"ok": False, "error": "draft not found"}
+    if d.get("asset_type") not in ("explainer_video", "video_script"):
+        return {"ok": False, "error": f"draft {draft_id} is a {d.get('asset_type')}, not a video script"}
+    script = (d.get("body") or d.get("transcript") or "").strip()
+    if not script:
+        return {"ok": False, "error": "draft has no script to render"}
+    try:
+        from . import heygen_video as _hg
+    except ImportError:  # pragma: no cover
+        import heygen_video as _hg  # type: ignore
+    if not _hg.configured():
+        return {"skipped": True,
+                "reason": "video rendering not configured — owner must set HEYGEN_API_KEY + HEYGEN_AVATAR_ID"}
+    res = _hg.render(business_id, script, title=(d.get("title") or "Explainer video"),
+                     work_order_id=d.get("work_order_id"))
+    if res.get("ok"):
+        with db() as conn:
+            qn = d.get("quality_notes") if isinstance(d.get("quality_notes"), dict) else {}
+            qn = dict(qn or {})
+            qn["rendered_video"] = {"visual_id": res.get("visual_id"), "video_url": res.get("video_url"),
+                                    "duration": res.get("duration"), "provider": "heygen"}
+            conn.execute("UPDATE rich_media_drafts SET quality_notes=%s, updated_at=now() "
+                         "WHERE id=%s AND business_id=%s", (json.dumps(qn), draft_id, business_id))
+            conn.commit()
+        log.info("rendered HeyGen video for rich-media draft %s (visual %s)", draft_id, res.get("visual_id"))
+    return res
+
+
 def list_drafts(business_id: int) -> None:
     _ensure_table()
     with db() as conn:
