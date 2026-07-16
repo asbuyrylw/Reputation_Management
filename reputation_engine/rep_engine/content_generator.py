@@ -355,7 +355,8 @@ def _grounding_context(business_id: int, target_query: str | None = None) -> dic
 
 
 _BRIEF_WORDS = {"white_paper": 1500, "blog": 800, "article": 700, "faq": 600, "local_page": 650,
-                "landing_page": 500, "gbp_post": 120, "social_post": 100, "bio": 350, "video_script": 400}
+                "landing_page": 500, "gbp_post": 120, "social_post": 100, "bio": 350, "video_script": 400,
+                "deep_article": 2200, "newsletter": 550, "blog_series": 900}
 _BRIEF_READ = {"white_paper": "Grade 10-12 (authoritative)", "gbp_post": "Grade 6-8 (very plain)",
                "social_post": "Grade 6-8 (very plain)", "video_script": "Grade 6-8 (spoken)"}
 _BRIEF_STRUCT = {
@@ -585,9 +586,17 @@ _ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "
 def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
                   outline: str = "", voice: str = "") -> str:
     tier = _ASSET_TIER.get(asset_type, "mid")
+    # Size the output cap to the piece's target length (+ headroom for headings/citations/byline), so a
+    # long-form asset isn't truncated mid-draft. A flat 2600 clipped deep_article (2.5k words ~3.3k
+    # tokens) and long white_papers. ~1.5 tokens/word; clamp so short types stay cheap, long stay whole.
+    # The model reliably writes ~2x its target length, and max_tokens is a CAP (no cost unless used),
+    # so size generously: ~2.5 tokens/target-word + a high floor, clamped. Undersizing truncates the
+    # draft mid-sentence; oversizing is free.
+    target_words = _BRIEF_WORDS.get(asset_type, 1200)
+    max_tokens = max(3200, min(int(target_words * 2.5) + 800, 6500))
     return llm.orchestrator_text(GEN_SYSTEM,
                                  _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
-                                 max_tokens=2600, tier=tier)
+                                 max_tokens=max_tokens, tier=tier)
 
 
 # ----------------------------------------------------------------------------
@@ -628,8 +637,13 @@ REVISE_SYSTEM = (
 
 def _revise(body: str, fixes: list) -> str:
     user = "Issues/fixes to address:\n- " + "\n- ".join(fixes or []) + f"\n\nCurrent draft:\n{body}"
+    # A rewrite is ~as long as the input, so the output cap MUST scale with the body. A fixed 2200
+    # silently truncated (-> empty) any revision of a 9k+ char article, so _maximize_geo AND the
+    # readability pass discarded every long-form revision and never actually improved it. Size to the
+    # body (~3 chars/token) + headroom, clamped so long-form isn't truncated but a cap still exists.
+    max_tokens = max(2600, min(int(len(body or "") / 3.0) + 500, 8000))
     # creative rewrite -> mid tier (Sonnet/gpt-4o).
-    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=2200, tier="mid")
+    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=max_tokens, tier="mid")
 
 
 # ----------------------------------------------------------------------------
@@ -893,6 +907,52 @@ def _ensure_freshness(body: str, when: str) -> str:
             lines[i : i + 1] = [ln, "", line]
             return "\n".join(lines)
     return line + "\n\n" + body
+
+
+def _ensure_readability(body: str, asset_type: str, sq: str, content_type: str,
+                        business_name: str, geo: str) -> str:
+    """Plain-language backstop. The full/Opus tier writes at ~grade 15 regardless of the prompt AND of
+    the GEO fluency signal (a draft already clearing _maximize_geo's target never gets its readability
+    revised). Dense prose reads generic and lifts poorly (Princeton fluency +29%; NN/g concise copy
+    +58% usability). So if the reading grade is too high, revise ONCE to shorten sentences + simplify
+    wording, preserving every fact, citation, quote, heading, the answer-first opener, byline, and
+    freshness line. Keeps the rewrite only if it lowered the grade without materially dropping GEO.
+    Best-effort; returns the input unchanged on failure/non-improvement."""
+    if not body:
+        return body
+    try:
+        from . import content_quality as _cq
+    except Exception:  # noqa: BLE001
+        return body
+    limit = 13 if asset_type in ("white_paper", "deep_article") else 11   # white papers read denser
+    try:
+        grade = _cq.readability_score(body).get("grade") or 0
+    except Exception:  # noqa: BLE001
+        return body
+    if grade <= limit:
+        return body
+    rev = _revise(body, [
+        f"PLAIN-LANGUAGE REWRITE. The reading level is grade {grade}; bring it to grade 6-8 (and never "
+        f"above {limit}). Shorten sentences to ~15-20 words on average, split long/compound sentences, "
+        "use everyday words, and write in active voice. PRESERVE EVERYTHING ELSE EXACTLY: keep every "
+        "fact, every statistic and its source, every inline citation link, every quotation, all "
+        "headings, the answer-first opening paragraph, the byline line, and the 'Last updated' line. Do "
+        "NOT drop content, weaken specificity, add [INSERT] placeholders, or change any numbers. Necessary "
+        "domain terms (e.g. 'insurance', 'retirement') are fine; simplify the sentences around them."])
+    if not rev:
+        return body
+    rev = _strip_placeholders(rev)
+    try:
+        g2 = _cq.readability_score(rev).get("grade")
+        _kw = dict(target_query=sq, content_type=content_type, asset_type=asset_type,
+                   business_name=business_name, geo=geo)
+        before = _cq.geo_score(body, **_kw).get("score") or 0
+        after = _cq.geo_score(rev, **_kw).get("score") or 0
+    except Exception:  # noqa: BLE001
+        return body
+    if g2 is not None and g2 < grade and after >= before - 3:   # improved readability, GEO held
+        return rev
+    return body
 
 
 _BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed by )", re.I | re.M)
@@ -1244,6 +1304,11 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         body = _ensure_freshness(body, f"{datetime.now(timezone.utc):%B %Y}")
         # E-E-A-T authorship (YMYL requirement): add a general, compliance-safe byline/reviewer line.
         body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "")
+        # Plain-language backstop: the Opus tier writes grade ~15 despite the prompt + fluency signal,
+        # so force a readability rewrite when the grade is too high (preserves facts/citations/quotes).
+        body = _ensure_readability(body, asset_type, _score_q, content_type,
+                                   (biz.get("name") if isinstance(biz, dict) else "") or "",
+                                   (biz.get("geo") if isinstance(biz, dict) else "") or "")
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
