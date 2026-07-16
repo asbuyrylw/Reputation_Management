@@ -37,11 +37,15 @@ _STATUS_URL = os.getenv("HEYGEN_STATUS_URL", f"{_API_BASE}/v1/video_status.get")
 _MAX_POLLS = int(os.getenv("HEYGEN_MAX_POLLS", "90"))       # ~15 min at 10s
 _POLL_SECONDS = int(os.getenv("HEYGEN_POLL_SECONDS", "10"))
 _MAX_CHARS = int(os.getenv("HEYGEN_MAX_SCRIPT_CHARS", "1500"))  # ~2 min of narration (retention cliff)
+# Validated defaults (a real render was produced with these on 2026-07-16), so only HEYGEN_API_KEY is
+# required to go live; override via HEYGEN_AVATAR_ID / HEYGEN_VOICE_ID for a different presenter/voice.
+_DEFAULT_AVATAR = "Abigail_standing_office_front"        # professional office-setting presenter
+_DEFAULT_VOICE = "97dd67ab8ce242b6a9e7689cb00c6414"      # clear English (female) voice
 
 
 def configured() -> bool:
-    """A key AND a chosen avatar are both required — HeyGen has no default avatar."""
-    return bool(os.getenv("HEYGEN_API_KEY") and os.getenv("HEYGEN_AVATAR_ID"))
+    """Only the API key is required — a validated default avatar + voice are used unless overridden."""
+    return bool(os.getenv("HEYGEN_API_KEY"))
 
 
 def _key() -> str:
@@ -87,13 +91,12 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
     visual_asset (so the Media UI's player + the YouTube publisher can use it). Returns
     {ok, visual_id, video_url, srt, duration, file_path} or {skipped}/{ok:False, error}. Never raises."""
     if not configured():
-        return {"skipped": True,
-                "reason": "HeyGen not configured (set HEYGEN_API_KEY + HEYGEN_AVATAR_ID; optional HEYGEN_VOICE_ID)"}
+        return {"skipped": True, "reason": "HeyGen not configured (set HEYGEN_API_KEY)"}
     narration = narration_from_script(script)[:_MAX_CHARS]
     if not narration:
         return {"ok": False, "error": "no narration text found in the script"}
-    avatar = avatar_id or os.getenv("HEYGEN_AVATAR_ID", "")
-    voice = voice_id or os.getenv("HEYGEN_VOICE_ID", "")
+    avatar = avatar_id or os.getenv("HEYGEN_AVATAR_ID") or _DEFAULT_AVATAR
+    voice = voice_id or os.getenv("HEYGEN_VOICE_ID") or _DEFAULT_VOICE
     w, h = (720, 1280) if aspect == "9:16" else (1280, 720)
     voice_obj: dict = {"type": "text", "input_text": narration}
     if voice:

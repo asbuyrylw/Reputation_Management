@@ -860,7 +860,7 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
         import heygen_video as _hg  # type: ignore
     if not _hg.configured():
         return {"skipped": True,
-                "reason": "HeyGen not configured — set HEYGEN_API_KEY + HEYGEN_AVATAR_ID (or choose the Veo renderer)"}
+                "reason": "HeyGen not configured — set HEYGEN_API_KEY on the worker (or choose the Veo renderer)"}
     res = _hg.render(business_id, script, title=(d.get("title") or "Explainer video"),
                      work_order_id=d.get("work_order_id"))
     if res.get("ok"):
