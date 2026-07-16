@@ -319,7 +319,16 @@ def _grounding_context(business_id: int, target_query: str | None = None) -> dic
             keywords = _scope_keywords(allkw, target_query)
     except Exception:  # noqa: BLE001 -- best-effort: missing table or empty result degrades to no keywords
         keywords = []
-    return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords}
+    # Authoritative citation sources + real datable statistics (the #1 GEO/citability lever). So the
+    # writer can cite .gov/regulator/industry/academic sources INLINE and quote REAL numbers.
+    authoritative = ""
+    try:
+        from . import authoritative_sources as _authsrc
+        authoritative = _authsrc.grounding_for_business(business_id)
+    except Exception:  # noqa: BLE001 -- best-effort
+        authoritative = ""
+    return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords,
+            "authoritative": authoritative}
 
 
 _BRIEF_WORDS = {"white_paper": 1500, "blog": 800, "article": 700, "faq": 600, "local_page": 650,
@@ -523,6 +532,9 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         "WHAT AI CURRENTLY GETS WRONG / THE GAP THIS CONTENT MUST CLOSE:",
         grounding.get("gap_focus") or "(general trust & visibility)",
         "",
+        # Authoritative sources to cite inline + real statistics to quote -- the biggest AI-citation lever.
+        grounding.get("authoritative") or "",
+        "" if grounding.get("authoritative") else "",
         f"Work order: {title}",
         f"Instruction: {instr}" if instr else "",
         kw_line + f"Target question this should answer when someone asks AI: "

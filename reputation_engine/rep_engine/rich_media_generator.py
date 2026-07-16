@@ -124,6 +124,10 @@ def _ensure_table() -> None:
         # Deep link to open the piece in an external tool (e.g. the NotebookLM Studio page where the
         # owner listens to / downloads the generated podcast, since Google exposes no audio-download API).
         conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS notebook_url TEXT")
+        # Video/rich-media grade: overall citability score + the full per-dimension scorecard
+        # (AEO/GEO, information, production, video SEO, length), same shape idea as content_drafts.
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS geo_score NUMERIC")
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS quality_notes JSONB")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_rmedia_biz "
             "ON rich_media_drafts(business_id, status)"
@@ -155,6 +159,17 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
             f"Contested terms: {biz.get('contested_terms','')}"
         )
         sources.append({"title": "Business Profile", "text": trusted_ctx})
+
+        # Authoritative citation sources + real statistics -> so rich media can reference/cite the
+        # .gov/regulator/industry/academic sources AI answer engines trust (the biggest citability lever).
+        try:
+            from . import authoritative_sources as _authsrc
+            _auth = _authsrc.grounding_block(biz.get("services") or "", biz.get("industry") or "",
+                                             biz.get("geo") or "")
+            if _auth:
+                sources.append({"title": "Authoritative Sources to Cite + Real Statistics", "text": _auth})
+        except Exception as e:  # noqa: BLE001
+            log.debug("rich_media: authoritative sources unavailable: %s", e)
 
         # Brand guardrails + owner-uploaded source material (trusted) -> so NotebookLM rich media is
         # on-brand and grounded in the client's real docs, not generic web filler.
@@ -493,6 +508,8 @@ def _persist(
     compliance_flags: list | None = None,
     generator: str = "llm",
     notebook_url: Optional[str] = None,
+    business_name: str = "",
+    geo: str = "",
 ) -> int:
     # Publish-ready: rich-media scripts/briefs go through the SAME placeholder strip + license-number
     # scrub as text drafts, so a video/slide/infographic never ships with an [INSERT: ...] or a
@@ -503,21 +520,36 @@ def _persist(
             body = _cg._scrub_license_phrasing(_cg._strip_placeholders(body))
         except Exception as e:  # noqa: BLE001 -- cleanup must never block persistence
             log.debug("rich_media: body cleanup skipped: %s", e)
+    # Grade video scripts (AEO/GEO citability first, then info/production/SEO/length) so a video is
+    # scored like text. Runs on the CLEANED body. Best-effort; non-video types get no grade.
+    quality_notes = None
+    geo_grade = None
+    if body and asset_type in ("explainer_video", "video_script"):
+        try:
+            from . import content_quality as _cq
+            _q = f"{business_name} {geo} financial services".strip()
+            vg = _cq.video_score(body, target_query=_q, business_name=business_name, geo=geo,
+                                 asset_type=asset_type)
+            quality_notes, geo_grade = vg, vg.get("score")
+            duration_secs = duration_secs or (vg.get("runtime_secs") or None)
+        except Exception as e:  # noqa: BLE001 -- grading must never block persistence
+            log.debug("rich_media: video grading skipped: %s", e)
     with db() as conn:
         row = conn.execute(
             """INSERT INTO rich_media_drafts
                (business_id, asset_type, title, body, audio_url, transcript,
                 duration_secs, sources_used, compliance_pass, compliance_flags, generator,
-                notebook_url, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
+                notebook_url, geo_score, quality_notes, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
             (business_id, asset_type, title,
              body, audio_url, transcript, duration_secs,
              json.dumps(sources_used or []),
-             compliance_pass, json.dumps(compliance_flags or []), generator, notebook_url),
+             compliance_pass, json.dumps(compliance_flags or []), generator, notebook_url,
+             geo_grade, json.dumps(quality_notes) if quality_notes else None),
         ).fetchone()
         conn.commit()
-    log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s)", row["id"],
-             asset_type, generator, compliance_pass)
+    log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s, grade=%s)", row["id"],
+             asset_type, generator, compliance_pass, geo_grade)
     return row["id"]
 
 
@@ -620,6 +652,8 @@ def generate(
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
                     generator="llm",
+                    business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
+                    geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
                 )
                 created.append(draft_id)
 
@@ -636,6 +670,8 @@ def generate(
                     compliance_pass=comp_pass,
                     compliance_flags=comp_flags,
                     generator="llm",
+                    business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
+                    geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
                 )
                 created.append(draft_id)
 

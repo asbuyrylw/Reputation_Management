@@ -467,6 +467,169 @@ def geo_score(body: str, target_query: str = "", content_type: str = "", asset_t
 
 
 # ============================================================================================
+# VIDEO grader -- a video SCRIPT is graded for AI-citability (AEO/GEO) FIRST (the whole point is that
+# AI answer engines surface the business), then information quality, production quality, video SEO, and
+# runtime. AI engines cite video via its TRANSCRIPT, so the spoken content must be answer-first,
+# entity-clear, and Q&A-structured. Weighted blend over 5 dimensions + a runtime read + a compliance note.
+# ============================================================================================
+_TS = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
+_ONSCREEN = re.compile(r"\[\s*(?:on[-\s]?screen|visual|b-?roll|text\s*(?:card|overlay)|graphic|footage|cut to|scene)", re.I)
+_NARR = re.compile(r"\b(?:narrator|v\.?o\.?|voice[-\s]?over|on[-\s]?camera|host|speaker|talent)\b", re.I)
+# ideal runtime band (seconds) per rich video type
+_VIDEO_LEN = {"explainer_video": (60, 180), "video_script": (45, 180), "explainer": (60, 180),
+              "report_audio": (120, 600), "podcast": (300, 1500)}
+
+
+def _runtime_secs(body: str) -> int:
+    return max([int(m) * 60 + int(s) for m, s in _TS.findall(body or "")], default=0)
+
+
+def _spoken_only(body: str) -> str:
+    """Just the narration -- strip [stage directions], ## headings, and speaker labels -- because that
+    is the TRANSCRIPT an AI answer engine actually reads and can cite."""
+    t = re.sub(r"\[[^\]]*\]", " ", body or "")          # [ON SCREEN: ...] stage directions
+    t = re.sub(r"^\s*#{1,6}.*$", " ", t, flags=re.M)     # segment headings
+    t = re.sub(r"^\s*\|.*$", " ", t, flags=re.M)         # tables (production briefs)
+    t = re.sub(r"^\s*\*{0,2}(?:narrator|v\.?o\.?|on[-\s]?camera|host|speaker|talent)[^:\n]{0,30}:\*{0,2}",
+               " ", t, flags=re.I | re.M)                # speaker labels
+    return t
+
+
+def _dim(checks: list[tuple]) -> dict:
+    """checks: (label, ok_bool, weight, fix) -> {score, checks[]} (weights sum to 100)."""
+    score = sum(w for _, ok, w, _ in checks if ok)
+    return {"score": score, "band": _band(score),
+            "checks": [{"label": l, "ok": bool(ok), "points": w if ok else 0, "max": w,
+                        "fix": (fix if not ok else "")} for l, ok, w, fix in checks]}
+
+
+def video_score(body: str, target_query: str = "", business_name: str = "", geo: str = "",
+                asset_type: str = "explainer_video") -> dict:
+    """Grade a video SCRIPT across AI-citability (AEO/GEO), information quality, production quality,
+    video SEO, and runtime. Returns per-dimension scorecards + a weighted overall (AI-citability
+    weighted highest, per the reputation goal). Deterministic + dormant-safe."""
+    body = body or ""
+    low = body.lower()
+    spoken = _spoken_only(body)
+    qterms = _terms(target_query)
+    city = (geo or "").split(",")[0].strip().lower()
+    headings = _HEADING.findall(body)
+    name_hits = low.count((business_name or "").lower()) if (business_name or "").strip() else 0
+    runtime = _runtime_secs(body)
+    onscreen = len(_ONSCREEN.findall(body))
+    narr = len(_NARR.findall(body))
+    seg_ts = sum(1 for h in headings if _TS.search(h))
+    segments = seg_ts or len(re.findall(r"^\s*#{2,4}\s", body, re.M))
+    qh = sum(1 for h in headings if h.strip().endswith("?"))
+    has_faq = qh >= 1 or bool(re.search(r"\b(q ?& ?a|faq|frequently asked|common questions|questions? (?:people ask|answered))\b", low))
+    # first substantive spoken line (for spoken answer-first)
+    first_spoken = ""
+    for para in re.split(r"\n\s*\n", spoken.strip()):
+        p = para.strip(' *">\t')
+        if len(_words(p)) >= 8:
+            first_spoken = p
+            break
+
+    # --- 1) AEO / GEO -- AI-citability of the transcript (PRIMARY) ---
+    ans_first = (bool(qterms) and sum(t in first_spoken.lower() for t in qterms) >= max(1, len(qterms) // 2)
+                 and 10 <= len(_words(first_spoken)) <= 90)
+    entity = (name_hits >= 3) and (not city or city in low)
+    transcript = bool(re.search(r"\b(caption|closed[-\s]?caption|subtitle|srt|transcript)\b", low))
+    quotable = bool(_STAT.search(spoken)) or bool(re.search(r"\b(licensed|regulated|founded|established|serves?|based in|affiliat)\b", low))
+    schema = bool(re.search(r"\b(videoobject|video ?schema|clip ?schema|schema markup|structured data)\b", low))
+    fresh = bool(_FRESH.search(body))
+    aeo_geo = _dim([
+        ("Spoken answer-first (opens with the direct answer)", ans_first, 26,
+         "Have the narrator state a crisp 1-2 sentence answer to the core question in the first ~15 seconds."),
+        ("Entity clarity (business + city + service, repeated)", entity, 20,
+         "Say the business name + city + what it does explicitly and 3+ times."),
+        ("Q&A / FAQ segment (AI extracts Q&A from transcripts)", has_faq, 16,
+         "Add a short Q&A / FAQ segment answering the top questions people ask about the business."),
+        ("Captions / transcript (what AI actually reads)", transcript, 16,
+         "Ship closed captions / an SRT transcript -- AI answer engines read the transcript, not the pixels."),
+        ("Quotable, attributable statements", quotable, 12,
+         "Include a crisp, attributable, quotable line (a real stat or definitive fact) AI can lift."),
+        ("VideoObject schema recommended for the embed", schema, 6,
+         "Recommend VideoObject/Clip schema on the page that embeds the video."),
+        ("Freshness / current-year signal", fresh, 4,
+         "Add a visible last-updated / current-year cue so it reads as current."),
+    ])
+
+    # --- 2) INFORMATION quality (accurate, grounded coverage of who/what/where) ---
+    covers = lambda *ws: any(w in low for w in ws)
+    grounded = (name_hits >= 1) and (not city or city in low)
+    info = _dim([
+        ("Defines who the business is", (name_hits >= 1) and covers("team", "team of", "we are", "is a"), 18,
+         "Clearly state who the business is on first mention."),
+        ("Covers the core services", covers("insurance", "financial", "debt", "investment", "planning", "education"), 18,
+         "Cover the main services the business offers."),
+        ("States location / service area", bool(city and city in low) or covers("cincinnati", "ohio", "area", "serving"), 16,
+         "Name the city / service area."),
+        ("Establishes legitimacy (general licensing/affiliation)", covers("licensed", "regulated", "affiliat", "member", "registered"), 16,
+         "Note (generally) that the professionals are licensed/regulated -- no specific license numbers."),
+        ("Clear call to action / how to connect", covers("visit", "call", "contact", "learn more", "reach", "get a", "book"), 16,
+         "End with a clear CTA (how to contact / next step)."),
+        ("Grounded in real facts (not generic filler)", grounded, 16,
+         "Ground the script in the business's real name + place + offerings, not generic claims."),
+    ])
+
+    # --- 3) PRODUCTION quality (shootable, well-structured) ---
+    hook = len(_words(first_spoken)) >= 8 and (runtime == 0 or True)
+    end_card = bool(re.search(r"\b(end ?card|logo|outro|closing|wordmark)\b", low))
+    thumb = bool(re.search(r"\b(thumbnail|title card|lower third)\b", low))
+    production = _dim([
+        ("Opening hook", hook, 16, "Open with a hook in the first 5-10 seconds."),
+        ("Segmented with timestamps", seg_ts >= 3 or segments >= 3, 18, "Break the script into 3+ timed segments."),
+        ("On-screen text / visual direction", onscreen >= 3, 18, "Add on-screen text + visual/B-roll direction per segment."),
+        ("Narration / dialogue present", narr >= 1, 14, "Write the actual narration/dialogue, not just directions."),
+        ("Call to action", bool(re.search(r"\b(cta|call to action|visit|contact|learn more|subscribe)\b", low)), 14,
+         "Add an explicit CTA."),
+        ("Branded end card / outro", end_card, 10, "Add a branded end card / outro."),
+        ("Thumbnail / title guidance", thumb, 10, "Include thumbnail + title guidance for the upload."),
+    ])
+
+    # --- 4) VIDEO SEO (YouTube/discovery signals) ---
+    has_title = bool(re.search(r"\b(youtube title|video title|title:)\b", low)) or bool(re.match(r"^\s*#\s", body))
+    has_desc = bool(re.search(r"\b(description|youtube description)\b", low))
+    has_tags = bool(re.search(r"\b(tags?|keywords?)\b\s*[:|]", low))
+    has_chapters = seg_ts >= 3
+    kw_intro = bool(qterms) and any(t in first_spoken.lower() for t in qterms)
+    video_seo = _dim([
+        ("Keyword-rich title", has_title and (name_hits >= 1), 22, "Give a keyword-rich title with the business + service + city."),
+        ("Description with NAP + keywords + link", has_desc, 20, "Add a description with NAP, keywords, and a link to the owned page."),
+        ("Tags / keywords list", has_tags, 16, "List target tags/keywords for the upload."),
+        ("Chapters / timestamps", has_chapters, 16, "Add YouTube chapters (timestamped segments)."),
+        ("Captions / SRT for indexing", transcript, 16, "Upload captions/SRT -- they are indexed and read by search + AI."),
+        ("Target keyword spoken in the intro", kw_intro, 10, "Say the target keyword in the spoken intro + title."),
+    ])
+
+    # --- 5) LENGTH (runtime vs the ideal band for the type) ---
+    lo, hi = _VIDEO_LEN.get(asset_type, (60, 180))
+    if runtime == 0:
+        length = {"score": 40, "band": "weak", "runtime_secs": 0, "runtime": "unknown",
+                  "note": "No timestamps found -- add segment timecodes so runtime is explicit."}
+    else:
+        if lo <= runtime <= hi:
+            lscore = 100
+        elif runtime < lo:
+            lscore = max(40, round(100 * runtime / lo))
+        else:
+            lscore = max(50, round(100 * hi / runtime))
+        length = {"score": lscore, "band": _band(lscore), "runtime_secs": runtime,
+                  "runtime": f"{runtime // 60}:{runtime % 60:02d}", "ideal": f"{lo // 60}:{lo % 60:02d}-{hi // 60}:{hi % 60:02d}",
+                  "note": ("in the ideal range" if lscore == 100 else "shorter than ideal" if runtime < lo else "longer than ideal")}
+
+    W = {"aeo_geo": 0.35, "information": 0.25, "production": 0.20, "video_seo": 0.15, "length": 0.05}
+    dims = {"aeo_geo": aeo_geo, "information": info, "production": production, "video_seo": video_seo, "length": length}
+    overall = round(sum(dims[k]["score"] * w for k, w in W.items()))
+    return {"score": overall, "band": _band(overall), "runtime_secs": runtime,
+            "runtime": (length.get("runtime") if runtime else "unknown"),
+            "weights": W, "dimensions": dims,
+            "summary": {"AEO/GEO (AI citability)": aeo_geo["score"], "Information": info["score"],
+                        "Production": production["score"], "Video SEO": video_seo["score"], "Length": length["score"]}}
+
+
+# ============================================================================================
 # SERP-competitor grade (Phase 3) -- benchmark the draft against the pages actually ranking.
 # ============================================================================================
 def serp_grade(body: str, benchmark: Optional[dict], keywords: Optional[list[str]] = None) -> dict:
