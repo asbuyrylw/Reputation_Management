@@ -517,7 +517,9 @@ def _persist(
     if body:
         try:
             from . import content_generator as _cg
+            from . import content_quality as _cqs
             body = _cg._scrub_license_phrasing(_cg._strip_placeholders(body))
+            body = _cqs.scrub_slop(body)   # de-generic: strip formulaic AI-slop lead-ins
         except Exception as e:  # noqa: BLE001 -- cleanup must never block persistence
             log.debug("rich_media: body cleanup skipped: %s", e)
     # Grade video scripts (AEO/GEO citability first, then info/production/SEO/length) so a video is

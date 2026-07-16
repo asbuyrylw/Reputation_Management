@@ -198,9 +198,13 @@ def grounding_block(services: str = "", industry: str = "", geo: str = "") -> st
         lines.append(f"- {s['name']} ({s['url']}) — {s['provides']}. Cite for: {s['cite_when']}.")
     if stats:
         lines.append("")
-        lines.append("REAL, ATTRIBUTABLE STATISTICS you MAY quote (quote the number as-is, ATTRIBUTE the "
-                     "source, and keep the 'as of' year; use one ONLY if it genuinely fits this page's "
-                     "topic; NEVER invent or alter a statistic):")
+        lines.append("REAL, ATTRIBUTABLE STATISTICS -- you MUST quote AT LEAST 2-3 of these in the piece "
+                     "(long-form: 3-5), each woven into the relevant section with an INLINE markdown link "
+                     "to its source and the year, e.g. 'About 51% of U.S. adults own life insurance "
+                     "([LIMRA, 2024](https://www.limra.com)).' A concrete, sourced statistic is the single "
+                     "most-cited element by AI answer engines. Quote the number AS-IS; keep the 'as of' "
+                     "year; choose the ones that genuinely fit this page's topic; NEVER invent or alter a "
+                     "statistic, and NEVER state one without its source:")
         for st in stats:
             lines.append(f"- \"{st['stat']}\" — {st['source']} ({st['as_of']}), {st['url']}")
     return "\n".join(lines)

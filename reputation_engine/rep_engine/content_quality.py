@@ -267,13 +267,86 @@ def readability_score(body: str) -> dict:
     syl = sum(_syllables(w) for w in words)
     grade = round(0.39 * (nw / ns) + 11.8 * (syl / nw) - 15.59, 1)
     passive = len(_PASSIVE.findall(text))
+    avg_sent = nw / ns
     issues = []
-    if grade > 12:
-        issues.append({"label": f"Reading grade {grade} (hard)", "fix": "Shorten sentences + simpler words; aim grade 8–10."})
+    if grade > 11:
+        issues.append({"label": f"Reading grade {grade} (hard)", "fix": "Shorten sentences + simpler words; aim grade 6–8 (10–12 only for authoritative white papers)."})
+    if avg_sent > 22:
+        issues.append({"label": f"Avg sentence {round(avg_sent,1)} words (long)", "fix": "Aim 15–20 words/sentence; split long sentences (NN/g: concise copy tested +58% usability)."})
     if passive > max(3, ns // 4):
         issues.append({"label": f"{passive} passive-voice phrases", "fix": "Rewrite passive sentences in active voice."})
     return {"grade": grade, "avg_sentence_len": round(nw / ns, 1), "passive_hits": passive,
-            "target": "grade 8–10 for a broad audience", "issues": issues}
+            "target": "grade 6–8 for a broad audience (NN/g)", "issues": issues}
+
+
+# ============================================================================================
+# Anti-slop / distinctiveness -- the machine-measurable "generic AI writing" tells research flags
+# (formulaic openers/closers, non-committal hedges, filler transitions, buzzword vocabulary). These
+# are what make automated content read as generic; we detect them so the grader penalizes them and
+# the generator's revision loop can strip them. Kept SEPARATE from compliance (which bans regulated
+# claims like guarantees/superlatives), and from the true-fact vocabulary (a piece may legitimately
+# say "insurance" or "financial") -- this list is only the empty-calorie AI-tell phrases.
+# ============================================================================================
+_SLOP_PHRASES = [
+    # formulaic openers / closers (whole-phrase, safe to flag)
+    r"in today'?s (?:fast[- ]paced|digital|modern|ever[- ]changing|competitive) (?:world|age|era|landscape|environment)",
+    r"in today'?s world", r"in the world of", r"in the realm of", r"in the fast[- ]paced world",
+    r"in conclusion", r"in summary", r"to sum up", r"at the end of the day", r"when it comes to",
+    r"last but not least", r"needless to say", r"as we all know", r"it goes without saying",
+    # non-committal hedges
+    r"it'?s (?:important|worth|crucial|essential) to (?:note|remember|mention|understand) that",
+    r"it should be noted that", r"it is worth noting", r"generally speaking", r"that being said",
+    # filler transitions
+    r"furthermore", r"moreover", r"here'?s the kicker", r"rest assured", r"look no further",
+    # buzzword / AI-tell vocabulary
+    r"delve", r"delving", r"leverage", r"leveraging", r"foster", r"fostering", r"seamless(?:ly)?",
+    r"tapestry", r"testament to", r"transformative", r"game[- ]chang", r"plethora", r"myriad",
+    r"unlock(?:ing)?(?: the)? (?:potential|power|secret)", r"elevate", r"empower(?:ing)?",
+    r"ever[- ]evolving", r"vibrant", r"bustling", r"dive into", r"deep dive", r"navigate the",
+    r"cutting[- ]edge", r"unparalleled", r"in this (?:article|post|guide|blog)", r"we'?ll explore",
+]
+_SLOP_RE = re.compile(r"\b(?:" + "|".join(_SLOP_PHRASES) + r")\b", re.I)
+# Sentence-initial filler lead-ins we can safely delete (keep the substantive clause after the comma).
+_SLOP_LEADIN_RE = re.compile(
+    r"(?:^|(?<=[.!?\n]))\s*(?:In (?:today'?s[^,.]{0,40}|conclusion|summary|the world of[^,.]{0,30})"
+    r"|Ultimately|Needless to say|As we all know|That being said|It(?:'s| is) (?:important|worth"
+    r"|crucial|essential) to (?:note|remember|mention|understand) that|It should be noted that)\s*,?\s*",
+    re.I)
+
+
+def slop_score(body: str) -> dict:
+    """Distinctiveness grade (100 = clean): counts generic-AI-tell phrases per ~500 words and the
+    number of DISTINCT tells. High slop = generic content that reads as machine-produced."""
+    body = body or ""
+    wc = max(1, len(_words(body)))
+    hits = _SLOP_RE.findall(body)
+    # normalize matched phrases for a distinct-tell count
+    distinct = {h.lower().strip() for h in hits}
+    density = len(hits) / (wc / 500.0)             # tells per 500 words
+    # 100 - penalty; each tell per-500w costs ~12, each distinct family a touch more
+    score = max(0, round(100 - density * 12 - max(0, len(distinct) - 1) * 4))
+    return {"score": score, "band": _band(score), "tells": len(hits), "distinct_tells": len(distinct),
+            "examples": sorted(distinct)[:12],
+            "fix": ("Remove generic AI-tell phrases (formulaic openers/closers, hedges like "
+                    "‘it’s important to note’, buzzwords like ‘leverage/delve/seamless’) and replace "
+                    "with specific, concrete statements." if score < 80 else "")}
+
+
+def scrub_slop(body: str) -> str:
+    """Best-effort deterministic removal of the SAFEST sentence-initial filler lead-ins (keeps the
+    real clause, re-capitalizes it). Buzzwords mid-sentence are left for the LLM revision pass, since
+    deleting them blindly would break grammar."""
+    if not body:
+        return body
+    out = body
+    for _ in range(3):   # chained lead-ins: removing one can expose the next
+        stripped = _SLOP_LEADIN_RE.sub("", out)
+        if stripped == out:
+            break
+        out = stripped
+    # re-capitalize the first letter of any sentence we truncated
+    out = re.sub(r"(^|[.!?]\s+|\n)([a-z])", lambda m: m.group(1) + m.group(2).upper(), out)
+    return out
 
 
 # ============================================================================================
@@ -335,15 +408,24 @@ _EXT_LINK = re.compile(r"\]\((https?://[^)]+)\)")
 _AUTH = re.compile(r"https?://[^)\s]*\.(gov|edu|org|ac\.[a-z]{2})\b", re.I)
 _COMPARE = re.compile(r"\b(vs\.?|versus|compare(d)?|best|top \d|pros? and cons?|alternative)\b", re.I)
 _REVIEW = re.compile(r"\b(review|rating|stars?|testimonial|\d(\.\d)?\s?/\s?5)\b", re.I)
+# A directly-quoted, ATTRIBUTED statement -- the #1 measured AI-citation lever (Princeton GEO, +41%).
+# Matches a 20+ char quoted passage, or an "according to <Source>" / "<Source> reports/notes/found"
+# attribution. Both together = an attributed quotation an AI answer engine can lift verbatim.
+_QUOTE_STR = re.compile(r'["“][^"”\n]{20,}["”]')
+_ATTRIB = re.compile(
+    r'\b(?:according to|as (?:noted|reported|stated|found|estimated) (?:by|in)|per (?:the |a )?[A-Z]'
+    r'|[A-Z][A-Za-z.&\'\-]{2,}(?:\s+[A-Z][A-Za-z.&\'\-]{2,})?\s+'
+    r'(?:reports?|states?|notes?|found|finds?|estimates?|writes?|explains?|warns?|advises?|reported that)'
+    r')\b')
 
 # Per-content-type weight profiles (each sums to 100). Keys must exist in _geo_signal_score() below.
 _GEO_PROFILES: dict[str, dict[str, int]] = {
-    "blog":        {"answer_first": 18, "question_headings": 14, "stat_density": 14, "citation_density": 16, "schema": 8, "entity": 12, "freshness": 8, "chunkability": 10},
-    "article":     {"answer_first": 18, "question_headings": 14, "stat_density": 14, "citation_density": 16, "schema": 8, "entity": 12, "freshness": 8, "chunkability": 10},
-    "faq":         {"answer_first": 20, "question_headings": 22, "stat_density": 10, "citation_density": 12, "schema": 12, "entity": 12, "freshness": 4, "chunkability": 8},
-    "white_paper": {"answer_first": 12, "stat_density": 20, "citation_density": 24, "entity": 12, "chunkability": 12, "schema": 8, "freshness": 6, "question_headings": 6},
-    "landing_page":{"answer_first": 20, "comparison": 16, "entity": 16, "schema": 10, "question_headings": 12, "citation_density": 10, "freshness": 6, "chunkability": 10},
-    "local_page":  {"nap": 22, "entity": 18, "answer_first": 16, "schema": 12, "reviews": 10, "freshness": 8, "question_headings": 8, "citation_density": 6},
+    "blog":        {"answer_first": 16, "quotation": 12, "question_headings": 12, "stat_density": 14, "citation_density": 16, "schema": 6, "entity": 10, "freshness": 6, "chunkability": 8},
+    "article":     {"answer_first": 16, "quotation": 12, "question_headings": 12, "stat_density": 14, "citation_density": 16, "schema": 6, "entity": 10, "freshness": 6, "chunkability": 8},
+    "faq":         {"answer_first": 20, "question_headings": 20, "quotation": 8, "stat_density": 10, "citation_density": 12, "schema": 10, "entity": 10, "freshness": 4, "chunkability": 6},
+    "white_paper": {"answer_first": 12, "quotation": 12, "stat_density": 18, "citation_density": 20, "entity": 10, "chunkability": 10, "schema": 6, "freshness": 6, "question_headings": 6},
+    "landing_page":{"answer_first": 20, "comparison": 14, "entity": 14, "quotation": 8, "schema": 8, "question_headings": 12, "citation_density": 10, "freshness": 6, "chunkability": 8},
+    "local_page":  {"nap": 20, "entity": 16, "answer_first": 16, "quotation": 6, "schema": 10, "reviews": 10, "freshness": 8, "question_headings": 8, "citation_density": 6},
 }
 # Social posts are a DISTRIBUTION/authority signal, not a citable document -- graded on their own
 # lightweight rubric (see _geo_social), never the citability rubric.
@@ -379,6 +461,10 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     # stat density: ~1 quotable stat per 200 words
     stats = len(_STAT.findall(body))
     stat_density = min(1.0, stats / max(1, wc / 200))
+    # quotation: attributed, directly-quoted statements -- the #1 measured AI-citation lever.
+    # Count quoted passages AND source attributions; reward ~1 per 400 words (2+ on long-form).
+    quotes = len(_QUOTE_STR.findall(body)) + len(_ATTRIB.findall(body))
+    quotation = min(1.0, quotes / max(1.0, wc / 400.0))
     # citation density: external links per ~300 words, authoritative sources bonus
     ext = _EXT_LINK.findall(body)
     auth = len(_AUTH.findall(body))
@@ -405,6 +491,7 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     return {"answer_first": answer_first, "question_headings": question_headings, "stat_density": stat_density,
             "citation_density": citation_density, "schema": schema, "entity": entity, "freshness": freshness,
             "chunkability": chunkability, "nap": nap, "reviews": reviews, "comparison": comparison,
+            "quotation": quotation,
             "_suggested_schema": ("LocalBusiness" if nap >= 0.5 else "FAQPage" if qh else "Article")}
 
 
@@ -412,6 +499,7 @@ _GEO_FIX = {
     "answer_first": "Open the page (and each section) with a self-contained 40–60 word answer an AI can lift.",
     "question_headings": "Phrase H2/H3s as the real questions people ask (they map to AI prompts).",
     "stat_density": "Add a concrete, attributable statistic roughly every 150–200 words.",
+    "quotation": "Quote a real statistic or authority verbatim with attribution (e.g. “…,” according to LIMRA) — attributed quotations are the strongest measured AI-citation lever (+41%).",
     "citation_density": "Cite authoritative primary sources inline (.gov/.edu/official) — the single biggest citation lever.",
     "schema": "Mark up as FAQPage/Article (LocalBusiness for a location page).",
     "entity": "Name the business + city explicitly and consistently; define who you are on first use.",
@@ -714,6 +802,7 @@ def analyze_draft(body: str, *, target_query: str = "", keywords: Optional[list[
         "structure": _safe("structure", lambda: structure_score(body)),
         "keyword_density": _safe("keyword_density", lambda: keyword_density_check(body, keywords)),
         "readability": _safe("readability", lambda: readability_score(body)),
+        "distinctiveness": _safe("distinctiveness", lambda: slop_score(body)),
         "aeo": _safe("aeo", lambda: aeo_score(body, target_query, business_name, geo)),
         "geo": _safe("geo", lambda: geo_score(body, target_query, content_type, asset_type, business_name, geo)),
         "intent_serp": _safe("intent_serp", lambda: intent_and_serp(target_query, keyword_intent)),

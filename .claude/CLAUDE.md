@@ -1,4 +1,4 @@
-## vexp - Context-Aware AI Coding <!-- vexp v2.1.6 -->
+## vexp - Context-Aware AI Coding <!-- vexp v2.2.1 -->
 
 ### MANDATORY: use vexp pipeline - do NOT grep or glob the codebase
 For every task - bug fixes, features, refactors, debugging:
@@ -46,6 +46,9 @@ Only use Read when you need exact raw content to edit a specific line.
 - **Session Memory**: auto-captures observations; memories auto-surfaced in results
 - **LSP Bridge**: VS Code captures type-resolved call edges
 - **Change Coupling**: co-changed files included as related context
+- **Query tips**: include real identifiers (ClassName, function_name) or file paths
+  in the task for precise matches - pure natural-language phrasing falls back to
+  text ranking and is less reliable
 
 ### Advanced Parameters
 - `preset: "debug"` - forces debug mode (capsule+tests+impact+memory)

@@ -225,8 +225,14 @@ GEN_SYSTEM = (
     "words -- use ONLY real numbers you can source (industry data, official/regulatory figures, the "
     "parent company's public data) and NEVER invent one; (5) CITE authoritative primary sources INLINE "
     "as markdown links (.gov/.edu/official -- e.g. the state regulator, SEC/EDGAR, the parent company's "
-    "investor page): inline citations to authoritative sources are the single biggest AI-citation "
-    "lever; (6) name the business + city + service explicitly and consistently (entity clarity); "
+    "investor page): inline citations to authoritative sources are a top AI-citation lever; "
+    "(5b) present AT LEAST TWO of the provided real statistics AS SHORT DIRECT QUOTATIONS with inline "
+    "attribution -- put the quantitative claim in quotation marks and attribute it to its source, e.g. "
+    "\"About 51% of U.S. adults own life insurance,\" according to [LIMRA's 2024 Barometer Study](url) "
+    "-- because ADDING ATTRIBUTED QUOTATIONS is the single strongest MEASURED lever for getting content "
+    "quoted by AI answer engines (Princeton GEO study, +41% vs +33% for a bare stat); quote ONLY the "
+    "real, provided sources/numbers, and NEVER invent a quote or attribute words to a specific named "
+    "person; (6) name the business + city + service explicitly and consistently (entity clarity); "
     "(7) keep sections ~200-400 words with bullets/tables so a passage lifts cleanly; (8) where an "
     "image strengthens the page, insert a markdown image with DESCRIPTIVE alt text as ![alt describing "
     "the image](IMAGE: short generation prompt); (9) add a visible 'Last updated: <MONTH YEAR>' line "
@@ -238,8 +244,25 @@ GEN_SYSTEM = (
     "questions that don't fit it (e.g. broad medical-underwriting eligibility questions, or unrelated "
     "career/licensing-exam trivia); drop any provided keyword that doesn't genuinely belong here. "
     "Directly address the gap / narrative the content is meant to fix. Never fabricate facts, "
-    "credentials, reviews, or statistics. Write in a warm, trustworthy, plain tone. Output ONLY the "
-    "asset content -- no preamble."
+    "credentials, reviews, or statistics. "
+    # --- Anti-generic ("AI slop") spec: what separates distinctive, authoritative content from
+    # generic machine output (research: NN/g scannability; Google helpful-content 'beyond the obvious').
+    "WRITE DISTINCTIVE, SPECIFIC CONTENT -- NOT GENERIC AI FILLER. (a) SPECIFICITY MANDATE: every "
+    "section MUST contain at least one CONCRETE anchor -- a named entity, an exact number, a real place, "
+    "or a dated/specific example -- never a vague generality. (b) BAN generic 'AI-slop' phrasing: do NOT "
+    "use formulaic openers/closers ('In today's fast-paced world', 'In conclusion', 'In summary', "
+    "'Ultimately', 'At the end of the day', 'When it comes to'), non-committal hedges ('it's important "
+    "to note', 'it's worth noting', 'generally speaking', 'that being said'), filler transitions "
+    "('furthermore', 'moreover'), or buzzword vocabulary ('delve', 'leverage', 'foster', 'seamless', "
+    "'tapestry', 'landscape', 'realm', 'transformative', 'game-changer', 'plethora', 'unlock', 'elevate', "
+    "'empower', 'cutting-edge', 'unparalleled', 'dive into', 'in this article we'll explore'). State "
+    "things plainly and specifically instead. (c) ADD NET-NEW VALUE: use the business's REAL specifics "
+    "and local facts and a clear, defensible point of view; do NOT just restate generic consensus an AI "
+    "already knows -- give a reader something specific to this business and place. (d) READABILITY: write "
+    "at a grade 6-8 level (grade 10-12 only for a white paper) -- short sentences (~15-20 words average), "
+    "active voice, one idea per paragraph (<=150 words), scannable with descriptive headings, bullets, "
+    "and tables. "
+    "Output ONLY the asset content -- no preamble."
     + llm.LICENSE_CONTENT_POLICY
 )
 
@@ -872,6 +895,27 @@ def _ensure_freshness(body: str, when: str) -> str:
     return line + "\n\n" + body
 
 
+_BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed by )", re.I | re.M)
+
+
+def _ensure_byline(body: str, business_name: str) -> str:
+    """E-E-A-T authorship signal. Financial content is YMYL: Google's rater guidelines rate a page
+    with no clear author background 'Lowest', and named authorship is a top measured citation signal
+    (+30.6% correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 --
+    truthful given the human review-before-publish workflow, and NEVER a specific person or license
+    number. Best-effort; skipped if a byline already exists or the business name is unknown."""
+    if not body or not (business_name or "").strip() or _BYLINE_RE.search(body):
+        return body
+    name = business_name.strip()
+    line = f"*By {name} · Reviewed by {name}’s licensed professionals*"
+    lines = body.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("# "):
+            lines[i : i + 1] = [ln, "", line]
+            return "\n".join(lines)
+    return line + "\n\n" + body
+
+
 def _scoring_query(wo: dict, business_name: str = "", geo: str = "") -> str:
     """A REAL user query for AEO/GEO scoring + optimization. The gap model's topic is an internal LABEL
     ('Entity Disambiguation Asset: ...', 'Legitimacy & Transparency Hub page') whose scaffolding words
@@ -1187,9 +1231,19 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # placeholder a disclosure auto-fix introduced.
     body = _strip_placeholders(body)
     body = _scrub_license_phrasing(body)
+    # De-generic pass: strip the safest formulaic AI-slop lead-ins deterministically ('In conclusion,',
+    # 'It's important to note that', 'In today's fast-paced world,'). Buzzwords mid-sentence are left to
+    # the prompt ban + revision loop (deleting them blindly would break grammar).
+    try:
+        from . import content_quality as _cqs
+        body = _cqs.scrub_slop(body)
+    except Exception:  # noqa: BLE001 -- best-effort cosmetic cleanup, never sink the draft
+        pass
     # Guarantee the freshness line the AEO scorer looks for (full tier often omits it despite the prompt).
     if asset_type not in ("schema", "social_post", "gbp_post", "x_post", "facebook_post", "instagram_post"):
         body = _ensure_freshness(body, f"{datetime.now(timezone.utc):%B %Y}")
+        # E-E-A-T authorship (YMYL requirement): add a general, compliance-safe byline/reviewer line.
+        body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "")
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
