@@ -86,6 +86,13 @@ def publish_video(business_id: int, visual_id: int, *, privacy: str = "unlisted"
     token = _fresh_token(conn_id, business_id, creds)
     res = _yt.upload_video(token, video_bytes, title=vtitle, description=vdesc, privacy=privacy)
     if not res.get("ok"):
+        # A runtime auth rejection (401/403) must surface 'reconnect' like every other publish path,
+        # else the connection stays 'active' and every subsequent publish 401s silently.
+        if res.get("auth_failed"):
+            try:
+                _vault.revoke_on_runtime_401(conn_id, business_id, res.get("error"))
+            except Exception:  # noqa: BLE001
+                pass
         return res
     video_id, url = res["video_id"], res["url"]
     caption_ok = None

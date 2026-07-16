@@ -565,6 +565,10 @@ _JOB_RATE_LIMITS = {
     "gbp_reconcile": (2, 3600),
     "post_mention_replies": (12, 3600),
     "generate_visual": (30, 3600),
+    # video render (HeyGen/Veo, cost per render) + YouTube publish + cluster content (multi-piece LLM).
+    "render_video": (6, 3600),
+    "publish_youtube": (6, 3600),
+    "generate_clusters": (4, 3600),
     # Katteb heavy op = 1000 credits + Katteb's own 6/hour cap; keep the trigger rate under that.
     "katteb_seo": (6, 3600),
     "ingest_gsc": (6, 3600),

@@ -960,6 +960,26 @@ def _slugify(text: str) -> str:
     return s[:60] or "page"
 
 
+_FOOTER_RE = re.compile(
+    r"^(?:"
+    r"#{1,6}\s+.*(?:disclaimer|disclosure|legal|important notice|not (?:financial|investment|tax|legal) advice).*"  # heading
+    r"|-{3,}"                                                                                                       # HR rule
+    r"|[*_]{0,3}\s*(?:disclaimer|disclosure|important notice|legal notice|not (?:financial|investment|tax|legal) advice)\b.*"  # bold/plain line
+    r")\s*$", re.I | re.M)
+
+
+def _insert_before_footer(body: str, block: str) -> str:
+    """Splice `block` in just BEFORE a trailing legal/disclaimer footer (a disclaimer heading or an
+    '---' rule in the last ~60% of the page), so related-content links don't land AFTER the required
+    final disclaimer block. Appends if no footer is detected."""
+    last = None
+    for m in _FOOTER_RE.finditer(body):
+        last = m
+    if last and last.start() > len(body) * 0.4:
+        return body[:last.start()].rstrip() + block + "\n\n" + body[last.start():]
+    return body.rstrip() + block
+
+
 def _add_cluster_links(body: str, cluster: dict | None) -> str:
     """Topic-cluster internal linking. Research (HubSpot): more internal links between related pages
     lift rankings + build the topical authority AI answer engines reward. Deterministically add the
@@ -973,13 +993,13 @@ def _add_cluster_links(body: str, cluster: dict | None) -> str:
     if role == "spoke" and cluster.get("pillar_title"):
         ptitle = cluster["pillar_title"]
         pslug = cluster.get("pillar_slug") or _slugify(ptitle)
-        if f"/{pslug}" not in body:
-            body = body.rstrip() + f"\n\n*Part of our complete guide: [{ptitle}](/{pslug}).*\n"
+        if f"](/{pslug})" not in body:   # precise: the exact markdown link, not a bare slug substring
+            body = _insert_before_footer(body, f"\n\n*Part of our complete guide: [{ptitle}](/{pslug}).*\n")
     elif role == "pillar":
         spokes = [s for s in (cluster.get("spokes") or []) if isinstance(s, dict) and s.get("title")][:8]
         if spokes and "## Explore this guide" not in body:
             items = "\n".join(f"- [{s['title']}](/{s.get('slug') or _slugify(s['title'])})" for s in spokes)
-            body = body.rstrip() + f"\n\n## Explore this guide\n\n{items}\n"
+            body = _insert_before_footer(body, f"\n\n## Explore this guide\n\n{items}\n")
     return body
 
 

@@ -414,43 +414,10 @@ def _generate_note_asset(
     Returns markdown."""
     if _tools.over_budget(business_id):
         raise _tools.BudgetExceededError(f"business {business_id} is over monthly budget")
+    # Return the raw LLM markdown directly. (The old _format_note() wrapper was dead code -- it
+    # prepended editor-facing 'Instructions for production/designer:' preambles, which violate the
+    # publish-ready policy, so it was removed rather than reactivated.)
     return _fallback_llm(asset_type, biz, sources, business_id)
-
-    # Post-process: wrap raw note into the target format.
-    return _format_note(asset_type, raw, biz)
-
-
-def _format_note(asset_type: str, raw: str, biz: dict) -> str:
-    """Wrap a raw NotebookLM note into the target asset format."""
-    name = biz.get("name", "the business")
-    if asset_type == "slide_deck":
-        return (
-            f"# Slide Deck Brief — {name}\n\n"
-            "**Instructions for deck designer:** Convert each section below into one slide. "
-            "Add brand visuals, data charts from the monthly report, and the company logo.\n\n"
-            + raw
-        )
-    if asset_type == "infographic":
-        return (
-            f"# Infographic Brief — {name}\n\n"
-            "**Instructions for designer:** Convert the Q&A pairs below into an infographic. "
-            "Use icons for each section, brand colors, and a clear headline at the top.\n\n"
-            + raw
-        )
-    if asset_type == "explainer_video":
-        return (
-            f"# Explainer Video Script — {name}\n\n"
-            "**Instructions for production:** Use the study-guide outline below as the "
-            "script skeleton. Record a talking-head or animated explainer of 2-4 minutes. "
-            "Pair with the video production briefs in the monthly report for full specs.\n\n"
-            + raw
-        )
-    if asset_type == "research_brief":
-        return (
-            f"# Research Brief — {name}\n\n"
-            "**For:** PR teams, journalists, content collaborators\n\n" + raw
-        )
-    return raw
 
 
 def _fallback_llm(

@@ -57,8 +57,10 @@ def narration_from_script(script: str) -> str:
     (On-screen: ...) cues, ## headings, speaker labels (via content_quality._spoken_only) and the
     [m:ss] timestamps, then collapses whitespace."""
     spoken = _cq._spoken_only(script or "")
-    spoken = re.sub(r"\[?\d{1,2}:[0-5]\d\]?", " ", spoken)          # timestamps
-    spoken = re.sub(r"^\s*[-*#>|].*$", " ", spoken, flags=re.M)     # any residual list/heading lines
+    spoken = re.sub(r"\[?\d{1,2}:[0-5]\d\]?", " ", spoken)                    # timestamps
+    # Strip only the leading list/heading MARKER, keep the line's text -- a video_script's talking
+    # points are often bullets ('- helps you save'), and wiping the whole line emptied the narration.
+    spoken = re.sub(r"^\s*(?:[-*>|]+|#{1,6})\s+", " ", spoken, flags=re.M)
     return re.sub(r"\s+", " ", spoken).strip()
 
 
@@ -92,7 +94,11 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
     {ok, visual_id, video_url, srt, duration, file_path} or {skipped}/{ok:False, error}. Never raises."""
     if not configured():
         return {"skipped": True, "reason": "HeyGen not configured (set HEYGEN_API_KEY)"}
-    narration = narration_from_script(script)[:_MAX_CHARS]
+    narration = narration_from_script(script)
+    if len(narration) > _MAX_CHARS:      # cap length, but end on a full sentence (else the avatar
+        clipped = narration[:_MAX_CHARS]  # speaks a cut-off final word/sentence)
+        cut = max(clipped.rfind(". "), clipped.rfind("! "), clipped.rfind("? "))
+        narration = (clipped[:cut + 1] if cut > _MAX_CHARS * 0.6 else clipped.rsplit(" ", 1)[0]).strip()
     if not narration:
         return {"ok": False, "error": "no narration text found in the script"}
     avatar = avatar_id or os.getenv("HEYGEN_AVATAR_ID") or _DEFAULT_AVATAR

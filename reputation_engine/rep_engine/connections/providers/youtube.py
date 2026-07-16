@@ -37,8 +37,12 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 UPLOAD_VIDEOS = "https://www.googleapis.com/upload/youtube/v3/videos"
 UPLOAD_CAPTIONS = "https://www.googleapis.com/upload/youtube/v3/captions"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
-# youtube.upload = insert videos/captions; youtube.readonly = channel liveness probe.
+# youtube.upload = videos.insert; youtube.force-ssl = REQUIRED for captions.insert (youtube.upload
+# does NOT grant caption access -> a caption upload 403s without it; force-ssl also covers
+# videos.insert); youtube.readonly = channel liveness probe. Existing connections must RE-CONSENT to
+# pick up force-ssl (old tokens 403 on captions).
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
+          "https://www.googleapis.com/auth/youtube.force-ssl",
           "https://www.googleapis.com/auth/youtube.readonly"]
 
 

@@ -527,6 +527,10 @@ def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *, m
     for c in targets:
         try:
             results.append(generate_cluster(business_id, c, max_spokes=max_spokes, created_by=created_by))
+        except SystemExit as e:   # over-budget stop (BaseException) -> stop the sweep, like generate_all_gaps
+            log.warning("generate_clusters: budget stop after %d cluster(s): %s", len(results), e)
+            errors.append({"cluster": c.get("topic"), "reason": "monthly budget reached"})
+            break
         except Exception as e:  # noqa: BLE001
             log.warning("generate_clusters: cluster '%s' failed: %s", c.get("topic"), e)
             errors.append({"cluster": c.get("topic"), "reason": str(e)[:200]})
