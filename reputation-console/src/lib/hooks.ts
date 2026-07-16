@@ -2023,6 +2023,25 @@ export function useRejectRichMedia(businessId: number | null) {
   });
 }
 
+// Render a REAL MP4 for an explainer-video/video-script draft via HeyGen (dormant until the owner
+// sets HEYGEN_API_KEY + HEYGEN_AVATAR_ID — the job returns {skipped} otherwise).
+export function useRenderRichMediaVideo(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: number) => apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/render-video`, { method: "POST", body: {} }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["rich-media", businessId] }); qc.invalidateQueries({ queryKey: ["visuals", businessId] }); },
+  });
+}
+
+// Publish a rendered video visual to the owner's YouTube channel (dormant until YouTube is connected).
+export function usePublishVisualYouTube(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (visualId: number) => apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/visuals/${visualId}/publish-youtube`, { method: "POST", body: { privacy: "unlisted" } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+  });
+}
+
 // Submit the owned-content feed to Google as a sitemap (faster discovery). Needs a live GSC connection.
 export function useSubmitSitemap(businessId: number | null) {
   const qc = useQueryClient();

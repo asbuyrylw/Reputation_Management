@@ -8,7 +8,7 @@
 
 import { useMemo, useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useVisuals, useRichMediaDrafts, useRichMediaDraft, useApproveRichMedia, useRejectRichMedia } from "@/lib/hooks";
+import { useVisuals, useRichMediaDrafts, useRichMediaDraft, useApproveRichMedia, useRejectRichMedia, useRenderRichMediaVideo, usePublishVisualYouTube } from "@/lib/hooks";
 import { apiBase } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { CreateContentButton } from "@/components/CreateContentButton";
@@ -89,6 +89,9 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
   const detail = useRichMediaDraft(businessId, needsBody ? item.id : null);
   const approve = useApproveRichMedia(businessId);
   const reject = useRejectRichMedia(businessId);
+  const renderVideo = useRenderRichMediaVideo(businessId);
+  const publishYT = usePublishVisualYouTube(businessId);
+  const isVideoScript = item.source === "rich" && (item.assetType === "explainer_video" || item.assetType === "video_script");
   const d: RichMediaDraft | undefined = detail.data;
   const m = KIND_META[item.kind];
   const isPending = item.source === "rich" && (item.status === "pending_review" || item.status === "pending");
@@ -140,6 +143,22 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
           )}
         </div>
 
+        {isVideoScript && (
+          <div className="flex items-center justify-between gap-2 border-t border-line p-3">
+            <span className="text-[12px] leading-snug text-ink-4">Turn this vetted script into a real narrated video (the avatar speaks it verbatim).</span>
+            <button onClick={() => renderVideo.mutate(item.id)} disabled={renderVideo.isPending || renderVideo.isSuccess}
+              className="shrink-0 rounded-[10px] bg-indigo px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
+              {renderVideo.isPending ? "Starting…" : renderVideo.isSuccess ? "Rendering… (appears in Media)" : "▶ Render video"}</button>
+          </div>
+        )}
+        {item.kind === "video" && item.fileUrl && (
+          <div className="flex items-center justify-between gap-2 border-t border-line p-3">
+            <span className="text-[12px] leading-snug text-ink-4">Publish to YouTube (unlisted, with captions) — the most-cited source in AI answers.</span>
+            <button onClick={() => publishYT.mutate(item.id)} disabled={publishYT.isPending || publishYT.isSuccess}
+              className="shrink-0 rounded-[10px] bg-[#c4302b] px-3.5 py-1.5 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-60">
+              {publishYT.isPending ? "Publishing…" : publishYT.isSuccess ? "Queued ✓" : "▶ Publish to YouTube"}</button>
+          </div>
+        )}
         {isPending && (
           <div className="flex items-center justify-end gap-2 border-t border-line p-3">
             <button onClick={() => { reject.mutate(item.id, { onSuccess: onClose }); }} disabled={reject.isPending}

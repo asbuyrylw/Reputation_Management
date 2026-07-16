@@ -106,7 +106,7 @@ function statusTone(status: string): { tone: Tone; label: string } {
 const fmtWhen = (d?: string | null) => (d ? new Date(d).toLocaleString() : "never");
 
 interface ProviderDef {
-  kind: "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics";
+  kind: "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics" | "youtube";
   name: string;
   blurb: string;
   surface: "owned" | "third_party";
@@ -141,6 +141,12 @@ const PROVIDERS: ProviderDef[] = [
     kind: "google_analytics",
     name: "Google Analytics",
     blurb: "Import sessions, conversions & behavior — see what visitors do after they arrive.",
+    surface: "owned",
+  },
+  {
+    kind: "youtube",
+    name: "YouTube",
+    blurb: "Publish rendered explainer videos (with captions) to your channel — YouTube is the most-cited source in Google's AI answers.",
     surface: "owned",
   },
 ];
@@ -435,11 +441,12 @@ function ProviderCard({
   const connected = status === "active";
   const canConnect = canEdit && vaultReady;
 
-  // OAuth start, used by all Google providers (GBP + Search Console + Analytics).
+  // OAuth start, used by all Google providers (GBP + Search Console + Analytics + YouTube).
   const isOauth =
     provider.kind === "google_business_profile" ||
     provider.kind === "google_search_console" ||
-    provider.kind === "google_analytics";
+    provider.kind === "google_analytics" ||
+    provider.kind === "youtube";
   const startOauth = () => {
     setErr(null);
     authorize.mutate(provider.kind, {
