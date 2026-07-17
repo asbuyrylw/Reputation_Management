@@ -836,9 +836,12 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
         # the sequential worker); the hourly poll_video_renders sweep downloads + stores it when ready.
         with db() as conn:
             b = conn.execute("SELECT name, geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        cb_base = _hg.callback_base()
         started = _hg.start_agent_session(business_id, script, title=title,
                                           business_name=(b or {}).get("name") or "",
-                                          geo=(b or {}).get("geo") or "")
+                                          geo=(b or {}).get("geo") or "",
+                                          callback_url=(f"{cb_base}/webhooks/heygen" if cb_base else None),
+                                          callback_id=f"{business_id}:{draft_id}")
         if not started.get("ok"):
             return started
         with db() as conn:

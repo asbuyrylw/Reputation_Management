@@ -253,12 +253,23 @@ def build_video_agent_prompt(narration: str, *, business_name: str, geo: str, ti
     return "\n".join(parts)
 
 
+def callback_base() -> str:
+    """Public base URL for the HeyGen completion webhook (Railway sets RAILWAY_PUBLIC_DOMAIN on the
+    API service). Overridable via HEYGEN_CALLBACK_BASE. '' -> no webhook (the hourly sweep still runs)."""
+    base = os.getenv("HEYGEN_CALLBACK_BASE", "").strip().rstrip("/")
+    if base:
+        return base
+    dom = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    return f"https://{dom}" if dom else ""
+
+
 def start_agent_session(business_id: int, script: str, *, title: str = "", business_name: str = "",
                         geo: str = "", avatar_id: Optional[str] = None, voice_id: Optional[str] = None,
-                        orientation: str = "landscape") -> dict:
+                        orientation: str = "landscape", callback_url: Optional[str] = None,
+                        callback_id: Optional[str] = None) -> dict:
     """Create a v3 Video Agent session (POST /v3/video-agents) and return IMMEDIATELY (no poll), so a
     ~20-45 min render never blocks the worker. Returns {ok, session_id, video_id, prompt} or
-    {skipped}/{ok:False}. The caller stores session_id; a poll sweep (poll_pending) finishes it."""
+    {skipped}/{ok:False}. The caller stores session_id; a webhook (or the poll sweep) finishes it."""
     if not configured():
         return {"skipped": True, "reason": "HeyGen not configured (set HEYGEN_API_KEY)"}
     narration = narration_from_script(script)[:_MAX_CHARS]
@@ -272,6 +283,10 @@ def start_agent_session(business_id: int, script: str, *, title: str = "", busin
     sid_style = os.getenv("HEYGEN_STYLE_ID")
     if sid_style:
         body["style_id"] = sid_style
+    if callback_url:      # webhook -> low-latency completion (the poll sweep is the fallback)
+        body["callback_url"] = callback_url
+        if callback_id:
+            body["callback_id"] = callback_id
     start = _http.request_json("POST", _AGENT_CREATE, headers=hdr, json=body, timeout=60,
                                max_retries=2, guard_redirects=True)
     if start.failed or not isinstance(start.data, dict):
