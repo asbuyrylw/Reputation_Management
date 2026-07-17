@@ -37,10 +37,13 @@ _STATUS_URL = os.getenv("HEYGEN_STATUS_URL", f"{_API_BASE}/v1/video_status.get")
 _MAX_POLLS = int(os.getenv("HEYGEN_MAX_POLLS", "90"))       # ~15 min at 10s
 _POLL_SECONDS = int(os.getenv("HEYGEN_POLL_SECONDS", "10"))
 _MAX_CHARS = int(os.getenv("HEYGEN_MAX_SCRIPT_CHARS", "1500"))  # ~2 min of narration (retention cliff)
-# Validated defaults (a real render was produced with these on 2026-07-16), so only HEYGEN_API_KEY is
-# required to go live; override via HEYGEN_AVATAR_ID / HEYGEN_VOICE_ID for a different presenter/voice.
+# Defaults, so only HEYGEN_API_KEY is required to go live; override via HEYGEN_AVATAR_ID /
+# HEYGEN_VOICE_ID for a different presenter/voice.
 _DEFAULT_AVATAR = "Abigail_standing_office_front"        # professional office-setting presenter
-_DEFAULT_VOICE = "97dd67ab8ce242b6a9e7689cb00c6414"      # clear English (female) voice
+# AMERICAN female voice (Nancy). The prior default (97dd67…, "Monika Sogam") was British/non-US
+# accented — wrong for a Cincinnati business. Other US options: Jenny 6458ca9a09ba411b9487dfe105dd05dc,
+# Abigail 21f4b9659e204a7481f6966c0f247a4c, Guy(male) — set HEYGEN_VOICE_ID to swap.
+_DEFAULT_VOICE = "ac4d9b87d4bb4dc19f2115043b6ab583"      # Nancy — warm, credible American female
 
 
 # v3 Video Agent (produced pipeline: avatar + B-roll + motion graphics + styled scenes from ONE
@@ -247,6 +250,18 @@ def build_video_agent_prompt(narration: str, *, business_name: str, geo: str, ti
         "message. Do NOT invent new financial facts, figures, testimonials, or advice. No guaranteed "
         "returns, no performance promises, no '#1'/'best'. Front-load the hook in the first 5 seconds. "
         "Do not pad with silence.",
+        "",
+        # The #1 cause of a robotic, un-believable video: the Agent repeats the brand name + city on
+        # every line. Cap it hard. Over-repetition also HURTS AI-citation quality (keyword-stuffing).
+        f"DELIVERY (SOUND LIKE A REAL PERSON, NOT AN AD — critical): Write the narration the way a warm, "
+        f"credible human actually speaks. Say the business name ('{business_name}') AT MOST 2-3 times in "
+        f"the ENTIRE video — once in the opening, optionally once at the close — and EVERYWHERE else use "
+        f"'we', 'our team', or 'us'. Name the city ('{city or 'the city'}') at most ONCE or TWICE total. "
+        "NEVER repeat the business name or the city in back-to-back sentences — that reads as a robotic, "
+        "keyword-stuffed ad, lowers viewer trust, and is PENALIZED by AI answer engines. Use "
+        "contractions and a natural conversational rhythm so a viewer genuinely believes a real person "
+        "recorded this. The on-screen text (below) can show the name/city; the spoken words should not "
+        "hammer them.",
         "",
         f"STYLE: {_STYLE_CATCHALL}",
     ]

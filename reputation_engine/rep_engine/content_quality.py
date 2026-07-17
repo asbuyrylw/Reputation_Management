@@ -376,8 +376,10 @@ def aeo_score(body: str, target_query: str = "", business_name: str = "", geo: s
     faq = sum(1 for h in headings if h.strip().endswith("?"))
     low = body.lower()
     name_hits = low.count((business_name or "").lower()) if (business_name or "").strip() else 0
-    entity_clear = ((not (business_name or "").strip()) or name_hits >= 3) and \
-                   ((not (geo or "").strip()) or (geo or "").lower() in low)
+    _awc = len(_words(body)) or 1
+    entity_clear = ((not (business_name or "").strip())
+                    or (name_hits >= 2 and name_hits / max(1.0, _awc / 100.0) <= 5.0)) and \
+                   ((not (geo or "").strip()) or (geo or "").lower() in low)   # named, not stuffed
     fresh = bool(_FRESH.search(body))
     pillars = [
         {"name": "Direct answer up top", "ok": crisp, "weight": 25, "fix": "Open with a crisp 40–60 word answer to the target query."},
@@ -484,10 +486,23 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     citation_density = min(1.0, cit + (0.25 if auth else 0))
     # schema-ready shape (question headings -> FAQ; else structured Article)
     schema = 1.0 if qh >= 1 else 0.6
-    # entity clarity: business name (3+) + geo present
-    name_hits = low.count((business_name or "").lower()) if (business_name or "").strip() else 0
-    entity = 1.0 if (((not (business_name or "").strip()) or name_hits >= 3)
-                     and ((not (geo or "").strip()) or (geo or "").lower() in low)) else (0.5 if name_hits >= 1 else 0.0)
+    # entity clarity: named ENOUGH for an AI to attribute the facts, but NOT keyword-stuffed. Repeating
+    # the brand name every sentence reads as a robotic ad + is penalized like keyword-stuffing (-10%,
+    # Princeton) -- so reward a natural density and PENALIZE over-repetition.
+    _name = (business_name or "").strip()
+    name_hits = low.count(_name.lower()) if _name else 0
+    _geo_ok = (not (geo or "").strip()) or ((geo or "").lower() in low)
+    _per100 = name_hits / max(1.0, wc / 100.0)   # brand mentions per 100 words
+    if not _name:
+        entity = 1.0 if _geo_ok else 0.5
+    elif name_hits == 0:
+        entity = 0.0
+    elif _per100 > 5.0:                           # stuffed (>~1 mention / 20 words) -> penalize
+        entity = 0.35
+    elif name_hits >= 2 and _geo_ok:
+        entity = 1.0
+    else:
+        entity = 0.6
     # freshness marker
     freshness = 1.0 if _FRESH.search(body) else 0.0
     # extractable chunks: reasonable section length + bullets/tables present
@@ -694,7 +709,10 @@ def video_score(body: str, target_query: str = "", business_name: str = "", geo:
     # --- 1) AEO / GEO -- AI-citability of the transcript (PRIMARY) ---
     ans_first = (bool(qterms) and sum(t in first_spoken.lower() for t in qterms) >= max(1, len(qterms) // 2)
                  and 10 <= len(_words(first_spoken)) <= 90)
-    entity = (name_hits >= 3) and (not city or city in low)
+    # named enough for attribution + city present, but NOT keyword-stuffed (a spoken video repeating
+    # the brand name every line reads as a robotic ad -> fail entity so the grade reflects it).
+    _vwc = len(_words(spoken)) or 1
+    entity = (name_hits >= 2) and (not city or city in low) and (name_hits / max(1.0, _vwc / 100.0) <= 5.0)
     transcript = bool(re.search(r"\b(caption|closed[-\s]?caption|subtitle|srt|transcript)\b", low))
     quotable = bool(_STAT.search(spoken)) or bool(re.search(r"\b(licensed|regulated|founded|established|serves?|based in|affiliat)\b", low))
     schema = bool(re.search(r"\b(videoobject|video ?schema|clip ?schema|schema markup|structured data)\b", low))
