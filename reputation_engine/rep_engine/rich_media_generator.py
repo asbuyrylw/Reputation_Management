@@ -832,20 +832,97 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
     if which in ("heygen_agent", "agent", "video_agent", "produced"):
         # v3 Video Agent (produced: B-roll + motion graphics). Non-verbatim -> load the business
         # name/geo for the structured, compliance-constrained prompt; human-reviewed before publish.
+        # ASYNC: the render takes ~20-45 min, so CREATE the session + return immediately (never block
+        # the sequential worker); the hourly poll_video_renders sweep downloads + stores it when ready.
         with db() as conn:
             b = conn.execute("SELECT name, geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
-        res = _hg.render_agent(business_id, script, title=title,
-                               business_name=(b or {}).get("name") or "",
-                               geo=(b or {}).get("geo") or "", work_order_id=d.get("work_order_id"))
-        if res.get("ok"):
-            _record_rendered_video(business_id, draft_id, d, res, "heygen_agent")
-            log.info("rendered HeyGen Video Agent for draft %s (visual %s)", draft_id, res.get("visual_id"))
-        return res
+        started = _hg.start_agent_session(business_id, script, title=title,
+                                          business_name=(b or {}).get("name") or "",
+                                          geo=(b or {}).get("geo") or "")
+        if not started.get("ok"):
+            return started
+        with db() as conn:
+            qn = d.get("quality_notes") if isinstance(d.get("quality_notes"), dict) else {}
+            qn = dict(qn or {})
+            qn["rendered_video"] = {"provider": "heygen_agent", "status": "rendering",
+                                    "session_id": started["session_id"], "video_id": started.get("video_id"),
+                                    "prompt": (started.get("prompt") or "")[:500],
+                                    "work_order_id": d.get("work_order_id")}
+            conn.execute("UPDATE rich_media_drafts SET quality_notes=%s, updated_at=now() "
+                         "WHERE id=%s AND business_id=%s", (json.dumps(qn), draft_id, business_id))
+            conn.commit()
+        # Ensure the completion sweep runs (hourly fallback; downloads the MP4 when the Agent finishes).
+        try:
+            from . import scheduler as _sch
+            _sch.upsert_schedule(business_id, "poll_video_renders", 1)
+        except Exception as e:  # noqa: BLE001
+            log.debug("could not schedule poll_video_renders: %s", e)
+        log.info("started HeyGen Video Agent for draft %s (session %s)", draft_id, started["session_id"])
+        return {"ok": True, "pending": True, "session_id": started["session_id"],
+                "message": "Produced video started (~20-45 min) — it will appear in Media when ready."}
     res = _hg.render(business_id, script, title=title, work_order_id=d.get("work_order_id"))
     if res.get("ok"):
         _record_rendered_video(business_id, draft_id, d, res, "heygen")
         log.info("rendered HeyGen video for rich-media draft %s (visual %s)", draft_id, res.get("visual_id"))
     return res
+
+
+def poll_pending_agent_renders(business_id: int) -> dict:
+    """Completion sweep for async v3 Video Agent renders: for each draft flagged `rendering`, check the
+    session and — when ready — download + store the MP4/SRT as a video visual_asset and mark the draft
+    `rendered`. Cheap no-op when nothing is pending. Removes its own hourly schedule once the queue is
+    empty so it doesn't poll forever. Runs on the worker; each check is a couple HTTP calls, not a
+    long block."""
+    _ensure_table()
+    try:
+        from . import heygen_video as _hg
+    except ImportError:  # pragma: no cover
+        import heygen_video as _hg  # type: ignore
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, quality_notes FROM rich_media_drafts WHERE business_id=%s "
+            "AND quality_notes->'rendered_video'->>'status' = 'rendering' "
+            "AND quality_notes->'rendered_video'->>'provider' = 'heygen_agent'", (business_id,)).fetchall()
+    maxa = int(os.getenv("AGENT_POLL_MAX_ATTEMPTS", "60"))
+    done = still = failed = 0
+    for r in rows:
+        qn = dict(r.get("quality_notes") or {})
+        rv = dict(qn.get("rendered_video") or {})
+        sid = rv.get("session_id")
+        if not sid:
+            continue
+        res = _hg.fetch_agent_video(business_id, sid, video_id=rv.get("video_id"),
+                                    prompt=rv.get("prompt") or "", work_order_id=rv.get("work_order_id"),
+                                    draft_id=r["id"])
+        if res.get("ok"):
+            rv.update({"status": "rendered", "visual_id": res.get("visual_id"),
+                       "video_url": res.get("video_url"), "duration": res.get("duration")})
+            done += 1
+        elif res.get("failed"):
+            rv.update({"status": "failed", "error": (res.get("error") or "")[:300]})
+            failed += 1
+        else:   # pending or a transient fetch error -> retry next sweep, up to maxa
+            rv["attempts"] = (rv.get("attempts") or 0) + 1
+            if rv["attempts"] > maxa:
+                rv["status"] = "timed_out"
+                failed += 1
+            else:
+                still += 1
+        qn["rendered_video"] = rv
+        with db() as conn:
+            conn.execute("UPDATE rich_media_drafts SET quality_notes=%s, updated_at=now() "
+                         "WHERE id=%s AND business_id=%s", (json.dumps(qn), r["id"], business_id))
+            conn.commit()
+    # Nothing left rendering -> stop the hourly sweep (self-clean).
+    if still == 0:
+        try:
+            from . import scheduler as _sch
+            for s in _sch.list_schedules(business_id):
+                if s.get("job_type") == "poll_video_renders":
+                    _sch.delete_schedule(business_id, s["id"])
+        except Exception:  # noqa: BLE001
+            pass
+    return {"rendered": done, "still_rendering": still, "failed": failed, "checked": len(rows)}
 
 
 def list_drafts(business_id: int) -> None:

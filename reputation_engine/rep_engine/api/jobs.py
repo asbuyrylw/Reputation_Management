@@ -204,6 +204,13 @@ def _run_publish_youtube(business_id: int, args: dict):
                             privacy=args.get("privacy") or "unlisted")
 
 
+def _run_poll_video_renders(business_id: int, args: dict):
+    """Completion sweep for async v3 Video Agent renders: download + store the MP4 once the Agent
+    finishes (~20-45 min), so the render never blocks the worker. Self-clears its schedule when idle."""
+    rm = _imp("rich_media_generator")
+    return rm.poll_pending_agent_renders(business_id)
+
+
 def _run_measure_content_impact(business_id: int, args: dict):
     """Measure how far each content batch moved the gap it targets (SoV + alignment delta, % gap
     closed) against the latest audit. DB-only; safe to run after every audit."""
@@ -472,7 +479,8 @@ JOB_DISPATCH = {
     "generate_content_batches": _run_generate_content_batches,
     "generate_clusters": _run_generate_clusters,
     "render_video": _run_render_video,
-    "publish_youtube": _run_publish_youtube,   # multi-type content per gap
+    "publish_youtube": _run_publish_youtube,
+    "poll_video_renders": _run_poll_video_renders,   # multi-type content per gap
     "measure_content_impact": _run_measure_content_impact,       # did the content move the gap?
     "report": _run_report,
     "cycle": _run_cycle,
@@ -568,6 +576,7 @@ _JOB_RATE_LIMITS = {
     # video render (HeyGen/Veo, cost per render) + YouTube publish + cluster content (multi-piece LLM).
     "render_video": (6, 3600),
     "publish_youtube": (6, 3600),
+    "poll_video_renders": (30, 3600),   # scheduled completion sweep for async Video Agent renders
     "generate_clusters": (4, 3600),
     # Katteb heavy op = 1000 credits + Katteb's own 6/hour cap; keep the trigger rate under that.
     "katteb_seo": (6, 3600),

@@ -253,22 +253,18 @@ def build_video_agent_prompt(narration: str, *, business_name: str, geo: str, ti
     return "\n".join(parts)
 
 
-def render_agent(business_id: int, script: str, *, title: str = "", business_name: str = "",
-                 geo: str = "", work_order_id: Optional[int] = None, draft_id: Optional[int] = None,
-                 avatar_id: Optional[str] = None, voice_id: Optional[str] = None,
-                 orientation: str = "landscape") -> dict:
-    """Render a PRODUCED video via the v3 Video Agent (POST /v3/video-agents): avatar + B-roll +
-    motion graphics + styled scenes from one structured, compliance-constrained prompt. Polls the
-    session (~20-45 min) then fetches the MP4 + SRT and stores a `video` visual_asset. Dormant-safe;
-    never raises. NOTE: the Agent EXPANDS the script (non-verbatim) — the video is human-reviewed
-    before publish, and the prompt constrains it to visuals-only enrichment for compliance."""
+def start_agent_session(business_id: int, script: str, *, title: str = "", business_name: str = "",
+                        geo: str = "", avatar_id: Optional[str] = None, voice_id: Optional[str] = None,
+                        orientation: str = "landscape") -> dict:
+    """Create a v3 Video Agent session (POST /v3/video-agents) and return IMMEDIATELY (no poll), so a
+    ~20-45 min render never blocks the worker. Returns {ok, session_id, video_id, prompt} or
+    {skipped}/{ok:False}. The caller stores session_id; a poll sweep (poll_pending) finishes it."""
     if not configured():
         return {"skipped": True, "reason": "HeyGen not configured (set HEYGEN_API_KEY)"}
     narration = narration_from_script(script)[:_MAX_CHARS]
     if not narration:
         return {"ok": False, "error": "no narration text found in the script"}
-    prompt = build_video_agent_prompt(narration, business_name=business_name or title,
-                                      geo=geo, title=title)
+    prompt = build_video_agent_prompt(narration, business_name=business_name or title, geo=geo, title=title)
     hdr = {"X-Api-Key": _key(), "Content-Type": "application/json"}
     body = {"prompt": prompt, "avatar_id": (avatar_id or os.getenv("HEYGEN_AVATAR_ID") or _DEFAULT_AVATAR),
             "voice_id": (voice_id or os.getenv("HEYGEN_VOICE_ID") or _DEFAULT_VOICE),
@@ -284,24 +280,30 @@ def render_agent(business_id: int, script: str, *, title: str = "", business_nam
     session_id = data.get("session_id")
     if not session_id:
         return {"ok": False, "error": f"no session_id from Video Agent: {str(start.data)[:200]}"}
+    return {"ok": True, "session_id": session_id, "video_id": data.get("video_id"), "prompt": prompt}
 
-    video_id = data.get("video_id")
-    for _ in range(_AGENT_MAX_POLLS):
-        time.sleep(_AGENT_POLL_SECONDS)
-        st = _http.request_json("GET", f"{_AGENT_CREATE}/{session_id}", headers=hdr,
-                                timeout=30, max_retries=2, guard_redirects=True)
-        if st.failed or not isinstance(st.data, dict):
-            continue
-        d = st.data.get("data") or {}
-        status = (d.get("status") or "").lower()
-        video_id = d.get("video_id") or video_id
-        if status in ("completed", "success", "done"):
-            break
-        if status in ("failed", "error"):
-            return {"ok": False, "error": f"Video Agent failed: {d.get('failure_message') or str(d)[:200]}"}
-    if not video_id:
-        return {"ok": False, "error": "Video Agent timed out or produced no video"}
 
+def fetch_agent_video(business_id: int, session_id: str, *, video_id: Optional[str] = None,
+                      prompt: str = "", work_order_id: Optional[int] = None,
+                      draft_id: Optional[int] = None) -> dict:
+    """Check a Video Agent session ONCE (a couple HTTP calls, never a long block). If completed, fetch
+    + download the MP4/SRT and store a `video` visual_asset -> {ok, visual_id, ...}. If still
+    rendering -> {pending: True, status, progress}. If failed -> {ok: False, failed: True, error}."""
+    if not configured():
+        return {"skipped": True, "reason": "HeyGen not configured"}
+    hdr = {"X-Api-Key": _key(), "Content-Type": "application/json"}
+    st = _http.request_json("GET", f"{_AGENT_CREATE}/{session_id}", headers=hdr, timeout=30,
+                            max_retries=2, guard_redirects=True)
+    if st.failed or not isinstance(st.data, dict):
+        return {"pending": True, "status": "unknown"}
+    d = st.data.get("data") or {}
+    status = (d.get("status") or "").lower()
+    video_id = d.get("video_id") or video_id
+    if status in ("failed", "error"):
+        return {"ok": False, "failed": True,
+                "error": f"Video Agent failed: {d.get('failure_message') or str(d)[:200]}"}
+    if status not in ("completed", "success", "done") or not video_id:
+        return {"pending": True, "status": status or "generating", "progress": d.get("progress")}
     vg = _http.request_json("GET", f"{_VIDEO_GET}/{video_id}", headers=hdr, timeout=30,
                             max_retries=2, guard_redirects=True)
     vd = (vg.data.get("data") if isinstance(vg.data, dict) else {}) or {}
@@ -309,7 +311,7 @@ def render_agent(business_id: int, script: str, *, title: str = "", business_nam
     srt_url = vd.get("subtitle_url")
     duration = vd.get("duration")
     if not video_url:
-        return {"ok": False, "error": "Video Agent completed but no video_url"}
+        return {"pending": True, "status": "completed_no_url"}
     raw = _download_binary(video_url)
     if not raw:
         return {"ok": False, "error": "could not download the Video Agent MP4"}
@@ -324,17 +326,38 @@ def render_agent(business_id: int, script: str, *, title: str = "", business_nam
     path = _vc._save_png(business_id, raw, ext="mp4")
     visual_id = _vc._persist(
         business_id, kind="video", provider="heygen_agent", model="video_agent_v3",
-        prompt=prompt[:500], file_path=path, url=video_url,
+        prompt=(prompt or "")[:500], file_path=path, url=video_url,
         compliance_note="Produced by HeyGen Video Agent (non-verbatim; visuals-constrained prompt) — review narration before publish.",
         work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4",
         meta={"source": "heygen_agent", "srt": srt, "duration": duration, "session_id": session_id})
     try:
         from . import cost as _cost
-        secs = float(duration or 0) or (len(narration) / 14.0)
         _cost.record_cost(business_id, None, "video", "heygen", "render_agent",
-                          units=secs, unit_label="seconds", model="video_agent_v3",
-                          detail={"content_type": "video", "api": "heygen_video_agent"})
+                          units=float(duration or 0) or 90.0, unit_label="seconds",
+                          model="video_agent_v3", detail={"content_type": "video", "api": "heygen_video_agent"})
     except Exception:  # noqa: BLE001
         pass
     return {"ok": True, "visual_id": visual_id, "video_url": video_url, "srt": srt,
             "duration": duration, "file_path": path, "session_id": session_id}
+
+
+def render_agent(business_id: int, script: str, *, title: str = "", business_name: str = "",
+                 geo: str = "", work_order_id: Optional[int] = None, draft_id: Optional[int] = None,
+                 avatar_id: Optional[str] = None, voice_id: Optional[str] = None,
+                 orientation: str = "landscape") -> dict:
+    """BLOCKING convenience: start a Video Agent session and poll to completion (~20-45 min). In
+    production prefer async (start_agent_session + a poll_pending sweep) so the worker isn't blocked;
+    this stays for direct/CLI/test use. Produced video is NON-VERBATIM (visuals-constrained + human-
+    reviewed before publish)."""
+    started = start_agent_session(business_id, script, title=title, business_name=business_name,
+                                  geo=geo, avatar_id=avatar_id, voice_id=voice_id, orientation=orientation)
+    if not started.get("ok"):
+        return started
+    sid, vid, prompt = started["session_id"], started.get("video_id"), started.get("prompt", "")
+    for _ in range(_AGENT_MAX_POLLS):
+        time.sleep(_AGENT_POLL_SECONDS)
+        res = fetch_agent_video(business_id, sid, video_id=vid, prompt=prompt,
+                                work_order_id=work_order_id, draft_id=draft_id)
+        if not res.get("pending"):
+            return res
+    return {"ok": False, "error": "Video Agent timed out"}
