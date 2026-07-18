@@ -356,9 +356,11 @@ def _narrative(business_id: int, goal: dict, overall: dict, gaps: list[dict],
     system = (
         "You are a reputation-strategy advisor. Given the goal, the measured progress, per-gap status, "
         "and recommended actions (all pre-computed from real data), write a concise, decisive briefing "
-        "(120-180 words) for the business owner: are we winning, what's working, what's stalled, and "
-        "the 2-3 highest-leverage moves next. Reference the ACTUAL numbers. No hype, no guarantees, no "
-        "invented facts. Return ONE JSON object: {\"briefing\": \"...\"}."
+        "(120-180 words) for the business owner: open with 1-2 sentences on whether we're winning + "
+        "what's working/stalled (reference the ACTUAL numbers), THEN a markdown numbered list titled "
+        "'**Highest-leverage moves next:**' with the 2-3 top moves — put each move on its OWN line "
+        "starting with '1.' / '2.' / '3.' (real newlines '\\n' between items, not one run-on sentence). "
+        "No hype, no guarantees, no invented facts. Return ONE JSON object: {\"briefing\": \"...\"}."
         + LICENSE_CONTENT_POLICY + NO_NEGATIVE_DISAMBIGUATION_POLICY)
     try:
         out = orchestrator_json(system, payload, tier="cheap", max_tokens=700, timeout=90,

@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { useAdvisor } from "@/lib/hooks";
 import { Card, Spinner } from "@/components/ui";
+import { MarkdownBody } from "@/components/MarkdownBody";
 import type { Advisor, AdvisorGap, AdvisorAction, PdcaStatus } from "@/lib/types";
 
 // Each recommended action deep-links to exactly where the owner acts on it (the "dead text" fix).
@@ -127,8 +128,8 @@ export function AdvisorPanel({ businessId, compact = false, framing = "strategy"
         </span>
       </div>
 
-      {/* briefing */}
-      {d.briefing ? <p className="max-w-[70ch] text-[14px] leading-relaxed text-ink-2">{d.briefing}</p> : <p className="text-[13px] text-ink-4">{s.note}</p>}
+      {/* briefing — full width, markdown so bullet/number lists render on their own indented lines */}
+      {d.briefing ? <MarkdownBody text={d.briefing} className="w-full text-[14px] leading-relaxed text-ink-2" /> : <p className="text-[13px] text-ink-4">{s.note}</p>}
 
       {/* the numbers */}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
