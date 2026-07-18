@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useContentOptimizationStatus, useApproveDraft, useRejectDraft, useKattebCredits } from "@/lib/hooks";
+import { useContentDrafts, useContentOptimizationStatus, useApproveDraft, useRejectDraft } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
 import { DraftEditorPanel, readabilityScore } from "@/components/DraftEditorPanel";
 import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
@@ -33,7 +33,7 @@ function scoreCls(n: number | null): string {
   return "text-rose-600";
 }
 function seoScore(d: ContentDraft): number | null {
-  return d.quality_notes?.katteb?.seo_score ?? d.quality_notes?.on_page?.score ?? null;
+  return d.quality_notes?.on_page?.score ?? null;
 }
 // The content AREA of a draft (for the area filter), from its content/asset type.
 const CONTENT_AREA: Record<string, string> = {
@@ -144,7 +144,6 @@ export default function DraftsPage() {
   const { data: optStatus } = useContentOptimizationStatus(businessId);
   const approve = useApproveDraft(businessId);
   const reject = useRejectDraft(businessId);
-  const { data: kattebCredits } = useKattebCredits(businessId);
   const [tab, setTab] = useState<Tab>("ready");
   const [sort, setSort] = useState<Sort>("impact");
   const [groupFlaws, setGroupFlaws] = useState(false);
@@ -225,8 +224,8 @@ export default function DraftsPage() {
     setSelected(new Set());
   };
 
-  // The open draft, kept live from the latest fetch so a finished Katteb analysis (which lands in
-  // quality_notes.katteb after a refetch) shows up in the slide-over without reopening it.
+  // The open draft, kept live from the latest fetch so a freshly-saved AI edit / re-score shows up
+  // in the slide-over without reopening it.
   const liveOpen = openDraft ? ((data ?? []).find((d) => d.id === openDraft.id) ?? openDraft) : null;
 
   return (
@@ -237,11 +236,6 @@ export default function DraftsPage() {
           subtitle="Your drafts at a glance — click any row to review, edit, and publish. Nothing publishes without you."
         />
         <div className="flex shrink-0 items-center gap-2">
-          {kattebCredits?.configured && kattebCredits.credits_available != null && (
-            <span className="mt-1 rounded-full bg-indigo-50 px-2.5 py-1 font-mono text-[11px] text-indigo-700" title="Katteb credits for deep SEO analysis this month">
-              Katteb: {kattebCredits.credits_available.toLocaleString()} / {kattebCredits.credits_total?.toLocaleString()} credits
-            </span>
-          )}
           <CreateContentButton className="inline-flex h-9 items-center rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-sm hover:bg-indigo-strong" />
         </div>
       </div>

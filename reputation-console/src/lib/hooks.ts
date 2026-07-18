@@ -464,12 +464,23 @@ export function useAnalyzeSeo(businessId: number | null) {
   );
 }
 
-// Humanizer rewrite (~100 credits, synchronous). Returns the rewritten text; caller decides to save.
+// Humanize-with-AI: rewrite the draft to read more human via the budget-gated verified
+// orchestrator (synchronous). Returns the rewritten text; the caller decides whether to save it.
 export function useHumanizeDraft(businessId: number | null) {
   return useMutation({
     mutationFn: (draftId: number) =>
-      apiFetch<{ ok: boolean; rewritten_text: string; credits_charged: number }>(
-        `/businesses/${businessId}/drafts/${draftId}/humanize`, { method: "POST", body: {} }),
+      apiFetch<{ ok: boolean; rewritten_text: string }>(
+        `/businesses/${businessId}/content-drafts/${draftId}/ai-humanize`, { method: "POST", body: {} }),
+  });
+}
+
+// Edit-with-AI: apply a plain-language instruction to the draft ("make it shorter", "add a FAQ",
+// "warmer tone") via the budget-gated orchestrator. Returns the rewritten text; caller saves it.
+export function useAiEditDraft(businessId: number | null) {
+  return useMutation({
+    mutationFn: ({ draftId, instruction }: { draftId: number; instruction: string }) =>
+      apiFetch<{ ok: boolean; rewritten_text: string }>(
+        `/businesses/${businessId}/content-drafts/${draftId}/ai-edit`, { method: "POST", body: { instruction } }),
   });
 }
 

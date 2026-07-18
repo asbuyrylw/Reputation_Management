@@ -1,16 +1,16 @@
 "use client";
 
-// Right-side slide-over editor for a content draft (the Katteb-style review UX the owner asked
-// for): Publish at the top, the full editable article on the left, and a scores/report panel on
-// the RIGHT with a "Scores" tab and an "Analyze Competitors" tab (our SERP benchmark + a
-// human-triggered Katteb SEO analysis). Reuses the existing draft hooks; nothing auto-publishes.
+// Right-side slide-over editor for a content draft: Publish at the top, the full editable article
+// on the left, and a scores/benchmark panel on the RIGHT. AI assist (Edit-with-AI + Humanize-with-AI)
+// runs through the budget-gated verified orchestrator; nothing auto-saves or auto-publishes — the
+// operator reviews every change and clicks Save / Publish.
 
 import { useState } from "react";
 import Link from "next/link";
-import { useEditDraft, useApproveDraft, useAnalyzeSeo, useKattebCredits, useHumanizeDraft } from "@/lib/hooks";
+import { useEditDraft, useApproveDraft, useHumanizeDraft, useAiEditDraft } from "@/lib/hooks";
 import { ApiError } from "@/lib/api";
 import { MarkdownBody } from "@/components/MarkdownBody";
-import type { ContentDraft, DraftKatteb } from "@/lib/types";
+import type { ContentDraft } from "@/lib/types";
 
 function scoreTone(n: number | null | undefined): string {
   if (n == null) return "text-slate-400";
@@ -40,100 +40,45 @@ function ScoreRow({ label, score, max = 100, hint }: { label: string; score: num
   );
 }
 
-// The "Analyze Competitors" tab: our own SERP benchmark (free, already computed) + the deeper
-// Katteb SEO/competitor analysis (human-triggered, ~1000 credits).
-function CompetitorsTab({ draft, businessId }: { draft: ContentDraft; businessId: number | null }) {
-  const analyze = useAnalyzeSeo(businessId);
-  const { data: credits } = useKattebCredits(businessId);
+// The "Benchmark" tab: our own SERP benchmark (free, already computed) — how the piece stacks up
+// against the pages actually ranking for its query.
+function BenchmarkTab({ draft }: { draft: ContentDraft }) {
   const qn = draft.quality_notes || {};
   const serp = qn.serp;
-  const katteb: DraftKatteb | undefined = qn.katteb;
-  const st = katteb?.structure;
 
+  if (!serp || serp.skipped) {
+    return <div className="text-[12.5px] text-slate-400">No SERP benchmark on this piece yet. It’s computed when the draft is generated for a target keyword.</div>;
+  }
   return (
-    <div className="space-y-4">
-      {/* our own SERP benchmark (free) */}
-      {serp && !serp.skipped ? (
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Our SERP benchmark</div>
-          <div className="mt-1 text-[12.5px] text-slate-600">
-            {serp.our_words != null && <>Your piece: <b>{serp.our_words}</b> words {serp.target_words != null && <>· ranking pages avg <b>{serp.target_words}</b></>}<br /></>}
-            {serp.covered_pct != null && <>Term coverage: <b>{Math.round(serp.covered_pct)}%</b> of what ranking pages cover</>}
-          </div>
-          {serp.competitors && serp.competitors.length > 0 && (
-            <ul className="mt-1.5 space-y-1 text-[12px] text-slate-500">
-              {serp.competitors.slice(0, 5).map((c, i) => (
-                <li key={i} className="truncate">{c.link ? <a href={c.link} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">{c.title || c.link}</a> : c.title}{c.words != null && ` · ${c.words}w`}</li>
-              ))}
-            </ul>
-          )}
+    <div className="space-y-3">
+      <div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">How you compare to ranking pages</div>
+        <div className="mt-1 text-[12.5px] text-slate-600">
+          {serp.our_words != null && <>Your piece: <b>{serp.our_words}</b> words {serp.target_words != null && <>· ranking pages avg <b>{serp.target_words}</b></>}<br /></>}
+          {serp.covered_pct != null && <>Term coverage: <b>{Math.round(serp.covered_pct)}%</b> of what ranking pages cover</>}
+          {serp.in_range === false && <span className="ml-1 rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-600">thin — add depth</span>}
         </div>
-      ) : (
-        <div className="text-[12.5px] text-slate-400">No SERP benchmark on this piece yet.</div>
-      )}
-
-      {/* Katteb deep analysis */}
-      <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-[12.5px] font-semibold text-indigo-800">Katteb deep SEO analysis</div>
-          {credits?.configured && credits.credits_available != null && (
-            <span className="font-mono text-[10.5px] text-slate-400">{credits.credits_available.toLocaleString()} credits left</span>
-          )}
-        </div>
-        {katteb ? (
-          <div className="mt-2">
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px]">
-              <span>Your SEO score: <b className={scoreTone(katteb.seo_score)}>{katteb.seo_score ?? "—"}</b></span>
-              {katteb.competitor_scores && <span className="text-slate-500">competitors avg <b>{katteb.competitor_scores.avg}</b> · top <b>{katteb.competitor_scores.top}</b></span>}
-            </div>
-            {st && (
-              <div className="mt-1.5 grid grid-cols-3 gap-2 text-center text-[11px]">
-                <div className="rounded bg-white p-1.5"><div className="font-bold text-slate-800">{st.word_count_avg}<span className="text-slate-400"> / {st.word_count_top}</span></div><div className="text-slate-400">words avg/top</div></div>
-                <div className="rounded bg-white p-1.5"><div className="font-bold text-slate-800">{st.headings_avg}<span className="text-slate-400"> / {st.headings_top}</span></div><div className="text-slate-400">headings</div></div>
-                <div className="rounded bg-white p-1.5"><div className="font-bold text-slate-800">{st.images_avg}<span className="text-slate-400"> / {st.images_top}</span></div><div className="text-slate-400">images</div></div>
-              </div>
-            )}
-            {katteb.competitors && katteb.competitors.length > 0 && (
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full text-left text-[11.5px]">
-                  <thead><tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                    <th className="py-1 pr-2">Domain</th><th className="py-1 pr-2 text-right">Words</th><th className="py-1 pr-2 text-right">H</th><th className="py-1 pr-2 text-right">Img</th><th className="py-1 pr-2 text-right">Ent</th><th className="py-1 text-right">SEO</th>
-                  </tr></thead>
-                  <tbody>
-                    {katteb.competitors.map((c, i) => (
-                      <tr key={i} className="border-t border-slate-100">
-                        <td className="py-1 pr-2"><a href={c.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">{c.domain}</a></td>
-                        <td className="py-1 pr-2 text-right tabular-nums">{c.words ?? "—"}</td>
-                        <td className="py-1 pr-2 text-right tabular-nums">{c.headings ?? "—"}</td>
-                        <td className="py-1 pr-2 text-right tabular-nums">{c.images ?? "—"}</td>
-                        <td className="py-1 pr-2 text-right tabular-nums">{c.entities ?? "—"}</td>
-                        <td className={`py-1 text-right font-semibold tabular-nums ${scoreTone(c.seo_score)}`}>{c.seo_score ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="mt-1 text-[10.5px] text-slate-400">Analyzed {katteb.analyzed_at ? new Date(katteb.analyzed_at).toLocaleDateString() : ""}{katteb.keyword ? ` · "${katteb.keyword}"` : ""}</div>
-          </div>
-        ) : credits?.configured ? (
-          <div className="mt-2">
-            <p className="text-[12px] text-slate-500">See how this piece stacks up against the actual top-ranking pages for its keyword (competitor stats + an SEO score). Uses ~1,000 Katteb credits.</p>
-            <button
-              type="button"
-              onClick={() => analyze.mutate({ draftId: draft.id })}
-              disabled={analyze.isPending || analyze.isSuccess}
-              className="mt-2 rounded-md bg-indigo-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {analyze.isPending ? "Starting…" : analyze.isSuccess ? "Running… (1-3 min)" : "Run Katteb analysis"}
-            </button>
-            {analyze.isSuccess && <p className="mt-1 text-[11px] text-slate-500">Analyzing — the results appear here in a minute or two (refresh the draft).</p>}
-            {analyze.isError && <p className="mt-1 text-[11px] text-rose-600">{(analyze.error as ApiError)?.message ?? "Couldn't start."}</p>}
-          </div>
-        ) : (
-          <p className="mt-2 text-[12px] text-slate-400">Katteb isn&apos;t configured (add KATTEB_API_KEY on the backend to enable deep SEO analysis).</p>
-        )}
       </div>
+      {(serp.terms_missing?.length ?? 0) > 0 && (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Terms to weave in</div>
+          <div className="flex flex-wrap gap-1">
+            {serp.terms_missing!.slice(0, 16).map((t) => (
+              <span key={t} className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10.5px] text-rose-600">✗ {t}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {serp.competitors && serp.competitors.length > 0 && (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pages you’re up against</div>
+          <ul className="space-y-1 text-[12px] text-slate-500">
+            {serp.competitors.slice(0, 5).map((c, i) => (
+              <li key={i} className="truncate">{c.link ? <a href={c.link} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">{c.title || c.link}</a> : c.title}{c.words != null && ` · ${c.words}w`}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -144,13 +89,16 @@ export function DraftEditorPanel({ draft, businessId, canEdit, onClose }: {
   const edit = useEditDraft(businessId);
   const approve = useApproveDraft(businessId);
   const humanize = useHumanizeDraft(businessId);
-  const [tab, setTab] = useState<"scores" | "competitors">("scores");
+  const aiEdit = useAiEditDraft(businessId);
+  const [tab, setTab] = useState<"scores" | "benchmark">("scores");
   const [mode, setMode] = useState<"read" | "edit">("read");
   const [title, setTitle] = useState(draft.title ?? "");
   const [body, setBody] = useState(draft.body ?? "");
+  const [instruction, setInstruction] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const qn = draft.quality_notes || {};
   const wordCount = qn.on_page?.word_count ?? (draft.body ?? "").split(/\s+/).filter(Boolean).length;
+  const kwRate = qn.keyword_coverage?.rate != null ? Math.round(qn.keyword_coverage.rate * 100) : null;
 
   const save = () => {
     setErr(null);
@@ -170,6 +118,15 @@ export function DraftEditorPanel({ draft, businessId, canEdit, onClose }: {
       onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't humanize."),
     });
   };
+  const runAiEdit = () => {
+    if (!instruction.trim()) return;
+    setErr(null);
+    aiEdit.mutate({ draftId: draft.id, instruction: instruction.trim() }, {
+      onSuccess: (r) => { setBody(r.rewritten_text); setMode("edit"); setInstruction(""); },
+      onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't apply that edit."),
+    });
+  };
+  const assistBusy = humanize.isPending || aiEdit.isPending;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/30" onClick={onClose}>
@@ -191,7 +148,7 @@ export function DraftEditorPanel({ draft, businessId, canEdit, onClose }: {
         </div>
         {err && <div className="border-b border-rose-100 bg-rose-50 px-4 py-1.5 text-[12px] text-rose-700">{err}</div>}
 
-        {/* body: article (left) + scores/competitors (right) */}
+        {/* body: article (left) + scores/benchmark (right) */}
         <div className="flex min-h-0 flex-1">
           {/* left — the article */}
           <div className="min-w-0 flex-1 overflow-y-auto p-4">
@@ -205,12 +162,12 @@ export function DraftEditorPanel({ draft, businessId, canEdit, onClose }: {
             )}
           </div>
 
-          {/* right — scores / competitors */}
+          {/* right — scores / benchmark */}
           <div className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-slate-50/60 p-3">
             <div className="mb-2 inline-flex rounded-md border border-slate-200 bg-white p-0.5 text-xs">
-              {(["scores", "competitors"] as const).map((t) => (
+              {(["scores", "benchmark"] as const).map((t) => (
                 <button key={t} onClick={() => setTab(t)} className={`rounded px-2.5 py-1 font-medium capitalize ${tab === t ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
-                  {t === "competitors" ? "Competitors" : "Scores"}
+                  {t === "benchmark" ? "Benchmark" : "Scores"}
                 </button>
               ))}
             </div>
@@ -218,11 +175,13 @@ export function DraftEditorPanel({ draft, businessId, canEdit, onClose }: {
             {tab === "scores" ? (
               <div className="space-y-2">
                 <div className="rounded-lg bg-white p-2.5">
-                  <ScoreRow label="AI Visibility" score={qn.citation_ready?.score} hint="Will AI quote this?" />
-                  <ScoreRow label="Readability" score={readabilityScore(qn.readability?.grade)} hint={qn.readability?.grade != null ? `Grade ${qn.readability.grade}` : undefined} />
+                  <ScoreRow label="AI visibility" score={qn.citation_ready?.score} hint="Will AI quote this?" />
+                  <ScoreRow label="AEO" score={qn.aeo?.score} hint="Answer-engine ready" />
+                  <ScoreRow label="GEO" score={qn.geo?.score} hint="AI-citability grade" />
+                  <ScoreRow label="Keywords" score={kwRate} hint="Target terms included" />
+                  <ScoreRow label="Naturalness" score={qn.distinctiveness?.score} hint="Reads human, not AI" />
                   <ScoreRow label="On-page SEO" score={qn.on_page?.score} />
-                  <ScoreRow label="GEO grade" score={qn.geo?.score} hint="Answer-engine ready" />
-                  {qn.katteb?.seo_score != null && <ScoreRow label="Katteb SEO" score={qn.katteb.seo_score} />}
+                  <ScoreRow label="Readability" score={readabilityScore(qn.readability?.grade)} hint={qn.readability?.grade != null ? `Grade ${qn.readability.grade}` : undefined} />
                 </div>
                 <div className="rounded-lg bg-white p-2.5 text-[12px] text-slate-600">
                   <div className="flex justify-between"><span>Words</span><b className="tabular-nums">{wordCount}</b></div>
@@ -230,15 +189,39 @@ export function DraftEditorPanel({ draft, businessId, canEdit, onClose }: {
                   {draft.target_query && <div className="mt-1 truncate"><span className="text-slate-400">Target:</span> {draft.target_query}</div>}
                   {draft.gap_source && <div className="truncate"><span className="text-slate-400">Closes gap:</span> {draft.gap_source}</div>}
                 </div>
+
+                {/* AI assist — edit + humanize via the budget-gated orchestrator (never auto-saves) */}
                 {canEdit && (
-                  <button onClick={runHumanize} disabled={humanize.isPending} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">
-                    {humanize.isPending ? "Humanizing…" : "✨ Humanize (Katteb, ~100 cr)"}
-                  </button>
+                  <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-2.5">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">AI assist</div>
+                    <textarea
+                      value={instruction}
+                      onChange={(e) => setInstruction(e.target.value)}
+                      rows={2}
+                      placeholder="Tell AI what to change — e.g. “make it shorter and warmer”, “add an FAQ section”, “lead with the answer”"
+                      className="mt-1.5 w-full rounded-md border border-slate-300 px-2 py-1.5 text-[12px]"
+                    />
+                    <button
+                      onClick={runAiEdit}
+                      disabled={assistBusy || !instruction.trim()}
+                      className="mt-1.5 w-full rounded-md bg-indigo-600 px-2 py-1.5 text-[12px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {aiEdit.isPending ? "Editing…" : "✎ Edit with AI"}
+                    </button>
+                    <button
+                      onClick={runHumanize}
+                      disabled={assistBusy}
+                      className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {humanize.isPending ? "Humanizing…" : "✨ Humanize with AI"}
+                    </button>
+                    <p className="mt-1 text-[10.5px] text-slate-400">AI rewrites into the editor — review it, then Save edits. Nothing publishes automatically.</p>
+                  </div>
                 )}
                 <Link href="/content/drafts" onClick={onClose} className="block text-center text-[11px] text-indigo-600 hover:underline">Full review card →</Link>
               </div>
             ) : (
-              <CompetitorsTab draft={draft} businessId={businessId} />
+              <BenchmarkTab draft={draft} />
             )}
           </div>
         </div>

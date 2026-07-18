@@ -65,9 +65,11 @@ class SubtasksUpdate(BaseModel):
 
 try:
     from ... import content_generator as _cg
+    from ... import content_assist as _ca
     from ... import tracking as _tracking
 except ImportError:  # pragma: no cover
     import content_generator as _cg  # type: ignore
+    import content_assist as _ca  # type: ignore
     import tracking as _tracking  # type: ignore
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["content"])
@@ -1097,6 +1099,52 @@ def edit_draft(
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Draft can't be edited (already approved/published, or nothing to change)")
     return {"updated": draft_id}
+
+
+def _draft_body(conn, draft_id: int, business_id: int) -> str:
+    """Load a draft's body, scoped to the business (404 if it isn't theirs)."""
+    row = conn.execute(
+        "SELECT body FROM content_drafts WHERE id=%s AND business_id=%s",
+        (draft_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Draft not found")
+    return row["body"] or ""
+
+
+class AiEditRequest(BaseModel):
+    instruction: str
+
+
+@router.post("/content-drafts/{draft_id}/ai-edit")
+def ai_edit_draft(
+    draft_id: int,
+    body: AiEditRequest,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Edit-with-AI: apply the operator's instruction to the draft via the budget-gated verified
+    orchestrator, returning the rewritten text. Does NOT save -- the operator reviews it, then
+    saves over the draft with the normal edit (so the human gate + compliance stay in charge)."""
+    text = _draft_body(conn, draft_id, business_id)
+    res = _ca.ai_edit(business_id, text, body.instruction)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "edit failed")
+    return res
+
+
+@router.post("/content-drafts/{draft_id}/ai-humanize")
+def ai_humanize_draft(
+    draft_id: int,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Humanize-with-AI: rewrite the draft to read more human (preserving meaning/facts/structure)
+    via the budget-gated verified orchestrator. Returns the rewritten text; does NOT auto-save."""
+    text = _draft_body(conn, draft_id, business_id)
+    res = _ca.humanize(business_id, text)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "humanize failed")
+    return res
 
 
 class ApproveRequest(BaseModel):
