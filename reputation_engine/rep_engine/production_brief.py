@@ -62,6 +62,7 @@ VIDEO_SYSTEM = (
     '"description":"keyword-rich video description","tags":[".."],"thumbnail_concept":"..",'
     '"cta":".."}]}'
     + tools.LICENSE_CONTENT_POLICY
+    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 SOCIAL_SYSTEM = (
@@ -78,6 +79,7 @@ SOCIAL_SYSTEM = (
     '"keywords":[".."],"hook":"scroll-stopping first line","outline":["point",".."],'
     '"visual_concept":"..","cta":"..","cadence":"suggested posting cadence"}]}'
     + tools.LICENSE_CONTENT_POLICY
+    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 

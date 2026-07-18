@@ -445,6 +445,7 @@ def _fallback_llm(
         "financial-marketing compliance: no guaranteed returns, no 'risk-free', no '#1' "
         "or 'best' as stated fact. Output ONLY the asset content in markdown."
         + _tools.LICENSE_CONTENT_POLICY
+        + _tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
     )
     prompt_text = template.format(name=biz.get("name", "the business"))
     # Add source context. The client's own material (Business Profile, Requested Focus, BRAND RULES,

@@ -44,6 +44,7 @@ UNTRUSTED_INSTRUCTION = _audit.UNTRUSTED_INSTRUCTION
 # Re-export so content/brief generators (production_brief, rich_media, agent_content) can append the
 # owner's "no specific license numbers in content" policy to their prompts from one source of truth.
 LICENSE_CONTENT_POLICY = _audit.LICENSE_CONTENT_POLICY
+NO_NEGATIVE_DISAMBIGUATION_POLICY = _audit.NO_NEGATIVE_DISAMBIGUATION_POLICY
 
 
 class BudgetExceededError(RuntimeError):

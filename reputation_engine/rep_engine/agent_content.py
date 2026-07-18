@@ -89,6 +89,7 @@ DRAFT_SYSTEM = (
     "few sections. For video_script: a short spoken script. Never fabricate and never make compliance-risky "
     "claims (guarantees of results, '#1'/'best', 'risk-free'). Output ONLY the asset body as plain text."
     + tools.LICENSE_CONTENT_POLICY
+    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 LINKS_SYSTEM = (

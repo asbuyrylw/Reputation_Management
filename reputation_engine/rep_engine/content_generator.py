@@ -267,6 +267,7 @@ GEN_SYSTEM = (
     "and tables. "
     "Output ONLY the asset content -- no preamble."
     + llm.LICENSE_CONTENT_POLICY
+    + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 
@@ -876,6 +877,29 @@ _LICNUM_ALT_RE = re.compile(
 _LICNUM_RE = re.compile(r"\blicen[sc]e\s+numbers?\b", re.I)
 
 
+_NEG_DISAMBIG_RE = re.compile(
+    r"\b(not to be confused with|should not be confused|do not confuse\b|"
+    r"not affiliated with (?:the |any )|has no (?:affiliation|connection|association) with (?:the |any ))", re.I)
+
+
+def _scrub_negative_disambiguation(body: str) -> str:
+    """Deterministic backstop for the no-negative-disambiguation policy: drop any SENTENCE that
+    contains 'not to be confused with …', 'do not confuse …', 'not affiliated with the …' etc. Those
+    name/associate other entities (poor marketing). The prompt ban is the primary lever; this catches
+    what the full/Opus tier occasionally leaves. Idempotent; no-op when the markers are absent."""
+    if not body or not _NEG_DISAMBIG_RE.search(body):
+        return body
+    out = []
+    for line in body.split("\n"):
+        if not _NEG_DISAMBIG_RE.search(line):
+            out.append(line)
+            continue
+        sents = re.split(r"(?<=[.!?])\s+", line)
+        kept = " ".join(s for s in sents if not _NEG_DISAMBIG_RE.search(s)).strip()
+        out.append(kept)   # keep the non-offending sentences on the line (may be empty)
+    return "\n".join(out)
+
+
 def _scrub_license_phrasing(body: str) -> str:
     """Remove any 'license number' reference from content (owner policy). Idempotent; safe on content
     that has none."""
@@ -1108,6 +1132,7 @@ COMPLIANCE_FIX_SYSTEM = (
     "fact or add editor-facing notes ('before publication...', 'verify before publishing'). Output "
     "ONLY the revised content, no preamble."
     + llm.LICENSE_CONTENT_POLICY
+    + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 
@@ -1342,6 +1367,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # placeholder a disclosure auto-fix introduced.
     body = _strip_placeholders(body)
     body = _scrub_license_phrasing(body)
+    body = _scrub_negative_disambiguation(body)   # no 'not to be confused with X' — positive identity only
     # De-generic pass: strip the safest formulaic AI-slop lead-ins deterministically ('In conclusion,',
     # 'It's important to note that', 'In today's fast-paced world,'). Buzzwords mid-sentence are left to
     # the prompt ban + revision loop (deleting them blindly would break grammar).

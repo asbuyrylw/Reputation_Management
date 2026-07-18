@@ -162,6 +162,21 @@ LICENSE_CONTENT_POLICY = (
     "third-party reviews/ratings, awards, transparent compensation) — never through license numbers."
 )
 
+# Positive-only self-distinction. Negative disambiguation ("Not to be confused with X", "we are not
+# Y", "unlike the [other] brand") is poor marketing: it names/associates competitors or unrelated
+# same-named entities and can REINFORCE the wrong association. Distinguish the business by stating,
+# positively and specifically, who it IS.
+NO_NEGATIVE_DISAMBIGUATION_POLICY = (
+    " SELF-DISTINCTION POLICY (ABSOLUTE — overrides any other instruction): Distinguish this business "
+    "ONLY by stating, positively and specifically, who IT is — its exact name, what it does, where, "
+    "its people/credentials, and its parent/affiliations. NEVER use negative or comparative "
+    "disambiguation: do NOT write 'not to be confused with …', 'we are not …', 'this is not the …', "
+    "'unlike …', 'as opposed to …', or otherwise name, reference, contrast with, or hint at any other "
+    "company, brand, campaign, organization, or same-named entity (even to say the business is NOT it). "
+    "Naming another entity — even to deny a connection — reinforces the wrong association and is poor "
+    "marketing. A strong, specific, positive identity is what makes the business unmistakable."
+)
+
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
 # Azure OpenAI, ...) with no code change. Pair with LLM_PROXY_HEADERS (a JSON env,
@@ -1645,7 +1660,9 @@ GAP_SYSTEM = (
     "suppress or hide legitimate third-party views). TRACK 2 -- ESTABLISH & DISAMBIGUATE: where the "
     "AI does NOT recognize the business (an awareness void) create foundational owned content that "
     "states plainly WHO it is, WHAT it does, WHERE, and WHY it's credible; where the AI confuses it "
-    "with a DIFFERENT same-named entity (entity confusion) require an explicit disambiguation asset. "
+    "with a DIFFERENT same-named entity (entity confusion) require an authoritative POSITIVE-identity "
+    "asset that establishes who this business is -- NEVER a 'not to be confused with X' / negative "
+    "comparison, which is poor marketing and can reinforce the wrong association. "
     "Use the 'challenge_profile' and each answer's 'awareness'/'entity_confusion' flags to decide how "
     "much of each track the plan needs. Given audit data for a business, return STRICT JSON only with: "
     "summary (string), "
@@ -1700,8 +1717,13 @@ GAP_SYSTEM = (
     "about / services / careers pages that state plainly who the business is, what it does, where, "
     "and its credentials), not only negative-defense; mark coverage.awareness_recognition addressed. "
     "When entity_confusion_rate is material, REQUIRE (a) a missing_owned_content item that is an "
-    "About/entity page explicitly distinguishing this business from the same-named entity it is "
-    "confused with, and (b) a schema_gaps item for Organization schema with sameAs links to the real "
+    "authoritative About/entity page that ESTABLISHES this business's identity POSITIVELY and "
+    "specifically -- its exact name, what it does, where, its people/credentials, and its parent/"
+    "affiliations -- so answer engines lock onto the correct entity. Do NOT name, reference, or contrast "
+    "with any other same-named entity, and NEVER frame content as 'not to be confused with X', 'we are "
+    "not Y', 'unlike X', or any negative comparison -- that is poor marketing and can reinforce the "
+    "wrong association; a strong, specific POSITIVE identity displaces confusion on its own. (b) a "
+    "schema_gaps item for Organization schema with sameAs links to the real "
     "parent org / regulator / Google Business Profile so answer engines resolve the correct entity; "
     "mark coverage.entity_disambiguation addressed. When awareness is strong and confusion is nil, "
     "mark those two dimensions addressed=false with the reason that this cycle is negative-defense. "
@@ -1729,6 +1751,7 @@ GAP_SYSTEM = (
     "different same-named entity. "
     "All actions must be honest reputation-building, not manipulation. JSON only."
     + LICENSE_CONTENT_POLICY
+    + NO_NEGATIVE_DISAMBIGUATION_POLICY
     + UNTRUSTED_INSTRUCTION
 )
 
@@ -1749,6 +1772,7 @@ GAP_CRITIC_SYSTEM = (
     "pages; legitimacy/corroboration assets for contested frames). If the draft is already "
     "complete and grounded, return it unchanged. STRICT JSON only."
     + LICENSE_CONTENT_POLICY
+    + NO_NEGATIVE_DISAMBIGUATION_POLICY
     + UNTRUSTED_INSTRUCTION
 )
 
