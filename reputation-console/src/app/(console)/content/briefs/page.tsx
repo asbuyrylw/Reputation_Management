@@ -419,6 +419,7 @@ export default function BriefsPage() {
   const { data: keywordIntent } = useKeywordIntent(businessId);
   const genAll = useGenerateContentBatch(businessId);
   const [confirmAll, setConfirmAll] = useState(false);
+  const [areaFilter, setAreaFilter] = useState<string>("all");
 
   if (lb || lw || !workOrders) return <Spinner />;
 
@@ -438,6 +439,15 @@ export default function BriefsPage() {
     .map((k) => ({ key: k, label: AREA_LABEL[k], items: contentItems.filter((w) => areaKey(w.area) === k) }))
     .filter((g) => g.items.length > 0);
   const notStarted = contentItems.filter((w) => !draftByWo.get(w.id) && !assetByWo.get(w.id)).length;
+
+  // "By section" filter: All + each area that has pieces + a "Video & social" chip for the recipes.
+  const areaChips = [
+    { key: "all", label: "All" },
+    ...grouped.map((g) => ({ key: g.key, label: g.label })),
+    ...(recipes.length > 0 ? [{ key: "recipes", label: "Video & social" }] : []),
+  ];
+  const visibleGroups = areaFilter === "all" ? grouped : grouped.filter((g) => g.key === areaFilter);
+  const showRecipes = recipes.length > 0 && (areaFilter === "all" || areaFilter === "recipes");
 
   return (
     <div>
@@ -486,8 +496,26 @@ export default function BriefsPage() {
         />
       ) : (
         <div className="space-y-6">
+          {/* Filter by section (website / blog / local / social / video & social recipes) so a
+              producer can see just what they own. Only shown when there's more than one section. */}
+          {areaChips.length > 2 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-ink-4">Show</span>
+              {areaChips.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => setAreaFilter(c.key)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${areaFilter === c.key ? "bg-ink text-white" : "border border-line-2 text-ink-3 hover:bg-line/60"}`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* the SPECIFIC pieces from the strategy, grouped by area — the heart of this page */}
-          {grouped.map((g) => (
+          {visibleGroups.map((g) => (
             <section key={g.key}>
               <h3 className="mb-2 text-sm font-semibold text-ink">{g.label} <span className="font-normal text-ink-4">({g.items.length})</span></h3>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -505,7 +533,7 @@ export default function BriefsPage() {
             </section>
           ))}
 
-          {recipes.length > 0 && (
+          {showRecipes && (
             <section>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-ink">Video &amp; social recipes ({recipes.length})</h3>
