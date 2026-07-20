@@ -17,12 +17,13 @@ _FINANCE_MARKERS = ["financial", "finra", "limra", "acli", "sec.gov", "licensed 
 
 
 def _prompt_surface(profile: dict) -> str:
-    """Everything that flows into a prompt/compliance/persona/source decision, MINUS tenant-declared
-    passthrough fields (contested_terms/firm_type echo the owner's own input, not a leak)."""
+    """The prompt-bound VALUES of a profile (not its metadata key names -- a field NAMED
+    'regulated_financial' is a gate flag, not a finance vocabulary leak), MINUS tenant-declared
+    passthrough fields (contested_terms/firm_type/negative_lexicon echo the owner's own input)."""
     p = dict(profile)
-    for k in ("contested_terms", "firm_type", "industry"):
+    for k in ("contested_terms", "firm_type", "industry", "negative_lexicon"):
         p.pop(k, None)
-    return json.dumps(p, default=str).lower()
+    return json.dumps(list(p.values()), default=str).lower()   # values only -> key names can't false-match
 
 
 def test_generic_is_finance_free():
@@ -118,3 +119,63 @@ def test_derive_is_pure_no_shared_mutation():
     a["review_sites"].append("MUTATED")
     b = bp.derive({"industry": "nonprofit"})
     assert "MUTATED" not in b["review_sites"]   # GENERIC/BUCKETS not mutated across calls
+
+
+# --- Slice A: license_policy_for builder + regulated_financial + real-signal local presence ---------
+
+def test_license_policy_for_finance_reproduces_live_literal_byte_for_byte():
+    # The builder must compose EXACTLY today's LICENSE_CONTENT_POLICY for the finance pilot, so Slice B
+    # can replace the module constant with license_policy_for(profile) without regressing the pilot.
+    from rep_engine import ai_state_audit as llm
+    p = bp.derive({"industry": "financial_services", "firm_type": "insurance",
+                   "geo": "Cincinnati, OH", "contested_terms": "MLM,pyramid scheme,scam"})
+    assert bp.license_policy_for(p) == llm.LICENSE_CONTENT_POLICY   # byte-for-byte (em-dashes + leading space)
+
+
+def test_license_policy_for_generic_is_empty():
+    # No license-number ban for a non-suppressing tenant -- a bakery may say "license number 12345".
+    assert bp.license_policy_for(bp.derive({"industry": "restaurant"})) == ""
+    assert bp.license_policy_for(bp.derive({})) == ""
+
+
+def test_regulated_financial_gate():
+    assert bp.derive({"firm_type": "insurance", "industry": "vague text"})["regulated_financial"] is True
+    assert bp.derive({"industry": "financial_services"})["regulated_financial"] is True
+    # medical/legal are 'regulated' but NOT 'regulated_financial' -> they never inherit finance vocab
+    for ind in ("dentist", "law firm"):
+        p = bp.derive({"industry": ind})
+        assert p["regulated"] is True and p["regulated_financial"] is False
+
+
+def test_negative_lexicon_from_contested_terms_only():
+    assert bp.derive({"industry": "financial_services", "contested_terms": "MLM, pyramid scheme, scam"}
+                     )["negative_lexicon"] == ["mlm", "pyramid scheme", "scam"]
+    assert bp.derive({"industry": "financial_services"})["negative_lexicon"] == []   # none declared -> none
+    assert bp.derive({"industry": "restaurant"})["negative_lexicon"] == []
+
+
+def test_state_from_geo_space_separated_and_unresolvable():
+    from rep_engine import industry_profiles as ip
+    assert ip.state_from_geo("Cincinnati OH") == "Ohio"          # space-separated (was broken)
+    assert ip.state_from_geo("Cincinnati, OH") == "Ohio"
+    assert ip.state_from_geo("Brooklyn, New York") == "New York"
+    assert ip.state_from_geo("Indianapolis IN") == "Indiana"     # trailing abbrev, not the word 'in'
+    assert ip.state_from_geo("United States") == ""              # cannot resolve a state
+
+
+def test_has_local_presence_real_signal_wins():
+    # a connected GBP (local_signal True) forces local presence on even for a non-local archetype
+    assert bp.derive({"industry": "ecommerce"})["has_local_presence"] is False
+    assert bp.derive({"industry": "ecommerce"}, local_signal=True)["has_local_presence"] is True
+    # None (unknown) leaves the archetype default; an operator override still wins last
+    assert bp.derive({"industry": "b2b_saas"}, local_signal=None)["has_local_presence"] is False
+    assert bp.derive({"industry": "b2b_saas"}, local_signal=None,
+                     overrides={"has_local_presence": True})["has_local_presence"] is True
+
+
+def test_required_disclosures_surfaced_from_regulatory_profile():
+    p = bp.derive({"firm_type": "insurance", "geo": "Cincinnati, OH",
+                   "regulatory_profile": {"firm_type": "insurance",
+                                          "disclosures": ["Securities offered through XYZ, member FINRA/SIPC."]}})
+    assert p["required_disclosures"] == ["Securities offered through XYZ, member FINRA/SIPC."]
+    assert bp.derive({"industry": "restaurant"})["required_disclosures"] == []

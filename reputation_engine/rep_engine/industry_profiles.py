@@ -37,14 +37,30 @@ GENERIC: dict = {
     "suppress_specific_credential_numbers": False,          # only finance suppresses license numbers
     "regulator": "",                                        # a named regulator, when one applies
     "byline_reviewer": "editorial team",                    # generic; NOT "licensed professionals"
+    # The SPECIFIC credential-number kinds a suppressing (finance) tenant must never publish, and the
+    # noun for the "our agents are licensed <noun>" clause -- both compose license_policy_for(). Empty
+    # for GENERIC (no license-number ban -> license_policy_for returns "").
+    "credential_number_types": [],                          # finance: [FINRA CRD, NPN, state insurance license #s]
+    "licensed_professional_noun": "",                       # finance: "insurance professionals"
+    "regulated_financial": False,                           # finance-ONLY gate (derive() sets it firm_type-first)
+    "required_disclosures": [],                             # surfaced from businesses.regulatory_profile.disclosures
+    "authoritative_source_pack": "",                        # "" -> dynamic discovery; "financial" -> the finance registry
+    "draft_tier_policy": "auto_owned",                      # owned-surface low-risk may auto-approve; finance = manual_all
 
     # --- authoritative sources / GEO -------------------------------------
     "authoritative_source_domains": [],                     # [] -> dynamic per-tenant discovery (no finance list)
     "require_stat_quotations": True,                        # AGNOSTIC GEO lever -- keep for ALL verticals
 
     # --- challenge calibration (start global; later calibrated to the tenant's own velocity) ---
+    # All four low/material thresholds mirror challenge.py's module constants so profile-gating
+    # _classify() can't KeyError. finance == generic here (a finance-specific value would itself be
+    # a regression) -- the finance bucket deliberately does NOT override them.
     "void_high": 0.50,
+    "void_low": 0.30,
     "neg_high": 0.40,
+    "neg_low": 0.25,
+    "void_material": 0.25,
+    "neg_material": 0.30,
     "healthy_alignment": 0.40,
     "void_fill_factors": {"awareness_gap": 1.6, "mixed": 1.1, "negative_narrative": 0.8},
     "target_alignment": 0.5,                                # per-tenant success target (nonprofit/awareness differ)
@@ -53,6 +69,10 @@ GENERIC: dict = {
     "personas": ["generic", "local_customer", "prospective_client"],
     "audience_examples": ["a prospective customer", "someone comparing local options"],
     "contested_probe": False,                               # only when contested_terms declares one
+    # Negative terms the mention/sentiment layer flags. EMPTY by default + never planted by industry:
+    # derive() composes it from the tenant's OWN contested_terms, so no vertical is auto-accused (the
+    # finance "pyramid/mlm" probe fires only because Team Unstoppable DECLARED those contested terms).
+    "negative_lexicon": [],
 
     # --- content plan -----------------------------------------------------
     "default_content_types": ["blog", "article", "faq", "social_post"],
@@ -74,6 +94,15 @@ BUCKETS: dict[str, dict] = {
         "compliance_packs": ["universal_deceptive", "financial"],
         "credential_noun": "license",
         "suppress_specific_credential_numbers": True,       # no FINRA CRD / NPN / license numbers in content
+        # The exact credential-number kinds + licensed-professional noun that compose the finance
+        # license policy (reproduces LICENSE_CONTENT_POLICY's "no ... FINRA CRD ... NPN ..." + "licensed
+        # insurance professionals" clauses). Order matters -- it is rendered "no A, no B, no C".
+        "credential_number_types": ["individual/agent state insurance license numbers",
+                                    "FINRA CRD numbers", "NPN numbers"],
+        "licensed_professional_noun": "insurance professionals",
+        "regulated_financial": True,                        # the finance-only gate
+        "authoritative_source_pack": "financial",           # inject the authoritative_sources finance registry
+        "draft_tier_policy": "manual_all",                  # every finance draft human-gated
         # Regulator is state-specific; derive() fills {state} from geo. Reproduces "the Ohio
         # Department of Insurance" for a Cincinnati OH tenant, not a hardcoded global.
         "regulator_template": "the {state} Department of Insurance",
@@ -228,15 +257,31 @@ def bucket_for(industry: str | None, firm_type: str | None = None) -> str:
 
 
 def state_from_geo(geo: str | None) -> str:
-    """Full state name from a geo string ('Cincinnati, OH' / 'Ohio') for a regulator template, or ''."""
+    """Full state name from a geo string, tolerant of comma OR space separation ('Cincinnati, OH',
+    'Cincinnati OH', 'Ohio', 'Brooklyn, New York'). '' when no US state is present (e.g. 'United
+    States'). Prefers a full name / the trailing token so a common word ('in', 'or') inside a city
+    name doesn't false-match a state abbreviation."""
     if not geo:
         return ""
     g = geo.strip()
-    for token in [t.strip() for t in g.replace("/", ",").split(",")]:
-        tl = token.lower()
-        if tl in _STATES:
-            return _STATES[tl]
-        for full in _STATES.values():
-            if full.lower() == tl:
-                return full
+    fulls = {full.lower(): full for full in _STATES.values()}
+    segs = [s.strip().lower() for s in g.replace("/", ",").split(",") if s.strip()]
+    # 1) a comma segment that IS a full state name ("Cincinnati, Ohio")
+    for s in segs:
+        if s in fulls:
+            return fulls[s]
+    # 2) a full state name as consecutive words anywhere ("New York City")
+    gl = " " + " ".join(g.lower().replace(",", " ").replace("/", " ").split()) + " "
+    for low, full in fulls.items():
+        if f" {low} " in gl:
+            return full
+    # 3) a 2-letter abbreviation, preferring the LAST word of a segment (the state trails the city)
+    for s in segs:
+        words = s.split()
+        if words and words[-1] in _STATES:
+            return _STATES[words[-1]]
+    # 4) any 2-letter abbreviation token (fallback)
+    for w in g.lower().replace(",", " ").replace("/", " ").split():
+        if w in _STATES:
+            return _STATES[w]
     return ""
