@@ -26,6 +26,10 @@ stripe>=9.0            # Phase 2c billing (Checkout/Portal/webhooks); imported l
                        # the app runs fine without it until STRIPE_SECRET_KEY is set
 cryptography>=42       # Integrations vault: Fernet at-rest encryption for OAuth tokens /
                        # app-passwords (rep_engine.crypto). Only loaded when connections are used.
+boto3>=1.34            # Central object storage (rep_engine.storage): S3-compatible client for Railway
+                       # Buckets / Cloudflare R2 / AWS S3 / MinIO. Imported lazily and dormant until a
+                       # bucket is configured (BUCKET_* injected by a connected Railway Bucket, or
+                       # REP_STORAGE_*), so the app runs fine without it until storage is set up.
 playwright>=1.45       # Citation/directory-listing automation (rep_engine.citation_builder): drives a
                        # headless browser under Gemini Computer Use, screenshot-by-screenshot, always
                        # pausing for a human confirm before any submit-like click. Only imported when a
