@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
 import {
   useExternalSignals,
@@ -106,7 +106,7 @@ function statusTone(status: string): { tone: Tone; label: string } {
 const fmtWhen = (d?: string | null) => (d ? new Date(d).toLocaleString() : "never");
 
 interface ProviderDef {
-  kind: "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics" | "youtube";
+  kind: "wordpress_org" | "google_business_profile" | "google_search_console" | "google_analytics" | "youtube";
   name: string;
   blurb: string;
   surface: "owned" | "third_party";
@@ -124,12 +124,6 @@ const PROVIDERS: ProviderDef[] = [
     name: "Google Business Profile",
     blurb: "Post updates to your Google profile and reply to Google reviews (subject to Google approval).",
     surface: "owned",
-  },
-  {
-    kind: "ayrshare_profile",
-    name: "Social (Facebook · Instagram · LinkedIn · Pinterest)",
-    blurb: "Third-party social via Ayrshare — drafts are prepared; you post and confirm manually.",
-    surface: "third_party",
   },
   {
     kind: "google_search_console",
@@ -432,9 +426,6 @@ function ProviderCard({
   const [siteUrl, setSiteUrl] = useState("");
   const [wpUser, setWpUser] = useState("");
   const [appPassword, setAppPassword] = useState("");
-  // Ayrshare form
-  const [profileKey, setProfileKey] = useState("");
-  const [displayName, setDisplayName] = useState("");
 
   const status = connection?.status ?? "";
   const { tone, label } = statusTone(status);
@@ -469,20 +460,6 @@ function ProviderCard({
         onSuccess: () => {
           setShowForm(false);
           setSiteUrl(""); setWpUser(""); setAppPassword("");
-        },
-        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save the connection."),
-      },
-    );
-  };
-
-  const submitAyrshare = () => {
-    setErr(null);
-    connect.mutate(
-      { kind: "ayrshare_profile", profile_key: profileKey.trim(), display_name: displayName.trim() || undefined },
-      {
-        onSuccess: () => {
-          setShowForm(false);
-          setProfileKey(""); setDisplayName("");
         },
         onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save the connection."),
       },
@@ -565,7 +542,7 @@ function ProviderCard({
 
       {testNote && <p className="mt-2 text-xs text-ink-3">{testNote}</p>}
 
-      {/* Direct-credential forms (WordPress app-password / Ayrshare profile key) */}
+      {/* Direct-credential form (WordPress app-password) */}
       {canConnect && showForm && provider.kind === "wordpress_org" && (
         <div className="mt-3 space-y-2 border-t border-line pt-3">
           <p className="text-xs text-ink-3">
@@ -584,21 +561,6 @@ function ProviderCard({
           </Button>
         </div>
       )}
-      {canConnect && showForm && provider.kind === "ayrshare_profile" && (
-        <div className="mt-3 space-y-2 border-t border-line pt-3">
-          <p className="text-xs text-ink-3">
-            Paste your Ayrshare <span className="font-medium">Profile Key</span>. Social posts are prepared as drafts —
-            you review and post them yourself (third-party platforms require manual posting).
-          </p>
-          <Input value={profileKey} onChange={(e) => setProfileKey(e.target.value)} placeholder="Ayrshare profile key"
-            type="password" />
-          <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (optional)" />
-          <Button onClick={submitAyrshare} disabled={connect.isPending || !profileKey}>
-            {connect.isPending ? "Saving…" : "Save connection"}
-          </Button>
-        </div>
-      )}
-
       {/* GSC property picker — choose which verified property to pull, once connected. */}
       {provider.kind === "google_search_console" && connected && connection && canConnect && (
         <GscPropertyPicker connection={connection} businessId={businessId} />
@@ -642,6 +604,8 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
   // Accounts confirmed by the latest in-session sync (merged with what's on the connection meta).
   const [syncedAccounts, setSyncedAccounts] = useState<ZerniaAccount[] | null>(null);
   const [syncNote, setSyncNote] = useState<string | null>(null);
+  // True while the owner is authorizing a network in the Zernio popup — drives the auto-sync on return.
+  const awaitingAuthRef = useRef(false);
 
   const connection = data?.connections.find((c) => c.kind === "zernia");
   // platforms come back from setup; once set up they're stored on the connection meta too.
@@ -675,6 +639,7 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
         if (res.authUrl) {
           const w = window.open(res.authUrl, "_blank");
           if (!w) setErr("Your browser blocked the authorization popup — allow popups for this site and try again.");
+          else awaitingAuthRef.current = true; // pull the account automatically when they come back
         }
       },
       onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start the connection."),
@@ -696,6 +661,25 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
       onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't sync your accounts."),
     });
   };
+
+  // Keep a live ref so the window-focus listener always calls the latest runSync (stable subscription).
+  const runSyncRef = useRef(runSync);
+  useEffect(() => {
+    runSyncRef.current = runSync;
+  });
+
+  // When the owner finishes authorizing in the Zernio popup and returns to this tab, pull the newly
+  // connected account automatically — no need to click Sync. (The manual Sync button still works.)
+  // The short delay gives Zernio's OAuth callback a moment to register the account before we fetch.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!awaitingAuthRef.current) return;
+      awaitingAuthRef.current = false;
+      window.setTimeout(() => runSyncRef.current(), 1200);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   return (
     <Card>
@@ -735,7 +719,7 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
         <div className="mt-3 border-t border-line pt-3">
           <p className="text-xs text-ink-3">
             Your Zernio profile is ready. Click <span className="font-medium">Connect</span> on each network to authorize
-            that account in a Zernio popup, then <span className="font-medium">Sync</span> to confirm.
+            that account in a popup — when you come back, the connected account appears automatically.
           </p>
 
           {platforms.length === 0 ? (
@@ -778,7 +762,7 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
               {sync.isPending ? "Syncing…" : "Sync connected accounts"}
             </Button>
             <span className="text-xs text-ink-4">
-              After you finish connecting in the popup, click Sync to pull your accounts.
+              Accounts sync automatically when you return from the popup — use this if one doesn&apos;t show up.
             </span>
           </div>
           {syncNote && <p className="mt-2 text-xs text-ink-3">{syncNote}</p>}
@@ -811,12 +795,14 @@ function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; ca
       )}
 
       <Card className="mb-4 bg-indigo-050/50">
-        <div className="text-sm font-semibold text-ink">How publishing honesty works</div>
+        <div className="text-sm font-semibold text-ink">How publishing works</div>
         <p className="mt-1 text-sm text-ink-2">
-          <span className="font-medium">Surfaces you own</span> (your WordPress site, your Google Business Profile) can be
-          published to automatically once you approve. <span className="font-medium">Third-party platforms</span> (Facebook,
-          Instagram, LinkedIn, Pinterest) are draft-only — we prepare the post and alert you, but{" "}
-          <span className="font-medium">you post it manually</span> to stay within each platform&apos;s terms of service.
+          <span className="font-medium">Surfaces you own</span> (your WordPress site, your Google Business Profile) publish
+          automatically once you approve. <span className="font-medium">Social accounts you connect below</span> (Facebook,
+          Instagram, LinkedIn, X, and more) publish through each platform&apos;s official API once you authorize them — and
+          you still approve every post first. A few places with no posting API or stricter terms (Yelp, Reddit) stay
+          draft-only: we prepare the reply and the <span className="font-medium">Reply Assist</span> extension shows it on
+          the page for you to post yourself.
         </p>
       </Card>
 
