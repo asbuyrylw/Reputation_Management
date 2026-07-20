@@ -239,6 +239,10 @@ export interface StrategyView {
   summary: string;
   sections: StrategySection[];
   counts: Record<string, number>;
+  // True when the gap analysis produced no gap-derived work — the plan is baseline setup only and
+  // should be re-run, not presented as finished. degraded_reason is the client-facing explanation.
+  degraded?: boolean;
+  degraded_reason?: string | null;
 }
 
 // One logged completed action (from a work order marked done/verified or a brief marked

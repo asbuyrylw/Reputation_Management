@@ -499,6 +499,22 @@ METRICS = [
 ]
 
 
+# The gap-model arrays that carry REAL, gap-derived work. If every one is empty, build_work_orders
+# still emits baseline boilerplate (Phase-0 setup, the monthly monitor, standing outreach), so a plan
+# built from an EMPTY or failed gap model looks complete while carrying zero gap-derived work. Both
+# assemble_plan and strategy_view flag that as `degraded` from ONE definition here, so the plan JSON
+# and the console's Strategy page can't disagree about whether a strategy is real.
+_GAP_CONTENT_KEYS = ("missing_owned_content", "schema_gaps", "thin_corroboration",
+                     "surface_actions", "local_seo_gaps", "competitor_defense", "site_technical_gaps")
+
+
+def _is_degraded(gap: dict) -> bool:
+    """True when the gap model produced NO gap-derived content (baseline boilerplate only) -- the
+    signal to tell the client 'plan is degraded, re-run the gap model' rather than present setup
+    tasks as a finished strategy."""
+    return not any((gap or {}).get(k) for k in _GAP_CONTENT_KEYS)
+
+
 def assemble_plan(business: dict, gap: dict, start: date) -> dict:
     wos = build_work_orders(gap, business)
     bid = business.get("id")
@@ -527,16 +543,11 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
         }
     auto = [w for w in wos if w.execution == "auto"]
     human = [w for w in wos if w.execution in ("manual", "semi")]
-    # Silent-success guard: build_work_orders always emits baseline boilerplate (Phase-0, the monthly
-    # monitor, and a standing podcast-outreach task), so a plan built from an EMPTY or failed gap
-    # model still looks complete while carrying zero gap-derived work. Detect that from the gap model
-    # itself -- every gap-CONTENT array empty -- rather than from work-order counts (some baseline
-    # tasks carry a gap-like source), so the console/report can show "plan is degraded -- re-run the
-    # gap model" instead of presenting boilerplate as a finished strategy.
-    _GAP_CONTENT_KEYS = ("missing_owned_content", "schema_gaps", "thin_corroboration",
-                         "surface_actions", "local_seo_gaps", "competitor_defense", "site_technical_gaps")
+    # Silent-success guard (see _is_degraded / _GAP_CONTENT_KEYS above): a plan built from an EMPTY or
+    # failed gap model looks complete while carrying zero gap-derived work. Detect it from the gap
+    # model itself so the console/report can show "plan is degraded -- re-run the gap model".
     gap_derived = [w for w in wos if (w.rationale or {}).get("gap_source", "baseline setup") != "baseline setup"]
-    degraded = not any(gap.get(k) for k in _GAP_CONTENT_KEYS)
+    degraded = _is_degraded(gap)
     if degraded:
         log.warning("assemble_plan business=%s: gap model produced NO gap-derived work orders "
                     "(baseline boilerplate only) -- gap synthesis is likely empty or failed.", bid)
@@ -726,10 +737,18 @@ def strategy_view(business_id: int) -> dict:
         g["why"] = appr.get("why") or primary.get("why", "")
         g["title"] = g.get("source_query") or primary.get("title", "Task")
         sections[g["section"]]["groups"].append(g)
+    # Same degraded signal assemble_plan flags: if the gap model carries no gap-derived content, the
+    # Strategy page is baseline boilerplate -- tell the client to re-run, don't present it as finished.
+    degraded = _is_degraded(gap)
     return {
         "summary": gap.get("summary", ""),
         "sections": [sections[k] for k in ("ai_visibility", "seo", "search")],
         "counts": {k: len(sections[k]["groups"]) for k in sections},
+        "degraded": degraded,
+        "degraded_reason": (
+            "This plan was built from an empty or failed gap analysis, so it shows only standard "
+            "setup tasks — not work targeted at your specific gaps. Re-run the gap analysis to "
+            "generate a strategy tailored to your business." if degraded else None),
     }
 
 

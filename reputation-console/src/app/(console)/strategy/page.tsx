@@ -133,6 +133,23 @@ export default function StrategyPage() {
         </Link>
       </div>
 
+      {/* Degraded plan: the gap analysis produced no gap-derived work, so what follows is baseline
+          setup only — surface that honestly instead of passing boilerplate off as a finished plan. */}
+      {strat?.degraded && (
+        <div className="mb-5 mt-2 flex items-start gap-3 rounded-[14px] border border-amber-300 bg-amber-50 p-4">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden>
+            <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+          </svg>
+          <div>
+            <div className="text-[13px] font-bold text-amber-900">This plan is incomplete</div>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800">
+              {strat.degraded_reason || "This plan was built from an empty or failed gap analysis, so it shows only standard setup tasks. Re-run the gap analysis to generate a strategy tailored to your business."}
+            </p>
+            <Link href="/runs" className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-amber-900 hover:underline">Re-run the audit &amp; gap analysis →</Link>
+          </div>
+        </div>
+      )}
+
       {/* Which keywords to actually go after — winnable (real demand + low difficulty), competitor
           gaps, and highest demand. Each becomes a content task carrying the target keyword. The
           measured "is it working?" view now lives in Content → Performance. */}
