@@ -178,12 +178,13 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
         from . import visual_content as _vc
     except ImportError:  # pragma: no cover
         import visual_content as _vc  # type: ignore
-    path = _vc._save_png(business_id, raw, ext="mp4")
+    skey, purl, path, fbytes = _vc._store_bytes(business_id, raw, "heygen-video.mp4", "video/mp4")
     visual_id = _vc._persist(
         business_id, kind="video", provider="heygen", model=os.getenv("HEYGEN_ENGINE", "avatar"),
         prompt=narration[:500], file_path=path, url=video_url,
         compliance_note="Avatar speaks the vetted script verbatim (no generated/hallucinated speech).",
-        work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4",
+        work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",
+        storage_key=skey, public_url=purl,
         meta={"source": "heygen", "srt": srt, "duration": duration, "narration_chars": len(narration)})
     try:  # itemized cost — HeyGen bills per second (~$0.05-0.067/s); estimate from duration/speech rate
         from . import cost as _cost
@@ -353,12 +354,13 @@ def fetch_agent_video(business_id: int, session_id: str, *, video_id: Optional[s
         from . import visual_content as _vc
     except ImportError:  # pragma: no cover
         import visual_content as _vc  # type: ignore
-    path = _vc._save_png(business_id, raw, ext="mp4")
+    skey, purl, path, fbytes = _vc._store_bytes(business_id, raw, "heygen-agent-video.mp4", "video/mp4")
     visual_id = _vc._persist(
         business_id, kind="video", provider="heygen_agent", model="video_agent_v3",
         prompt=(prompt or "")[:500], file_path=path, url=video_url,
         compliance_note="Produced by HeyGen Video Agent (non-verbatim; visuals-constrained prompt) — review narration before publish.",
-        work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4",
+        work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",
+        storage_key=skey, public_url=purl,
         meta={"source": "heygen_agent", "srt": srt, "duration": duration, "session_id": session_id})
     try:
         from . import cost as _cost
