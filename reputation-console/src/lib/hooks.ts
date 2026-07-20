@@ -1941,6 +1941,18 @@ export function useSetBrandGuardrails(businessId: number | null) {
 export function useSourceDocuments(businessId: number | null) {
   return useApiQuery<{ documents: SourceDocument[] }>(["source-docs", businessId], base(businessId, "/source-documents"));
 }
+// Auto-ingest the client's own website into the grounding corpus (crawls the site, extracts each
+// page's main text into source_documents). Async job: new docs appear once the worker finishes.
+export function useSyncWebsiteMaterial(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/businesses/${businessId}/jobs/ingest_source_material`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+      qc.invalidateQueries({ queryKey: ["source-docs", businessId] });
+    },
+  });
+}
 export function useAddSourceDoc(businessId: number | null) {
   const qc = useQueryClient();
   return useMutation({

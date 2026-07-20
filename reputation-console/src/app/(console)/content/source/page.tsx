@@ -6,7 +6,7 @@
 
 import { useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useBrandGuardrails, useSetBrandGuardrails, useSourceDocuments, useAddSourceDoc, useUploadSourceDoc, useDeleteSourceDoc } from "@/lib/hooks";
+import { useBrandGuardrails, useSetBrandGuardrails, useSourceDocuments, useAddSourceDoc, useUploadSourceDoc, useDeleteSourceDoc, useSyncWebsiteMaterial } from "@/lib/hooks";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import type { SourceDocument } from "@/lib/types";
 
@@ -18,6 +18,7 @@ export default function SourceMaterialPage() {
   const addDoc = useAddSourceDoc(businessId);
   const upload = useUploadSourceDoc(businessId);
   const del = useDeleteSourceDoc(businessId);
+  const syncSite = useSyncWebsiteMaterial(businessId);
   const fileRef = useRef<HTMLInputElement>(null);
   const [guardText, setGuardText] = useState<string | null>(null);
   const [noteTitle, setNoteTitle] = useState("");
@@ -83,6 +84,22 @@ export default function SourceMaterialPage() {
           <p className="mt-0.5 mb-3 text-xs text-slate-500">Upload brand docs, scripts, product one-pagers, testimonials, FAQs — anything the AI should build content from. Select several at once. TXT / MD / PDF / DOCX.</p>
           {canEdit && (
             <>
+              {/* Fastest path: pull the client's own website in automatically so the corpus is never
+                  empty. Crawls the site + extracts each page's text into the corpus (idempotent). */}
+              <div className="mb-4 rounded-[10px] border border-indigo-100 bg-indigo-050/50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[13px] font-semibold text-slate-800">Sync from your website</div>
+                    <div className="text-[11.5px] text-slate-500">Auto-import your site’s pages as grounding — no uploading needed.</div>
+                  </div>
+                  <button onClick={() => syncSite.mutate()} disabled={syncSite.isPending}
+                    className="shrink-0 rounded-[10px] bg-indigo px-3.5 py-2 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
+                    {syncSite.isPending ? "Starting…" : "↻ Sync website"}</button>
+                </div>
+                {syncSite.isSuccess && <div className="mt-2 text-[12px] text-good">✓ Syncing your website — new pages will appear in the corpus below in a minute or two.</div>}
+                {syncSite.isError && <div className="mt-2 text-[12px] text-rose-600">Couldn’t start the sync. Make sure a website domain is set for this business, then try again.</div>}
+              </div>
+
               <input ref={fileRef} type="file" multiple accept=".txt,.md,.csv,.pdf,.docx" onChange={onFile} className="hidden" />
               <button onClick={() => fileRef.current?.click()} disabled={upload.isPending}
                 className="rounded-[10px] border-2 border-dashed border-line-2 bg-paper px-4 py-6 text-[14px] font-semibold text-ink-2 hover:border-indigo hover:text-indigo disabled:opacity-60">

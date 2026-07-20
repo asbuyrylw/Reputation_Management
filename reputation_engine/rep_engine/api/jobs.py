@@ -128,6 +128,14 @@ def _run_site_crawl(business_id: int, args: dict) -> None:
     _imp("site_crawl").crawl_cmd(business_id, int(args.get("max_pages", 40)))
 
 
+def _run_ingest_source_material(business_id: int, args: dict) -> dict:
+    # Auto-ingest the client's own website content into the grounding corpus (source_documents),
+    # so generation is grounded in their real pages. Idempotent: replaces the prior site_crawl set.
+    return _imp("source_ingest").ingest_site(
+        business_id, max_pages=int(args.get("max_pages", 20)),
+        created_by=args.get("created_by"))
+
+
 def _run_gap_model(business_id: int, args: dict) -> None:
     _imp("ai_state_audit").build_gap_model(business_id)
 
@@ -471,6 +479,7 @@ JOB_DISPATCH = {
     "audit": _run_audit,
     "fast_audit": _run_fast_audit,   # rec 9: reduced-battery 'first look' (score fast, no cascade)
     "site_crawl": _run_site_crawl,
+    "ingest_source_material": _run_ingest_source_material,   # crawl -> grounding corpus (G.1)
     "audit_socials": _run_audit_socials,
     "gap_model": _run_gap_model,
     "plan": _run_plan,
@@ -587,6 +596,7 @@ _JOB_RATE_LIMITS = {
     "dataforseo_intel": (6, 3600),
     "dataforseo_reviews": (6, 3600),
     "index_own_content": (4, 3600),
+    "ingest_source_material": (6, 3600),   # crawl the client's site into the grounding corpus
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),
 }
@@ -661,10 +671,11 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
 _OUTPUT_PRODUCING_JOBS = frozenset({
     "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "keyword_research",
     "production_briefs", "citation_analyze", "benchmark", "local_rank", "generate_content_batches",
+    "ingest_source_material",
 })
 
 # Keys a handler's return dict commonly uses to report how many items it produced. First hit wins.
-_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored", "pieces")
+_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored", "pieces", "ingested")
 
 
 def _derive_produced_count(result) -> Optional[int]:
