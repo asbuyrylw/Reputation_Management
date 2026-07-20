@@ -168,21 +168,23 @@ def _env(*names: str, default: str = "") -> str:
 
 
 def _resolve_config() -> dict | None:
-    """Build the storage config from env. Honors Railway Buckets' injected BUCKET_* vars (present
-    once a bucket is connected to the service) and generic REP_STORAGE_* / AWS_* for R2/S3/MinIO.
+    """Build the storage config from env. A connected Railway Bucket injects the STANDARD AWS SDK
+    vars (AWS_S3_BUCKET_NAME / AWS_ENDPOINT_URL / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+    AWS_DEFAULT_REGION); REP_STORAGE_* overrides are honored for R2/S3/MinIO or a manual setup.
     Returns None when storage isn't configured -- callers stay dormant, no exception."""
-    bucket = _env("REP_STORAGE_BUCKET", "BUCKET_NAME", "S3_BUCKET")
-    access = _env("REP_STORAGE_ACCESS_KEY", "BUCKET_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")
-    secret = _env("REP_STORAGE_SECRET_KEY", "BUCKET_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY")
+    bucket = _env("REP_STORAGE_BUCKET", "AWS_S3_BUCKET_NAME", "BUCKET_NAME", "S3_BUCKET")
+    access = _env("REP_STORAGE_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "BUCKET_ACCESS_KEY_ID")
+    secret = _env("REP_STORAGE_SECRET_KEY", "AWS_SECRET_ACCESS_KEY", "BUCKET_SECRET_ACCESS_KEY")
     if not (bucket and access and secret):
         return None
     return {
         "provider": _env("REP_STORAGE_PROVIDER", default="s3"),
         "bucket": bucket,
-        "endpoint": _env("REP_STORAGE_ENDPOINT", "BUCKET_ENDPOINT", "S3_ENDPOINT"),
+        "endpoint": _env("REP_STORAGE_ENDPOINT", "AWS_ENDPOINT_URL", "BUCKET_ENDPOINT", "S3_ENDPOINT"),
         "access_key": access,
         "secret_key": secret,
-        "region": _env("REP_STORAGE_REGION", "BUCKET_REGION", "AWS_REGION", default="us-east-1"),
+        "region": _env("REP_STORAGE_REGION", "AWS_DEFAULT_REGION", "AWS_REGION", "BUCKET_REGION",
+                       default="us-east-1"),
         "prefix": _env("REP_STORAGE_PREFIX", default="assets"),
         # Set ONLY if you front the bucket with a public domain (R2 public / CloudFront). Leave
         # unset for Railway Buckets (private) -> delivery is presigned / proxied.
