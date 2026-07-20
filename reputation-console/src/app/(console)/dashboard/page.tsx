@@ -21,10 +21,11 @@ import { RunPipelineButton } from "@/components/RunPipelineButton";
 import { FreshnessChip } from "@/components/FreshnessChip";
 import { PipelinePrecheckBanner } from "@/components/PipelinePrecheckBanner";
 import VisibilityTrendChart from "@/components/VisibilityTrendChart";
+import { PrimaryChallengeCard } from "@/components/PrimaryChallengeCard";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { repScore, dashboardScore } from "@/lib/repScore";
-import type { SeriesPoint, Business } from "@/lib/types";
+import type { SeriesPoint, Business, Challenge } from "@/lib/types";
 
 type Json = Record<string, unknown>;
 type WeakQuery = { prompt?: string; engine?: string; problem?: string; fix?: string; addressed_by?: string };
@@ -154,6 +155,10 @@ export default function DashboardPage() {
   const { score, deltaVsLast } = dashboardScore(s);
   const goalScore = repScore((timeline as Json | undefined)?.dominance_target as number);
   const goalText = (businesses.find((b) => b.id === businessId)?.goal || "").trim();
+  // The primary-challenge diagnosis (awareness gap vs. entrenched negative narrative) rides in the
+  // timeline payload; surface it on the dashboard too, not just Timeline — it explains WHY the score
+  // is where it is and which lever moves it, before the Advisor's "what to do next".
+  const challenge = (timeline as Json | undefined)?.challenge as Challenge | undefined;
 
   // v2 dashboard props — AI projection ETA, local goal ETA, and the worst-scoring answers.
   const aiExp = ((timeline as Json | undefined)?.projection as Json | undefined)?.expected as Json | undefined;
@@ -304,6 +309,15 @@ export default function DashboardPage() {
 
           {/* v2 — your two goals: AI reputation + local page-1. */}
           <TwoGoals score={score} goalScore={goalScore} aiDate={aiDate} aiMonths={aiMonths} localGoal={localGoal} />
+
+          {/* Primary-challenge diagnosis: is this an awareness gap (faster to fill) or an entrenched
+              negative narrative (slower to crowd out)? Explains the score before the plan prescribes. */}
+          {challenge && (
+            <div>
+              <SecHead title="Your primary challenge" note="what's actually holding the score back" link={{ label: "Full timeline", href: "/timeline" }} />
+              <PrimaryChallengeCard challenge={challenge} />
+            </div>
+          )}
 
           {/* Strategy Advisor (PDCA) — is the plan working + the single next move, live-wired. */}
           <AdvisorPanel businessId={businessId} compact />
