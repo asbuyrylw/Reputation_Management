@@ -350,8 +350,21 @@ export interface ContentDraft {
         suggested_links?: DraftSuggestedLink[];
         image_markers?: DraftImageMarker[];
         katteb?: DraftKatteb;
+        coverage_advisory?: DraftCoverageAdvisory;
       } & Record<string, unknown>)
     | null;
+}
+
+// Warning-only grounding-coverage advisory: was this draft's topic backed by the client's source
+// corpus? Pure metadata — never blocks generation. The card shows a notice only for thin/ungrounded.
+export interface DraftCoverageAdvisory {
+  topic: string;
+  grounded: boolean | null;   // null only in the "unknown" state (renders nothing)
+  matched_docs: number;
+  rank: number;
+  entity_risk: boolean;
+  status: "grounded" | "thin" | "ungrounded" | "unknown";
+  note: string | null;
 }
 
 // Katteb SEO/competitor analysis stored on a draft (from a human-triggered ~1000-credit run).

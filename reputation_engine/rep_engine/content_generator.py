@@ -1467,6 +1467,18 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001
         log.debug("topic/link enrichment skipped: %s", e)
 
+    # Grounding-coverage ADVISORY (warn-only): does the client's verified source corpus hold facts for
+    # THIS topic? Pure metadata for the review UI -- NEVER read by any gate and inert to the writer
+    # prompt (the piece was already generated with whatever grounding existed). Fail-safe: coverage()
+    # reads ONLY grounding_retrieval (never raises) and is a total function, and this block is
+    # best-effort, so a failure just omits the key. HARD RULE: never call source_material.* here (those
+    # are fail-loud re-raisers and would crash generation).
+    try:
+        from . import grounding_coverage as _gc
+        quality_notes["coverage_advisory"] = _gc.coverage(business_id, _scope_q)
+    except Exception as e:  # noqa: BLE001
+        log.debug("coverage advisory skipped: %s", e)
+
     # Phase-4 visual content: pull the ![alt](IMAGE: prompt) markers the writer embedded into
     # structured metadata (alt text + prompt + section) so images can be produced per marker.
     try:

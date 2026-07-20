@@ -267,6 +267,10 @@ export function DraftReviewCard({
   const factCheck = draft.quality_notes?.fact_check;
   // NeuronWriter SERP content score — only present when content-optimization is configured.
   const neuron = draft.quality_notes?.neuron;
+  // Grounding-coverage advisory (warning-only): shown for thin/ungrounded topics so the owner can add
+  // source material. grounded/unknown stay silent. Never affects approval — purely informational.
+  const coverage = draft.quality_notes?.coverage_advisory;
+  const showCoverage = coverage && (coverage.status === "ungrounded" || coverage.status === "thin");
   const scoreTone = (s: number) => (s >= 80 ? "text-good" : s >= 60 ? "text-amber" : "text-alert");
   // "Why this helps" — derived from the question it targets + the work-order instruction.
   const whyHelps = draft.target_query
@@ -360,6 +364,18 @@ export function DraftReviewCard({
           <ul className="list-disc pl-5">
             {added.map((a, i) => <li key={i}>{a?.note || a?.type || "compliance edit"}</li>)}
           </ul>
+        </ComplianceNotice>
+      )}
+
+      {/* grounding-coverage advisory — warning-only; the draft was still generated, this just flags
+          that it wasn't backed by the client's source material and points to how to fix it */}
+      {showCoverage && coverage && (
+        <ComplianceNotice tone="info" className="mt-2"
+          title={coverage.status === "ungrounded" ? "Generated without supporting facts" : "Thin source material for this topic"}>
+          <div>{coverage.note}</div>
+          <Link href="/content/source" className="mt-1 inline-block font-semibold text-amber hover:underline">
+            Add source material →
+          </Link>
         </ComplianceNotice>
       )}
 
