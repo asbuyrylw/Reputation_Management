@@ -21,9 +21,11 @@ from typing import Optional
 try:
     from .db import db
     from . import content_generator as _cg
+    from . import textutils as _tu
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
     import content_generator as _cg  # type: ignore
+    import textutils as _tu  # type: ignore
 
 log = logging.getLogger("content_batch")
 
@@ -65,7 +67,7 @@ def _match_prompts(topic: str, weak: list[dict]) -> list[str]:
     """Which weak-answer prompts belong to this gap. Exact/substring on addressed_by first, then a
     lenient token-overlap fallback (gap topics and addressed_by rarely match verbatim)."""
     tl = (topic or "").lower()
-    ttoks = {w for w in re.findall(r"[a-z]{4,}", tl) if w not in _STOPW}
+    ttoks = _tu.word_set(tl, stop=_STOPW)
     out: list[str] = []
     for w in weak:
         p = w.get("prompt")
@@ -75,7 +77,7 @@ def _match_prompts(topic: str, weak: list[dict]) -> list[str]:
         if ab and (ab == tl or ab in tl or tl in ab):
             out.append(p)
             continue
-        cmp_toks = {x for x in re.findall(r"[a-z]{4,}", (ab or "") + " " + p.lower()) if x not in _STOPW}
+        cmp_toks = _tu.word_set((ab or "") + " " + p.lower(), stop=_STOPW)
         if ttoks and len(ttoks & cmp_toks) >= max(2, len(ttoks) // 3):
             out.append(p)
     # dedupe, preserve order
@@ -95,7 +97,7 @@ def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
     """The ranking keywords a local/geo goal should target -- from the keyword-research set
     (target_keywords), scored by relevance to the geo query. A page-1 goal needs a PROGRAM of
     content across this keyword cluster (not one page), so each becomes a supporting blog."""
-    qtoks = {w for w in re.findall(r"[a-z]{4,}", (query or "").lower()) if w not in _STOPW}
+    qtoks = _tu.word_set(query, stop=_STOPW)
     try:
         with db() as conn:
             rows = conn.execute(
@@ -109,7 +111,7 @@ def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
         kw = (r.get("keyword") or "").strip()
         if not kw or kw.lower() == (query or "").lower():
             continue
-        ktoks = {w for w in re.findall(r"[a-z]{4,}", kw.lower()) if w not in _STOPW}
+        ktoks = _tu.word_set(kw, stop=_STOPW)
         overlap = len(qtoks & ktoks)
         is_local = (r.get("kind") or "") == "local"
         if overlap >= 1 or is_local:
@@ -187,7 +189,7 @@ def gaps_for_business(business_id: int) -> list[dict]:
     for i, item in enumerate(gm.get("missing_owned_content") or []):
         topic = (item.get("topic") or f"topic {i+1}").strip()
         out.append({
-            "gap_key": f"moc:{topic.lower()}",
+            "gap_key": _tu.gid("moc", topic),
             "topic": topic,
             "asset_type": (item.get("asset_type") or "article").lower(),
             "gap_source": "audited gap: missing_owned_content",
@@ -200,7 +202,7 @@ def gaps_for_business(business_id: int) -> list[dict]:
     for i, item in enumerate(gm.get("local_seo_gaps") or []):
         q = (item.get("query") or f"local query {i+1}").strip()
         out.append({
-            "gap_key": f"local:{q.lower()}",
+            "gap_key": _tu.gid("local", q),
             "topic": q,
             "asset_type": "local_page",
             "gap_source": "local search ranking",
@@ -212,7 +214,7 @@ def gaps_for_business(business_id: int) -> list[dict]:
     for i, item in enumerate(gm.get("competitor_defense") or []):
         q = (item.get("query") or f"competitor query {i+1}").strip()
         out.append({
-            "gap_key": f"comp:{q.lower()}",
+            "gap_key": _tu.gid("comp", q),
             "topic": q,
             "asset_type": "article",
             "gap_source": "competitor analysis",
@@ -346,7 +348,7 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
             "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
             "target_prompts, content_types, baseline, status, created_by) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating',%s) RETURNING id",
-            (business_id, gap.get("gap_key") or f"moc:{topic.lower()}", gap.get("gap_source") or "",
+            (business_id, gap.get("gap_key") or _tu.gid("moc", topic), gap.get("gap_source") or "",
              f"Fill gap: {topic}", topic, json.dumps(prompts), json.dumps(types),
              json.dumps(baseline), created_by)).fetchone()
         batch_id = b["id"]

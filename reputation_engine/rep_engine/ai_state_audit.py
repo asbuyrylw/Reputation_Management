@@ -52,12 +52,12 @@ try:
     from . import cost  # when imported as part of the rep_engine package
     from . import http
     from .llm_schemas import ScoreResult
-    from .textutils import split_terms
+    from .textutils import GAP_STOPWORDS, gap_tokens, split_terms
 except ImportError:  # pragma: no cover -- allows running the file directly
     import cost  # type: ignore
     import http  # type: ignore
     from llm_schemas import ScoreResult  # type: ignore
-    from textutils import split_terms  # type: ignore
+    from textutils import GAP_STOPWORDS, gap_tokens, split_terms  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("ai_state_audit")
@@ -1955,13 +1955,10 @@ def _search_perf_for_gap(business_id: int) -> dict:
     return out
 
 
-_ADDRESSED_STOPW = {"and", "with", "the", "for", "your", "our", "page", "overview", "detail",
-                    "case", "studies", "story", "stories", "about", "what", "where", "which",
-                    "business", "company"}
-
-
-def _addressed_toks(s: str) -> set:
-    return {w for w in re.findall(r"[a-z]{4,}", (s or "").lower()) if w not in _ADDRESSED_STOPW}
+# Canonical tokenizer + vocabulary now live in textutils (shared with content_batch's matcher so
+# the two can't drift again). These aliases keep this module's historical private names.
+_ADDRESSED_STOPW = GAP_STOPWORDS
+_addressed_toks = gap_tokens
 
 
 def _link_weak_queries(model: dict) -> None:

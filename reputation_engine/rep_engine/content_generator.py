@@ -45,9 +45,11 @@ from pydantic import ValidationError
 
 try:
     from . import ai_state_audit as llm   # reuse the orchestrator LLM plumbing
+    from . import textutils as _tu
     from .llm_schemas import ComplianceResult, EvalResult
 except ImportError:  # pragma: no cover
     import ai_state_audit as llm  # type: ignore
+    import textutils as _tu  # type: ignore
     from llm_schemas import ComplianceResult, EvalResult  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -983,8 +985,7 @@ def _ensure_readability(body: str, asset_type: str, sq: str, content_type: str,
 
 
 def _slugify(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
-    return s[:60] or "page"
+    return _tu.slugify(text)   # canonical impl in textutils (shared with content_batch's cluster slugs)
 
 
 _FOOTER_RE = re.compile(
