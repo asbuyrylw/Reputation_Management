@@ -211,7 +211,10 @@ def _node_synthesize(state: RCState) -> dict:
                         # pages -- fence it as untrusted so an instruction the analyst
                         # quoted from a hostile page can't steer the synthesis.
                         "analyzed_sources": tools.fence(json.dumps(analyzed, default=str))}),
-            business_id=state["business_id"], tier="full", operation="rootcause_synth")
+            business_id=state["business_id"], tier="full", operation="rootcause_synth",
+            # summary + primary_sources/missing/counters arrays: usually <2000 but grows with the
+            # analyzed-source count -- a modest headroom bump avoids a truncated-JSON -> {} synthesis.
+            max_tokens=4000)
     except tools.BudgetExceededError:
         rc = {"summary": "Synthesis skipped: over monthly budget.", "primary_sources": [],
               "why_it_ranks": "", "missing_owned_assets": [], "recommended_counters": []}
@@ -263,7 +266,7 @@ def investigate(business_id: int, run_id: Optional[int] = None) -> dict:
             raise SystemExit(f"No business id {business_id}")
         if run_id is None:
             r = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             run_id = r["id"] if r else None
     if not run_id:

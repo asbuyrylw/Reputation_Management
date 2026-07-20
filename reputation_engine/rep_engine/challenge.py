@@ -40,8 +40,10 @@ from typing import Optional
 
 try:
     from .db import db
+    from .answer_flags import is_wrong_entity
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    from answer_flags import is_wrong_entity  # type: ignore
 
 log = logging.getLogger("challenge")
 
@@ -158,8 +160,9 @@ def _r3(v):
 
 
 def _ec(r) -> bool:
-    """entity_confusion as a hard bool (legacy rows store NULL -> treated as False)."""
-    return bool(r["entity_confusion"]) if "entity_confusion" in r.keys() else False
+    """entity_confusion as a hard bool (legacy rows store NULL -> treated as False).
+    Canonical NULL-safe rule now lives in answer_flags (shared with narrative_score)."""
+    return is_wrong_entity(r)
 
 
 def _compute(rows: list) -> dict:
@@ -235,7 +238,7 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
         name = biz["name"]
         if run_id is None:
             run = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             run_id = run["id"] if run else None
         rows = []

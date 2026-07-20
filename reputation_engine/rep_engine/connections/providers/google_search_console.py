@@ -212,3 +212,49 @@ def add_site(access_token: str, prop: str) -> dict:
     if res.failed:
         return {"ok": False, "status": res.status, "error": res.error or "could not register the property"}
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# URL Inspection API (v1) + Sitemaps (v3) -- the "full-surface" reads
+# ---------------------------------------------------------------------------
+INSPECT_URL = "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
+
+
+def inspect_url(access_token: str, prop: str, url: str, language_code: str = "en-US") -> dict:
+    """URL Inspection API index:inspect for one URL. Returns the FULL inspectionResult
+    (indexStatusResult + richResultsResult + mobileUsabilityResult) -- not just coverageState --
+    so callers can read canonicalization, schema validity, crawl/fetch state, and last-crawl.
+    Returns {ok, result} or {ok:False, status, error}. Never raises."""
+    res = _http.request_json(
+        "POST", INSPECT_URL,
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"inspectionUrl": url, "siteUrl": prop, "languageCode": language_code},
+        timeout=25, max_retries=1, guard_redirects=True)
+    if res.failed or not isinstance(res.data, dict):
+        return {"ok": False, "status": res.status, "error": res.error or "inspection failed"}
+    return {"ok": True, "result": res.data.get("inspectionResult") or {}}
+
+
+def list_sitemaps(access_token: str, prop: str) -> dict:
+    """Sitemaps.list: submitted sitemaps + per-sitemap submitted/indexed/warning/error counts.
+    Returns {ok, sitemaps:[...]} or {ok:False, ...}."""
+    res = _http.request_json(
+        "GET", f"{GSC_BASE}/sites/{quote(prop, safe='')}/sitemaps",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20, max_retries=2, guard_redirects=True)
+    if res.failed or not isinstance(res.data, dict):
+        return {"ok": False, "status": res.status, "error": res.error, "sitemaps": []}
+    return {"ok": True, "sitemaps": res.data.get("sitemap") or []}
+
+
+def submit_sitemap(access_token: str, prop: str, feedpath: str) -> dict:
+    """Sitemaps.submit (PUT). `feedpath` is the full sitemap URL. Idempotent -- re-submitting an
+    existing sitemap just re-notifies Google. Returns {ok} or {ok:False, status, error}."""
+    res = _http.request_json(
+        "PUT", f"{GSC_BASE}/sites/{quote(prop, safe='')}/sitemaps/{quote(feedpath, safe='')}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20, max_retries=2, guard_redirects=True, parse_json=False)
+    if res.failed:
+        return {"ok": False, "status": res.status, "error": res.error or "could not submit the sitemap"}
+    return {"ok": True}
+    return {"ok": True}

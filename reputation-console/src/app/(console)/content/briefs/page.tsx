@@ -3,13 +3,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { VisualContentPanel } from "@/components/VisualContentPanel";
 import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent, ProductionBrief } from "@/lib/types";
 
 // Today as a YYYY-MM-DD string in the local timezone (default for "produced on").
@@ -189,10 +190,10 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
 
 // The content the gap analysis says to produce (these are work-orders), vs. the off-platform
 // video/social recipes (production_briefs). video_creation appears here but is produced from a recipe.
-const CONTENT_CAPS = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation", "video_creation"]);
-const DRAFTABLE = new Set(["content_writing", "schema_markup", "review_generation", "local_content_creation"]);
-// Show a manageable first page of content pieces, then expand for the rest.
-const CONTENT_PREVIEW = 8;
+// schema_markup is intentionally EXCLUDED — schema (JSON-LD) is a website/developer task, not
+// editorial content, so it stays on the task board under "website fixes", not in the content section.
+const CONTENT_CAPS = new Set(["content_writing", "review_generation", "local_content_creation", "video_creation"]);
+const DRAFTABLE = new Set(["content_writing", "review_generation", "local_content_creation"]);
 
 const CAP_LABEL: Record<string, string> = {
   content_writing: "Website content",
@@ -207,19 +208,47 @@ function stageOf(draft: ContentDraft | undefined, asset: Asset | undefined): { l
   if (asset && (asset.published_status === "live" || asset.published_url)) return { label: "Published", cls: "bg-emerald-100 text-emerald-700" };
   if (asset || draft?.status === "approved") return { label: "Approved — ready to publish", cls: "bg-sky-100 text-sky-700" };
   if (draft?.status === "pending_review") return { label: "Draft in review", cls: "bg-amber-100 text-amber-700" };
-  if (draft?.status === "needs_fix") return { label: "Draft needs a fix", cls: "bg-rose-100 text-rose-700" };
+  if (draft?.status === "held" || draft?.status === "needs_fix") return { label: "Held — needs an author", cls: "bg-rose-100 text-rose-700" };
   if (draft?.status === "rejected") return { label: "Draft rejected", cls: "bg-line text-ink-3" };
   return { label: "Not started", cls: "bg-line text-ink-4" };
+}
+
+// Target keywords with their real monthly search volume (when a volume provider is configured), so
+// producers see demand at the moment they write. Volume comes from the shared target_keywords set.
+function KeywordChips({ keywords, businessId }: { keywords: string[]; businessId: number | null }) {
+  const { data: all } = useTargetKeywords(businessId);
+  const vol = new Map((all ?? []).map((k) => [k.keyword.toLowerCase(), k]));
+  return (
+    <div className="flex flex-wrap gap-1">
+      {keywords.map((kw) => {
+        const m = vol.get(kw.toLowerCase());
+        return (
+          <span key={kw} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700"
+            title={m?.search_volume != null ? `${m.search_volume.toLocaleString()} searches/mo${m.keyword_difficulty != null ? ` · difficulty ${m.keyword_difficulty}/100` : ""}` : undefined}>
+            {kw}
+            {m?.search_volume != null && <span className="font-mono text-[9.5px] font-semibold text-emerald-700">{m.search_volume >= 1000 ? `${(m.search_volume / 1000).toFixed(1)}k` : m.search_volume}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   wo: WorkOrder; draft?: ContentDraft; asset?: Asset; businessId: number | null; canEdit: boolean;
 }) {
   const gen = useGenerateDraftForWo(businessId);
+  const genProgram = useGenerateContentBatch(businessId);
+  const [showSpec, setShowSpec] = useState(false);
+  const brief = useContentBrief(businessId, showSpec ? wo.id : null);
   const stage = stageOf(draft, asset);
   const target = draft?.target_query ?? asset?.target_query ?? null;
   const published = asset && (asset.published_status === "live" || asset.published_url);
-  const canDraft = canEdit && DRAFTABLE.has(wo.capability ?? "") && !draft && !asset;
+  // A local page-1 GOAL isn't one draftable piece — it needs a PROGRAM (geo page + blogs + FAQ +
+  // social) to rank. "Produce content program" generates that multi-piece batch for this gap.
+  const isLocalGoal = wo.capability === "local_content_creation";
+  const localQuery = (wo.gap_specifics?.source_query || wo.title || "").toLowerCase();
+  const canDraft = canEdit && DRAFTABLE.has(wo.capability ?? "") && !isLocalGoal && !draft && !asset;
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
@@ -231,10 +260,41 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
       </div>
       <div className="mt-1.5 text-sm font-semibold text-ink">{wo.title}</div>
       {target && <div className="mt-0.5 text-xs text-ink-3">Targets the search: “{target}”</div>}
+      {isLocalGoal && !draft && !asset && <div className="mt-0.5 text-[11px] text-ink-4">A page-1 goal needs several pieces (geo page + blogs + FAQ + social) — produce them as a program.</div>}
       {(wo.why_helps_ai_rep || wo.why_helps_seo) && (
         <div className="mt-1 space-y-0.5 text-[11px]">
           {wo.why_helps_ai_rep && <div><span className="font-medium text-indigo">AI reputation:</span> {wo.why_helps_ai_rep}</div>}
           {wo.why_helps_seo && <div><span className="font-medium text-emerald-600">SEO:</span> {wo.why_helps_seo}</div>}
+        </div>
+      )}
+      {CONTENT_CAPS.has(wo.capability ?? "") && !published && (
+        <div className="mt-1.5">
+          <button type="button" onClick={() => setShowSpec((s) => !s)} className="text-[11px] font-medium text-indigo hover:underline">
+            {showSpec ? "▾ What this piece needs" : "▸ What this piece needs (keywords, length, structure)"}
+          </button>
+          {showSpec && (
+            brief.isLoading ? (
+              <div className="mt-1 text-[11px] text-ink-4">Loading spec…</div>
+            ) : brief.data ? (
+              <div className="mt-1 space-y-1 rounded-lg border border-line bg-paper px-3 py-2 text-[11.5px] text-ink-2">
+                {brief.data.keywords.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5"><span className="font-semibold text-ink-3">Target keywords:</span> <KeywordChips keywords={brief.data.keywords} businessId={businessId} /></div>
+                )}
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                  <span><span className="font-semibold text-ink-3">Length:</span> ~{brief.data.word_count_target} words</span>
+                  <span><span className="font-semibold text-ink-3">Readability:</span> {brief.data.readability_target}</span>
+                </div>
+                <div><span className="font-semibold text-ink-3">Structure:</span> {brief.data.structure}</div>
+                {brief.data.closes_gap && <div><span className="font-semibold text-rose-600">Closes the AI gap:</span> “{brief.data.closes_gap}”</div>}
+                {brief.data.coverage && brief.data.coverage.status !== "grounded" && brief.data.coverage.status !== "unknown" && (
+                  <div><span className="font-semibold text-amber">Grounding:</span> {brief.data.coverage.status === "ungrounded" ? "no source material for this topic yet — " : "only thin source material — "}
+                    <Link href="/content/source" className="font-semibold text-amber hover:underline">add it in Source Material →</Link></div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-1 text-[11px] text-ink-4">Spec unavailable.</div>
+            )
+          )}
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -247,6 +307,18 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
             {gen.isPending ? "Generating draft…" : gen.isSuccess ? "Draft queued ✓" : "✨ Generate draft"}
           </Button>
         )}
+        {canEdit && isLocalGoal && !draft && !asset && (
+          <button
+            type="button"
+            onClick={() => genProgram.mutate({ gap_key: `local:${localQuery}` })}
+            disabled={genProgram.isPending || genProgram.isSuccess}
+            className="inline-flex items-center rounded-md bg-indigo px-2.5 py-1 font-semibold text-white hover:bg-indigo-strong disabled:opacity-60"
+            title="Generates the multi-piece program (geo page + supporting blogs + FAQ + social) to rank for this local search"
+          >
+            {genProgram.isPending ? "Starting…" : genProgram.isSuccess ? "Program queued ✓" : "Produce content program"}
+          </button>
+        )}
+        {genProgram.isSuccess && isLocalGoal && <span className="text-[11px] text-emerald-700">Multi-piece program queued — track it under Content impact.</span>}
         {draft && !published && (
           <Link href="/content/drafts" className="font-medium text-indigo hover:underline">Review draft →</Link>
         )}
@@ -259,6 +331,9 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
           <span className="text-ink-4">Produce from a recipe below</span>
         )}
       </div>
+      {/* generate a visual (image / video / quote card) for this content piece — lives here in
+          Content, not on the task board */}
+      <VisualContentPanel businessId={businessId} workOrderId={wo.id} canEdit={canEdit} />
     </Card>
   );
 }
@@ -326,6 +401,18 @@ function RecipeCard({ brief: b, businessId, canEdit }: { brief: ProductionBrief;
   );
 }
 
+// Group content work orders by area (Website / Local / Social / …) so "To produce" reads as
+// organized, specific pieces — not one long undifferentiated list.
+const AREA_LABEL: Record<string, string> = {
+  website: "Website", content: "Website", blog: "Blog", local: "Local", social: "Social",
+  outreach: "Outreach", reviews: "Reviews", other: "Other",
+};
+const AREA_ORDER = ["website", "content", "blog", "local", "social", "outreach", "reviews", "other"];
+const areaKey = (a?: string | null) => {
+  const k = (a || "").trim().toLowerCase();
+  return k && AREA_LABEL[k] ? k : "other";
+};
+
 export default function BriefsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data: briefs, isLoading: lb } = useProductionBriefs(businessId);
@@ -334,7 +421,9 @@ export default function BriefsPage() {
   const { data: assets } = useAssets(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
   const { data: keywordIntent } = useKeywordIntent(businessId);
-  const [showAllContent, setShowAllContent] = useState(false);
+  const genAll = useGenerateContentBatch(businessId);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [areaFilter, setAreaFilter] = useState<string>("all");
 
   if (lb || lw || !workOrders) return <Spinner />;
 
@@ -349,21 +438,55 @@ export default function BriefsPage() {
     .sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1));
   const recipes = briefs ?? [];
 
+  // Group the specific pieces by area so each one is organized, not a flat wall.
+  const grouped = AREA_ORDER
+    .map((k) => ({ key: k, label: AREA_LABEL[k], items: contentItems.filter((w) => areaKey(w.area) === k) }))
+    .filter((g) => g.items.length > 0);
+  const notStarted = contentItems.filter((w) => !draftByWo.get(w.id) && !assetByWo.get(w.id)).length;
+
+  // "By section" filter: All + each area that has pieces + a "Video & social" chip for the recipes.
+  const areaChips = [
+    { key: "all", label: "All" },
+    ...grouped.map((g) => ({ key: g.key, label: g.label })),
+    ...(recipes.length > 0 ? [{ key: "recipes", label: "Video & social" }] : []),
+  ];
+  const visibleGroups = areaFilter === "all" ? grouped : grouped.filter((g) => g.key === areaFilter);
+  const showRecipes = recipes.length > 0 && (areaFilter === "all" || areaFilter === "recipes");
+
   return (
     <div>
       <PageHeader
         title="Content to produce"
-        subtitle="The content your gap analysis says to create — each piece's status, the search it targets, and why it helps. Generate a draft, review it, then publish."
+        subtitle="Every specific piece your strategy calls for — its spec, the search it targets, and one-click Generate. Draft, review, publish."
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
-      {canEdit && (
-        <Card className="mb-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm text-ink-3">
-              Content comes from your latest gap analysis &amp; plan. Refresh the off-platform recipes below from the plan.
-            </span>
-            <RunJobButton businessId={businessId} jobType="production_briefs" label="Refresh recipes" />
+
+      {/* Bulk produce — the batch "make several pieces at once" flow, folded in here so one click
+          drafts everything the plan calls for. */}
+      {canEdit && contentItems.length > 0 && (
+        <Card className="mb-4 border-indigo-100 bg-indigo-050">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-[240px] flex-1">
+              <div className="text-[14px] font-semibold text-ink">Produce everything at once</div>
+              <div className="text-[12.5px] text-ink-3">
+                Drafts all {notStarted > 0 ? notStarted : contentItems.length} pieces the plan calls for in one run (each is graded + held if it can&apos;t pass). Uses API credits.
+              </div>
+            </div>
+            {!confirmAll ? (
+              <button onClick={() => setConfirmAll(true)} disabled={genAll.isPending}
+                className="rounded-[10px] bg-indigo px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-50">
+                {genAll.isPending ? "Starting…" : "▶ Produce all"}
+              </button>
+            ) : (
+              <span className="flex items-center gap-2 text-[12.5px] text-ink-2">
+                Runs the full content pipeline.
+                <button onClick={() => { genAll.mutate({}); setConfirmAll(false); }} className="rounded-md bg-indigo px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-strong">Yes, produce all</button>
+                <button onClick={() => setConfirmAll(false)} className="rounded-md border border-line-2 px-3 py-1 text-xs font-semibold text-ink-2 hover:bg-line/60">Cancel</button>
+              </span>
+            )}
           </div>
+          {genAll.isSuccess && <div className="mt-2 text-xs text-good">Queued — track progress above.</div>}
+          {genAll.isError && <div className="mt-2 text-xs text-alert">{(genAll.error as Error)?.message ?? "Couldn’t start."}</div>}
         </Card>
       )}
 
@@ -377,13 +500,30 @@ export default function BriefsPage() {
         />
       ) : (
         <div className="space-y-6">
-          <TopicAuthoritySection data={topical} />
-          <KeywordIntentSection data={keywordIntent} />
-          {contentItems.length > 0 && (
-            <section>
-              <h3 className="mb-2 text-sm font-semibold text-ink">Content pieces ({contentItems.length})</h3>
+          {/* Filter by section (website / blog / local / social / video & social recipes) so a
+              producer can see just what they own. Only shown when there's more than one section. */}
+          {areaChips.length > 2 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-ink-4">Show</span>
+              {areaChips.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => setAreaFilter(c.key)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${areaFilter === c.key ? "bg-ink text-white" : "border border-line-2 text-ink-3 hover:bg-line/60"}`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* the SPECIFIC pieces from the strategy, grouped by area — the heart of this page */}
+          {visibleGroups.map((g) => (
+            <section key={g.key}>
+              <h3 className="mb-2 text-sm font-semibold text-ink">{g.label} <span className="font-normal text-ink-4">({g.items.length})</span></h3>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {(showAllContent ? contentItems : contentItems.slice(0, CONTENT_PREVIEW)).map((w) => (
+                {g.items.map((w) => (
                   <ContentItem
                     key={w.id}
                     wo={w}
@@ -394,22 +534,10 @@ export default function BriefsPage() {
                   />
                 ))}
               </div>
-              {contentItems.length > CONTENT_PREVIEW && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => setShowAllContent((v) => !v)}
-                >
-                  {showAllContent
-                    ? "Show fewer"
-                    : `Show ${contentItems.length - CONTENT_PREVIEW} more`}
-                </Button>
-              )}
             </section>
-          )}
+          ))}
 
-          {recipes.length > 0 && (
+          {showRecipes && (
             <section>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-ink">Video &amp; social recipes ({recipes.length})</h3>
@@ -438,6 +566,25 @@ export default function BriefsPage() {
                 ))}
               </div>
             </section>
+          )}
+
+          {/* Blanket topic ideas — demoted below the specific pieces + collapsed. This is
+              exploratory ("more topics you could own"), not the concrete plan, so it doesn't lead. */}
+          {(topical?.clusters.length || keywordIntent?.by_intent.length) ? (
+            <details className="rounded-xl border border-line bg-paper/40 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-ink-2">Explore more topic ideas</summary>
+              <p className="mt-1 text-xs text-ink-4">Broader topics and keywords you could own beyond the specific pieces above — turn any into a task from your gaps.</p>
+              <div className="mt-3 space-y-6">
+                <TopicAuthoritySection data={topical} />
+                <KeywordIntentSection data={keywordIntent} />
+              </div>
+            </details>
+          ) : null}
+
+          {canEdit && recipes.length > 0 && (
+            <div className="text-right">
+              <RunJobButton businessId={businessId} jobType="production_briefs" label="Refresh video/social recipes" />
+            </div>
           )}
         </div>
       )}

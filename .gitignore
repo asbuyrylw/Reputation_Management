@@ -36,3 +36,12 @@ reputation_engine/_pipeline_watch.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Local editor / AI-tool state (not shared)
+.vexp/
+.antigravity/
+.cursor/
+.vscode/
+.claude/hooks/
+.claude/settings.json
+.github/copilot-instructions.md

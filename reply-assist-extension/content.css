@@ -1,0 +1,81 @@
+#koob-reply-assist-panel {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  width: 320px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+  z-index: 2147483647;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1e293b;
+}
+
+#koob-reply-assist-panel .koob-ra-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #4f46e5;
+  color: #fff;
+  font-weight: 600;
+  border-radius: 10px 10px 0 0;
+}
+
+#koob-reply-assist-panel .koob-ra-close {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#koob-reply-assist-panel .koob-ra-empty {
+  padding: 12px;
+  color: #64748b;
+}
+
+#koob-reply-assist-panel .koob-ra-list {
+  padding: 8px;
+}
+
+#koob-reply-assist-panel .koob-ra-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+#koob-reply-assist-panel .koob-ra-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+#koob-reply-assist-panel .koob-ra-draft {
+  color: #334155;
+  white-space: pre-wrap;
+  margin-bottom: 6px;
+}
+
+#koob-reply-assist-panel .koob-ra-actions {
+  display: flex;
+  gap: 6px;
+}
+
+#koob-reply-assist-panel .koob-ra-actions button {
+  flex: 1;
+  padding: 5px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+#koob-reply-assist-panel .koob-ra-actions button:hover {
+  background: #eef2ff;
+}

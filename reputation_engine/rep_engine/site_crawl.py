@@ -171,6 +171,7 @@ class PageAudit:
     keywords: list = field(default_factory=list)        # top keywords (pyseo)
     seo_warnings: list = field(default_factory=list)     # richer warnings (pyseo)
     semantic: dict = field(default_factory=dict)         # semantic-depth scorecard (Module 12)
+    main_text: str = ""                                  # extracted body text (for grounding ingest)
 
 
 def _same_host(seed: str, url: str) -> bool:
@@ -371,6 +372,7 @@ def audit_page(seed: str, url: str, targets: dict | None = None) -> tuple[PageAu
     pa.word_count = ex["words"]
     pa.has_canonical = ex["canonical"]
     pa.schema_types = ex["schema"]
+    pa.main_text = (ex.get("text") or "").strip()   # captured for source-material grounding ingest
     if used_firecrawl:
         pa.issues.append("rendered_via_firecrawl")  # informational, not a defect
 
@@ -556,8 +558,8 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
     most recent gap_model's schema_gaps / missing_owned_content."""
     with db() as conn:
         run = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s ORDER BY id DESC LIMIT 1",
-            (business_id,),
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1", (business_id,),
         ).fetchone()
         biz = conn.execute("SELECT contested_terms FROM businesses WHERE id=%s",
                            (business_id,)).fetchone()
@@ -636,6 +638,15 @@ def crawl_cmd(business_id: int, max_pages: int) -> None:
     lh = lighthouse(seed)
     summary = summarize(results, lh)
     merge_into_gap_inputs(business_id, summary)
+    # Auto-ingest the pages we just crawled into the grounding corpus (source_documents), so content
+    # generation is grounded in the client's real site without a second crawl. Best-effort: a corpus
+    # write must never fail the site audit itself.
+    try:
+        from . import source_ingest as _si
+        ing = _si.ingest_from_pages(business_id, results)
+        log.info("site_crawl: ingested %d page(s) into grounding corpus", ing.get("ingested", 0))
+    except Exception as e:  # noqa: BLE001 -- ingest is a bonus; the audit is the job
+        log.warning("site_crawl: grounding ingest skipped: %s", e)
     print(json.dumps({k: v for k, v in summary.items() if k != "pages"}, indent=2))
 
 

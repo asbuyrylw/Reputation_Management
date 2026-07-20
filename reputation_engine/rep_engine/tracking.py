@@ -177,8 +177,8 @@ def sync_plan(business_id: int) -> dict:
                     recommended_tool, instruction, phase, target_date, status,
                     rationale, gap_source, why_helps_ai_rep, why_helps_seo, added_in_revision,
                     start_date, predicted_ai_points, predicted_seo_impact, predicted_basis, task_key,
-                    area, platform, gap_specifics)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    area, platform, gap_specifics, planned)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
                 (business_id, plan_row["id"], w.get("wo_id"), w.get("title"), w.get("capability"),
                  w.get("execution"), w.get("recommended_tool"), w.get("instruction"),
                  w.get("phase"), date.fromisoformat(td) if td else None,
@@ -233,9 +233,15 @@ def sync_plan(business_id: int) -> dict:
 # ----------------------------------------------------------------------------
 def create_work_order(business_id: int, title: str, *, instruction: str | None = None,
                       capability: str | None = None, recommended_tool: str | None = None,
-                      target_date: str | None = None, assignee: str | None = None) -> int:
+                      target_date: str | None = None, assignee: str | None = None,
+                      gap_source: str | None = None, source_query: str | None = None,
+                      area: str | None = None, why_helps_ai_rep: str | None = None,
+                      why_helps_seo: str | None = None) -> int:
     """Add a manual work order (an ad-hoc task the owner/admin wants tracked alongside the
-    plan-generated ones). plan_id is NULL; wo_code is a per-business MANUAL-<n>. Returns id."""
+    plan-generated ones), carrying gap lineage when it comes from a gap item ("turn into task").
+    plan_id is NULL; wo_code is a per-business MANUAL-<n>. IDEMPOTENT: if an OPEN task with the same
+    title already exists (e.g. the plan already materialized it, or the owner clicked twice), returns
+    that id instead of creating a duplicate. Returns the work-order id."""
     title = (title or "").strip()
     if not title:
         raise ValueError("title required")
@@ -243,16 +249,24 @@ def create_work_order(business_id: int, title: str, *, instruction: str | None =
     if target_date:
         td = target_date if isinstance(target_date, date) else date.fromisoformat(str(target_date))
     with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM work_orders WHERE business_id=%s AND lower(title)=lower(%s) "
+            "AND NOT COALESCE(superseded,false) AND status NOT IN ('done','verified','skipped') "
+            "ORDER BY id DESC LIMIT 1", (business_id, title)).fetchone()
+        if existing:
+            return existing["id"]
         n = conn.execute(
             "SELECT COUNT(*) c FROM work_orders WHERE business_id=%s AND wo_code LIKE 'MANUAL-%%'",
             (business_id,),
         ).fetchone()["c"]
+        gs = json.dumps({"source_query": source_query}) if source_query else None
         row = conn.execute(
             """INSERT INTO work_orders (business_id, wo_code, title, capability, instruction,
-                recommended_tool, target_date, assignee, phase, status, planned)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'manual','pending',TRUE) RETURNING id""",
+                recommended_tool, target_date, assignee, gap_source, gap_specifics, area,
+                why_helps_ai_rep, why_helps_seo, phase, status, planned)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'manual','pending',TRUE) RETURNING id""",
             (business_id, f"MANUAL-{n + 1}", title, capability, instruction,
-             recommended_tool, td, assignee),
+             recommended_tool, td, assignee, gap_source, gs, area, why_helps_ai_rep, why_helps_seo),
         ).fetchone()
         conn.commit()
     log.info("Created manual work order %d for business %d", row["id"], business_id)
@@ -280,10 +294,15 @@ def log_action(conn, *, business_id: int, capability: str | None, title: str | N
             "title, completed_on, logged_by, notes")
     vals = (business_id, work_order_id, production_brief_id, source, capability, area, platform,
             title, completed_on, logged_by, notes)
-    if key_col:  # upsert on the work_order/brief unique index
+    if key_col:  # upsert on the work_order/brief PARTIAL unique index
+        # The unique indexes are partial (uq_actions_wo/uq_actions_brief WHERE <col> IS NOT NULL,
+        # migration 0061). Postgres cannot infer a partial index as the ON CONFLICT arbiter unless
+        # the SAME predicate is repeated here -- a bare `ON CONFLICT (col)` raises 42P10 and rolls
+        # back the whole txn (incl. the status change) + 500s the caller. key_col is a fixed literal.
         conn.execute(
             f"INSERT INTO actions_taken ({cols}) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-            f"ON CONFLICT ({key_col}) DO UPDATE SET completed_on=EXCLUDED.completed_on, "
+            f"ON CONFLICT ({key_col}) WHERE {key_col} IS NOT NULL DO UPDATE SET "
+            f"completed_on=EXCLUDED.completed_on, "
             f"capability=EXCLUDED.capability, area=EXCLUDED.area, platform=EXCLUDED.platform, "
             f"title=EXCLUDED.title, source=EXCLUDED.source, notes=EXCLUDED.notes, logged_at=now()",
             vals)
@@ -449,7 +468,8 @@ def attribute(business_id: int) -> dict:
     with db() as conn:
         runs = conn.execute(
             "SELECT id, started_at, finished_at FROM audit_runs "
-            "WHERE business_id=%s AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 2",
+            "WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2",
             (business_id,),
         ).fetchall()
         if len(runs) < 2:
@@ -510,8 +530,8 @@ def check_alert(business_id: int) -> dict:
         ).fetchone()
         threshold = float(cfg["alert_threshold"]) if cfg else 0.15
         runs = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-            "ORDER BY id DESC LIMIT 2", (business_id,),
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2", (business_id,),
         ).fetchall()
         if len(runs) < 2:
             return {"alert": False, "reason": "insufficient_runs"}

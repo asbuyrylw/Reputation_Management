@@ -95,7 +95,8 @@ def learn(business_id: int, quiet: bool = False) -> dict:
     _ensure_tables()
     with db() as conn:
         runs = conn.execute(
-            "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+            "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' "
             "ORDER BY id ASC", (business_id,),
         ).fetchall()
         if len(runs) < 2:
@@ -194,7 +195,8 @@ def task_impact(business_id: int) -> dict:
     (so the movement can't be credited to any task type)."""
     with db() as conn:
         runs = conn.execute(
-            "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+            "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' "
             "ORDER BY id ASC", (business_id,),
         ).fetchall()
         if len(runs) < 2:

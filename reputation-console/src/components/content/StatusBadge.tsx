@@ -8,6 +8,7 @@ import type { Tone } from "@/lib/uiTokens";
 const STATUS_WORDS: Record<string, string> = {
   pending_review: "Waiting for you",
   needs_fix: "Needs a fix",
+  held: "Held — needs an author",
   approved: "Approved",
   rejected: "Rejected",
   published: "Published",
@@ -22,7 +23,7 @@ const STATUS_WORDS: Record<string, string> = {
 export function statusTone(status: string): Tone {
   const s = (status || "").toLowerCase();
   if (["published", "live", "approved", "verified", "done", "sent"].includes(s)) return "good";
-  if (["needs_fix", "rejected", "failed", "error", "breached"].includes(s)) return "bad";
+  if (["needs_fix", "held", "rejected", "failed", "error", "breached"].includes(s)) return "bad";
   if (["pending_review", "new", "drafted", "scheduled", "waiting", "in_review"].includes(s)) return "info";
   return "neutral";
 }

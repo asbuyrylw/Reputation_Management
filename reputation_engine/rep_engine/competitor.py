@@ -30,8 +30,10 @@ Run:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as _futures
 import json
 import logging
+import os
 import re
 
 
@@ -45,7 +47,24 @@ except ImportError:  # pragma: no cover
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("competitor")
 
+# Benchmark resilience (mirrors the audit's knobs so a competitor benchmark is as fast + robust as
+# an AI-state audit -- it reuses the SAME engines + battery). Without these, benchmark ran the whole
+# lensed battery x engines SERIALLY with no circuit breaker, so it took ~as long as sum-of-all-calls
+# and a single slow/dead provider blocked the (single-threaded) worker for many minutes.
+#  - _ENGINE_CONCURRENCY: engines queried at once per prompt (independent network calls). 1 = serial.
+#  - _CIRCUIT_TRIP: consecutive failures before a provider is skipped for the rest of the run.
+_ENGINE_CONCURRENCY = int(os.getenv("AUDIT_ENGINE_CONCURRENCY", "5"))
+_CIRCUIT_TRIP = int(os.getenv("AUDIT_CIRCUIT_TRIP", "3"))
 
+
+def _bench_answer(eng, prompt: str):
+    """Network-only half of one (engine, prompt) call: get the engine's answer. Does NO database
+    work, so it is safe to run concurrently across engines in a thread pool. A raised provider
+    error is folded into a 'failed' result so one engine throwing can't crash the batch."""
+    try:
+        return eng, eng.answer(prompt)
+    except Exception as e:  # noqa: BLE001 -- a raised provider error == a failed answer
+        return eng, {"text": "", "sources": [], "failed": True, "error": f"{eng.name} raised: {e}"}
 
 
 
@@ -112,31 +131,49 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
     # imported lazily so this module loads without the full audit stack at import time
     from . import ai_state_audit as m
 
+    # Setup (short DB hold): resolve the business + competitors and open the run row, then RELEASE
+    # the connection so the many minutes of network calls don't pin a pooled connection.
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
             # ValueError (not SystemExit): benchmark() runs as a background job and compare()
             # in a request -- a BaseException would escape the runner / request handler.
             raise ValueError(f"No business id {business_id}")
-        comps = conn.execute("SELECT * FROM competitors WHERE business_id=%s", (business_id,)).fetchall()
+        comps = [dict(c) for c in
+                 conn.execute("SELECT * FROM competitors WHERE business_id=%s", (business_id,)).fetchall()]
         if not comps:
             if not quiet:
                 log.info("No competitors registered for business %d; add some first.", business_id)
             return {}
+        biz = dict(biz)
         # a shared benchmark run id groups this comparison. kind='competitor' so it isn't
         # mistaken for an AI-reputation audit in the Audits list.
         run = conn.execute("INSERT INTO audit_runs (business_id, kind) VALUES (%s,'competitor') RETURNING id",
                            (business_id,)).fetchone()
         run_id = run["id"]
+        conn.commit()
 
-        battery = m.build_prompt_battery_lensed(dict(biz))
-        engines = m.active_engines()
-        subj_name = biz["name"]
-        subj_domain = (biz.get("domain") or "")
-        recorded = 0
-        for prompt, persona, location in battery:
-            for eng in engines:
-                ans = eng.answer(prompt)
+    battery = m.build_prompt_battery_lensed(biz)
+    engines = m.active_engines()
+    subj_name = biz["name"]
+    subj_domain = (biz.get("domain") or "")
+    recorded = 0
+    fail_streak: dict = {}
+    tripped: set = set()
+
+    for prompt, persona, location in battery:
+        active = [e for e in engines if e.name not in tripped]
+        if not active:
+            break  # every engine circuit-broken this run -> stop early (rest would all be skips)
+        # --- network: query all still-active engines CONCURRENTLY (independent calls, no DB) ---
+        if _ENGINE_CONCURRENCY > 1 and len(active) > 1:
+            with _futures.ThreadPoolExecutor(max_workers=min(_ENGINE_CONCURRENCY, len(active))) as ex:
+                results = list(ex.map(lambda e: _bench_answer(e, prompt), active))
+        else:
+            results = [_bench_answer(e, prompt) for e in active]
+        # --- DB: persist this prompt's rows + circuit-breaker accounting on ONE short connection ---
+        with db() as conn:
+            for eng, ans in results:
                 if ans.get("skipped"):
                     continue
                 failed = bool(ans.get("failed"))
@@ -154,11 +191,26 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
                          json.dumps(sources), mentions_subject, mc, persona, location, failed),
                     )
                     recorded += 1
-        # Leave finished_at NULL: a competitor benchmark is not an AI reputation audit, and the
-        # "latest AI audit" queries all filter `finished_at IS NOT NULL`. compare()/trend() read
-        # competitor_answers (by run_id), not this flag, so they're unaffected. (kind='competitor'.)
-        # Mark the run 'complete' (not the default 'in_progress') so it reaches a terminal status;
-        # finished_at stays NULL so it never enters the ai_audit finished-run selectors.
+                # Circuit-breaker on REAL calls: N consecutive failures -> skip this provider for the
+                # rest of the run so one dead/slow engine can't dominate the (single-threaded) worker.
+                if failed:
+                    fail_streak[eng.name] = fail_streak.get(eng.name, 0) + 1
+                    if fail_streak[eng.name] >= _CIRCUIT_TRIP:
+                        tripped.add(eng.name)
+                        if not quiet:
+                            log.warning("Engine %s circuit-broken after %d consecutive failures; "
+                                        "skipping it for the rest of benchmark run %d.",
+                                        eng.name, fail_streak[eng.name], run_id)
+                else:
+                    fail_streak[eng.name] = 0
+            conn.commit()
+
+    # Leave finished_at NULL: a competitor benchmark is not an AI reputation audit, and the
+    # "latest AI audit" queries all filter `finished_at IS NOT NULL`. compare()/trend() read
+    # competitor_answers (by run_id), not this flag, so they're unaffected. (kind='competitor'.)
+    # Mark the run 'complete' (not the default 'in_progress') so it reaches a terminal status;
+    # finished_at stays NULL so it never enters the ai_audit finished-run selectors.
+    with db() as conn:
         conn.execute("UPDATE audit_runs SET status='complete' WHERE id=%s", (run_id,))
         conn.commit()
     if not quiet:

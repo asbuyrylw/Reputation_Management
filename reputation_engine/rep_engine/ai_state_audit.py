@@ -52,12 +52,12 @@ try:
     from . import cost  # when imported as part of the rep_engine package
     from . import http
     from .llm_schemas import ScoreResult
-    from .textutils import split_terms
+    from .textutils import GAP_STOPWORDS, gap_tokens, split_terms
 except ImportError:  # pragma: no cover -- allows running the file directly
     import cost  # type: ignore
     import http  # type: ignore
     from llm_schemas import ScoreResult  # type: ignore
-    from textutils import split_terms  # type: ignore
+    from textutils import GAP_STOPWORDS, gap_tokens, split_terms  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("ai_state_audit")
@@ -123,7 +123,59 @@ GAP_MODEL_TIER = os.getenv("GAP_MODEL_TIER", "mid")
 # pathological tail where a stalled call retries 3x its 240s timeout (~12 min); a normal call
 # (~2-4 min, succeeds on the first attempt) is unaffected. On exhaustion the call fails and the
 # previous good gap model is preserved (fail-safe). Override with GAP_MODEL_DEADLINE.
-GAP_MODEL_DEADLINE = int(os.getenv("GAP_MODEL_DEADLINE", "300"))
+GAP_MODEL_DEADLINE = int(os.getenv("GAP_MODEL_DEADLINE", "900"))
+
+# Per-call READ timeout (seconds) for the gap synthesis + critic passes. Each generates a LARGE
+# structured object (~11-12k output tokens over the whole coverage schema); measured live at ~243s
+# end-to-end, which overran the previous 240s read timeout by a hair -> the whole gap model failed
+# with 'Read timed out' and the content pipeline cascade-failed. 480 gives a comfortable margin
+# above the observed generation time; GAP_MODEL_DEADLINE (above) still caps the total across retries.
+GAP_MODEL_TIMEOUT = int(os.getenv("GAP_MODEL_TIMEOUT", "480"))
+
+# Cap + length-bound the per-answer EVIDENCE fed into gap synthesis. A full battery can be
+# ~300 answers x ~2.7k chars = ~350k INPUT tokens, which overruns the synthesis model's context
+# window (the call returns empty/'{}' -> the whole gap model fails to parse -> the content pipeline
+# cascade-fails) and costs ~$1/call in input alone. We instead feed the MOST gap-relevant answers
+# (negatives / contested / unowned / low-alignment first), each truncated: the aggregate picture is
+# already carried by challenge_profile + external_signals, so the raw answers only need to give the
+# model concrete, representative evidence per gap -- not the entire transcript.
+GAP_MAX_ANSWERS = int(os.getenv("GAP_MAX_ANSWERS", "90"))
+GAP_ANSWER_CHARS = int(os.getenv("GAP_ANSWER_CHARS", "800"))
+
+# Business-owner policy (ABSOLUTE): auto-generated content AND strategy recommendations must never
+# surface SPECIFIC regulated license identifiers. A general "our agents are all licensed" statement is
+# encouraged; specific numbers are not (the system can't verify them, so they'd only ever be
+# unfillable [INSERT] placeholders that also read as legalistic/defensive). Appended to every
+# content-writing + strategy/recommendation system prompt so the whole pipeline honors it.
+LICENSE_CONTENT_POLICY = (
+    " LICENSE POLICY (ABSOLUTE — overrides any other instruction): You MAY state GENERALLY that the "
+    "business's agents/professionals are all licensed (e.g. 'our agents are licensed insurance "
+    "professionals'). You must NEVER include, request, recommend, or leave an [INSERT] placeholder for "
+    "any SPECIFIC license identifier — no individual/agent state insurance license numbers, no FINRA "
+    "CRD numbers, no NPN numbers — and NEVER create or recommend any content, page, section, FAQ, or "
+    "corroboration/proof item that depends on listing specific license numbers. Do NOT reference "
+    "'license number(s)' in the content AT ALL — not as a value, not as a search field, and not as a "
+    "verification step (e.g. never write 'search by license number'). A general statement that the "
+    "agents are licensed is sufficient; if you mention verification, phrase it generally (e.g. 'you "
+    "can confirm our agents are licensed through the Ohio Department of Insurance'). Establish "
+    "legitimacy through OTHER means (a general licensing statement, regulated-affiliate disclosure, "
+    "third-party reviews/ratings, awards, transparent compensation) — never through license numbers."
+)
+
+# Positive-only self-distinction. Negative disambiguation ("Not to be confused with X", "we are not
+# Y", "unlike the [other] brand") is poor marketing: it names/associates competitors or unrelated
+# same-named entities and can REINFORCE the wrong association. Distinguish the business by stating,
+# positively and specifically, who it IS.
+NO_NEGATIVE_DISAMBIGUATION_POLICY = (
+    " SELF-DISTINCTION POLICY (ABSOLUTE — overrides any other instruction): Distinguish this business "
+    "ONLY by stating, positively and specifically, who IT is — its exact name, what it does, where, "
+    "its people/credentials, and its parent/affiliations. NEVER use negative or comparative "
+    "disambiguation: do NOT write 'not to be confused with …', 'we are not …', 'this is not the …', "
+    "'unlike …', 'as opposed to …', or otherwise name, reference, contrast with, or hint at any other "
+    "company, brand, campaign, organization, or same-named entity (even to say the business is NOT it). "
+    "Naming another entity — even to deny a connection — reinforces the wrong association and is poor "
+    "marketing. A strong, specific, positive identity is what makes the business unmistakable."
+)
 
 # LLM endpoint base URLs -- override to route the WHOLE LLM layer through an
 # observability proxy / OpenAI-compatible gateway (Helicone, LiteLLM proxy, vLLM,
@@ -945,18 +997,68 @@ def _anthropic_system(system: str):
     return system
 
 
+# Anthropic ephemeral-cache READ multiplier: a cache-eligible prefix (see _anthropic_system) bills
+# at ~0.1x base input on repeat calls. The per-answer SCORING_SYSTEM is re-sent hundreds of times
+# per audit and is cache-eligible, so counting it at full input price every call OVERSTATES COGS
+# (and could trip the monthly budget cap on phantom spend). orchestrator_json doesn't surface the
+# real cached/uncached split, so we price the cacheable prefix at cache-read rate and only the
+# variable answer text at full price. Output is the compact ScoreResult JSON, so a small fixed
+# estimate is honest. (When the scoring path later surfaces provider usage, prefer that.)
+_CACHE_READ_MULT = 0.1
+_SCORE_OUTPUT_TOKENS = 200  # compact fixed-schema score JSON
+
+
+def _score_cost_tokens(answer_text: str) -> tuple[int, int]:
+    """(input, output) token estimate for one cheap-tier score call, pricing the cache-eligible
+    SCORING_SYSTEM prefix at cache-read rate rather than full price (Anthropic + large prompt only;
+    other orchestrators / short prompts fall back to full price)."""
+    prefix = cost.approx_tokens(SCORING_SYSTEM)
+    variable = cost.approx_tokens(answer_text or "")
+    cacheable = ORCHESTRATOR == "anthropic" and len(SCORING_SYSTEM) >= _CACHE_MIN_CHARS
+    prefix_billed = int(prefix * _CACHE_READ_MULT) if cacheable else prefix
+    return max(1, prefix_billed + variable), _SCORE_OUTPUT_TOKENS
+
+
 def _anthropic_headers() -> dict:
     # prompt-caching beta header is harmless where caching is GA; required on older api versions.
     return {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
             "anthropic-beta": "prompt-caching-2024-07-31", "content-type": "application/json"}
 
 
+def _bill_orchestrator(bill: Optional[dict], system: str, user: str, output_text: str,
+                       usage: Optional[dict], tier: str) -> None:
+    """Record the cost of ONE orchestrator LLM call to the ledger. Opt-in: a caller that wants its
+    spend metered passes bill={'business_id':int|None, 'operation':str, 'run_id':int|None}. Prefers
+    the provider's REAL token usage, else estimates from prompt+output (cost.py is an estimate
+    anyway). Skips a failed/empty call so no phantom cost is recorded. Never raises -- metering must
+    never break generation."""
+    if not bill or not output_text:
+        return
+    op = bill.get("operation")
+    if not op:
+        return
+    try:
+        amodel, omodel = _model_for(tier)
+        is_openai = ORCHESTRATOR == "openai"
+        provider = "openai" if is_openai else "anthropic"
+        model = omodel if is_openai else amodel
+        if usage and usage.get("input") is not None:
+            inp, out = int(usage.get("input") or 0), int(usage.get("output") or 0)
+        else:
+            inp = cost.approx_tokens(system) + cost.approx_tokens(user)
+            out = cost.approx_tokens(output_text)
+        cost.record(bill.get("business_id"), bill.get("run_id"), provider, op, model, inp, out)
+    except Exception:  # noqa: BLE001 -- cost metering must never break generation
+        pass
+
+
 def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
-                      tier: str = "full") -> str:
+                      tier: str = "full", *, bill: Optional[dict] = None) -> str:
     """Free-text completion from the configured orchestrator LLM (no JSON
     constraint). Used by the content generator. Returns '' on failure.
     tier ('cheap'|'mid'|'full') selects the model so callers can route creative
-    work to the mid tier (Sonnet/gpt-4o) instead of the full Opus tier."""
+    work to the mid tier (Sonnet/gpt-4o) instead of the full Opus tier.
+    bill (optional): {'business_id','operation','run_id'} -> meters this call's spend."""
     anthropic_model, openai_model = _model_for(tier)
     if ORCHESTRATOR == "openai":
         if "YOUR_OPENAI" in OPENAI_API_KEY:
@@ -973,9 +1075,11 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
             log.warning("orchestrator_text(openai) failed: %s", res.error)
             return ""
         try:
-            return res.data["choices"][0]["message"]["content"]
+            text = res.data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             return ""
+        _bill_orchestrator(bill, system, user, text, _usage(res.data), tier)
+        return text
     # anthropic
     if "YOUR_ANTHROPIC" in ANTHROPIC_API_KEY:
         return ""
@@ -990,24 +1094,29 @@ def orchestrator_text(system: str, user: str, max_tokens: int = 2000,
         log.warning("orchestrator_text(anthropic) failed: %s", res.error)
         return ""
     d = res.data or {}
-    return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+    text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+    _bill_orchestrator(bill, system, user, text, _usage(d), tier)
+    return text
 
 
 def orchestrator_json(system: str, user: str, tier: str = "full", max_tokens: int = 2000,
-                      timeout: int = 90, deadline: Optional[float] = None) -> dict:
+                      timeout: int = 90, deadline: Optional[float] = None,
+                      bill: Optional[dict] = None) -> dict:
     """Call the configured orchestrator LLM and parse a JSON object response.
     Uses provider structured-output modes where available so parsing is reliable.
     tier='cheap' routes to the smaller model (high-volume scoring); max_tokens lets large
     structured outputs (e.g. the gap model) avoid truncation; timeout accommodates large
     syntheses whose generation can exceed the default read timeout. deadline (optional) caps the
     TOTAL wall-clock across retries so a stalled call fails fast instead of retrying its full
-    timeout N times."""
+    timeout N times. bill (optional): {'business_id','operation','run_id'} -> meters this call's
+    spend (estimate-based, since the complete helpers surface text, not usage)."""
     if ORCHESTRATOR == "openai":
         text = _openai_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout, deadline=deadline)
     else:
         text = _anthropic_complete(system, user, tier=tier, max_tokens=max_tokens, timeout=timeout, deadline=deadline)
     if not text:
         return {}
+    _bill_orchestrator(bill, system, user, text, None, tier)
     return _parse_json_lenient(text)
 
 
@@ -1372,8 +1481,9 @@ def audit(business_id: int, fast: bool = False) -> int:
                                     else (None, None)
                                 if _score_model is None:
                                     _, _score_model = _model_for("cheap")
+                                _si, _so = _score_cost_tokens(ans.get("text", ""))
                                 cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model,
-                                            cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")), 200)
+                                            _si, _so)
 
                         if skipped:
                             drop.add(eng.name)   # key not configured -> don't store, stop querying it
@@ -1417,7 +1527,23 @@ def audit(business_id: int, fast: bool = False) -> int:
                 # (or a killed worker) preserves the work done so far instead of rolling back the
                 # whole battery. The per-business advisory lock is session-level, so this is safe.
                 conn.commit()
-            conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
+            # Run-level integrity guard: a battery that ran but scored NOTHING is not a clean
+            # 'complete'. If the judge/orchestrator provider was unreachable for the whole run while
+            # the answer engines succeeded, every score_answer() returned {} and every row was marked
+            # failed -- completing it green would aggregate a score over ZERO rows and let
+            # build_gap_model synthesize a plan on empty evidence. Mark it failed instead (the answers
+            # are durable; refresh_failed_answers can re-score once the judge is back). Only trips on a
+            # TOTAL blackout (0 scored) so a normal partial-failure run still completes.
+            _cnt = conn.execute(
+                "SELECT count(*) AS total, count(*) FILTER (WHERE NOT COALESCE(failed,false)) AS scored "
+                "FROM answers WHERE run_id=%s", (run_id,)).fetchone()
+            if _cnt and (_cnt["total"] or 0) > 0 and (_cnt["scored"] or 0) == 0:
+                log.error("Audit run %d: 0 of %d answers scored -- marking FAILED, not complete "
+                          "(judge/orchestrator provider unreachable?). Re-run or refresh_failed once it's back.",
+                          run_id, _cnt["total"])
+                conn.execute("UPDATE audit_runs SET finished_at=now(), status='failed' WHERE id=%s", (run_id,))
+            else:
+                conn.execute("UPDATE audit_runs SET finished_at=now(), status='complete' WHERE id=%s", (run_id,))
             conn.commit()
         except SystemExit:
             raise   # budget/lock exits are clean control flow, not crashes
@@ -1502,8 +1628,8 @@ def refresh_failed_answers(business_id: int, engines: Optional[list[str]] = None
                         _u["input"] if _u else cost.approx_tokens(r["prompt"]),
                         _u["output"] if _u else cost.approx_tokens(ans.get("text", "")))
             _, _score_model = _model_for("cheap")
-            cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model,
-                        cost.approx_tokens(SCORING_SYSTEM + ans.get("text", "")), 200)
+            _si, _so = _score_cost_tokens(ans.get("text", ""))
+            cost.record(business_id, run_id, ORCHESTRATOR, "score", _score_model, _si, _so)
             # Replace the failed row via the canonical persist path (delete + re-insert) so the
             # metric columns are written exactly as a fresh audit would. Aggregates (score,
             # contested/owned rates) are computed on read, so they pick this up automatically.
@@ -1534,7 +1660,9 @@ GAP_SYSTEM = (
     "suppress or hide legitimate third-party views). TRACK 2 -- ESTABLISH & DISAMBIGUATE: where the "
     "AI does NOT recognize the business (an awareness void) create foundational owned content that "
     "states plainly WHO it is, WHAT it does, WHERE, and WHY it's credible; where the AI confuses it "
-    "with a DIFFERENT same-named entity (entity confusion) require an explicit disambiguation asset. "
+    "with a DIFFERENT same-named entity (entity confusion) require an authoritative POSITIVE-identity "
+    "asset that establishes who this business is -- NEVER a 'not to be confused with X' / negative "
+    "comparison, which is poor marketing and can reinforce the wrong association. "
     "Use the 'challenge_profile' and each answer's 'awareness'/'entity_confusion' flags to decide how "
     "much of each track the plan needs. Given audit data for a business, return STRICT JSON only with: "
     "summary (string), "
@@ -1589,8 +1717,13 @@ GAP_SYSTEM = (
     "about / services / careers pages that state plainly who the business is, what it does, where, "
     "and its credentials), not only negative-defense; mark coverage.awareness_recognition addressed. "
     "When entity_confusion_rate is material, REQUIRE (a) a missing_owned_content item that is an "
-    "About/entity page explicitly distinguishing this business from the same-named entity it is "
-    "confused with, and (b) a schema_gaps item for Organization schema with sameAs links to the real "
+    "authoritative About/entity page that ESTABLISHES this business's identity POSITIVELY and "
+    "specifically -- its exact name, what it does, where, its people/credentials, and its parent/"
+    "affiliations -- so answer engines lock onto the correct entity. Do NOT name, reference, or contrast "
+    "with any other same-named entity, and NEVER frame content as 'not to be confused with X', 'we are "
+    "not Y', 'unlike X', or any negative comparison -- that is poor marketing and can reinforce the "
+    "wrong association; a strong, specific POSITIVE identity displaces confusion on its own. (b) a "
+    "schema_gaps item for Organization schema with sameAs links to the real "
     "parent org / regulator / Google Business Profile so answer engines resolve the correct entity; "
     "mark coverage.entity_disambiguation addressed. When awareness is strong and confusion is nil, "
     "mark those two dimensions addressed=false with the reason that this cycle is negative-defense. "
@@ -1617,6 +1750,8 @@ GAP_SYSTEM = (
     "plus disambiguation/identity content where the engines confuse the business with a "
     "different same-named entity. "
     "All actions must be honest reputation-building, not manipulation. JSON only."
+    + LICENSE_CONTENT_POLICY
+    + NO_NEGATIVE_DISAMBIGUATION_POLICY
     + UNTRUSTED_INSTRUCTION
 )
 
@@ -1636,6 +1771,8 @@ GAP_CRITIC_SYSTEM = (
     "impressions/impact first). Keep the same honest crowding-out rules (no contested-keyword "
     "pages; legitimacy/corroboration assets for contested frames). If the draft is already "
     "complete and grounded, return it unchanged. STRICT JSON only."
+    + LICENSE_CONTENT_POLICY
+    + NO_NEGATIVE_DISAMBIGUATION_POLICY
     + UNTRUSTED_INSTRUCTION
 )
 
@@ -1663,7 +1800,7 @@ def _gap_critic_refine(draft: dict, first_party_signals: dict,
                                 "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str)
         crit = orchestrator_json(
             GAP_CRITIC_SYSTEM, crit_user,
-            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
+            tier=GAP_MODEL_TIER, max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
         # Ledger the critic pass spend too (rec 10b) -- best-effort, never breaks the refine.
         if business_id is not None:
             try:
@@ -1712,7 +1849,199 @@ def _search_perf_for_gap(business_id: int) -> dict:
             out["our_content_pages"] = _ga.top_pages(business_id, limit=10, ours_only=True)
     except Exception as e:  # noqa: BLE001
         log.warning("gap model: GA signals unavailable (%s)", e)
+    # Page-level TECHNICAL health (PageSpeed / Core Web Vitals): owned pages that are slow, fail
+    # CWV, or are schema/SEO-weak silently suppress their own ranking + AI citation, so the model
+    # can prescribe a technical fix (not just "write more"). First-party, fail-safe.
+    try:
+        from . import pagespeed as _ps
+        snap = _ps.latest(business_id)
+        if snap.get("has_data"):
+            out["technical_health"] = {"avg_performance": snap.get("avg_performance"),
+                                       "avg_seo": snap.get("avg_seo"),
+                                       "cwv_failing": snap.get("cwv_failing"),
+                                       "slow_pages": snap.get("slow_pages")}
+            tg = _ps.technical_gaps(business_id)
+            if tg:
+                out["technical_seo_issues"] = tg[:10]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: PageSpeed signals unavailable (%s)", e)
+    # INDEX / CANONICAL / SCHEMA health (GSC URL Inspection full-surface): owned pages Google isn't
+    # indexing, canonical loss (Google prefers a different URL), or invalid structured data that
+    # blocks rich-results / AI extraction. Each is a concrete, fixable reason an owned page isn't
+    # crowding out a negative. First-party, fail-safe.
+    try:
+        from . import gsc_inspect as _gi
+        isnap = _gi.latest(business_id)
+        if isnap.get("has_data"):
+            out["index_health"] = {"checked": isnap.get("checked"), "indexed": isnap.get("indexed"),
+                                   "not_indexed": (isnap.get("not_indexed") or [])[:10],
+                                   "canonical_loss": (isnap.get("canonical_loss") or [])[:10],
+                                   "schema_invalid": (isnap.get("schema_invalid") or [])[:10]}
+            ig = _gi.technical_gaps(business_id)
+            if ig:
+                out["index_issues"] = ig[:10]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: GSC inspection signals unavailable (%s)", e)
+    # Real search DEMAND (Google Keyword Planner via the volume provider): the highest-volume target
+    # keywords, so the model can weight gaps by how much traffic is actually at stake, not just by
+    # answer sentiment. First-party, fail-safe -- empty when no volume provider is configured.
+    try:
+        with db() as _c:
+            rows = _c.execute(
+                "SELECT keyword, search_volume, keyword_difficulty, cpc FROM target_keywords "
+                "WHERE business_id=%s AND search_volume IS NOT NULL "
+                # exclude competitor-gap keywords: they're national-generic intel (huge volumes) that
+                # would swamp the client's own local demand signal.
+                "AND (source IS NULL OR source <> 'dataforseo_competitor') "
+                "ORDER BY search_volume DESC NULLS LAST LIMIT 15", (business_id,)).fetchall()
+        if rows:
+            out["keyword_demand"] = [{"keyword": r["keyword"], "search_volume": r["search_volume"],
+                                      "difficulty": r["keyword_difficulty"], "cpc": r["cpc"]} for r in rows]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: keyword-demand signals unavailable (%s)", e)
+    # WINNABLE keywords: real demand + LOW difficulty = "attack these to get to page 1". This is what
+    # turns raw volume into an actionable target list the strategy can build content around. Uses the
+    # real keyword_difficulty from DataForSEO Labs (0-100). Includes competitor-gap keywords here (as
+    # opportunities) — they're excluded only from the demand-weighting above, not from opportunities.
+    try:
+        _maxdiff = int(os.getenv("KEYWORD_WINNABLE_MAX_DIFFICULTY", "35"))
+        with db() as _c:
+            wins = _c.execute(
+                "SELECT keyword, search_volume, keyword_difficulty, cpc, source FROM target_keywords "
+                "WHERE business_id=%s AND search_volume IS NOT NULL AND search_volume >= 20 "
+                "AND keyword_difficulty IS NOT NULL AND keyword_difficulty <= %s "
+                "ORDER BY search_volume DESC NULLS LAST LIMIT 15", (business_id, _maxdiff)).fetchall()
+        if wins:
+            out["keyword_opportunities"] = [
+                {"keyword": r["keyword"], "search_volume": r["search_volume"],
+                 "difficulty": r["keyword_difficulty"], "cpc": r["cpc"],
+                 "from_competitor": (r["source"] == "dataforseo_competitor")} for r in wins]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: keyword-opportunity signals unavailable (%s)", e)
+    # COMPETITOR keyword footholds: relevant, higher-volume terms rivals rank for that we don't yet
+    # target — surfaced as strategy opportunities (kept separate from local demand weighting).
+    try:
+        with db() as _c:
+            crows = _c.execute(
+                "SELECT keyword, search_volume, keyword_difficulty, rationale FROM target_keywords "
+                "WHERE business_id=%s AND source='dataforseo_competitor' AND search_volume IS NOT NULL "
+                "ORDER BY search_volume DESC NULLS LAST LIMIT 12", (business_id,)).fetchall()
+        if crows:
+            out["competitor_keyword_gaps"] = [
+                {"keyword": r["keyword"], "search_volume": r["search_volume"],
+                 "difficulty": r["keyword_difficulty"], "note": r["rationale"]} for r in crows]
+    except Exception as e:  # noqa: BLE001
+        log.warning("gap model: competitor-keyword signals unavailable (%s)", e)
+    # BRAND mentions + sentiment + REVIEWS: reputation signals the gap model should weigh. Read from
+    # STORED ingest (dataforseo_mentions / dataforseo_reviews tables) -- never a live call in the gap
+    # hot path. Dormant until the ingest jobs have run + stored; a missing table is a no-op.
+    try:
+        with db() as _c:
+            mr = _c.execute("SELECT total_count, sentiment FROM dataforseo_mentions WHERE business_id=%s "
+                            "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+            if mr:
+                out["web_mentions"] = {"total": mr["total_count"], "sentiment": mr["sentiment"]}
+            # Reviews across platforms (Google/Trustpilot): rating + volume are reputation signals the
+            # gap model weighs (low/no reviews => a real reputation gap; poor rating => narrative risk).
+            rv = _c.execute(
+                "SELECT DISTINCT ON (platform) platform, rating, reviews_count FROM dataforseo_reviews "
+                "WHERE business_id=%s ORDER BY platform, id DESC", (business_id,)).fetchall()
+            if rv:
+                out["reviews"] = [{"platform": r["platform"],
+                                   "rating": (r["rating"] or {}).get("value") if isinstance(r["rating"], dict) else r["rating"],
+                                   "count": r["reviews_count"]} for r in rv]
+    except Exception:  # noqa: BLE001 -- table not created yet -> no-op
+        pass
     return out
+
+
+# Canonical tokenizer + vocabulary now live in textutils (shared with content_batch's matcher so
+# the two can't drift again). These aliases keep this module's historical private names.
+_ADDRESSED_STOPW = GAP_STOPWORDS
+_addressed_toks = gap_tokens
+
+
+def _link_weak_queries(model: dict) -> None:
+    """In place: for each weak_queries item WITHOUT an addressed_by, set it to the exact topic/query
+    string of the best token-overlap plan item (missing_owned_content.topic first, then
+    local_seo_gaps.query / competitor_defense.query). No match -> left as-is. Deterministic; safe on
+    partial/missing sections. Stores the worst-answer -> fixing-task link so content_batch doesn't
+    have to rediscover it via its fuzzy fallback."""
+    if not isinstance(model, dict):
+        return
+    weak = model.get("weak_queries")
+    if not isinstance(weak, list):
+        return
+    candidates = []  # (label, token-set) in priority order
+    for it in (model.get("missing_owned_content") or []):
+        t = (it.get("topic") if isinstance(it, dict) else None) or ""
+        if t.strip():
+            candidates.append((t.strip(), _addressed_toks(t)))
+    for key in ("local_seo_gaps", "competitor_defense"):
+        for it in (model.get(key) or []):
+            q = (it.get("query") if isinstance(it, dict) else None) or ""
+            if q.strip():
+                candidates.append((q.strip(), _addressed_toks(q)))
+    if not candidates:
+        return
+    for w in weak:
+        if not isinstance(w, dict) or (w.get("addressed_by") or "").strip():
+            continue  # keep an LLM-provided link
+        wtoks = _addressed_toks((w.get("prompt") or "") + " " + (w.get("problem") or "")
+                                + " " + (w.get("fix") or ""))
+        if not wtoks:
+            continue
+        best_label, best_overlap = None, 0
+        for label, ctoks in candidates:
+            overlap = len(wtoks & ctoks)
+            # require a real overlap (>=2 and >= a third of the candidate's tokens) so a single
+            # shared word can't create a spurious link -- same bar as content_batch._match_prompts.
+            if ctoks and overlap >= max(2, len(ctoks) // 3) and overlap > best_overlap:
+                best_label, best_overlap = label, overlap
+        if best_label:
+            w["addressed_by"] = best_label
+
+
+def _gap_answer_priority(a: dict) -> tuple:
+    """Sort key (ascending) -> MOST gap-relevant answers first. Negative / contested / unowned /
+    low-alignment answers are the evidence a gap model is built from; positive, on-message answers
+    are kept only to fill the cap. Ties break by lowest goal_alignment (weakest answers first)."""
+    sent = (a.get("sentiment") or "").lower()
+    ga = a.get("goal_alignment")
+    ga = float(ga) if isinstance(ga, (int, float)) else 0.5
+    aw = a.get("awareness")
+    aw = float(aw) if isinstance(aw, (int, float)) else 1.0
+    problem = (
+        (2 if sent == "negative" else 1 if sent in ("mixed", "neutral") else 0)
+        + (1 if a.get("mentions_contested") else 0)
+        + (1 if a.get("surfaces_owned") is False else 0)
+        + (1 if ga < 0.5 else 0)
+        + (1 if aw < 0.5 else 0)
+    )
+    return (-problem, ga)
+
+
+def _prioritize_gap_answers(rows, cap: int) -> list:
+    """Return at most `cap` answers, most gap-relevant first, guaranteeing at least one answer per
+    engine (so the sample isn't dominated by a single assistant) before filling by priority.
+    Returns every row (as dicts) unchanged when already under the cap."""
+    rows = [dict(r) for r in rows]
+    if cap <= 0 or len(rows) <= cap:
+        return rows
+    order = sorted(range(len(rows)), key=lambda i: _gap_answer_priority(rows[i]))
+    picked: list[int] = []
+    picked_set: set[int] = set()
+    seen_eng: set = set()
+    for i in order:                      # coverage pass: one per engine
+        eng = rows[i].get("engine")
+        if eng not in seen_eng:
+            picked.append(i); picked_set.add(i); seen_eng.add(eng)
+    for i in order:                      # fill by priority
+        if len(picked) >= cap:
+            break
+        if i not in picked_set:
+            picked.append(i); picked_set.add(i)
+    return [rows[i] for i in sorted(picked[:cap])]
 
 
 def build_gap_model(business_id: int) -> dict:
@@ -1725,7 +2054,7 @@ def build_gap_model(business_id: int) -> dict:
         # Also SKIP a 'fast' first-look run (rec 9): its reduced battery is too thin a sample to
         # synthesize a full strategy plan from -- wait for a full audit.
         run = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
             "AND status='complete' AND COALESCE(mode,'full') <> 'fast' ORDER BY id DESC LIMIT 1",
             (business_id,),
         ).fetchone()
@@ -1743,7 +2072,7 @@ def build_gap_model(business_id: int) -> dict:
         answers = conn.execute(
             "SELECT engine, prompt, answer_text, cited_sources, sentiment, goal_alignment, "
             "mentions_contested, surfaces_owned, awareness, entity_confusion, key_sources, missing "
-            "FROM answers WHERE run_id=%s", (run["id"],)
+            "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (run["id"],)
         ).fetchall()
         # answer_text + cited_sources are attacker-controllable (engine output /
         # cited pages). key_sources + missing are the SCORER LLM's free-text
@@ -1752,10 +2081,16 @@ def build_gap_model(business_id: int) -> dict:
         # they are equally untrusted and fenced too, lest a hostile answer launder an
         # instruction into the strategy synthesis. The remaining columns are
         # first-party numeric/categorical scores and pass through unchanged.
+        # Feed a gap-relevant, length-bounded SAMPLE (not the whole transcript) so the synthesis
+        # input can't overrun the model's context window -> empty output -> a failed gap model that
+        # cascade-fails the content pipeline. The aggregate picture is carried by challenge_profile +
+        # external_signals below; these raw answers are per-gap EVIDENCE, so a capped/truncated set
+        # is sufficient (and ~10x cheaper).
+        gap_answers = _prioritize_gap_answers(answers, GAP_MAX_ANSWERS)
         fenced_answers = []
-        for a in answers:
+        for a in gap_answers:
             row = dict(a)
-            row["answer_text"] = _fence_untrusted(row.get("answer_text", ""))
+            row["answer_text"] = _fence_untrusted((row.get("answer_text") or "")[:GAP_ANSWER_CHARS])
             row["cited_sources"] = _fence_untrusted(json.dumps(row.get("cited_sources", []), default=str))
             row["key_sources"] = _fence_untrusted(json.dumps(row.get("key_sources") or [], default=str))
             row["missing"] = _fence_untrusted(json.dumps(row.get("missing") or [], default=str))
@@ -1893,7 +2228,7 @@ def build_gap_model(business_id: int) -> dict:
         # and site_technical_gaps, so the JSON runs longer -- too small a cap truncates it
         # mid-object and the synthesis is discarded as unparseable.
         model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
-                                  max_tokens=12000, timeout=240, deadline=GAP_MODEL_DEADLINE)
+                                  max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
         # Ledger the synthesis spend (rec 10b) so the gap model's cost is visible in COGS and counts
         # against the monthly cap, like audit answers do. Recorded even on a failed/empty synthesis:
         # we still paid for the input tokens, and honest budgeting must not omit that. Estimated
@@ -1939,6 +2274,10 @@ def build_gap_model(business_id: int) -> dict:
         else:
             log.info("gap model: first pass addressed all coverage dimensions; skipping critic pass")
         _hb()  # critic pass done (or skipped)
+        # Deterministic gap->content link: fill any NULL weak_query.addressed_by from the synthesized
+        # plan items so the worst-answer -> fixing-task link is stored, not left to the fuzzy fallback
+        # in content_batch._match_prompts. Applied to the FINAL (post-critic) model before persistence.
+        _link_weak_queries(model)
         conn.execute(
             "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
             (business_id, run["id"], json.dumps(model)),
@@ -1957,7 +2296,7 @@ def diff(business_id: int) -> dict:
         # Compare full-audit runs only: a 'fast' first-look run (rec 9) has a reduced, unlensed
         # battery, so diffing it against a full run would report a bogus progress delta.
         runs = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
             "AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 2", (business_id,)
         ).fetchall()
         if len(runs) < 2:
@@ -2064,7 +2403,7 @@ def per_engine_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
     with db() as conn:
         if run_id is None:
             run = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)
             ).fetchone()
             if not run:
@@ -2117,7 +2456,7 @@ def per_prompt_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
     with db() as conn:
         if run_id is None:
             run = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)
             ).fetchone()
             if not run:

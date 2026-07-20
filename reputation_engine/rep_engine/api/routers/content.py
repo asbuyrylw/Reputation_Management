@@ -14,12 +14,17 @@ import json
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from .. import jobs as _jobs
 from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
+
+try:
+    from ... import billing as _billing
+except ImportError:  # pragma: no cover
+    import billing as _billing  # type: ignore
 from ..schemas import RejectRequest, StatusRequest
 from ..settings import api_settings
 
@@ -49,14 +54,285 @@ class DiscoveryTargetUpdate(BaseModel):
 class TargetStatusRequest(BaseModel):
     status: str
 
+
+class SocialProfileUpdate(BaseModel):
+    profile_url: str = ""
+    exists: bool = True
+
+
+class SubtasksUpdate(BaseModel):
+    subtasks: list = []
+
 try:
     from ... import content_generator as _cg
+    from ... import content_assist as _ca
     from ... import tracking as _tracking
 except ImportError:  # pragma: no cover
     import content_generator as _cg  # type: ignore
+    import content_assist as _ca  # type: ignore
     import tracking as _tracking  # type: ignore
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["content"])
+
+
+# ---------------------------------------------------------------------------
+# Brand guardrails + source material (grounding for on-brand content)
+# ---------------------------------------------------------------------------
+def _sm():
+    try:
+        from ... import source_material as s
+    except ImportError:  # pragma: no cover
+        import source_material as s  # type: ignore
+    return s
+
+
+class GuardrailsBody(BaseModel):
+    brand_guardrails: str
+
+
+class SourceDocBody(BaseModel):
+    title: Optional[str] = None
+    content: str
+    source_type: Optional[str] = "note"
+    source_url: Optional[str] = None
+
+
+def _extract_text(filename: str, raw: bytes) -> str:
+    """Best-effort text extraction from an uploaded file (txt/md/csv direct; pdf via pypdf; docx via
+    python-docx). Unknown/binary -> decoded text fallback."""
+    name = (filename or "").lower()
+    try:
+        if name.endswith(".pdf"):
+            try:
+                from pypdf import PdfReader
+                import io
+                return "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(raw)).pages)
+            except Exception:  # noqa: BLE001
+                return ""
+        if name.endswith(".docx"):
+            try:
+                import io
+                from docx import Document
+                return "\n".join(p.text for p in Document(io.BytesIO(raw)).paragraphs)
+            except Exception:  # noqa: BLE001
+                return ""
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@router.get("/brand-guardrails")
+def get_guardrails(business_id: int = Depends(authorize_business)):
+    """The business's brand/voice guardrails (e.g. always Team Unstoppable, never Primerica)."""
+    return {"brand_guardrails": _sm().guardrails(business_id)}
+
+
+@router.put("/brand-guardrails")
+def put_guardrails(body: GuardrailsBody, business_id: int = Depends(require_business_editor)):
+    _sm().set_guardrails(business_id, body.brand_guardrails)
+    return {"ok": True}
+
+
+@router.get("/source-documents")
+def list_source_docs(business_id: int = Depends(authorize_business)):
+    """The client's uploaded source corpus that grounds content generation."""
+    return {"documents": _sm().list_documents(business_id)}
+
+
+@router.post("/source-documents")
+def add_source_doc(body: SourceDocBody, business_id: int = Depends(require_business_editor),
+                   user: dict = Depends(get_current_user)):
+    """Add a source document from pasted text or a URL note."""
+    doc_id = _sm().add_document(business_id, body.content, title=body.title,
+                               source_type=body.source_type or "note", source_url=body.source_url,
+                               created_by=(user or {}).get("id"))
+    if not doc_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty or unstorable content")
+    return {"id": doc_id}
+
+
+@router.post("/source-documents/upload")
+async def upload_source_doc(file: UploadFile = File(...),
+                            business_id: int = Depends(require_business_editor),
+                            user: dict = Depends(get_current_user)):
+    """Upload a document (txt/md/pdf/docx). The text is extracted, stored, and fed to the content
+    generators (Claude + NotebookLM) as grounding."""
+    raw = await file.read()
+    text = _extract_text(file.filename or "", raw)
+    if not text.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "could not extract text (unsupported file or empty)")
+    doc_id = _sm().add_document(business_id, text, title=file.filename, source_type="upload",
+                               created_by=(user or {}).get("id"))
+    return {"id": doc_id, "title": file.filename, "chars": len(text)}
+
+
+@router.delete("/source-documents/{doc_id}")
+def delete_source_doc(doc_id: int, business_id: int = Depends(require_business_editor)):
+    if not _sm().delete_document(business_id, doc_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    return {"deleted": doc_id}
+
+
+# ---------------------------------------------------------------------------
+# Create content (user-initiated): one button -> describe it + pick a type -> generate.
+# Every type funnels through the SAME grounded, human-gated pipeline: a work order is created
+# (so the piece has gap lineage + a home), then the right generator runs as a background job.
+#   - text / rich media  -> generate_drafts(only_wo)  [content_generator routes rich-media caps
+#                            to rich_media_generator]; lands in Drafts / Media, pending review.
+#   - image/quote/video  -> generate_visual;           lands in Media, pending review.
+# Brand rules + source material ground ALL of them (Team Unstoppable, never Primerica).
+# ---------------------------------------------------------------------------
+# content_type -> work-order capability the content_generator understands (see content_generator
+# GENERATABLE + _RICH_MEDIA_CAP_MAP). Anything not here is treated as a VISUAL kind.
+_CONTENT_TYPE_CAP = {
+    "article": "content_writing", "blog": "content_writing", "white_paper": "content_writing",
+    "faq": "content_writing", "landing_page": "content_writing", "local_page": "local_content_creation",
+    "deep_article": "deep_content", "newsletter": "deep_content", "blog_series": "deep_content",
+    "podcast": "podcast_creation", "slide_deck": "slide_deck", "infographic": "infographic",
+    "explainer_video": "explainer_video", "research_brief": "research_brief",
+}
+_CONTENT_TYPE_VISUAL = {"image", "quote_card", "video"}
+_TYPE_LABELS = {
+    "article": "Article", "blog": "Blog post", "white_paper": "White paper", "faq": "FAQ",
+    "landing_page": "Landing page", "local_page": "Local page", "deep_article": "Long-form article",
+    "newsletter": "Newsletter", "blog_series": "Blog series", "podcast": "Podcast",
+    "slide_deck": "Slide deck", "infographic": "Infographic", "explainer_video": "Explainer video",
+    "research_brief": "Research brief", "image": "Image", "quote_card": "Quote card", "video": "Video",
+}
+
+
+class CustomContentBody(BaseModel):
+    content_type: str
+    description: str                      # what the user wants created (the topic/prompt)
+    title: Optional[str] = None          # optional explicit title (defaults from description)
+    gap_key: Optional[str] = None        # optional: tie to a gap (lineage + keyword scoping)
+    gap_label: Optional[str] = None      # the gap's human topic (steers keyword scoping)
+    aspect_ratio: Optional[str] = None   # image/video (16:9, 9:16, 1:1)
+
+
+@router.get("/content-types")
+def content_types(business_id: int = Depends(authorize_business)):
+    """The catalogue the 'Create content' picker renders: each type, its label, family, and whether
+    its generator is configured (so the UI can flag e.g. video needs a Veo key)."""
+    try:
+        from ... import visual_content as _vc
+        from ... import rich_media_generator as _rmg
+    except ImportError:  # pragma: no cover
+        import visual_content as _vc  # type: ignore
+        import rich_media_generator as _rmg  # type: ignore
+    img_ok, vid_ok = _vc.image_configured(), _vc.video_configured()
+    # Whether a REAL NotebookLM-grade provider (that renders audio/slides/etc.) is wired. False by
+    # default: the in-house LLM always produces a text SCRIPT/BRIEF, but no rendered audio/slide/
+    # infographic file. Be honest about that instead of advertising these as finished media.
+    nlm_live = _rmg._notebooklm_live() if hasattr(_rmg, "_notebooklm_live") else False
+    def _fam(ct: str) -> str:
+        if ct in _CONTENT_TYPE_VISUAL:
+            return "visual"
+        cap = _CONTENT_TYPE_CAP.get(ct)
+        return "rich_media" if cap in ("podcast_creation", "slide_deck", "infographic",
+                                       "explainer_video", "research_brief", "deep_content") else "text"
+    # What the in-house LLM path actually PRODUCES for each rich type (honest, since the real
+    # NotebookLM renderer is dormant): a text script/brief, not a finished audio/slide/graphic file.
+    _RICH_PRODUCES = {
+        "podcast": "a two-host podcast SCRIPT (text). Rendered audio needs a NotebookLM/AutoContent provider.",
+        "explainer_video": "a video SCRIPT (text). A rendered video needs the Video type (Veo) or a NotebookLM provider.",
+        "slide_deck": "a slide-deck BRIEF (text outline). Rendered slides need a NotebookLM/AutoContent provider.",
+        "infographic": "an infographic BRIEF for a designer (text). A rendered graphic needs a NotebookLM/AutoContent provider.",
+        "research_brief": "a research briefing document (text).",
+        "deep_article": "a long-form article (text).",
+        "newsletter": "a newsletter brief (text).",
+        "blog_series": "a set of blog outlines (text).",
+    }
+    out = []
+    for ct, label in _TYPE_LABELS.items():
+        fam = _fam(ct)
+        ready, need = True, None
+        if ct == "video" and not vid_ok:
+            ready, need = False, "Set VIDEO_PROVIDER=veo + a Gemini/Veo key to render video."
+        elif ct == "image" and not img_ok:
+            ready, need = False, "Set an image provider key (GEMINI_API_KEY / IMAGE_API_KEY)."
+        elif fam == "rich_media":
+            # Rich media always produces a real deliverable (the LLM script/brief), so ready=True;
+            # the `needs` explains it's TEXT unless a real rendering provider is wired.
+            produces = _RICH_PRODUCES.get(ct)
+            if produces and not nlm_live:
+                need = f"Produces {produces}"
+        out.append({"content_type": ct, "label": label, "family": fam, "ready": ready, "needs": need})
+    return {"types": out, "image_configured": img_ok, "video_configured": vid_ok,
+            "notebooklm_live": nlm_live}
+
+
+@router.post("/custom-content", status_code=202)
+def create_custom_content(body: CustomContentBody, background: BackgroundTasks,
+                          business_id: int = Depends(require_business_editor),
+                          user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Create a piece of content the owner describes themselves. Grounded + human-gated like every
+    other draft — nothing auto-publishes."""
+    ct = (body.content_type or "").strip().lower()
+    desc = (body.description or "").strip()
+    if not desc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Describe what you'd like created.")
+    if ct not in _CONTENT_TYPE_CAP and ct not in _CONTENT_TYPE_VISUAL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown content type '{ct}'.")
+    # Billing/quota gate — this spends on LLM/media generation, same gate as batch content.
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "custom_content")
+    if not ok:
+        raise HTTPException(code, reason)
+    is_visual = ct in _CONTENT_TYPE_VISUAL
+    job_type = "generate_visual" if is_visual else "generate_drafts"
+    if not _jobs.rate_ok(business_id, job_type):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're creating content too fast — give it a little while.")
+    label = _TYPE_LABELS.get(ct, ct.replace("_", " ").title())
+    title = (body.title or f"{label}: {desc}").strip()[:180]
+    # A work order gives the piece gap lineage + a home in the pipeline. Visual pieces use a
+    # 'visual_content' capability the draft generator ignores (we dispatch them to generate_visual).
+    from ... import tracking as _t
+    cap = _CONTENT_TYPE_CAP.get(ct, "visual_content")
+    try:
+        wid = _t.create_work_order(
+            business_id, title, instruction=desc, capability=cap,
+            gap_source=("user_content" if body.gap_key else None),
+            source_query=(body.gap_label or None),
+            why_helps_ai_rep=(f"Owner-requested {label.lower()} to close the '{body.gap_label}' gap."
+                              if body.gap_label else "Owner-requested content."))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    if is_visual:
+        args = {"kind": ct, "prompt": desc, "work_order_id": wid,
+                "aspect_ratio": body.aspect_ratio or "16:9"}
+        if ct == "quote_card":
+            args["text"] = desc
+        job_id, active = _jobs.enqueue(business_id, "generate_visual", args=args, requested_by=user["id"])
+    else:
+        # Forward the explicit content_type so the generator resolves the asset_type deterministically
+        # (fixes 'blog' -> gbp_post misclassification and deep_content emitting all 3 sub-types).
+        job_id, active = _jobs.enqueue(business_id, "generate_drafts",
+                                       args={"only_wo": wid, "content_type": ct},
+                                       requested_by=user["id"])
+    if job_id is None:
+        # A generate job scoped to a DIFFERENT work order is in flight; the per-(business,job_type)
+        # dedup means it will NOT pick ours up (it targets its own only_wo). Rather than strand this
+        # WO behind a false "it'll pick this up" 409, run THIS piece's generation directly in the
+        # background on its own work order. It produces the same human-gated draft; it just isn't
+        # tracked as a separate runs-list row. The request was already rate- + billing-gated above.
+        _adhoc_args = args if is_visual else {"only_wo": wid, "content_type": ct}
+        def _adhoc_run():
+            try:
+                _jobs.JOB_DISPATCH[job_type](business_id, _adhoc_args)
+            except Exception:  # noqa: BLE001
+                import logging as _lg
+                _lg.getLogger("api.content").exception("ad-hoc custom-content generation failed (wo %s)", wid)
+        background.add_task(_adhoc_run)
+        return JSONResponse(status_code=202, content={"job_id": None, "job_type": job_type,
+                            "work_order_id": wid, "family": "visual" if is_visual else "content",
+                            "content_type": ct, "status": "queued"})
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "job_type": job_type,
+                                                  "work_order_id": wid, "family": "visual" if is_visual else "content",
+                                                  "content_type": ct, "status": "queued"})
 
 
 def _actor(user: dict) -> str:
@@ -68,6 +344,19 @@ def _to_float(d: dict, *keys: str) -> dict:
         if d.get(k) is not None:
             d[k] = float(d[k])
     return d
+
+
+def _floats_deep(x):
+    """Recursively coerce Decimal (psycopg NUMERIC) -> float so responses don't depend on the JSON
+    encoder's Decimal handling (an ORJSONResponse swap would otherwise 500 on the content-program reads)."""
+    from decimal import Decimal
+    if isinstance(x, Decimal):
+        return float(x)
+    if isinstance(x, dict):
+        return {k: _floats_deep(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_floats_deep(v) for v in x]
+    return x
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +372,8 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "completed_at, "
         "COALESCE(superseded, false) AS superseded, "
         "COALESCE(planned, false) AS planned, promoted_at, assignee_user_id, "
-        "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes "
+        "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes, "
+        "COALESCE(subtasks, '[]'::jsonb) AS subtasks "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
@@ -95,19 +385,124 @@ class WorkOrderCreate(BaseModel):
     instruction: Optional[str] = None
     recommended_tool: Optional[str] = None
     target_date: Optional[str] = None
+    # Gap lineage (carried when a gap item is turned into a task, so it links to content + shows why).
+    capability: Optional[str] = None
+    gap_source: Optional[str] = None
+    source_query: Optional[str] = None
+    area: Optional[str] = None
+    why_helps_ai_rep: Optional[str] = None
+    why_helps_seo: Optional[str] = None
 
 
 @router.post("/work-orders", status_code=201)
 def add_work_order(payload: WorkOrderCreate, business_id: int = Depends(require_business_editor)):
-    """Manually add an ad-hoc task to the work queue (outside the generated plan)."""
+    """Add a task to the work queue -- either an ad-hoc one, or a gap item "turned into a task"
+    (carrying its gap lineage). Idempotent on title, so it links to an existing task rather than
+    duplicating one the plan already created."""
     from ... import tracking as _t
     try:
         wid = _t.create_work_order(business_id, payload.title, instruction=payload.instruction,
                                    recommended_tool=payload.recommended_tool,
-                                   target_date=payload.target_date)
+                                   target_date=payload.target_date, capability=payload.capability,
+                                   gap_source=payload.gap_source, source_query=payload.source_query,
+                                   area=payload.area, why_helps_ai_rep=payload.why_helps_ai_rep,
+                                   why_helps_seo=payload.why_helps_seo)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return {"id": wid}
+
+
+@router.patch("/work-orders/{wo_id}/subtasks")
+def set_subtasks(wo_id: int, payload: SubtasksUpdate,
+                 business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Persist the per-step checklist state for a task -- a JSONB array of {text, done}, so the owner
+    can tick off individual steps of a multi-step task."""
+    clean = [{"text": str(s.get("text", ""))[:400], "done": bool(s.get("done"))}
+             for s in (payload.subtasks or []) if isinstance(s, dict) and s.get("text")]
+    row = conn.execute(
+        "UPDATE work_orders SET subtasks=%s, updated_at=now() WHERE id=%s AND business_id=%s RETURNING id",
+        (json.dumps(clean), wo_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work order not found")
+    conn.commit()
+    return {"ok": True, "wo_id": wo_id, "subtasks": clean}
+
+
+@router.get("/work-orders/{wo_id}/brief")
+def work_order_brief(wo_id: int, business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """The deterministic content SPEC for a to-produce piece (scoped keywords, length + readability
+    target, structure, and the AI gap it closes) -- surfaced before drafting so "what to produce" is
+    a reviewable spec, not just a title."""
+    row = conn.execute(
+        "SELECT id, title, capability, gap_source, gap_specifics FROM work_orders "
+        "WHERE id=%s AND business_id=%s", (wo_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work order not found")
+    return _cg.piece_brief(business_id, dict(row))
+
+
+@router.get("/work-orders/{wo_id}/visual-brief")
+def work_order_visual_brief(wo_id: int, business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """A gap-grounded prompt SUGGESTION for 'Add a visual' (image/video) on this task -- built
+    from its gap lineage (title, why_helps_ai_rep/seo, source query) so the prefilled prompt is
+    about what this task is actually supposed to convey, not a blank box. Still human-edited
+    before it's sent -- this is a prefill, not a draft."""
+    row = conn.execute(
+        "SELECT title, gap_source, gap_specifics, why_helps_ai_rep, why_helps_seo FROM work_orders "
+        "WHERE id=%s AND business_id=%s", (wo_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work order not found")
+    try:
+        from ... import visual_content as _vc
+    except ImportError:  # pragma: no cover
+        import visual_content as _vc  # type: ignore
+    return {"prompt": _vc.suggested_prompt(business_id, dict(row))}
+
+
+# ---- brand writing styles (cloned from a URL; the active one shapes generation) ----
+class StyleAnalyze(BaseModel):
+    url: str
+    name: Optional[str] = None
+
+
+class StyleActivate(BaseModel):
+    style_id: Optional[int] = None
+
+
+def _ws():
+    try:
+        from ... import writing_style as w
+    except ImportError:  # pragma: no cover
+        import writing_style as w  # type: ignore
+    return w
+
+
+@router.get("/writing-styles")
+def writing_styles(business_id: int = Depends(authorize_business)):
+    return {"styles": _ws().list_styles(business_id)}
+
+
+@router.post("/writing-styles/analyze")
+def analyze_writing_style(body: StyleAnalyze, business_id: int = Depends(require_business_editor)):
+    """Clone a writing style from an article URL (fetch + LLM style analysis, stored inactive)."""
+    res = _ws().analyze_url(business_id, body.url, name=body.name)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, res.get("error", "could not analyze"))
+    return res
+
+
+@router.patch("/writing-styles/active")
+def set_writing_style_active(body: StyleActivate, business_id: int = Depends(require_business_editor)):
+    """Set (or clear, with null) the active style used to shape generated content."""
+    _ws().set_active(business_id, body.style_id)
+    return {"ok": True}
+
+
+@router.delete("/writing-styles/{style_id}")
+def delete_writing_style(style_id: int, business_id: int = Depends(require_business_editor)):
+    if not _ws().delete_style(business_id, style_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "style not found")
+    return {"ok": True}
 
 
 @router.get("/team")
@@ -130,12 +525,170 @@ def content_drafts(business_id: int = Depends(authorize_business), conn=Depends(
         "SELECT d.id, d.work_order_id, d.asset_type, d.title, d.body, d.target_query, "
         "d.quality_score, d.quality_notes, d.compliance_pass, d.compliance_flags, d.status, "
         "d.revision_count, d.reviewer, d.reviewed_at, d.created_at, "
-        "d.highlighted_sections, d.placeholders_pending, w.instruction AS wo_instruction "
+        "d.highlighted_sections, d.placeholders_pending, d.batch_id, d.content_type, d.geo_score, "
+        "w.instruction AS wo_instruction, "
+        # Phase 1 -- surface the gap linkage on the draft so the reviewer sees WHAT it fixes:
+        "w.gap_source, w.why_helps_ai_rep, w.why_helps_seo, w.gap_specifics "
         "FROM content_drafts d LEFT JOIN work_orders w ON w.id = d.work_order_id "
         "WHERE d.business_id=%s ORDER BY d.id DESC",
         (business_id,),
     ).fetchall()
-    return [_to_float(dict(r), "quality_score") for r in rows]
+    out = []
+    for r in rows:
+        d = _to_float(dict(r), "quality_score")
+        d = _to_float(d, "geo_score")
+        out.append(d)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Gap-driven content BATCHES + measured impact (content-program Phase 4)
+# ---------------------------------------------------------------------------------------------
+class BatchGenerateRequest(BaseModel):
+    gap_key: Optional[str] = None            # one gap; omit to sweep all open content gaps
+    max_gaps: Optional[int] = None
+    content_types: Optional[list[str]] = None
+
+
+class ClusterGenerateRequest(BaseModel):
+    max_clusters: Optional[int] = 1          # topic clusters (pillar+spokes) to build; default 1 (a hub is ~5 pieces)
+    max_spokes: Optional[int] = 4            # spoke pages per pillar
+
+
+@router.get("/content-batches")
+def content_batches(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Every gap-driven content batch: its pieces (per type, with grade + status) and the latest
+    measured impact on the gap it targets."""
+    batches = conn.execute(
+        "SELECT id, gap_key, gap_source, label, target_topic, target_prompts, content_types, "
+        "baseline, status, created_at, updated_at FROM content_batches "
+        "WHERE business_id=%s ORDER BY id DESC", (business_id,)).fetchall()
+    out = []
+    for b in batches:
+        bd = dict(b)
+        bd["pieces"] = [dict(r) for r in conn.execute(
+            "SELECT id, content_type, asset_type, title, status, geo_score, quality_score, "
+            "published_asset_id FROM content_drafts WHERE batch_id=%s ORDER BY id", (b["id"],)).fetchall()]
+        imp = conn.execute(
+            "SELECT baseline_sov, measured_sov, sov_delta, baseline_alignment, measured_alignment, "
+            "alignment_delta, gap_pct_closed, per_type, notes, run_before, run_after, measured_at "
+            "FROM content_impact WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
+        bd["impact"] = dict(imp) if imp else None
+        out.append(bd)
+    return _floats_deep(out)
+
+
+@router.post("/content-batches/generate", status_code=202)
+def generate_content_batches(payload: BatchGenerateRequest, background: BackgroundTasks,
+                             business_id: int = Depends(require_business_editor),
+                             user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Kick off multi-type content generation for a gap (or every open gap). Enqueues the job so the
+    ~minutes of LLM work runs off the request path; the worker (or inline dev mode) runs it."""
+    # Billing/quota gate: block LLM-spending content work when the org's subscription is inactive
+    # (the audit trigger path gates the same way). No org / no subscription => unmetered (legacy).
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "generate_content_batches")
+    if not ok:
+        raise HTTPException(code, reason)
+    if not _jobs.rate_ok(business_id, "generate_content_batches"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're starting content batches too often — give it a little while.")
+    # requested_by is forwarded through args so content_batches.created_by is attributed.
+    args = {k: v for k, v in payload.model_dump().items() if v is not None}
+    args["requested_by"] = user["id"]
+    job_id, active = _jobs.enqueue(business_id, "generate_content_batches", args=args,
+                                   requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a content batch job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
+
+
+@router.post("/content-clusters/generate", status_code=202)
+def generate_content_clusters(payload: ClusterGenerateRequest, background: BackgroundTasks,
+                              business_id: int = Depends(require_business_editor),
+                              user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Kick off CLUSTER-DRIVEN content: build the highest-leverage uncovered topic clusters as
+    connected hubs (a comprehensive pillar page + focused, cross-linked spoke pages). The research-
+    backed alternative to one-off pieces — internal linking + full topic coverage build the topical
+    authority AI answer engines reward. Enqueued so the minutes of LLM work run off the request path."""
+    ok, reason, code = _billing.check_can_trigger(conn, business_id, "generate_clusters")
+    if not ok:
+        raise HTTPException(code, reason)
+    if not _jobs.rate_ok(business_id, "generate_clusters"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            "You're starting cluster generation too often — give it a little while.")
+    args = {k: v for k, v in payload.model_dump().items() if v is not None}
+    args["requested_by"] = user["id"]
+    job_id, active = _jobs.enqueue(business_id, "generate_clusters", args=args, requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a cluster job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
+
+
+@router.post("/content-impact/measure", status_code=202)
+def measure_content_impact(background: BackgroundTasks,
+                           business_id: int = Depends(require_business_editor),
+                           user: dict = Depends(get_current_user), conn=Depends(get_conn)):
+    """Manually re-measure every batch's impact against the latest audit (impact also refreshes
+    automatically after each full audit). Makes the measure_content_impact job reachable on demand."""
+    if not _jobs.rate_ok(business_id, "measure_content_impact"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Re-measuring too often — try again shortly.")
+    job_id, active = _jobs.enqueue(business_id, "measure_content_impact", requested_by=user["id"])
+    if job_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a measure job is already running (#{active})")
+    if api_settings().job_worker == "inline":
+        background.add_task(_jobs.run_job, job_id)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
+
+
+@router.get("/content-impact")
+def content_impact(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Measured impact rows across all batches (the ROI ledger): what each batch moved on its gap."""
+    rows = conn.execute(
+        "SELECT ci.*, cb.target_topic, cb.label FROM content_impact ci "
+        "JOIN content_batches cb ON cb.id = ci.batch_id "
+        "WHERE ci.business_id=%s ORDER BY ci.id DESC LIMIT 100", (business_id,)).fetchall()
+    return _floats_deep([dict(r) for r in rows])
+
+
+@router.get("/gap-completion")
+def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Per content-gap: how much content has been drafted/published for it and how far it's moved —
+    the completion meter that ties content back to the strategy/goal."""
+    try:
+        from ... import content_batch as _cb
+    except ImportError:  # pragma: no cover
+        import content_batch as _cb  # type: ignore
+    gaps = _cb.gaps_for_business(business_id)
+    out = []
+    for g in gaps:
+        b = conn.execute(
+            "SELECT id, status FROM content_batches WHERE business_id=%s AND gap_key=%s "
+            "ORDER BY id DESC LIMIT 1", (business_id, g["gap_key"])).fetchone()
+        drafted = published = 0
+        impact = None
+        if b:
+            # "published" means the asset is actually LIVE (published_status='live') -- the same
+            # definition content_impact uses -- not merely approved (which sets published_asset_id).
+            # Counting approved-but-not-live pieces here made the meter contradict the impact panel.
+            cnt = conn.execute(
+                "SELECT COUNT(*) drafted, "
+                "COUNT(*) FILTER (WHERE a.published_status='live') published "
+                "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
+                "WHERE d.batch_id=%s", (b["id"],)).fetchone()
+            drafted, published = cnt["drafted"], cnt["published"]
+            imp = conn.execute(
+                "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "
+                "WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
+            impact = dict(imp) if imp else None
+        out.append({"gap_key": g["gap_key"], "topic": g["topic"], "gap_source": g["gap_source"],
+                    "target_prompts": g["target_prompts"], "batch_id": b["id"] if b else None,
+                    "batch_status": b["status"] if b else None, "pieces_drafted": drafted,
+                    "pieces_published": published, "impact": impact})
+    return _floats_deep(out)
 
 
 @router.get("/production-briefs")
@@ -249,6 +802,29 @@ def social_audit(business_id: int = Depends(authorize_business), conn=Depends(ge
         d["completeness"] = float(d["completeness"]) if d["completeness"] is not None else None
         out.append(d)
     return out
+
+
+@router.patch("/social-audit/{platform}")
+def set_social_profile(platform: str, payload: SocialProfileUpdate,
+                       business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
+    """Manually set / correct the owned profile for a platform -- the owner pasting the RIGHT URL when
+    auto-discovery picked a wrong same-name page (e.g. facebook.com/TheTeamUnstoppable ->
+    /realteamunstoppable). Marks it source='manual', confidence='confirmed' so the discovery
+    no-downgrade guard never overwrites it on a later audit."""
+    plat = (platform or "").strip().lower()
+    if not plat:
+        raise HTTPException(status_code=400, detail="platform required")
+    url = (payload.profile_url or "").strip() or None
+    exists = bool(url) and payload.exists
+    conn.execute(
+        'INSERT INTO social_presence (business_id, platform, "exists", profile_url, '
+        "confidence, source, last_checked_at) VALUES (%s,%s,%s,%s,'confirmed','manual',now()) "
+        "ON CONFLICT (business_id, platform) DO UPDATE SET "
+        '"exists"=EXCLUDED."exists", profile_url=EXCLUDED.profile_url, '
+        "confidence='confirmed', source='manual', last_checked_at=now()",
+        (business_id, plat, exists, url))
+    conn.commit()
+    return {"ok": True, "platform": plat, "profile_url": url, "source": "manual", "confidence": "confirmed"}
 
 
 @router.get("/task-impact")
@@ -523,6 +1099,52 @@ def edit_draft(
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Draft can't be edited (already approved/published, or nothing to change)")
     return {"updated": draft_id}
+
+
+def _draft_body(conn, draft_id: int, business_id: int) -> str:
+    """Load a draft's body, scoped to the business (404 if it isn't theirs)."""
+    row = conn.execute(
+        "SELECT body FROM content_drafts WHERE id=%s AND business_id=%s",
+        (draft_id, business_id)).fetchone()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Draft not found")
+    return row["body"] or ""
+
+
+class AiEditRequest(BaseModel):
+    instruction: str
+
+
+@router.post("/content-drafts/{draft_id}/ai-edit")
+def ai_edit_draft(
+    draft_id: int,
+    body: AiEditRequest,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Edit-with-AI: apply the operator's instruction to the draft via the budget-gated verified
+    orchestrator, returning the rewritten text. Does NOT save -- the operator reviews it, then
+    saves over the draft with the normal edit (so the human gate + compliance stay in charge)."""
+    text = _draft_body(conn, draft_id, business_id)
+    res = _ca.ai_edit(business_id, text, body.instruction)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "edit failed")
+    return res
+
+
+@router.post("/content-drafts/{draft_id}/ai-humanize")
+def ai_humanize_draft(
+    draft_id: int,
+    business_id: int = Depends(require_business_editor),
+    conn=Depends(get_conn),
+):
+    """Humanize-with-AI: rewrite the draft to read more human (preserving meaning/facts/structure)
+    via the budget-gated verified orchestrator. Returns the rewritten text; does NOT auto-save."""
+    text = _draft_body(conn, draft_id, business_id)
+    res = _ca.humanize(business_id, text)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "humanize failed")
+    return res
 
 
 class ApproveRequest(BaseModel):

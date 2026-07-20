@@ -62,13 +62,10 @@ def _entrenchment(conn, business_id: int) -> dict:
     """Grade 0..1 (higher = more entrenched = slower). Built from the latest run:
     contested-mention rate, how many distinct sources carry the contested framing,
     and how authoritative/repeated those citations are."""
-    run = conn.execute(
-        "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-        "ORDER BY id DESC LIMIT 1", (business_id,),
-    ).fetchone()
-    if not run:
+    from . import audit_runs
+    rid = audit_runs.latest_display_run(conn, business_id)
+    if rid is None:
         return {"grade": 0.5, "basis": "no audit yet -- assumed moderate", "contested_rate": None}
-    rid = run["id"]
     row = conn.execute(
         "SELECT AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested_rate, "
         "COUNT(*) n FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (rid,),
@@ -136,7 +133,8 @@ def _observed_velocity(conn, business_id: int) -> dict:
     None until there are >=2 completed runs. This is the strongest predictor once
     available and should dominate the estimate."""
     runs = conn.execute(
-        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+        "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
+        "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' "
         "ORDER BY id ASC", (business_id,),
     ).fetchall()
     if len(runs) < 2:
@@ -174,11 +172,11 @@ def estimate(business_id: int, quiet: bool = False) -> dict:
         # current alignment (start point)
         cur = vel.get("current_alignment")
         if cur is None:
-            run = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                               "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
-            if run:
+            from . import audit_runs
+            _rid = audit_runs.latest_display_run(conn, business_id)
+            if _rid:
                 v = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s "
-                                 "AND NOT COALESCE(failed,false)", (run["id"],)).fetchone()["g"]
+                                 "AND NOT COALESCE(failed,false)", (_rid,)).fetchone()["g"]
                 cur = float(v) if v is not None else 0.0
             else:
                 cur = 0.0

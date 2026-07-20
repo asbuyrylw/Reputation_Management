@@ -4,12 +4,24 @@
 // isolated per tenant.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "./api";
+import { apiFetch, apiUpload } from "./api";
 import { useAuth } from "./auth";
 import type {
+  PageSpeed,
+  Advisor,
+  IndexHealth,
+  DataSources,
+  RichMediaList,
+  ContentTypeCatalogue,
+  CustomContentResult,
+  ReputationSignals,
+  RichMediaDraft,
+  CostDashboard,
+  SourceDocument,
   AdminUser,
   Asset,
   AuditRun,
+  ContentBrief,
   Answer,
   BillingPlan,
   SubscriptionSummary,
@@ -26,6 +38,9 @@ import type {
   VisibilityTrend,
   Competitor,
   ContentDraft,
+  ContentBatch,
+  ContentImpactRow,
+  GapCompletion,
   ContentOptimizationStatus,
   Dashboard,
   DiscoveryTarget,
@@ -55,6 +70,7 @@ import type {
   TaskImpact,
   WorkOrder,
   Roadmap,
+  StrategyView,
   SocialAudit,
   ConnectionsResponse,
   ZerniaSetup,
@@ -173,6 +189,12 @@ export function useGapModel(businessId: number | null) {
   return useApiQuery<GapModel | null>(["gap-model", businessId], businessId ? `/businesses/${businessId}/gap-model` : null);
 }
 
+// The detailed strategy view (3 sections, per-gap approach + tasks + content specs) rendered by
+// the Strategy page. Assembled server-side from the gap model + work orders + piece briefs.
+export function useStrategy(businessId: number | null) {
+  return useApiQuery<StrategyView>(["strategy", businessId], businessId ? `/businesses/${businessId}/strategy` : null);
+}
+
 export function useSocialPresence(businessId: number | null) {
   return useApiQuery<Record<string, { exists: boolean | null; profile_url: string | null; confidence: string | null }>>(
     ["social-presence", businessId],
@@ -201,6 +223,17 @@ export function useAuditSocials(businessId: number | null) {
   });
 }
 
+// Manually set / correct an owned social profile URL. The server marks it source='manual' so a
+// later re-audit never overwrites it. Invalidates the social audit so the row updates immediately.
+export function useSetSocialProfile(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ platform, profile_url }: { platform: string; profile_url: string }) =>
+      apiFetch(`/businesses/${businessId}/social-audit/${encodeURIComponent(platform)}`, { method: "PATCH", body: { profile_url } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["social-audit", businessId] }),
+  });
+}
+
 // ---- content / work ----
 export function useWorkOrders(businessId: number | null) {
   return useApiQuery<WorkOrder[]>(["work-orders", businessId], businessId ? `/businesses/${businessId}/work-orders` : null);
@@ -219,6 +252,31 @@ export function useTeam(businessId: number | null) {
 
 export function useContentDrafts(businessId: number | null) {
   return useApiQuery<ContentDraft[]>(["content-drafts", businessId], businessId ? `/businesses/${businessId}/content-drafts` : null);
+}
+
+// Gap-driven content batches (multiple types per gap) + their measured impact.
+export function useContentBatches(businessId: number | null) {
+  return useApiQuery<ContentBatch[]>(["content-batches", businessId], businessId ? `/businesses/${businessId}/content-batches` : null);
+}
+export function useGapCompletion(businessId: number | null) {
+  return useApiQuery<GapCompletion[]>(["gap-completion", businessId], businessId ? `/businesses/${businessId}/gap-completion` : null);
+}
+export function useContentImpact(businessId: number | null) {
+  return useApiQuery<ContentImpactRow[]>(["content-impact", businessId], businessId ? `/businesses/${businessId}/content-impact` : null);
+}
+// Kick off multi-type content generation for a gap (or every open gap). Invalidates batches + jobs.
+export function useGenerateContentBatch(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { gap_key?: string; max_gaps?: number; content_types?: string[] }) =>
+      apiFetch(`/businesses/${businessId}/content-batches/generate`, { method: "POST", body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["content-batches", businessId] });
+      qc.invalidateQueries({ queryKey: ["gap-completion", businessId] });
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+      qc.invalidateQueries({ queryKey: ["advisor", businessId] });  // predictions depend on produced content
+    },
+  });
 }
 
 // Is NeuronWriter content-optimization wired up for this business? `configured` means a key
@@ -300,6 +358,31 @@ export function useSetupBusiness() {
   });
 }
 
+// The owner-editable business profile (geo/services/goal/contested_terms/industry/firm_type) — the
+// same fields onboarding captured, editable AFTER setup without needing admin. PATCH /businesses/{id};
+// invalidates the business list + dashboard so the new profile flows everywhere.
+export interface BusinessProfilePatch {
+  name?: string;
+  domain?: string;
+  services?: string;
+  industry?: string;
+  goal?: string;
+  contested_terms?: string;
+  geo?: string;
+  firm_type?: string;
+}
+export function useUpdateBusinessProfile(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: BusinessProfilePatch) =>
+      apiFetch(`/businesses/${businessId}`, { method: "PATCH", body: patch }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["businesses"] });
+      qc.invalidateQueries({ queryKey: ["dashboard", businessId] });
+    },
+  });
+}
+
 export function useApproveDraft(businessId: number | null) {
   return useApiMutation<{ draftId: number; override_reason?: string }>(
     ({ draftId }) => `/businesses/${businessId}/content-drafts/${draftId}/approve`,
@@ -332,6 +415,84 @@ export function useRejectDraft(businessId: number | null) {
   );
 }
 
+// ---- brand writing styles (cloned from a URL; the active one shapes generation) ----
+export interface WritingStyle {
+  id: number; name: string; source_url: string | null; profile: string | null;
+  active: boolean; created_at: string;
+}
+export function useWritingStyles(businessId: number | null) {
+  return useApiQuery<{ styles: WritingStyle[] }>(["writing-styles", businessId], base(businessId, "/writing-styles"));
+}
+export function useAnalyzeWritingStyle(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ url, name }: { url: string; name?: string }) =>
+      apiFetch<{ ok: boolean; id: number }>(`/businesses/${businessId}/writing-styles/analyze`, { method: "POST", body: { url, name: name ?? null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
+  });
+}
+export function useSetActiveStyle(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (style_id: number | null) =>
+      apiFetch(`/businesses/${businessId}/writing-styles/active`, { method: "PATCH", body: { style_id } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
+  });
+}
+export function useDeleteWritingStyle(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (style_id: number) =>
+      apiFetch(`/businesses/${businessId}/writing-styles/${style_id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
+  });
+}
+
+// ---- Katteb content-scoring layer ----
+export function useKattebCredits(businessId: number | null) {
+  return useApiQuery<{ configured: boolean; ok?: boolean; credits_available?: number; credits_total?: number; plan_tier?: string }>(
+    ["katteb-credits", businessId], base(businessId, "/katteb/credits"));
+}
+
+// Kick off a Katteb SEO + competitor analysis for a draft (~1000 credits, runs as a job). Poll the
+// drafts list afterward; quality_notes.katteb appears when it finishes. Invalidates jobs (banner).
+export function useAnalyzeSeo(businessId: number | null) {
+  return useApiMutation<{ draftId: number }>(
+    ({ draftId }) => `/businesses/${businessId}/drafts/${draftId}/analyze-seo`,
+    () => ({}),
+    [["jobs", businessId], ["content-drafts", businessId], ["katteb-credits", businessId]],
+  );
+}
+
+// Humanize-with-AI: rewrite the draft to read more human via the budget-gated verified
+// orchestrator (synchronous). Returns the rewritten text; the caller decides whether to save it.
+export function useHumanizeDraft(businessId: number | null) {
+  return useMutation({
+    mutationFn: (draftId: number) =>
+      apiFetch<{ ok: boolean; rewritten_text: string }>(
+        `/businesses/${businessId}/content-drafts/${draftId}/ai-humanize`, { method: "POST", body: {} }),
+  });
+}
+
+// Edit-with-AI: apply a plain-language instruction to the draft ("make it shorter", "add a FAQ",
+// "warmer tone") via the budget-gated orchestrator. Returns the rewritten text; caller saves it.
+export function useAiEditDraft(businessId: number | null) {
+  return useMutation({
+    mutationFn: ({ draftId, instruction }: { draftId: number; instruction: string }) =>
+      apiFetch<{ ok: boolean; rewritten_text: string }>(
+        `/businesses/${businessId}/content-drafts/${draftId}/ai-edit`, { method: "POST", body: { instruction } }),
+  });
+}
+
+// Fact-check one claim from a draft (~100 credits, synchronous). Returns verdict + references.
+export function useFactcheckClaim(businessId: number | null) {
+  return useMutation({
+    mutationFn: ({ draftId, claim }: { draftId: number; claim: string }) =>
+      apiFetch<{ ok: boolean; verdict: string; is_fact: boolean; explanation: string; references: { url?: string; title?: string }[]; credits_charged: number }>(
+        `/businesses/${businessId}/drafts/${draftId}/factcheck`, { method: "POST", body: { claim } }),
+  });
+}
+
 // Atomize a long-form draft into per-platform social posts (stored as human-gated drafts).
 export function useAtomizeDraft(businessId: number | null) {
   return useApiMutation<{ draftId: number }>(
@@ -342,17 +503,38 @@ export function useAtomizeDraft(businessId: number | null) {
 }
 
 export function useAddWorkOrder(businessId: number | null) {
-  return useApiMutation<{ title: string; instruction?: string; recommended_tool?: string; target_date?: string }>(
+  return useApiMutation<{ title: string; instruction?: string; recommended_tool?: string; target_date?: string; capability?: string; gap_source?: string; source_query?: string; area?: string; why_helps_ai_rep?: string; why_helps_seo?: string }>(
     () => `/businesses/${businessId}/work-orders`,
     (v) => ({
       title: v.title,
       instruction: v.instruction ?? null,
       recommended_tool: v.recommended_tool ?? null,
       target_date: v.target_date ?? null,
+      capability: v.capability ?? null,
+      gap_source: v.gap_source ?? null,
+      source_query: v.source_query ?? null,
+      area: v.area ?? null,
+      why_helps_ai_rep: v.why_helps_ai_rep ?? null,
+      why_helps_seo: v.why_helps_seo ?? null,
     }),
     [["work-orders", businessId], ["dashboard", businessId]],
   );
 }
+// The deterministic content SPEC for a to-produce piece (keywords/length/readability/structure/gap),
+// shown before drafting. woId null -> not fetched (lazy, on expand).
+export function useContentBrief(businessId: number | null, woId: number | null) {
+  return useApiQuery<ContentBrief>(["content-brief", businessId, woId],
+    businessId && woId ? `/businesses/${businessId}/work-orders/${woId}/brief` : null);
+}
+
+// Gap-grounded prompt suggestion for "Add a visual" — prefills the prompt() dialog with what this
+// task is actually supposed to convey, instead of a blank box. Lazy: only fetched once the panel
+// is opened (the `enabled`-style null-path gate on useApiQuery).
+export function useVisualBrief(businessId: number | null, woId: number | null) {
+  return useApiQuery<{ prompt: string }>(["visual-brief", businessId, woId],
+    businessId && woId ? `/businesses/${businessId}/work-orders/${woId}/visual-brief` : null);
+}
+
 export function useSetWorkOrderStatus(businessId: number | null) {
   return useApiMutation<{ woId: number; status: string; assignee?: string; notes?: string; completed_on?: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/status`,
@@ -384,32 +566,28 @@ export function useGenerateDraftForWo(businessId: number | null) {
   return useApiMutation<{ woId: number }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/generate-draft`,
     () => ({}),
-    [["jobs", businessId], ["content-drafts", businessId]],
+    [["jobs", businessId], ["content-drafts", businessId], ["advisor", businessId]],
   );
 }
 
 // Promote a recommendation ("Do this next") onto the managed "Improvement tasks" board,
 // capturing owner + start/due dates + an optional first progress note.
-export function usePromoteWorkOrder(businessId: number | null) {
-  return useApiMutation<{ woId: number; assignee?: string; assignee_user_id?: number | null; start_date?: string; target_date?: string; note?: string }>(
-    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/promote`,
-    ({ assignee, assignee_user_id, start_date, target_date, note }) => ({
-      assignee: assignee ?? null,
-      assignee_user_id: assignee_user_id ?? null,
-      start_date: start_date ?? null,
-      target_date: target_date ?? null,
-      note: note ?? null,
-    }),
-    [["work-orders", businessId], ["dashboard", businessId]],
-  );
-}
-
 // Append a progress note to a managed task's timeline.
 export function useAddWorkOrderNote(businessId: number | null) {
   return useApiMutation<{ woId: number; text: string }>(
     ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/note`,
     ({ text }) => ({ text }),
     [["work-orders", businessId]],
+  );
+}
+
+// Persist a task's per-step checklist (array of {text, done}) — the owner ticking off sub-steps.
+export function useSetSubtasks(businessId: number | null) {
+  return useApiMutation<{ woId: number; subtasks: { text: string; done: boolean }[] }>(
+    ({ woId }) => `/businesses/${businessId}/work-orders/${woId}/subtasks`,
+    ({ subtasks }) => ({ subtasks }),
+    [["work-orders", businessId]],
+    "PATCH",
   );
 }
 
@@ -790,6 +968,18 @@ export function useAdminUsers() {
   });
 }
 
+// Admin itemized cost dashboard. Omit businessId for system-wide; pass one to scope to a tenant.
+export function useCostDashboard(days = 30, businessId?: number | null) {
+  const { user } = useAuth();
+  const qs = new URLSearchParams({ days: String(days) });
+  if (businessId) qs.set("business_id", String(businessId));
+  return useQuery({
+    queryKey: ["admin-costs", days, businessId ?? null],
+    queryFn: () => apiFetch<CostDashboard>(`/admin/costs?${qs.toString()}`),
+    enabled: !!user,
+  });
+}
+
 export function useCreateUser() {
   return useApiMutation<{ email: string; password: string; full_name?: string; role: string }>(
     () => "/admin/users",
@@ -947,6 +1137,126 @@ export function useIngestSignal(businessId: number | null) {
 // ---- connections vault ----
 export function useConnections(businessId: number | null) {
   return useApiQuery<ConnectionsResponse>(["connections", businessId], base(businessId, "/connections"));
+}
+
+// ---- Chrome "Reply Assist" extension tokens ----
+export interface ExtensionToken {
+  id: number;
+  label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export function useExtensionTokens(businessId: number | null) {
+  return useApiQuery<{ tokens: ExtensionToken[] }>(["extension-tokens", businessId], base(businessId, "/extension-tokens"));
+}
+
+// Mint a new token. The raw token is only ever returned here, once — the caller must show/copy
+// it immediately (nothing later can retrieve it; only the hash is stored server-side).
+export function useCreateExtensionToken(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (label: string) =>
+      apiFetch<{ ok: boolean; id: number; token: string; created_at: string }>(
+        `/businesses/${businessId}/extension-tokens`, { method: "POST", body: { label } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["extension-tokens", businessId] }),
+  });
+}
+
+export function useRevokeExtensionToken(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tokenId: number) =>
+      apiFetch(`/businesses/${businessId}/extension-tokens/${tokenId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["extension-tokens", businessId] }),
+  });
+}
+
+// ---- Computer-use citation/directory-listing builder ----
+export interface CitationDirectory {
+  key: string;
+  label: string;
+  url: string;
+  has_credentials: boolean;
+}
+
+export interface CitationRunStep {
+  step: number;
+  screenshot: string;
+  action: Record<string, unknown> | null;
+  note?: string;
+}
+
+export interface CitationRun {
+  id: number;
+  business_id: number;
+  work_order_id: number | null;
+  directory_key: string;
+  status: "running" | "awaiting_confirmation" | "done" | "failed" | "cancelled";
+  steps: CitationRunStep[];
+  pending_action: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useCitationDirectories(businessId: number | null) {
+  return useApiQuery<{ configured: boolean; directories: CitationDirectory[] }>(
+    ["citation-directories", businessId], base(businessId, "/citation-directories"));
+}
+
+export function useSetDirectoryCredentials(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ directoryKey, username, password }: { directoryKey: string; username: string; password: string }) =>
+      apiFetch(`/businesses/${businessId}/citation-directories/${directoryKey}/credentials`,
+        { method: "PUT", body: { username, password } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["citation-directories", businessId] }),
+  });
+}
+
+export function useCitationRuns(businessId: number | null) {
+  return useApiQuery<{ runs: CitationRun[] }>(["citation-runs", businessId], base(businessId, "/citation-runs"));
+}
+
+export function useCitationRun(businessId: number | null, runId: number | null) {
+  return useApiQuery<CitationRun>(["citation-run", businessId, runId],
+    businessId != null && runId != null ? `/businesses/${businessId}/citation-runs/${runId}` : null);
+}
+
+export function useStartCitationRun(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ directoryKey, workOrderId }: { directoryKey: string; workOrderId?: number }) =>
+      apiFetch<{ ok: boolean; run_id: number; status: string }>(`/businesses/${businessId}/citation-runs`,
+        { method: "POST", body: { directory_key: directoryKey, work_order_id: workOrderId ?? null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["citation-runs", businessId] }),
+  });
+}
+
+export function useConfirmCitationRun(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: number) =>
+      apiFetch(`/businesses/${businessId}/citation-runs/${runId}/confirm`, { method: "POST" }),
+    onSuccess: (_d, runId) => {
+      qc.invalidateQueries({ queryKey: ["citation-run", businessId, runId] });
+      qc.invalidateQueries({ queryKey: ["citation-runs", businessId] });
+    },
+  });
+}
+
+export function useCancelCitationRun(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: number) =>
+      apiFetch(`/businesses/${businessId}/citation-runs/${runId}/cancel`, { method: "POST" }),
+    onSuccess: (_d, runId) => {
+      qc.invalidateQueries({ queryKey: ["citation-run", businessId, runId] });
+      qc.invalidateQueries({ queryKey: ["citation-runs", businessId] });
+    },
+  });
 }
 
 // Start an OAuth flow (GBP only) — returns the provider authorize URL the caller redirects to.
@@ -1222,7 +1532,7 @@ export function useDraftVisuals(businessId: number | null, draftId: number | nul
 // so the progress banner picks it up + the visuals lists so it shows once the job finishes.
 export function useGenerateVisual(businessId: number | null) {
   return useApiMutation<{
-    kind: "image" | "quote_card" | "video_brief";
+    kind: "image" | "quote_card" | "video_brief" | "video";
     prompt?: string;
     text?: string;
     attribution?: string;
@@ -1584,4 +1894,185 @@ export function useLlmsTxt(businessId: number | null) {
 }
 export function useSchemaVerify(businessId: number | null) {
   return useApiQuery<SchemaVerify>(["schema-verify", businessId], base(businessId, "/schema-verify"));
+}
+
+// =====================================================================================
+// PageSpeed / Core Web Vitals (technical-SEO layer) + PDCA Strategy Advisor.
+// =====================================================================================
+
+// Latest Lighthouse + Core Web Vitals scores for owned (+ competitor) URLs, rollup, technical gaps.
+export function usePageSpeed(businessId: number | null) {
+  return useApiQuery<PageSpeed>(["pagespeed", businessId], base(businessId, "/pagespeed"));
+}
+
+// Grade owned URLs now (enqueues the ingest_pagespeed job). Needs PAGESPEED_API_KEY for live scores.
+export function useRunPageSpeed(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body?: { urls?: string[]; strategy?: string }) =>
+      apiFetch<{ enqueued: boolean }>(`/businesses/${businessId}/pagespeed/run`, {
+        method: "POST",
+        body: body ?? {},
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pagespeed", businessId] }),
+  });
+}
+
+// The PDCA strategy advisor: goal + per-gap progress + impact predictions + recommended next content.
+// llm=false skips the LLM briefing for a faster response.
+export function useAdvisor(businessId: number | null, llm = true) {
+  return useApiQuery<Advisor>(
+    ["advisor", businessId, llm],
+    businessId ? `/businesses/${businessId}/advisor?llm=${llm ? "true" : "false"}` : null,
+  );
+}
+
+// ---- Brand guardrails + source material (content grounding) ----
+export function useBrandGuardrails(businessId: number | null) {
+  return useApiQuery<{ brand_guardrails: string }>(["brand-guardrails", businessId], base(businessId, "/brand-guardrails"));
+}
+export function useSetBrandGuardrails(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (brand_guardrails: string) => apiFetch<{ ok: boolean }>(`/businesses/${businessId}/brand-guardrails`, { method: "PUT", body: { brand_guardrails } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["brand-guardrails", businessId] }),
+  });
+}
+export function useSourceDocuments(businessId: number | null) {
+  return useApiQuery<{ documents: SourceDocument[] }>(["source-docs", businessId], base(businessId, "/source-documents"));
+}
+// Auto-ingest the client's own website into the grounding corpus (crawls the site, extracts each
+// page's main text into source_documents). Async job: new docs appear once the worker finishes.
+export function useSyncWebsiteMaterial(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch(`/businesses/${businessId}/jobs/ingest_source_material`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+      qc.invalidateQueries({ queryKey: ["source-docs", businessId] });
+    },
+  });
+}
+export function useAddSourceDoc(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { title?: string; content: string; source_url?: string }) =>
+      apiFetch<{ id: number }>(`/businesses/${businessId}/source-documents`, { method: "POST", body: { ...body, source_type: body.source_url ? "url" : "note" } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
+  });
+}
+export function useUploadSourceDoc(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => apiUpload<{ id: number; title: string; chars: number }>(`/businesses/${businessId}/source-documents/upload`, file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
+  });
+}
+export function useDeleteSourceDoc(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (docId: number) => apiFetch<{ deleted: number }>(`/businesses/${businessId}/source-documents/${docId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["source-docs", businessId] }),
+  });
+}
+
+// ---- Create content (user-initiated generation) ----
+export function useContentTypes(businessId: number | null) {
+  return useApiQuery<ContentTypeCatalogue>(["content-types", businessId], base(businessId, "/content-types"));
+}
+export function useCreateContent(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { content_type: string; description: string; title?: string; gap_key?: string; gap_label?: string; aspect_ratio?: string }) =>
+      apiFetch<CustomContentResult>(`/businesses/${businessId}/custom-content`, { method: "POST", body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["content-drafts", businessId] });
+      qc.invalidateQueries({ queryKey: ["rich-media", businessId] });
+      qc.invalidateQueries({ queryKey: ["visuals", businessId] });
+      qc.invalidateQueries({ queryKey: ["work-orders", businessId] });
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+    },
+  });
+}
+
+// Stored reputation signals (DataForSEO): brand mentions + cross-platform reviews, between audits.
+export function useReputationSignals(businessId: number | null) {
+  return useApiQuery<ReputationSignals>(["reputation-signals", businessId], base(businessId, "/reputation-signals"));
+}
+
+// GSC full-surface: per-page index status + canonical loss + schema validity + crawl reasons.
+export function useIndexHealth(businessId: number | null) {
+  return useApiQuery<IndexHealth>(["index-health", businessId], base(businessId, "/index-health"));
+}
+
+// Live status of every data source powering the new features (connected / needs-key / needs-connection).
+export function useDataSources(businessId: number | null) {
+  return useApiQuery<DataSources>(["data-sources", businessId], base(businessId, "/data-sources"));
+}
+
+// Rich-media gallery feed: podcast / deck / infographic / explainer / long-form drafts.
+export function useRichMediaDrafts(businessId: number | null, opts?: { type?: string; status?: string }) {
+  const qs = new URLSearchParams();
+  if (opts?.type) qs.set("asset_type", opts.type);
+  if (opts?.status) qs.set("status_filter", opts.status);
+  const q = qs.toString();
+  return useApiQuery<RichMediaList>(
+    ["rich-media", businessId, opts?.type ?? "", opts?.status ?? ""],
+    businessId ? `/businesses/${businessId}/rich-media-drafts${q ? `?${q}` : ""}` : null,
+  );
+}
+
+// One rich-media draft with its full body + transcript (for the viewer modal).
+export function useRichMediaDraft(businessId: number | null, draftId: number | null) {
+  return useApiQuery<RichMediaDraft>(
+    ["rich-media-draft", businessId, draftId],
+    businessId && draftId ? `/businesses/${businessId}/rich-media-drafts/${draftId}` : null,
+  );
+}
+
+export function useApproveRichMedia(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: number) => apiFetch<{ status: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/approve`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rich-media", businessId] }),
+  });
+}
+
+export function useRejectRichMedia(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: number) => apiFetch<{ status: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/reject`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rich-media", businessId] }),
+  });
+}
+
+// Render a REAL MP4 for an explainer-video/video-script draft via HeyGen (dormant until the owner
+// sets HEYGEN_API_KEY + HEYGEN_AVATAR_ID — the job returns {skipped} otherwise).
+export function useRenderRichMediaVideo(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    // provider: undefined -> server default (HeyGen verbatim); "heygen_agent" -> v3 Video Agent
+    // (produced: B-roll + motion graphics, non-verbatim); "veo" -> Google generative clip/B-roll.
+    mutationFn: ({ draftId, provider }: { draftId: number; provider?: "heygen" | "heygen_agent" | "veo" }) =>
+      apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/render-video`, { method: "POST", body: provider ? { provider } : {} }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["rich-media", businessId] }); qc.invalidateQueries({ queryKey: ["visuals", businessId] }); },
+  });
+}
+
+// Publish a rendered video visual to the owner's YouTube channel (dormant until YouTube is connected).
+export function usePublishVisualYouTube(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (visualId: number) => apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/visuals/${visualId}/publish-youtube`, { method: "POST", body: { privacy: "unlisted" } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+  });
+}
+
+// Submit the owned-content feed to Google as a sitemap (faster discovery). Needs a live GSC connection.
+export function useSubmitSitemap(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<{ ok?: boolean; skipped?: boolean }>(`/businesses/${businessId}/sitemaps/submit`, { method: "POST", body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["index-health", businessId] }),
+  });
 }

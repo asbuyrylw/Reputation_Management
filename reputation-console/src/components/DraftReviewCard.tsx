@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Card, Badge, Input } from "./ui";
 import { StatusBadge } from "@/components/content/StatusBadge";
 import { ComplianceNotice } from "@/components/content/ComplianceNotice";
 import { DraftImageGallery } from "@/components/content/DraftImageGallery";
-import { useApproveDraft, useEditDraft, useRejectDraft, useAtomizeDraft } from "@/lib/hooks";
+import { MarkdownBody } from "./MarkdownBody";
+import { useApproveDraft, useEditDraft, useRejectDraft, useAtomizeDraft, usePublishChannels } from "@/lib/hooks";
 import type { BadgeTone } from "./ui";
 import type { ContentDraft, DraftNeuron } from "@/lib/types";
 
@@ -46,15 +48,22 @@ const G_CHIP: Record<"good" | "amber" | "alert", string> = {
 // keyword density, and search-intent shape. A scannable chip strip that expands to the detail +
 // the specific fixes, so a reviewer can grade a draft the way NeuronWriter grades a page.
 function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> }) {
-  const { structure, aeo, readability, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
-  if (!structure && !aeo && !readability && !term && !intent) return null;
+  const { structure, aeo, geo, serp, readability, distinctiveness: distinct, term_coverage: term, keyword_density: density, intent_serp: intent } = qn;
+  if (!structure && !aeo && !geo && !serp && !readability && !distinct && !term && !intent) return null;
+  const geoWeak = (geo?.checks ?? []).filter((c) => !c.ok);
   const chips = [
+    geo && typeof geo.score === "number" && { k: "GEO", v: `${geo.score}/100`, tone: gTone(geo.score) },
+    !serp?.skipped && typeof serp?.score === "number" && { k: "vs SERP", v: `${serp.score}/100`, tone: gTone(serp.score) },
     structure && { k: "Structure", v: `${structure.score}/100`, tone: gTone(structure.score) },
     aeo && { k: "AEO", v: `${aeo.score}/100`, tone: gTone(aeo.score) },
+    distinct && typeof distinct.score === "number" && { k: "Distinctiveness", v: `${distinct.score}/100`, tone: gTone(distinct.score) },
     readability?.grade != null && { k: "Readability", v: `grade ${readability.grade}`, tone: (readability.grade <= 10 ? "good" : readability.grade <= 12 ? "amber" : "alert") as "good" | "amber" | "alert" },
     term?.covered_pct != null && { k: "SERP terms", v: `${term.covered_pct}%`, tone: gTone(term.covered_pct) },
   ].filter(Boolean) as { k: string; v: string; tone: "good" | "amber" | "alert" }[];
-  const fixes = [...(structure?.issues ?? []), ...(aeo?.tips ?? []), ...(readability?.issues ?? []), ...(density?.issues ?? [])];
+  const distinctFix = distinct && distinct.score < 80 && distinct.fix
+    ? [{ label: `Generic phrasing (${distinct.tells} AI-slop tells: ${(distinct.examples ?? []).slice(0, 4).join(", ")})`, fix: distinct.fix }]
+    : [];
+  const fixes = [...(structure?.issues ?? []), ...(aeo?.tips ?? []), ...distinctFix, ...(readability?.issues ?? []), ...(density?.issues ?? [])];
 
   return (
     <details className="mt-2 rounded-[12px] border border-line bg-paper/60 p-2.5 text-xs">
@@ -63,9 +72,49 @@ function GradesPanel({ qn }: { qn: NonNullable<ContentDraft["quality_notes"]> })
         {chips.map((c) => (
           <span key={c.k} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${G_CHIP[c.tone]}`}>{c.k} {c.v}</span>
         ))}
+        {geo?.content_type && <span className="rounded-full bg-line/60 px-2 py-0.5 text-[10px] font-semibold uppercase text-ink-3">{geo.content_type.replace(/_/g, " ")}</span>}
         {intent && <span className="rounded-full bg-indigo-050 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-strong">{intent.intent}</span>}
       </summary>
       <div className="mt-2.5 space-y-3">
+        {/* GEO — the citability grade (weighted for this content type) + the top fixes */}
+        {geo && typeof geo.score === "number" && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">
+              GEO citability · {geo.score}/100 · {geo.band}{geo.suggested_schema ? ` · schema ${geo.suggested_schema}` : ""}
+            </div>
+            {geo.note ? (
+              <div className="text-ink-3">{geo.note}</div>
+            ) : geoWeak.length > 0 ? (
+              <div className="space-y-1">
+                {geoWeak.slice(0, 5).map((c) => (
+                  <div key={c.label} className="flex items-start gap-2">
+                    <span className="grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full bg-line-2 text-[9px] text-ink-4">○</span>
+                    <span className="flex-1 text-ink-3">{c.fix || c.label}</span>
+                    <span className="font-mono text-ink-4">{c.points}/{c.max}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="text-good">All citability checks pass ✓</div>}
+          </div>
+        )}
+        {/* SERP benchmark — how the draft stacks up against the pages actually ranking */}
+        {serp && !serp.skipped && (
+          <div>
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-4">
+              vs. ranking pages · {serp.covered_pct ?? "—"}% term coverage · {serp.our_words} words{serp.target_words ? ` (target ~${serp.target_words})` : ""}{serp.in_range === false ? " · thin ✗" : ""}
+            </div>
+            {(serp.terms_missing?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {serp.terms_missing!.slice(0, 14).map((t) => (
+                  <span key={t} className="rounded-full bg-alert-bg px-1.5 py-0.5 text-[10px] text-alert">✗ {t}</span>
+                ))}
+              </div>
+            )}
+            {(serp.competitors?.length ?? 0) > 0 && (
+              <div className="mt-1.5 text-ink-4">Ranking: {serp.competitors!.slice(0, 3).map((c) => `${(c.title || c.link || "").slice(0, 32)}${c.words ? ` (${c.words}w)` : ""}`).join(" · ")}</div>
+            )}
+          </div>
+        )}
         {/* AEO — will an AI quote this? per-pillar */}
         {aeo && aeo.pillars.length > 0 && (
           <div>
@@ -192,12 +241,15 @@ export function DraftReviewCard({
   const [editTitle, setEditTitle] = useState(draft.title || "");
   const [editBody, setEditBody] = useState(draft.body || "");
   const approve = useApproveDraft(businessId);
+  const { data: channels } = usePublishChannels(businessId);
+  const pubConnected = (channels ?? []).filter((c) => c.connected);
+  const pubUnconnected = (channels ?? []).filter((c) => !c.connected);
   const reject = useRejectDraft(businessId);
   const edit = useEditDraft(businessId);
   const atomize = useAtomizeDraft(businessId);
   const body = draft.body || "";
   const long = body.length > 400;
-  const pending = draft.status === "pending_review" || draft.status === "needs_fix";
+  const pending = draft.status === "pending_review" || draft.status === "needs_fix" || draft.status === "held";
   // Long-form pieces (not already a social post) can be atomized into per-platform social drafts.
   const atomizable = long && !(draft.asset_type || "").endsWith("_post");
   const flags = Array.isArray(draft.compliance_flags) ? draft.compliance_flags : [];
@@ -215,6 +267,10 @@ export function DraftReviewCard({
   const factCheck = draft.quality_notes?.fact_check;
   // NeuronWriter SERP content score — only present when content-optimization is configured.
   const neuron = draft.quality_notes?.neuron;
+  // Grounding-coverage advisory (warning-only): shown for thin/ungrounded topics so the owner can add
+  // source material. grounded/unknown stay silent. Never affects approval — purely informational.
+  const coverage = draft.quality_notes?.coverage_advisory;
+  const showCoverage = coverage && (coverage.status === "ungrounded" || coverage.status === "thin");
   const scoreTone = (s: number) => (s >= 80 ? "text-good" : s >= 60 ? "text-amber" : "text-alert");
   // "Why this helps" — derived from the question it targets + the work-order instruction.
   const whyHelps = draft.target_query
@@ -226,7 +282,7 @@ export function DraftReviewCard({
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-ink px-1.5 py-0.5 text-xs font-medium text-white">{draft.asset_type}</span>
+        <span className="rounded bg-ink px-1.5 py-0.5 text-xs font-medium text-white">{(draft.asset_type ?? "").replace(/_/g, " ")}</span>
         <StatusBadge status={draft.status} />
         {q && <span className={`text-xs font-medium ${q.cls}`}>Quality: {q.label}</span>}
         {neuron && <NeuronGauge neuron={neuron} />}
@@ -282,9 +338,11 @@ export function DraftReviewCard({
           {draft.target_query && (
             <div className="text-xs text-ink-3">Answers the question: “{draft.target_query}”</div>
           )}
-          <p className="mt-1 whitespace-pre-wrap text-sm text-ink-2">
-            {open || !long ? body : body.slice(0, 400) + "…"}
-          </p>
+          {open || !long ? (
+            <MarkdownBody text={body} className="mt-1 text-sm text-ink-2" />
+          ) : (
+            <p className="mt-1 whitespace-pre-wrap text-sm text-ink-2">{body.slice(0, 400) + "…"}</p>
+          )}
           {long && (
             <button onClick={() => setOpen((o) => !o)} className="mt-1 text-xs text-indigo hover:underline">
               {open ? "Show less" : "Show full draft"}
@@ -306,6 +364,18 @@ export function DraftReviewCard({
           <ul className="list-disc pl-5">
             {added.map((a, i) => <li key={i}>{a?.note || a?.type || "compliance edit"}</li>)}
           </ul>
+        </ComplianceNotice>
+      )}
+
+      {/* grounding-coverage advisory — warning-only; the draft was still generated, this just flags
+          that it wasn't backed by the client's source material and points to how to fix it */}
+      {showCoverage && coverage && (
+        <ComplianceNotice tone="info" className="mt-2"
+          title={coverage.status === "ungrounded" ? "Generated without supporting facts" : "Thin source material for this topic"}>
+          <div>{coverage.note}</div>
+          <Link href="/content/source" className="mt-1 inline-block font-semibold text-amber hover:underline">
+            Add source material →
+          </Link>
         </ComplianceNotice>
       )}
 
@@ -411,6 +481,18 @@ export function DraftReviewCard({
       <DraftImageGallery businessId={businessId} draftId={draft.id} markers={draft.quality_notes?.image_markers ?? []} canEdit={canEdit} />
 
       {whyHelps && <p className="mt-2 text-xs text-ink-3">💡 {whyHelps}</p>}
+      {/* Phase 1 — the specific gap this piece traces back to, so a reviewer sees WHAT it fixes. */}
+      {(draft.gap_specifics?.source_query || draft.gap_source || draft.why_helps_ai_rep || draft.why_helps_seo) && (
+        <div className="mt-2 rounded-[10px] border border-line bg-paper/60 px-2.5 py-1.5 text-[11px] text-ink-3">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">Closes gap</span>
+          {draft.gap_specifics?.source_query && <> · fixes the answer to <b className="text-ink-2">“{draft.gap_specifics.source_query}”</b></>}
+          {draft.gap_source && <> · from <span className="text-ink-2">{draft.gap_source}</span></>}
+          <div className="mt-0.5 flex flex-wrap gap-x-3">
+            {draft.why_helps_ai_rep && <span>🤖 {draft.why_helps_ai_rep}</span>}
+            {draft.why_helps_seo && <span>🔍 {draft.why_helps_seo}</span>}
+          </div>
+        </div>
+      )}
 
       {/* Phase-5 atomization — turn this long-form piece into per-platform social posts (human-gated) */}
       {canEdit && atomizable && (
@@ -466,6 +548,17 @@ export function DraftReviewCard({
             Send back
           </button>
           <span className="text-xs text-ink-4">Approving adds it to your published content.</span>
+        </div>
+      )}
+      {canEdit && pending && !rejecting && !editing && channels && channels.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="font-medium text-ink-3">Publishes to:</span>
+          {pubConnected.length > 0 ? pubConnected.map((c) => (
+            <span key={c.channel} className="rounded bg-good-bg px-1.5 py-0.5 font-medium text-good">✓ {c.label}</span>
+          )) : <span className="text-ink-4">no channels connected yet</span>}
+          {pubUnconnected.map((c) => (
+            <Link key={c.channel} href="/integrations" className="rounded bg-line/60 px-1.5 py-0.5 text-ink-4 hover:text-indigo hover:underline">{c.label} — connect</Link>
+          ))}
         </div>
       )}
       {canEdit && pending && rejecting && !editing && (

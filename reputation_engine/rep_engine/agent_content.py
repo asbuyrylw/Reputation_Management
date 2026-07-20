@@ -35,23 +35,51 @@ from langgraph.types import Command, interrupt
 try:
     from . import agent_tools as tools
     from . import content_generator as _cg
+    from . import rich_media_generator as _rmg
     from .db import db
 except ImportError:  # pragma: no cover -- loose-script fallback
     import agent_tools as tools  # type: ignore
     import content_generator as _cg  # type: ignore
+    import rich_media_generator as _rmg  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("agent_content")
 
 MAX_ASSETS = int(os.getenv("REMEDIATION_MAX_ASSETS", "6"))
-_CHANNELS = {"article", "social_post", "landing_page", "video_script"}
+_CHANNELS = {
+    # Standard LLM-generated channels
+    "article", "social_post", "landing_page", "video_script",
+    # NotebookLM API products (multi-source synthesis) + in-house LLM long-form
+    "podcast", "slide_deck", "infographic", "explainer_video",
+    "research_brief", "deep_article", "blog_series", "newsletter",
+}
+# Subset routed to rich_media_generator (NotebookLM API or LLM fallback with
+# multi-source corpus context) rather than the single-source LLM draft path.
+_RICH_MEDIA_CHANNELS = {
+    "podcast", "slide_deck", "infographic", "explainer_video",
+    "research_brief", "deep_article", "blog_series", "newsletter",
+}
 
 PLAN_SYSTEM = (
     "You are a reputation content strategist. Given a root-cause + gap brief, plan a small, high-impact "
     "multi-channel remediation BUNDLE (<=6 assets) that crowds out the contested narrative with accurate, "
     "OWNED content. Respond with ONE minified JSON object and nothing else: "
-    '{"assets":[{"channel":"article|social_post|landing_page|video_script","platform":"(social only: '
-    'reddit|x|facebook|linkedin|instagram, else null)","title":"..","topic":"..","keywords":[".."]}]}'
+    '{"assets":[{"channel":"<channel>","platform":"(social only: '
+    'reddit|x|facebook|linkedin|instagram, else null)","title":"..","topic":"..","keywords":[".."]}]}\n'
+    "Available channels:\n"
+    "  Standard (single-source LLM): article, social_post, landing_page, video_script.\n"
+    "  NotebookLM API products (synthesise ALL audit/gap/competitor sources into one asset):\n"
+    "    podcast         — two-host AI Audio Overview (MP3 + transcript)\n"
+    "    slide_deck      — executive 10-12 slide deck brief from study-guide synthesis\n"
+    "    infographic     — FAQ-based infographic content brief for a designer\n"
+    "    explainer_video — video script skeleton from multi-source study guide\n"
+    "    research_brief  — PR/journalist briefing doc from audit + competitor data\n"
+    "    deep_article    — long-form 1 500-2 500 word thought-leadership article\n"
+    "    blog_series     — three related blog post outlines with keyword targets\n"
+    "    newsletter      — monthly client newsletter brief from audit insights\n"
+    "Include at least one NotebookLM product (podcast, slide_deck, or research_brief) "
+    "whenever the gap shows contested claims or thin corroboration that benefits from "
+    "synthesising multiple sources."
 )
 
 DRAFT_SYSTEM = (
@@ -60,6 +88,8 @@ DRAFT_SYSTEM = (
     "and questions). For social_post: short and platform-appropriate. For landing_page: a headline plus a "
     "few sections. For video_script: a short spoken script. Never fabricate and never make compliance-risky "
     "claims (guarantees of results, '#1'/'best', 'risk-free'). Output ONLY the asset body as plain text."
+    + tools.LICENSE_CONTENT_POLICY
+    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 LINKS_SYSTEM = (
@@ -115,11 +145,33 @@ def _node_draft(state: RemState) -> dict:
     for a in state.get("plan", [])[:MAX_ASSETS]:
         if tools.over_budget(state["business_id"]):
             break
+        channel = a.get("channel", "")
+
+        # NotebookLM product channels: route to rich_media_generator, which assembles
+        # multi-source corpus context (audit answers, gap model, competitor data) before
+        # calling the NotebookLM API or its in-house LLM fallback. Drafts land in
+        # rich_media_drafts as pending_review (same human-gate requirement as below).
+        if channel in _RICH_MEDIA_CHANNELS:
+            try:
+                ids = _rmg.generate(state["business_id"], [channel])
+            except Exception as exc:
+                log.warning("agent_content: rich_media %s failed: %s", channel, exc)
+                ids = []
+            for rid in ids:
+                drafts.append({
+                    "id": rid, "channel": channel,
+                    "title": a.get("title", channel.replace("_", " ").title()),
+                    "compliance_pass": None, "status": "pending_review",
+                })
+            continue
+
+        # Standard channels: single-source LLM draft → deterministic+LLM compliance gate
+        # → content_drafts as pending_review.
         try:
             body = tools.llm_text(
                 DRAFT_SYSTEM,
                 json.dumps({"business": biz.get("name"), "goal": biz.get("goal"),
-                            "channel": a.get("channel"), "platform": a.get("platform"),
+                            "channel": channel, "platform": a.get("platform"),
                             "title": a.get("title"), "topic": a.get("topic"),
                             "keywords": a.get("keywords")}),
                 business_id=state["business_id"], tier="mid", max_tokens=1500,
@@ -134,10 +186,10 @@ def _node_draft(state: RemState) -> dict:
             row = conn.execute(
                 "INSERT INTO content_drafts (business_id, asset_type, title, body, compliance_pass, "
                 "compliance_flags, status) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (state["business_id"], a.get("channel"), a.get("title"), body, comp.get("pass"),
+                (state["business_id"], channel, a.get("title"), body, comp.get("pass"),
                  json.dumps(comp.get("flags", [])), status)).fetchone()
             conn.commit()
-        drafts.append({"id": row["id"], "channel": a.get("channel"), "title": a.get("title"),
+        drafts.append({"id": row["id"], "channel": channel, "title": a.get("title"),
                        "compliance_pass": comp.get("pass"), "status": status})
     return {"drafts": drafts}
 

@@ -74,7 +74,7 @@ export function WorstAnswers({
       const wo = hit && "wo" in hit ? hit.wo : hit;
       if (wo && "id" in wo) return `/content/work-orders#wo-${wo.id}`;
     }
-    return "/next-steps";
+    return "/content/work-orders";
   };
 
   return (

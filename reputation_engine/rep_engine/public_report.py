@@ -36,8 +36,8 @@ def public_summary(business_id: int) -> dict:
         if not b:
             return {"found": False}
         run = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL AND status='complete' "
-            "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND status='complete' ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
         ga = None
         if run:
             r = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s AND "

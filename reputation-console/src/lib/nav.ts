@@ -35,13 +35,17 @@ export const HUBS: Hub[] = [
       { href: "/seo", label: "Site health" },
     ],
   },
+  // Gap Analysis and Strategy are DISTINCT but aligned: the gap analysis is "what's wrong, where,
+  // impact" (analysis only); the strategy is "what we'll do about it -> tasks". Two hubs, no route
+  // moves -- /gaps and /strategy already exist.
   {
-    key: "plan", label: "Your problems & plan", opLabel: "Strategy & Plan", href: "/strategy",
+    key: "gaps", label: "Your gaps", opLabel: "Gap Analysis", href: "/gaps", tabs: [],
+  },
+  {
+    key: "plan", label: "Your strategy & plan", opLabel: "Strategy", href: "/strategy",
     tabs: [
       { href: "/strategy", label: "Overview" },
-      { href: "/gaps", label: "What's hurting you", opLabel: "Gaps" },
-      { href: "/content/work-orders", label: "Improvement tasks", opLabel: "Tasks" },
-      { href: "/next-steps", label: "Recommendations" },
+      { href: "/content/work-orders", label: "Tasks" },
       { href: "/timeline", label: "Time to goal" },
       { href: "/social", label: "Social" },
     ],
@@ -50,10 +54,14 @@ export const HUBS: Hub[] = [
     key: "content", label: "Getting it done", opLabel: "Content", href: "/content",
     tabs: [
       { href: "/content", label: "Overview" },
+      { href: "/content/performance", label: "Performance" },
       { href: "/content/briefs", label: "To produce" },
       { href: "/content/drafts", label: "Drafts" },
+      { href: "/content/media", label: "Media" },
       { href: "/content/finalized", label: "Published" },
-      { href: "/approvals", label: "Approvals" },
+      { href: "/content/library", label: "Library" },
+      { href: "/content/calendar", label: "Calendar" },
+      { href: "/content/source", label: "Source material" },
       { href: "/content/outreach", label: "Outreach" },
     ],
   },
@@ -61,8 +69,12 @@ export const HUBS: Hub[] = [
     key: "monitor", label: "Watch live", opLabel: "Monitor", href: "/notifications",
     tabs: [
       { href: "/notifications", label: "Attention", opLabel: "Notifications" },
+      // Approvals are responses to monitored pages (reviews/mentions/posts) → they live here.
+      { href: "/approvals", label: "Approvals" },
       { href: "/sustain/mentions", label: "Mentions" },
       { href: "/sustain/incidents", label: "Incidents" },
+      // Content impact = the measured effect of published content on each gap → a monitoring view.
+      { href: "/content/batches", label: "Content impact" },
     ],
   },
   {
@@ -87,6 +99,7 @@ export const HUBS: Hub[] = [
     key: "admin", label: "Admin", href: "/admin/jobs", adminOnly: true,
     tabs: [
       { href: "/admin/jobs", label: "Run jobs" },
+      { href: "/admin/costs", label: "Costs" },
       { href: "/admin/users", label: "Users" },
       { href: "/admin/businesses", label: "Businesses" },
     ],

@@ -31,6 +31,12 @@ def autopost_global_enabled() -> bool:
     return _truthy_env("AUTOPOST_GLOBAL_ENABLED", "false")
 
 
+def pressranger_enabled() -> bool:
+    """PressRanger press-release task-linking (default OFF until the Claude MCP is set up).
+    While off, the 'Corroborate' task instruction stays generic instead of naming PressRanger."""
+    return _truthy_env("PRESSRANGER_ENABLED", "false")
+
+
 # Secret-bearing patterns -> REDACTED. Broader than http._redact (which only scrubs URL query
 # params): this also catches bare bearer/basic tokens, app-password fields, and Fernet ciphertext
 # shapes that might appear in a provider error body we persist.

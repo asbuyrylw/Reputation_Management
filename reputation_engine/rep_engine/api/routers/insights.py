@@ -101,6 +101,115 @@ def ga_channels(business_id: int = Depends(authorize_business)):
     return _ga().channels(business_id)
 
 
+def _ps():
+    try:
+        from ... import pagespeed as p
+    except ImportError:  # pragma: no cover
+        import pagespeed as p  # type: ignore
+    return p
+
+
+@router.get("/pagespeed")
+def pagespeed(business_id: int = Depends(authorize_business)):
+    """Latest PageSpeed / Core Web Vitals scores for owned (+ competitor) URLs, a rollup, and the
+    structured technical-SEO gaps that feed the gap model + advisor. Dormant-safe: returns
+    {has_data:false} until the ingest_pagespeed job has graded pages (needs PAGESPEED_API_KEY)."""
+    p = _ps()
+    out = p.latest(business_id)
+    out["technical_gaps"] = p.technical_gaps(business_id)
+    out["configured"] = p.configured()
+    return out
+
+
+@router.get("/data-sources")
+def data_sources(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
+    """Live status of every data source that powers the new features, so the UI can show
+    connected / needs-key / needs-connection instead of silently-empty cards. Env-key features
+    (PageSpeed, keyword volume) report a `configured` bool; OAuth features report whether an active
+    connection exists + the property. Read-only; never raises."""
+    def _conn(kind: str):
+        try:
+            r = conn.execute("SELECT account_ref, meta, updated_at FROM platform_connections WHERE "
+                             "business_id=%s AND kind=%s AND status='active' ORDER BY id DESC LIMIT 1",
+                             (business_id, kind)).fetchone()
+        except Exception:  # noqa: BLE001
+            conn.rollback(); return {"connected": False}
+        if not r:
+            return {"connected": False}
+        meta = r.get("meta") or {}
+        return {"connected": True, "property": meta.get("gsc_property") or meta.get("ga_property") or r.get("account_ref"),
+                "synced_at": r["updated_at"].isoformat() if r.get("updated_at") else None}
+    try:
+        from ... import pagespeed as _ps_m, keyword_research as _kr, dataforseo as _dfs
+    except ImportError:  # pragma: no cover
+        import pagespeed as _ps_m; import keyword_research as _kr; import dataforseo as _dfs  # type: ignore
+    # DataForSEO powers competitor keyword intel + brand mentions/sentiment + cross-platform reviews.
+    # Report configured + whether ingest has actually STORED anything yet (so the card says
+    # "connected, last synced …" rather than a bare configured flag).
+    dfs_configured = _dfs.configured()
+    dfs_ment = _dfs.latest_mentions(business_id) if dfs_configured else None
+    dfs_revs = _dfs.latest_reviews(business_id) if dfs_configured else []
+    try:
+        comp_gaps = conn.execute("SELECT COUNT(*) c FROM target_keywords WHERE business_id=%s AND "
+                                 "source='dataforseo_competitor'", (business_id,)).fetchone()["c"]
+    except Exception:  # noqa: BLE001
+        conn.rollback(); comp_gaps = 0
+    return {
+        "google_search_console": {**_conn("google_search_console"), "unlocks": "real rankings, clicks & index/canonical health"},
+        "google_analytics": {**_conn("google_analytics"), "unlocks": "traffic & conversions per published page"},
+        "pagespeed": {"configured": _ps_m.configured(), "env_key": "PAGESPEED_API_KEY", "unlocks": "Core Web Vitals & technical-SEO grades"},
+        "keyword_volume": {"configured": _kr.volume_configured(), "env_key": "KEYWORD_VOLUME_PROVIDER + DataForSEO/KeywordsEverywhere", "unlocks": "real search volume, difficulty & CPC"},
+        "dataforseo": {"configured": dfs_configured, "env_key": "DATAFORSEO_LOGIN + DATAFORSEO_PASSWORD",
+                       "competitor_gaps": comp_gaps, "has_mentions": bool(dfs_ment),
+                       "review_platforms": [r["platform"] for r in dfs_revs],
+                       "synced_at": (dfs_ment or {}).get("created_at") if dfs_ment else (dfs_revs[0]["created_at"] if dfs_revs else None),
+                       "unlocks": "competitor keyword gaps, brand mentions & cross-platform reviews"},
+    }
+
+
+@router.get("/reputation-signals")
+def reputation_signals(business_id: int = Depends(authorize_business)):
+    """Stored off-audit reputation signals (DataForSEO): latest brand-mention volume + sentiment and
+    the latest review ratings per platform. Powers the console reputation panel; empty until the
+    dataforseo_intel / dataforseo_reviews ingest jobs have run. Never raises."""
+    try:
+        from ... import dataforseo as _dfs
+    except ImportError:  # pragma: no cover
+        import dataforseo as _dfs  # type: ignore
+    return {"mentions": _dfs.latest_mentions(business_id), "reviews": _dfs.latest_reviews(business_id)}
+
+
+class PageSpeedRun(BaseModel):
+    urls: Optional[list[str]] = None
+    strategy: Optional[str] = None
+
+
+@router.post("/pagespeed/run")
+def pagespeed_run(body: PageSpeedRun, business_id: int = Depends(require_business_editor)):
+    """Grade owned (+ competitor) URLs now — enqueues the ingest_pagespeed job (each URL ~30-60s, so
+    it runs in the background). Needs PAGESPEED_ENABLED + a PAGESPEED_API_KEY for live scores."""
+    try:
+        from .. import jobs as _jobs
+    except ImportError:  # pragma: no cover
+        import api.jobs as _jobs  # type: ignore
+    args = {k: v for k, v in {"urls": body.urls, "strategy": body.strategy}.items() if v}
+    job = _jobs.enqueue(business_id, "ingest_pagespeed", args=args or None)
+    return {"enqueued": True, "job": job}
+
+
+@router.get("/advisor")
+def advisor(llm: bool = True, business_id: int = Depends(authorize_business)):
+    """The PDCA strategy advisor: the goal + per-gap progress (DO/CHECK) + impact predictions +
+    the specific recommended next content (ACT), synthesized from the gap model, content batches,
+    measured impact, and the GA/GSC/PageSpeed/keyword-demand signals. Pass llm=false to skip the
+    LLM briefing (deterministic fallback) for a faster response."""
+    try:
+        from ... import strategy_advisor as _sa
+    except ImportError:  # pragma: no cover
+        import strategy_advisor as _sa  # type: ignore
+    return _sa.advise(business_id, with_narrative=llm)
+
+
 @router.get("/our-content-impact")
 def our_content_impact(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     """Causal proof loop (Wave 1 item 3): for content WE published, did it start earning search
@@ -275,6 +384,39 @@ def indexing_status(business_id: int = Depends(authorize_business)):
     return _ix.check_index_status(business_id)
 
 
+def _gi():
+    try:
+        from ... import gsc_inspect as g
+    except ImportError:  # pragma: no cover
+        import gsc_inspect as g  # type: ignore
+    return g
+
+
+@router.get("/index-health")
+def index_health(business_id: int = Depends(authorize_business)):
+    """GSC full-surface URL Inspection: per-owned-page index status + canonical loss (Google prefers a
+    different URL) + structured-data/schema validity + crawl/fetch reason codes, plus a rollup and the
+    structured technical gaps that feed the gap model + advisor. Dormant-safe: {has_data:false} until
+    the index_own_content job has inspected pages (needs a live GSC connection)."""
+    g = _gi()
+    out = g.latest(business_id)
+    out["technical_gaps"] = g.technical_gaps(business_id)
+    return out
+
+
+@router.get("/sitemaps")
+def gsc_sitemaps(business_id: int = Depends(authorize_business)):
+    """Submitted sitemaps + per-sitemap submitted/indexed/warning/error counts (GSC Sitemaps resource)."""
+    return _gi().sitemaps(business_id)
+
+
+@router.post("/sitemaps/submit")
+def gsc_submit_sitemap(business_id: int = Depends(require_business_editor)):
+    """Submit our owned-content feed to Google for faster discovery (complements IndexNow, which
+    Google ignores). Needs a live GSC connection + PUBLIC_APP_ORIGIN."""
+    return _gi().submit_content_feed(business_id)
+
+
 @router.get("/answer-changes")
 def answer_changes(business_id: int = Depends(authorize_business)):
     """Material changes in what AI says about you, run-over-run (Wave 4, item 17)."""
@@ -364,6 +506,19 @@ def gap_model(business_id: int = Depends(authorize_business), conn=Depends(get_c
         (business_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+@router.get("/strategy")
+def strategy(business_id: int = Depends(authorize_business)):
+    """The detailed, per-section strategy the console's Strategy page renders: three areas
+    (AI Visibility / SEO / Search), each with the gaps it closes, the approach to close each, the
+    tasks doing it, and the concrete content specs to produce. Assembled from the existing gap
+    model + work orders + piece briefs (no new LLM work)."""
+    try:
+        from ... import strategy_generator as _sg
+    except ImportError:  # pragma: no cover
+        import strategy_generator as _sg  # type: ignore
+    return _sg.strategy_view(business_id)
 
 
 @router.get("/report-view")
@@ -488,8 +643,9 @@ def seo_keywords(business_id: int = Depends(authorize_business), conn=Depends(ge
     Produced by the keyword_research job (LLM seed + Serper grounding). Distinct from
     /keywords, which is the brand-monitoring keyword list."""
     rows = conn.execute(
-        "SELECT keyword, kind, source, intent, priority, rationale FROM target_keywords "
-        "WHERE business_id=%s ORDER BY priority DESC NULLS LAST, keyword",
+        "SELECT keyword, kind, source, intent, priority, rationale, "
+        "search_volume, keyword_difficulty, cpc FROM target_keywords "
+        "WHERE business_id=%s ORDER BY search_volume DESC NULLS LAST, priority DESC NULLS LAST, keyword",
         (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]

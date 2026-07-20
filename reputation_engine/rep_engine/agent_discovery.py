@@ -162,7 +162,10 @@ def _node_qualify(state: DiscState) -> dict:
             json.dumps({"business": biz.get("name"), "industry": biz.get("services"),
                         "geo": biz.get("geo"), "goal": biz.get("goal"),
                         "coverage": tools.fence(json.dumps(raw[:40], default=str))}),
-            business_id=state["business_id"], tier="cheap", operation="discovery_qualify")
+            business_id=state["business_id"], tier="cheap", operation="discovery_qualify",
+            # targets[] is an UNBOUNDED list of ~8-field objects; the 2000-token default truncated
+            # a rich result mid-JSON -> unparseable -> {} -> zero outreach targets. Give it headroom.
+            max_tokens=5000, timeout=180)
     except tools.BudgetExceededError:
         return {"rounds": rounds, "notes": state.get("notes", []) + ["qualify stopped (over budget)"]}
     targets = res.get("targets") if isinstance(res, dict) else None

@@ -107,12 +107,28 @@ def _ensure_schema_built() -> None:
     command.upgrade(cfg, "head")
 
 
+@functools.lru_cache(maxsize=1)
+def _truncatable_tables(dsn: str) -> tuple[str, ...]:
+    """EVERY user table in the test DB (from the live catalog), except alembic_version. Derived from
+    the catalog rather than the hand-kept _ALL_TABLES so a migration that adds a table can't silently
+    leave it un-truncated between tests -- that drift caused real cross-test contamination (a prior
+    test's active source_documents row leaking, because business ids restart at 1 each test)."""
+    import psycopg
+    with psycopg.connect(dsn) as c:
+        rows = c.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' "
+            "AND tablename <> 'alembic_version' ORDER BY tablename").fetchall()
+    names = tuple(r[0] for r in rows)
+    return names or tuple(_ALL_TABLES)   # fall back to the static list if the catalog query is empty
+
+
 @pytest.fixture()
-def fresh_schema(conn):
+def fresh_schema(conn, db_dsn):
     """Ensure the schema exists (built once via Alembic) and truncate all tables
     between tests for isolation."""
     _ensure_schema_built()
+    tables = _truncatable_tables(db_dsn)
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE " + ", ".join(_ALL_TABLES) + " RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE " + ", ".join(f'"{t}"' for t in tables) + " RESTART IDENTITY CASCADE")
         conn.commit()
     return conn

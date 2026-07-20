@@ -141,30 +141,45 @@ def _handle_segment(url: str) -> str:
     return ""
 
 
-def _search_profile(name: str, platform: str, domains: list, name_tokens: list, need: int) -> str | None:
+def _handle_score(handle: str, name_tokens: list) -> int:
+    """Higher = the handle is a closer match to the business name. Rewards containing every name
+    token and the full concatenated name (an EXACT handle beats a longer same-name variant such as a
+    fan/parody page); a mild penalty for lots of extra characters."""
+    h = (handle or "").lower()
+    concat = "".join(name_tokens)
+    contained = sum(1 for t in name_tokens if t in h)
+    exact = 3 if h == concat else (2 if concat and concat in h else 0)
+    extra = max(0, len(h) - len(concat))
+    return contained * 2 + exact - (1 if extra > 6 else 0)
+
+
+def _search_profile(name: str, platform: str, domains: list, name_tokens: list, need: int) -> tuple:
     """Budget-gated web-search inference of a profile URL (used only when the website didn't link it).
-    Strict to avoid false positives: rejects CONTENT urls (posts/videos/photos) and requires a
-    business-name token to appear in the actual handle, not merely in the result title."""
+    SCORES every plausible candidate by handle-vs-name similarity and picks the BEST -- not the first
+    search result. Returns (url, ambiguous): ambiguous=True when 2+ DISTINCT same-name profiles tie
+    for the top score (e.g. facebook.com/TheTeamUnstoppable vs /realteamunstoppable), so the caller
+    flags it for owner confirmation instead of silently trusting search rank."""
     try:
         results = tools.web_search(f"{name} {platform}", limit=8)
     except Exception:  # noqa: BLE001
-        return None
+        return None, False
+    cands = []
     for r in results:
-        url = (r.get("url") or "")
-        low = url.lower()
-        if not any(d in low for d in domains):
+        clean = _is_profile_url(r.get("url") or "", domains, name_tokens)
+        if not clean:
             continue
-        if any(s in low for s in _NON_PROFILE) or any(s in low for s in _CONTENT_PATHS):
-            continue  # a share widget or a piece of content, not a profile
-        handle = _handle_segment(url)
+        handle = _handle_segment(clean)
         if not handle or handle in ("home", "feed", "search", "explore"):
             continue
-        # require a real name token IN THE HANDLE (handles vary, so token-substring); this is what
-        # rejects "facebook.com/AtlantaPoliceDpt/..." matching on a stray "team" in the title.
-        if name_tokens and not any(t in handle for t in name_tokens):
-            continue
-        return url.split("?")[0]
-    return None
+        cands.append((_handle_score(handle, name_tokens), handle, clean))
+    if not cands:
+        return None, False
+    cands.sort(key=lambda x: x[0], reverse=True)
+    top = cands[0]
+    # ambiguous: another candidate with a DIFFERENT handle scores as high as the top -> we can't tell
+    # them apart from the name alone; ask the owner rather than pick the search-rank winner.
+    ambiguous = any(c[1] != top[1] and c[0] >= top[0] for c in cands[1:])
+    return top[2], ambiguous
 
 
 def _is_profile_url(url: str, domains: list, name_tokens: list) -> str | None:
@@ -189,12 +204,12 @@ def _harvest_audit_citations(business_id: int, name_tokens: list) -> dict:
     real profiles (e.g. facebook.com/TheTeamUnstoppable) and avoids false 'create a profile you
     already have' tasks. Same profile/content/handle filtering; best (cleanest) URL per platform."""
     with db() as conn:
-        run = conn.execute("SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
-                           "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
-        if not run:
+        from . import audit_runs
+        rid = audit_runs.latest_display_run(conn, business_id)
+        if rid is None:
             return {}
         rows = conn.execute("SELECT cited_sources FROM answers WHERE run_id=%s "
-                            "AND cited_sources IS NOT NULL", (run["id"],)).fetchall()
+                            "AND cited_sources IS NOT NULL", (rid,)).fetchall()
     best: dict = {}
     for row in rows:
         for c in (row["cited_sources"] or []):
@@ -251,12 +266,13 @@ def discover(business_id: int) -> dict:
             out[platform] = {"exists": True, "url": cited[platform], "source": "citation",
                              "confidence": "verified", "signals": {}}
             continue
-        url = None
+        url, ambiguous = (None, False)
         if not tools.over_budget(business_id):
-            url = _search_profile(name, platform, domains, name_tokens, need)
+            url, ambiguous = _search_profile(name, platform, domains, name_tokens, need)
         out[platform] = {"exists": bool(url), "url": url,
                          "source": "search" if url else "none",
-                         "confidence": "inferred" if url else "unknown", "signals": {}}
+                         "confidence": ("ambiguous" if (url and ambiguous)
+                                        else ("inferred" if url else "unknown")), "signals": {}}
 
     gbp = _gbp_signal(name, geo)
     out["gbp"] = ({"exists": True, "url": None, "source": "serper", "confidence": "verified",
@@ -306,7 +322,8 @@ def _assess(business: dict, discovered: dict) -> dict:
     payload = json.dumps({"business": {k: business.get(k) for k in ("name", "domain", "services",
                           "goal", "geo")}, "discovered": discovered}, default=str)
     try:
-        res = orchestrator_json(_AUDIT_SYSTEM, payload, tier="cheap", max_tokens=2500, timeout=120)
+        res = orchestrator_json(_AUDIT_SYSTEM, payload, tier="cheap", max_tokens=2500, timeout=120,
+                                bill={"business_id": business.get("id"), "operation": "social_audit"})
     except Exception as e:  # noqa: BLE001
         log.warning("social audit LLM unavailable (%s); using heuristic fallback", e)
         res = {}
@@ -346,6 +363,11 @@ def run(business_id: int, quiet: bool = False) -> dict:
             'SELECT platform, "exists" AS exists, profile_url, source, confidence FROM '
             "social_presence WHERE business_id=%s", (business_id,)).fetchall()}
         for platform, d in discovered.items():
+            # A user-CONFIRMED profile (source='manual') is authoritative: never let auto-discovery
+            # overwrite it. Without this, re-running the audit deterministically re-picks the same
+            # wrong same-name page and clobbers the owner's correction.
+            if (prior.get(platform) or {}).get("source") == "manual":
+                continue
             if not d.get("exists") and d.get("source") == "none":
                 p = prior.get(platform)
                 if p and p.get("exists"):

@@ -170,7 +170,7 @@ def score_run_batched(business_id: int, run_id: Optional[int] = None) -> int:
             return 0
         if run_id is None:
             r = conn.execute(
-                "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL "
+                "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
                 "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
             run_id = r["id"] if r else None
         if not run_id:
@@ -188,13 +188,20 @@ def score_run_batched(business_id: int, run_id: Optional[int] = None) -> int:
         for ans in answers:
             score = _extract_score(out.get(f"ans-{ans['id']}"))
             if score is None:
+                # Genuine scoring failure: mark the row failed so it is EXCLUDED from metrics. A
+                # non-failed row with NULL metrics is silently counted as not-contested / not-owned,
+                # biasing the Wilson rates downward (the inline scoring path also fails such rows).
+                conn.execute("UPDATE answers SET failed=true WHERE id=%s", (ans["id"],))
                 continue
             conn.execute(
                 "UPDATE answers SET sentiment=%s, goal_alignment=%s, mentions_contested=%s, "
-                "surfaces_owned=%s, awareness=%s, entity_confusion=%s WHERE id=%s",
+                "surfaces_owned=%s, awareness=%s, entity_confusion=%s, key_sources=%s, missing=%s "
+                "WHERE id=%s",
                 (score.get("sentiment"), score.get("goal_alignment"),
                  bool(score.get("mentions_contested")), bool(score.get("surfaces_owned")),
-                 score.get("awareness"), bool(score.get("entity_confusion")), ans["id"]))
+                 score.get("awareness"), bool(score.get("entity_confusion")),
+                 json.dumps(score.get("key_sources") or []), json.dumps(score.get("missing") or []),
+                 ans["id"]))
             updated += 1
         conn.commit()
     log.info("batch-scored %d/%d answers for run %s", updated, len(answers), run_id)

@@ -68,6 +68,13 @@ CAPABILITIES = [
     "social_publishing", "press_outreach", "media_list_building", "link_building",
     "review_generation", "ai_visibility_tracking", "form_capture", "visitor_tracking",
     "schema_markup", "course_microsite",
+    # Rich-media capabilities (NotebookLM API + in-house LLM fallback path)
+    "podcast_creation",    # Audio Overview: two-host AI podcast from audit data
+    "slide_deck",          # Executive slide-deck brief from study-guide synthesis
+    "infographic",         # Infographic content brief from FAQ synthesis
+    "explainer_video",     # Explainer-video script from multi-source synthesis
+    "research_brief",      # Deep research brief for PR / content teams
+    "deep_content",        # Long-form articles, blog series, newsletters
 ]
 
 # Registry. preference within a capability = order listed (best/most-automatable first).
@@ -120,8 +127,30 @@ TOOL_REGISTRY: list[Tool] = [
     Tool("visitortracking", "VisitorTracking.com", "visitor_tracking", Exec.SEMI, "AppSumo; site visitor ID/analytics."),
     Tool("learniverse", "Learniverse", "course_microsite", Exec.MANUAL, "AppSumo; courses (financial-literacy content asset)."),
     Tool("acadle", "Acadle", "course_microsite", Exec.MANUAL, "AppSumo; academy/community (authority asset)."),
-    Tool("notebooklm", "NotebookLM", "topic_research", Exec.MANUAL, "Free; synthesize source docs into briefs/audio."),
+    # NotebookLM (MANUAL for topic research; SEMI via API for rich-media generation)
+    Tool("notebooklm", "NotebookLM", "topic_research", Exec.MANUAL,
+         "Free (browser); synthesize source docs into briefs/audio. Use notebooklm_api for automated generation."),
     Tool("getgeni2", "Vadoo AI captions", "video_repurpose", Exec.MANUAL, "AppSumo; captions/clips."),
+
+    # --- Rich-media generation via NotebookLM API (dormant-safe; LLM fallback when no key) ---
+    Tool("notebooklm_api", "NotebookLM API", "podcast_creation", Exec.SEMI,
+         "Google NotebookLM API; Audio Overview (two-host AI podcast) from audit + gap + competitor "
+         "sources. Requires NOTEBOOKLM_API_KEY or GEMINI_API_KEY. Output: MP3 + transcript, pending_review."),
+    Tool("notebooklm_api_slides", "NotebookLM API", "slide_deck", Exec.SEMI,
+         "Google NotebookLM API; study-guide synthesis across audit sources -> 10-12 slide deck brief."),
+    Tool("notebooklm_api_infographic", "NotebookLM API", "infographic", Exec.SEMI,
+         "Google NotebookLM API; FAQ synthesis -> infographic content brief for a designer."),
+    Tool("notebooklm_api_video", "NotebookLM API", "explainer_video", Exec.SEMI,
+         "Google NotebookLM API; study-guide synthesis -> explainer-video script. Pair with a video production brief."),
+    Tool("notebooklm_api_brief", "NotebookLM API", "research_brief", Exec.SEMI,
+         "Google NotebookLM API; briefing-doc synthesis across audit/competitor sources -> PR/content research brief."),
+    # In-house LLM path for deep written content (no external key required)
+    Tool("llm_deep_content", "Engine-native LLM", "deep_content", Exec.AUTO,
+         "System generates long-form articles, blog-series outlines, and newsletter briefs via the in-house LLM path."),
+    # Veo (Google) for cinematic video generation when the Gemini/Veo key is set
+    Tool("veo", "Google Veo", "video_creation", Exec.SEMI,
+         "Google Veo (requires GEMINI_API_KEY with Veo access); short cinematic clips from the video-production "
+         "brief. Output lands in pending_review before any use."),
 ]
 
 
@@ -255,23 +284,17 @@ def predict_impact(business_id: int, capability: str) -> dict:
     basis = ""
     confidence = "low"
     if lever:
+        # ONE canonical gain source (roi_predictor.gain_for): this-client learned -> cross-client
+        # prior -> static baseline, correctly normalized to 0-100 POINTS (the old code here used *100,
+        # 2x too high, while roadmap/predict_plan used the ga value as points, ~50x too low). Routing
+        # both through gain_for makes plan-ROI and roadmap-ROI agree.
         try:
-            from . import feedback_loop as _fb, acceleration_advisor as _acc
-        except ImportError:  # pragma: no cover
-            import feedback_loop as _fb  # type: ignore
-            import acceleration_advisor as _acc  # type: ignore
-        learned = {}
-        try:
-            learned = _fb.learned_lever_weights(business_id) or {}
+            from . import roi_predictor as _roi
+            ai_points, basis, confidence = _roi.gain_for(capability, business_id)
+            if basis == "this client":
+                basis = "measured from your results"
         except Exception:  # noqa: BLE001 -- prediction must never break planning
-            learned = {}
-        if lever in learned and learned[lever] > 0:
-            gain = learned[lever]
-            basis, confidence = "measured from your results", "medium"
-        else:
-            gain = (_acc.LEVERS.get(lever, {}) or {}).get("weight", 0.0)
-            basis, confidence = "industry baseline", "low"
-        ai_points = round(gain * 100.0, 1)  # 0-1 alignment gain per unit -> 0-100 score points
+            ai_points, basis, confidence = None, "", "low"
     seo_impact = _CAPABILITY_SEO.get(capability, "—")
     # ROI = expected impact x confidence / effort. Use the AI-score points when a lever exists,
     # else the SEO points-equivalent, so structural tasks rank fairly against scored ones.
@@ -297,12 +320,20 @@ def _phase_for_week(week: int) -> str:
     return PHASES[-1][0]
 
 
-def build_work_orders(gap: dict) -> list[WorkOrder]:
+def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
+    # Media/press angles must reflect THIS business's geo + industry, never a hardcoded example.
+    biz = business or {}
+    geo = (biz.get("geo") or "").strip() or "your local area"
+    industry = (biz.get("industry") or "").strip() or "local-business"
 
-    def add(title, capability, instruction, week, deps=None, *, gap_source="", why="",
+    def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
             source="audited gap", area=None, platform="", source_query=""):
+        # Foundational Phase-0 tasks (AI-visibility baseline, GBP claim, review sequence) legitimately
+        # trace to no single gap, so they default to gap_source='baseline setup' -> the console shows
+        # "From: baseline setup" instead of a blank "why". Gap-derived add() calls pass gap_source
+        # explicitly and override this default (audit report Low-19).
         nonlocal n
         n += 1
         tool = best_tool(capability)
@@ -352,9 +383,10 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
     # --- Phase 2: corroboration (press, media list, partner, link) ---
     if gap.get("thin_corroboration"):
         add("Build local media list", "media_list_building",
-            "Assemble a Cincinnati-area finance/local-business journalist + outlet list "
-            "with angles (veteran-owned, financial literacy, community workshops).", 5,
-            gap_source="audited gap: thin corroboration")
+            f"Assemble a {geo} {industry} journalist + local-outlet list, with pitch angles drawn "
+            f"from this business's real differentiators and community involvement (what makes it "
+            f"credible and locally newsworthy).", 5,
+            gap_source="audited gap: thin corroboration", source_query="local media list")
         for i, claim in enumerate(gap.get("thin_corroboration", [])):
             c = claim.get("claim", f"claim {i+1}")
             where = claim.get("where_to_get_it", "")
@@ -362,10 +394,43 @@ def build_work_orders(gap: dict) -> list[WorkOrder]:
                 f"Secure third-party coverage/mention supporting '{c}'. Source: {where}. "
                 f"Draft pitch; route via outreach tool; human approves before send.", 6,
                 gap_source="audited gap: thin corroboration", why=c, source_query=c)
-    add("Book local/finance podcast appearances", "press_outreach",
-        "Identify 3-5 relevant local/finance podcasts; pitch the principal as guest; "
-        "each episode yields an indexed third-party positive page.", 7,
-        gap_source="audited gap: thin corroboration")
+    add(f"Book relevant podcast appearances ({industry})", "press_outreach",
+        f"Identify 3-5 relevant {geo} / {industry} podcasts; pitch the principal as guest; "
+        f"each episode yields an indexed third-party positive page.", 7,
+        gap_source="audited gap: thin corroboration", source_query="podcast appearances")
+
+    # --- Phase 2: rich-media amplification via NotebookLM API + in-house LLM ---
+    # Always emitted so the strategy surfaces every available channel. Execution is AUTO/SEMI
+    # (per TOOL_REGISTRY). Auto-runs when AGENT_RICH_MEDIA_IN_CYCLE=1, or via the "Generate draft"
+    # button (generate_for_wo routes these capabilities to rich_media_generator). Text-only types
+    # need no external key; NotebookLM types require NOTEBOOKLM_API_KEY or GEMINI_API_KEY and fall
+    # back to the in-house LLM when absent — so the whole block is dormant-safe.
+    add("Generate deep-content bundle (long-form article + blog series + newsletter)", "deep_content",
+        "rich_media_generator.generate(['deep_article','blog_series','newsletter']): engine-native LLM "
+        "writes a 1,500-2,500 word thought-leadership article, three blog-post outlines, and a "
+        "newsletter brief from audit + gap context. No external key required. Saved as pending_review.", 6,
+        gap_source="rich-media amplification", source_query="deep content bundle")
+    add("Generate AI reputation podcast (Audio Overview)", "podcast_creation",
+        "rich_media_generator.generate(['podcast']): NotebookLM Audio Overview synthesizes a two-host "
+        "AI podcast from audit answers, gap model, competitor data + strategy plan. Requires "
+        "NOTEBOOKLM_API_KEY or GEMINI_API_KEY. Output: MP3 + transcript, pending_review.", 7,
+        gap_source="rich-media amplification", source_query="reputation podcast")
+    add("Generate executive slide-deck brief", "slide_deck",
+        "rich_media_generator.generate(['slide_deck']): NotebookLM study-guide synthesis across audit "
+        "sources -> 10-12 slide executive deck brief. Falls back to in-house LLM if no key.", 8,
+        gap_source="rich-media amplification", source_query="slide deck")
+    add("Generate PR/content-team research brief", "research_brief",
+        "rich_media_generator.generate(['research_brief']): NotebookLM briefing-doc synthesis across "
+        "audit + competitor sources -> deep research brief for PR teams/journalists. LLM fallback.", 8,
+        gap_source="rich-media amplification", source_query="research brief")
+    add("Generate infographic content brief", "infographic",
+        "rich_media_generator.generate(['infographic']): NotebookLM FAQ synthesis -> structured "
+        "infographic brief for a graphic designer. Falls back to LLM if no key.", 9,
+        gap_source="rich-media amplification", source_query="infographic brief")
+    add("Generate explainer video script", "explainer_video",
+        "rich_media_generator.generate(['explainer_video']): NotebookLM study-guide synthesis -> "
+        "explainer video script skeleton (2-4 min). Pair with the video production brief. LLM fallback.", 9,
+        gap_source="rich-media amplification", source_query="explainer video script")
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
     # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks
@@ -434,8 +499,24 @@ METRICS = [
 ]
 
 
+# The gap-model arrays that carry REAL, gap-derived work. If every one is empty, build_work_orders
+# still emits baseline boilerplate (Phase-0 setup, the monthly monitor, standing outreach), so a plan
+# built from an EMPTY or failed gap model looks complete while carrying zero gap-derived work. Both
+# assemble_plan and strategy_view flag that as `degraded` from ONE definition here, so the plan JSON
+# and the console's Strategy page can't disagree about whether a strategy is real.
+_GAP_CONTENT_KEYS = ("missing_owned_content", "schema_gaps", "thin_corroboration",
+                     "surface_actions", "local_seo_gaps", "competitor_defense", "site_technical_gaps")
+
+
+def _is_degraded(gap: dict) -> bool:
+    """True when the gap model produced NO gap-derived content (baseline boilerplate only) -- the
+    signal to tell the client 'plan is degraded, re-run the gap model' rather than present setup
+    tasks as a finished strategy."""
+    return not any((gap or {}).get(k) for k in _GAP_CONTENT_KEYS)
+
+
 def assemble_plan(business: dict, gap: dict, start: date) -> dict:
-    wos = build_work_orders(gap)
+    wos = build_work_orders(gap, business)
     bid = business.get("id")
     for w in wos:
         w_start = start + timedelta(weeks=w.week)
@@ -462,6 +543,14 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
         }
     auto = [w for w in wos if w.execution == "auto"]
     human = [w for w in wos if w.execution in ("manual", "semi")]
+    # Silent-success guard (see _is_degraded / _GAP_CONTENT_KEYS above): a plan built from an EMPTY or
+    # failed gap model looks complete while carrying zero gap-derived work. Detect it from the gap
+    # model itself so the console/report can show "plan is degraded -- re-run the gap model".
+    gap_derived = [w for w in wos if (w.rationale or {}).get("gap_source", "baseline setup") != "baseline setup"]
+    degraded = _is_degraded(gap)
+    if degraded:
+        log.warning("assemble_plan business=%s: gap model produced NO gap-derived work orders "
+                    "(baseline boilerplate only) -- gap synthesis is likely empty or failed.", bid)
     return {
         "business": {k: business.get(k) for k in ("name", "domain", "goal", "geo")},
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -476,7 +565,9 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
         "phases": phases,
         "metrics": METRICS,
         "monitoring_cadence": "Monthly Module 1 audit + diff -> client progress report.",
-        "counts": {"total": len(wos), "auto": len(auto), "human": len(human)},
+        "counts": {"total": len(wos), "auto": len(auto), "human": len(human),
+                   "gap_derived": len(gap_derived)},
+        "degraded": degraded,
         "work_orders": [w.__dict__ for w in wos],
     }
 
@@ -484,6 +575,197 @@ def assemble_plan(business: dict, gap: dict, start: date) -> dict:
 # ----------------------------------------------------------------------------
 # DB + CLI
 # ----------------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------------
+# Strategy VIEW -- the detailed, per-section plan the console's Strategy page renders.
+# This is the "what we'll do and why, in detail" layer: it takes the SAME gap model + work orders
+# the plan already produced and organizes them into the three areas the owner asked for
+# (AI Visibility / SEO / Search), attaching, per gap, the approach to close it and -- for content
+# work -- the concrete spec (title, type, keywords, length, readability, where it publishes,
+# objective). No new LLM calls: everything here already exists across the gap model, the work
+# orders, and content_generator.piece_brief.
+# ----------------------------------------------------------------------------
+_SECTION_LABELS = {
+    "ai_visibility": "AI Visibility",
+    "seo": "SEO (on-site)",
+    "search": "Search (rankings)",
+}
+_SECTION_NARRATIVE = {
+    "ai_visibility": "Give the AI assistants accurate, well-corroborated facts to quote about you — "
+                     "so they answer buyer questions in your favor instead of a competitor's or a "
+                     "stale third-party page's.",
+    "seo": "Fix the on-site technical signals (schema, thin/missing pages, crawlability) so both "
+           "search engines and AI assistants can cleanly read and trust your facts.",
+    "search": "Win the Google searches your buyers actually type — local map-pack and page-1 "
+              "rankings — with geo-specific content and a strong Google Business Profile.",
+}
+_PUBLISH_TO = {
+    "local_page": "Your website — local landing page",
+    "blog": "Your website — blog",
+    "article": "Your website",
+    "faq": "Your website — FAQ",
+    "white_paper": "Your website — gated resource",
+    "landing_page": "Your website — landing page",
+    "gbp_post": "Google Business Profile",
+    "social_post": "Social media",
+    "video_script": "YouTube / social video",
+    "bio": "Your website — about/bio",
+}
+_PLATFORM_PUBLISH = {
+    "gbp": "Google Business Profile", "linkedin": "LinkedIn", "facebook": "Facebook",
+    "instagram": "Instagram", "x": "X (Twitter)", "youtube": "YouTube", "tiktok": "TikTok",
+    "pinterest": "Pinterest", "reddit": "Reddit",
+}
+
+
+def _section_for(gap_source: str | None, capability: str | None, area: str | None) -> str:
+    gs, cap, ar = (gap_source or "").lower(), (capability or "").lower(), (area or "").lower()
+    if "local search" in gs or cap in ("local_content_creation", "gbp_optimization") or ar == "local":
+        return "search"
+    if "schema" in gs or "site crawl" in gs or cap == "schema_markup":
+        return "seo"
+    return "ai_visibility"
+
+
+def _norm_q(s: str | None) -> str:
+    import re as _re
+    return _re.sub(r"\s+", " ", _re.sub(r"[^a-z0-9 ]", "", (s or "").lower())).strip()
+
+
+def _gap_approach_index(gap: dict) -> dict:
+    """source_query (normalized) -> {approach, why} pulled from the gap model, so each work-order
+    group can show HOW we close its gap (the fix/recommendation) alongside the tasks."""
+    idx: dict = {}
+    def put(q, approach, why=""):
+        k = _norm_q(q)
+        if k and k not in idx:
+            idx[k] = {"approach": approach or "", "why": why or ""}
+    for w in gap.get("weak_queries", []) or []:
+        put(w.get("prompt"), w.get("fix"), w.get("problem"))
+    for m in gap.get("missing_owned_content", []) or []:
+        put(m.get("topic"), m.get("why"), m.get("why"))
+    for t in gap.get("thin_corroboration", []) or []:
+        put(t.get("claim"), t.get("where_to_get_it"))
+    for g in gap.get("local_seo_gaps", []) or []:
+        put(g.get("query"), g.get("recommendation"), g.get("why"))
+    for g in gap.get("competitor_defense", []) or []:
+        put(g.get("query"), g.get("recommendation"), g.get("why"))
+    for g in gap.get("site_technical_gaps", []) or []:
+        put(g.get("issue"), g.get("recommendation"), g.get("why"))
+    return idx
+
+
+# Capabilities that produce an actual WRITTEN/PRODUCED piece worth a content spec (keywords, length,
+# structure). schema_markup is a developer task, not content; local goals fan out to a program (no
+# single spec) -- both are excluded so the strategy shows a spec only where a piece is really written.
+_SPEC_CAPS = {"content_writing", "video_creation"}
+_CONTENT_CAPS = {"content_writing", "local_content_creation", "video_creation", "schema_markup"}
+
+
+def strategy_view(business_id: int) -> dict:
+    """Assemble the detailed strategy the console renders: three sections, each with the gaps it
+    covers, the approach to close each, the tasks that do it, and the content specs to produce."""
+    try:
+        from . import content_generator as _cg
+        from . import grounding_coverage as _gc
+    except ImportError:  # pragma: no cover
+        import content_generator as _cg  # type: ignore
+        import grounding_coverage as _gc  # type: ignore
+    cov_sigs: list = []   # per-content-piece coverage signals (from piece_brief) -> plan rollup
+    with db() as conn:
+        gm = conn.execute(
+            "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+            (business_id,)).fetchone()
+        rows = conn.execute(
+            "SELECT id, wo_code, title, capability, instruction, status, area, platform, "
+            "target_date, predicted_ai_points, predicted_seo_impact, gap_source, gap_specifics, "
+            "why_helps_ai_rep, why_helps_seo, rationale "
+            "FROM work_orders WHERE business_id=%s AND NOT COALESCE(superseded, false) "
+            "AND status NOT IN ('done','verified','skipped') ORDER BY id", (business_id,)).fetchall()
+    gap = {} if not gm else (gm["model"] if isinstance(gm["model"], dict) else json.loads(gm["model"]))
+    approach_idx = _gap_approach_index(gap)
+
+    # Group work orders by the gap they close: (source_query) when present, else (gap_source|title).
+    groups: dict = {}
+    order: list = []
+    for w in rows:
+        w = dict(w)
+        specs_q = (w.get("gap_specifics") or {}).get("source_query") if isinstance(w.get("gap_specifics"), dict) else None
+        gkey = _norm_q(specs_q) or f"{(w.get('gap_source') or '').lower()}|{_norm_q(w.get('title'))}"
+        if gkey not in groups:
+            groups[gkey] = {"source_query": specs_q, "gap_source": w.get("gap_source"),
+                            "section": _section_for(w.get("gap_source"), w.get("capability"), w.get("area")),
+                            "tasks": [], "specs": []}
+            order.append(gkey)
+        g = groups[gkey]
+        rationale = w.get("rationale") if isinstance(w.get("rationale"), dict) else {}
+        g["tasks"].append({
+            "id": w["id"], "wo_code": w.get("wo_code"), "title": w.get("title"),
+            "status": w.get("status"), "capability": w.get("capability"), "area": w.get("area"),
+            "platform": w.get("platform"), "instruction": w.get("instruction") or "",
+            "target_date": w["target_date"].isoformat() if w.get("target_date") else None,
+            "predicted_ai_points": float(w["predicted_ai_points"]) if w.get("predicted_ai_points") is not None else None,
+            "why": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or rationale.get("why") or "",
+        })
+        # Content work orders get their concrete production spec (deterministic; no LLM).
+        if (w.get("capability") or "") in _SPEC_CAPS:
+            try:
+                b = _cg.piece_brief(business_id, w)
+                pub = _PLATFORM_PUBLISH.get((w.get("platform") or "").lower()) \
+                    or _PUBLISH_TO.get(b.get("content_type") or b.get("asset_type") or "", "Your website")
+                cov = b.get("coverage")
+                if isinstance(cov, dict):
+                    cov_sigs.append(cov)
+                g["specs"].append({
+                    "wo_id": w["id"], "title": w.get("title"),
+                    "content_type": b.get("content_type") or b.get("asset_type"),
+                    "keywords": b.get("keywords") or [], "primary_keyword": b.get("primary_keyword"),
+                    "word_count_target": b.get("word_count_target"),
+                    "readability_target": b.get("readability_target"),
+                    "structure": b.get("structure"), "publish_to": pub,
+                    "objective": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or "",
+                    "coverage": cov,   # warn-only grounding advisory for this piece's topic
+                })
+            except Exception as e:  # noqa: BLE001 -- a spec failure must never break the whole view
+                log.debug("piece_brief failed for wo %s: %s", w.get("id"), e)
+
+    # Attach the approach/why to each group and bucket into the three sections.
+    sections = {k: {"key": k, "label": _SECTION_LABELS[k], "narrative": _SECTION_NARRATIVE[k], "groups": []}
+                for k in ("ai_visibility", "seo", "search")}
+    for gkey in order:
+        g = groups[gkey]
+        appr = approach_idx.get(_norm_q(g.get("source_query")), {})
+        # The approach ("how we close this") comes from the current gap model when its wording still
+        # matches; otherwise fall back to the work order's own stored instruction, which is stable
+        # across gap-model regenerations and was itself written from the gap at creation time.
+        primary = g["tasks"][0] if g["tasks"] else {}
+        g["approach"] = appr.get("approach") or primary.get("instruction", "")
+        g["why"] = appr.get("why") or primary.get("why", "")
+        g["title"] = g.get("source_query") or primary.get("title", "Task")
+        sections[g["section"]]["groups"].append(g)
+    # Same degraded signal assemble_plan flags: if the gap model carries no gap-derived content, the
+    # Strategy page is baseline boilerplate -- tell the client to re-run, don't present it as finished.
+    degraded = _is_degraded(gap)
+    # Plan-level grounding advisory (warn-only): roll up the per-piece coverage signals piece_brief
+    # already computed (SAME scope_query key the draft grounds on -> plan and draft can't disagree).
+    # Wrapped: any failure -> coverage=None so GET /strategy always returns.
+    try:
+        coverage = _gc.plan_coverage(cov_sigs)
+    except Exception as e:  # noqa: BLE001
+        log.debug("plan_coverage rollup skipped: %s", e)
+        coverage = None
+    return {
+        "summary": gap.get("summary", ""),
+        "sections": [sections[k] for k in ("ai_visibility", "seo", "search")],
+        "counts": {k: len(sections[k]["groups"]) for k in sections},
+        "degraded": degraded,
+        "degraded_reason": (
+            "This plan was built from an empty or failed gap analysis, so it shows only standard "
+            "setup tasks — not work targeted at your specific gaps. Re-run the gap analysis to "
+            "generate a strategy tailored to your business." if degraded else None),
+        "coverage": coverage,
+    }
 
 
 def _latest_gap(business_id: int) -> tuple[dict, dict]:

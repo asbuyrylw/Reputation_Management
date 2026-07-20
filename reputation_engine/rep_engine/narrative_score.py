@@ -28,8 +28,10 @@ from collections import defaultdict
 
 try:
     from .db import db
+    from .answer_flags import is_wrong_entity
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    from answer_flags import is_wrong_entity  # type: ignore
 
 log = logging.getLogger("narrative_score")
 
@@ -51,6 +53,10 @@ def _classify(a: dict) -> str:
 
 
 def _score_rows(rows: list[dict]) -> dict:
+    # Wrong-entity answers (a different, same-named business) are not about us. Exclude them
+    # entirely -- rather than letting them fall through to 'neutral' -- so they never dilute the
+    # denominator and drag the headline toward 50. Same NULL-safe rule as challenge (answer_flags).
+    rows = [a for a in rows if not is_wrong_entity(a)]
     total = len(rows)
     if not total:
         return {"score": None, "desired_pct": None, "contested_pct": None, "neutral_pct": None,
@@ -92,7 +98,7 @@ def compute(business_id: int, run_id: int | None = None, persist: bool = True, q
                 return {"run_id": None, "score": None, "n_answers": 0}
             run_id = r["id"]
         rows = conn.execute(
-            "SELECT engine, sentiment, goal_alignment, mentions_contested, surfaces_owned "
+            "SELECT engine, sentiment, goal_alignment, mentions_contested, surfaces_owned, entity_confusion "
             "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (run_id,),
         ).fetchall()
         out = _score_rows([dict(r) for r in rows])

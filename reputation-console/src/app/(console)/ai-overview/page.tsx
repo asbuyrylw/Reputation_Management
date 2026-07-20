@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useDashboard, usePerEngine, useTimeline, useMetricsTrend, useAnswerLenses, useAnswerChanges, useRunAnswers, useCompare } from "@/lib/hooks";
+import { useDashboard, usePerEngine, useTimeline, useMetricsTrend, useAnswerLenses, useAnswerChanges, useRunAnswers, useCompare, useShareOfVoice } from "@/lib/hooks";
 import { PerEnginePanel } from "@/components/PerEnginePanel";
 import { PerEngineTrend } from "@/components/PerEngineTrend";
 import { ScorePanel, SecHead } from "@/components/DashboardV2";
@@ -77,6 +77,7 @@ export default function AiOverviewPage() {
   const { data: answerChanges } = useAnswerChanges(businessId);
   const { data: answers } = useRunAnswers(businessId, latestRunId);
   const { data: compare } = useCompare(businessId);
+  const { data: sov } = useShareOfVoice(businessId);
 
   if (loading || (businessId != null && (isLoading || !data))) return <Spinner />;
   if (businesses.length === 0 || !data) {
@@ -109,9 +110,16 @@ export default function AiOverviewPage() {
     .slice(0, 3);
 
   const weak = ((data.gap as unknown as { weak_queries?: { prompt?: string; problem?: string }[] } | undefined)?.weak_queries) ?? [];
-  const owned = latest ? asPct(latest.owned_rate) : null;
-  const contested = latest ? asPct(latest.contested_rate) : null;
-  const neutral = owned != null && contested != null ? Math.max(0, 100 - owned - contested) : null;
+  // "Who AI cites" is a CITATION share-of-voice pie (owned/neutral/contested that sum to 100) — the
+  // SAME source + component as the /rankings detail this card links to, so the headline and the
+  // detail agree. (The answer-level owned_rate/contested_rate are two INDEPENDENT rates that can sum
+  // to >100, so deriving neutral = 100 − owned − contested was mathematically invalid and rendered 0.)
+  const sovClass = sov?.by_classification;
+  const owned = sovClass?.owned?.share != null ? Math.round(sovClass.owned.share * 100) : null;
+  const contested = sovClass?.contested?.share != null ? Math.round(sovClass.contested.share * 100) : null;
+  const neutral = sovClass?.neutral?.share != null
+    ? Math.round(sovClass.neutral.share * 100)
+    : (owned != null && contested != null ? Math.max(0, 100 - owned - contested) : null);
 
   const standings = (compare?.standings ?? []).slice().sort((a, b) => b.appearance_rate - a.appearance_rate);
   const rank = compare?.subject_rank ?? null;
@@ -140,7 +148,7 @@ export default function AiOverviewPage() {
               <Card className="col-span-full text-sm text-ink-4">No per-engine scores yet.</Card>
             ) : (
               engines.map((e) => (
-                <div key={e.key} className="rounded-[14px] border-2 bg-card p-3.5 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]" style={{ borderColor: `${scoreColor(e.score)}40` }}>
+                <div key={e.key} className="rounded-[14px] border border-line bg-card p-3.5 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                   <div className="mb-2 text-[13px] font-semibold text-ink">{engineLabel(e.key)}</div>
                   <div className="mx-auto mb-1.5 grid h-11 w-11 place-items-center rounded-full font-display text-[19px] font-semibold" style={{ background: `${scoreColor(e.score)}18`, color: scoreColor(e.score) }}>{e.score ?? "—"}</div>
                   <div className="font-mono text-[10.5px] uppercase tracking-[0.04em] text-ink-4">{e.band.label}</div>
@@ -150,7 +158,7 @@ export default function AiOverviewPage() {
           </div>
 
           {/* The worst things AI says right now — larger indented quotes */}
-          <SecHead title="The worst things AI says right now" link={{ label: "Fix these in the plan", href: "/next-steps" }} />
+          <SecHead title="The worst things AI says right now" link={{ label: "See gaps & fixes", href: "/gaps" }} />
           <div className="mb-7 space-y-3">
             {worstAnswers.length === 0 ? (
               <Card className="text-sm text-ink-4">No scored answers yet — run an audit.</Card>

@@ -34,7 +34,7 @@ callback_router = APIRouter(tags=["connections"])
 
 # kinds connectable via a direct (non-OAuth) credential POST.
 _DIRECT_KINDS = {"wordpress_org", "ayrshare_profile"}
-_OAUTH_KINDS = {"google_business_profile", "google_search_console", "google_analytics"}
+_OAUTH_KINDS = {"google_business_profile", "google_search_console", "google_analytics", "youtube"}
 
 # Per-platform OAuth-callback config (label, GBP-allowlist state, connect notification). Keeps the
 # callback generic so a new Google read-only product (GSC) doesn't inherit GBP-specific fields.
@@ -56,6 +56,13 @@ _CALLBACK_META = {
         "notify_title": "Connected Google Analytics",
         "notify_body": ("Google Analytics is connected. Pick which property to import, then we'll "
                         "start pulling your sessions, conversions and behavior data."),
+    },
+    "youtube": {
+        "label": "YouTube", "gbp_access": None,
+        "notify_title": "Connected YouTube",
+        "notify_body": ("YouTube is connected. You can now publish rendered explainer videos "
+                        "(with captions) straight to your channel — YouTube is the most-cited source "
+                        "in Google's AI answers, so this feeds your AI visibility."),
     },
 }
 _MAX_PENDING_STATES = 12  # per-business flood cap on state minting

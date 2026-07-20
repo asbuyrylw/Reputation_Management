@@ -24,6 +24,31 @@ except ImportError:  # pragma: no cover
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+
+def _cost():
+    try:
+        from ... import cost as c
+    except ImportError:  # pragma: no cover
+        import cost as c  # type: ignore
+    return c
+
+
+@router.get("/costs")
+def cost_dashboard(days: int = 30, business_id: int | None = None, _: dict = Depends(require_admin)):
+    """Itemized real-cost dashboard for the whole system (or one tenant with ?business_id=).
+    Returns totals + rollups by service category / provider / operation / content-type / audit run,
+    per-tenant spend, and the recent line-item feed. All figures are the recorded est_cost_usd
+    (exact where a provider returns it, e.g. DataForSEO; estimated from token/unit rates otherwise)."""
+    days = max(1, min(365, int(days or 30)))
+    c = _cost()
+    return {
+        "days": days,
+        "scope": "business" if business_id else "system",
+        "breakdown": c.breakdown(business_id, days),
+        "by_business": None if business_id else c.by_business(days),
+        "recent": c.recent(business_id, limit=60),
+    }
+
 _BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo",
                     "regulatory_profile", "owned_domains", "neuronwriter_project")
 # JSONB business columns -- wrapped with psycopg Json so a dict/list adapts to jsonb.

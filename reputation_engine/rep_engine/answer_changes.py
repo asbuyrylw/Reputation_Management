@@ -26,7 +26,8 @@ _DROP = 0.3  # goal_alignment drop that counts as material
 
 def _two_runs(conn, business_id: int):
     return conn.execute(
-        "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL AND status='complete' "
+        "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+        "AND status='complete' AND COALESCE(mode,'full')<>'fast' "
         "ORDER BY id DESC LIMIT 2", (business_id,)).fetchall()
 
 

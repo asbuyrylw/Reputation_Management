@@ -1,0 +1,590 @@
+"""
+Gap-driven content BATCHES (content-program Phase 4 core)
+=========================================================
+The program creates content one GAP at a time, not one PIECE at a time. For a single gap (a missing
+owned topic + the weak AI answers it should fix) we spin up MULTIPLE content types — blog, article,
+white paper, social — all targeting that gap, grouped in a `content_batches` row with a BASELINE
+snapshot of the gap's Share-of-Voice/alignment. After the next audit, `content_impact` measures how
+far the batch moved that gap (collectively, and per type where attributable), so the program can
+keep producing and adjust based on what actually moved the number.
+
+Dormant-safe + fail-loud: generation errors per piece are captured, not swallowed; a batch that
+produced zero pieces is marked failed (never a silent "complete").
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Optional
+
+try:
+    from .db import db
+    from . import content_generator as _cg
+    from . import textutils as _tu
+except ImportError:  # pragma: no cover
+    from db import db  # type: ignore
+    import content_generator as _cg  # type: ignore
+    import textutils as _tu  # type: ignore
+
+log = logging.getLogger("content_batch")
+
+# A sensible default multi-type spread per gap. Tailored by gap intent in _types_for_gap().
+_DEFAULT_TYPES = ["blog", "article", "white_paper", "social_post"]
+_LOCAL_TYPES = ["local_page", "blog", "faq", "social_post"]
+_COMMERCIAL_TYPES = ["landing_page", "article", "social_post"]
+# A video gap can't be auto-published as a finished video (Veo is paid/dormant), so we produce the
+# generatable, honest deliverable -- a shootable VIDEO SCRIPT -- plus a supporting blog + social,
+# instead of silently masquerading the gap as a plain blog (the gap's asset_type used to be ignored).
+_VIDEO_TYPES = ["video_script", "blog", "social_post"]
+
+# How each content type frames the same gap topic (title lens + capability).
+_TYPE_FRAME = {
+    "blog":         ("Blog: {t}", "content_writing"),
+    "article":      ("{t}", "content_writing"),
+    "white_paper":  ("White paper: {t} — an in-depth, cited guide", "content_writing"),
+    "landing_page": ("{t} — overview page", "content_writing"),
+    "local_page":   ("{t} in {geo}", "content_writing"),
+    "faq":          ("{t}: frequently asked questions", "content_writing"),
+    "video_script": ("Video script: {t} — a shootable script + shot list", "content_writing"),
+    "social_post":  ("{t}", "social_publishing"),
+}
+
+
+def _latest_gap_model(conn, business_id: int) -> dict:
+    row = conn.execute("SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
+                       (business_id,)).fetchone()
+    if not row:
+        return {}
+    m = row["model"]
+    return m if isinstance(m, dict) else (json.loads(m) if m else {})
+
+
+_STOPW = {"and", "with", "the", "for", "your", "our", "page", "overview", "detail", "case", "studies", "story", "stories"}
+
+
+def _match_prompts(topic: str, weak: list[dict]) -> list[str]:
+    """Which weak-answer prompts belong to this gap. Exact/substring on addressed_by first, then a
+    lenient token-overlap fallback (gap topics and addressed_by rarely match verbatim)."""
+    tl = (topic or "").lower()
+    ttoks = _tu.word_set(tl, stop=_STOPW)
+    out: list[str] = []
+    for w in weak:
+        p = w.get("prompt")
+        if not p:
+            continue
+        ab = (w.get("addressed_by") or "").strip().lower()
+        if ab and (ab == tl or ab in tl or tl in ab):
+            out.append(p)
+            continue
+        cmp_toks = _tu.word_set((ab or "") + " " + p.lower(), stop=_STOPW)
+        if ttoks and len(ttoks & cmp_toks) >= max(2, len(ttoks) // 3):
+            out.append(p)
+    # dedupe, preserve order
+    seen, ded = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            ded.append(p)
+    return ded
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).strip()
+
+
+def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
+    """The ranking keywords a local/geo goal should target -- from the keyword-research set
+    (target_keywords), scored by relevance to the geo query. A page-1 goal needs a PROGRAM of
+    content across this keyword cluster (not one page), so each becomes a supporting blog."""
+    qtoks = _tu.word_set(query, stop=_STOPW)
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT keyword, kind, priority FROM target_keywords WHERE business_id=%s "
+                "AND (source IS NULL OR source <> 'dataforseo_competitor') "
+                "ORDER BY priority DESC NULLS LAST LIMIT 80", (business_id,)).fetchall()
+    except Exception:  # noqa: BLE001 -- no keyword table yet -> no extra pieces
+        return []
+    scored: list[tuple[int, str]] = []
+    for r in rows:
+        kw = (r.get("keyword") or "").strip()
+        if not kw or kw.lower() == (query or "").lower():
+            continue
+        ktoks = _tu.word_set(kw, stop=_STOPW)
+        overlap = len(qtoks & ktoks)
+        is_local = (r.get("kind") or "") == "local"
+        if overlap >= 1 or is_local:
+            scored.append((overlap + (1 if is_local else 0), kw))
+    scored.sort(key=lambda x: -x[0])
+    seen, out = set(), []
+    for _, kw in scored:
+        k = kw.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(kw)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
+    """Snap gap-model prompt strings (LLM-authored, often paraphrased) to the ACTUAL battery prompt
+    text stored in `answers`, so the cluster query (`prompt = ANY`) matches instead of silently
+    hitting 0 rows. Exact-normalized match first, then best token-set (Jaccard >= 0.5) fallback.
+    Unresolvable candidates are dropped; if NONE resolve, returns [] so the caller falls back to
+    whole-run (a coarser but valid collective measure) rather than a silent empty cluster."""
+    prompts = [p for p in (prompts or []) if p]
+    if not prompts:
+        return []
+    with db() as conn:
+        run = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND status='complete' AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 1",
+            (business_id,)).fetchone()
+        if not run:
+            return []
+        battery = [r["prompt"] for r in conn.execute(
+            "SELECT DISTINCT prompt FROM answers WHERE run_id=%s AND prompt IS NOT NULL", (run["id"],)).fetchall()]
+    bnorm = [(_norm(p), p) for p in battery]
+    resolved: list[str] = []
+    for cand in prompts:
+        cn = _norm(cand)
+        if not cn:
+            continue
+        exact = next((p for n, p in bnorm if n == cn), None)
+        if exact:
+            resolved.append(exact)
+            continue
+        ctoks = set(cn.split())
+        best, best_j = None, 0.0
+        for n, p in bnorm:
+            ptoks = set(n.split())
+            if not ptoks:
+                continue
+            j = len(ctoks & ptoks) / len(ctoks | ptoks)
+            if j > best_j:
+                best, best_j = p, j
+        if best and best_j >= 0.5:
+            resolved.append(best)
+    seen, out = set(), []
+    for p in resolved:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def gaps_for_business(business_id: int) -> list[dict]:
+    """Enumerate the content-fillable gaps -- each becomes a MULTI-PIECE program, not one draft:
+      - missing_owned_content topics (the primary owned-content gaps),
+      - local_seo_gaps (a page-1 GOAL fans into a geo cluster: local page + blog + FAQ + social),
+      - competitor_defense (a rival-won question fans into competing owned content).
+    Returns [{gap_key, topic, asset_type, gap_source, why, target_prompts}]. target_prompts are the
+    weak AI answers the gap should move (token-matched); [] falls back to the whole run."""
+    with db() as conn:
+        gm = _latest_gap_model(conn, business_id)
+    weak = gm.get("weak_queries") or []
+    out = []
+    for i, item in enumerate(gm.get("missing_owned_content") or []):
+        topic = (item.get("topic") or f"topic {i+1}").strip()
+        out.append({
+            "gap_key": _tu.gid("moc", topic),
+            "topic": topic,
+            "asset_type": (item.get("asset_type") or "article").lower(),
+            "gap_source": "audited gap: missing_owned_content",
+            "why": item.get("why") or "",
+            "target_prompts": _match_prompts(topic, weak),
+        })
+    # Local page-1 GOALS -> a KEYWORD-DRIVEN geo content program (not one draftable item): the geo
+    # page + a supporting blog per ranking keyword + FAQ + social, so a page-2→page-1 move has a
+    # cluster of ranking assets behind it, not a single page.
+    for i, item in enumerate(gm.get("local_seo_gaps") or []):
+        q = (item.get("query") or f"local query {i+1}").strip()
+        out.append({
+            "gap_key": _tu.gid("local", q),
+            "topic": q,
+            "asset_type": "local_page",
+            "gap_source": "local search ranking",
+            "why": item.get("recommendation") or item.get("why") or "",
+            "target_prompts": _match_prompts(q, weak),
+            "keywords": _local_keywords(business_id, q),   # the ranking keyword cluster for this geo goal
+        })
+    # Questions a rival wins -> competing owned content.
+    for i, item in enumerate(gm.get("competitor_defense") or []):
+        q = (item.get("query") or f"competitor query {i+1}").strip()
+        out.append({
+            "gap_key": _tu.gid("comp", q),
+            "topic": q,
+            "asset_type": "article",
+            "gap_source": "competitor analysis",
+            "why": item.get("recommendation") or item.get("why") or "",
+            "target_prompts": _match_prompts(q, weak),
+        })
+    return out
+
+
+def _types_for_gap(gap: dict) -> list[str]:
+    at = (gap.get("asset_type") or "").lower()
+    topic = (gap.get("topic") or "").lower()
+    # Video is an explicit asset intent -> a shootable script spread, not a text article.
+    if "video" in at or "video" in topic:
+        return _VIDEO_TYPES
+    if "local" in at or "local" in topic:
+        return _LOCAL_TYPES
+    if at in ("landing_page", "comparison") or "landing" in topic or any(k in topic for k in ("best", "vs", "compare", "top ")):
+        return _COMMERCIAL_TYPES
+    return _DEFAULT_TYPES
+
+
+def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
+    """Snapshot the gap's current Share-of-Voice + alignment from the latest COMPLETE full audit,
+    over the specific prompts the gap owns (or the whole battery if none are named)."""
+    with db() as conn:
+        run = conn.execute(
+            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+            "AND status='complete' AND COALESCE(mode,'full')<>'fast' ORDER BY id DESC LIMIT 1",
+            (business_id,)).fetchone()
+        if not run:
+            return {"run_id": None, "sov": None, "alignment": None, "owned_rate": None,
+                    "contested_rate": None, "n": 0}
+        return {**_cluster_metrics(conn, business_id, run["id"], target_prompts), "run_id": run["id"]}
+
+
+def _cluster_metrics(conn, business_id: int, run_id: int, prompts: list[str]) -> dict:
+    """Aggregate AI-visibility metrics for a run over a set of prompts (empty = whole run)."""
+    if prompts:
+        row = conn.execute(
+            "SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) align, "
+            "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
+            "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false) AND prompt = ANY(%s)",
+            (business_id, run_id, prompts)).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) align, "
+            "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
+            "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false)",
+            (business_id, run_id)).fetchone()
+    owned = float(row["owned"]) if row and row["owned"] is not None else None
+    align = float(row["align"]) if row and row["align"] is not None else None
+    contested = float(row["contested"]) if row and row["contested"] is not None else None
+    # Share of Voice for the cluster: how often our owned content surfaces (0..1).
+    return {"sov": owned, "owned_rate": owned, "alignment": align,
+            "contested_rate": contested, "n": int(row["n"]) if row else 0}
+
+
+def _grade_social(business_id: int, draft_ids: list[int]) -> None:
+    """Give each atomized social post its social GEO grade (atomize_draft doesn't run the grader).
+    Linkage (batch_id/content_type) is already set atomically at insert, so a failure here only loses
+    the grade, never the batch membership. Best-effort per post."""
+    try:
+        from . import content_quality as _cq
+    except ImportError:  # pragma: no cover
+        import content_quality as _cq  # type: ignore
+    for sid in draft_ids:
+        try:
+            with db() as conn:
+                row = conn.execute("SELECT body, quality_notes FROM content_drafts WHERE id=%s", (sid,)).fetchone()
+                if not row:
+                    continue
+                qn = row["quality_notes"] if isinstance(row["quality_notes"], dict) else json.loads(row["quality_notes"] or "{}")
+                g = _cq.geo_score(row["body"] or "", content_type="social_post")
+                qn["geo"] = g
+                conn.execute("UPDATE content_drafts SET geo_score=%s, quality_notes=%s WHERE id=%s",
+                             (g.get("score"), json.dumps(qn), sid))
+                conn.commit()
+        except Exception as e:  # noqa: BLE001 -- one post's grade must not abort the rest
+            log.debug("social grade skipped for draft %s: %s", sid, e)
+
+
+def _match_content_wo(business_id: int, topic: str, source_query: str) -> Optional[int]:
+    """The open CONTENT work order this gap's batch fills, so the drafts link back to the plan:
+    approve() then advances the work order, and the work order is prune-protected while a draft
+    exists. Before this, batch drafts had work_order_id=NULL -- so plan progress never moved and a
+    still-pending work order could be hard-deleted despite shipped content. Returns a work-order id,
+    or None when the plan tracks no matching content task (the batch still generates; it just isn't
+    plan-linked). Matches on the work order's source_query, else title overlap (reuses the brief
+    lineage matcher)."""
+    try:
+        from . import production_brief as _pb
+    except ImportError:  # pragma: no cover
+        import production_brief as _pb  # type: ignore
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, title, capability, gap_specifics FROM work_orders "
+            "WHERE business_id=%s AND NOT superseded", (business_id,)).fetchall()
+    cands = []
+    for r in rows:
+        if (r["capability"] or "").lower() not in ("content_writing", "content_creation"):
+            continue
+        gs = r["gap_specifics"]
+        gs = gs if isinstance(gs, dict) else (json.loads(gs) if gs else {})
+        cands.append({"id": r["id"], "title": r["title"], "gap_specifics": gs})
+    if not cands:
+        return None
+    ids = _pb._match_work_orders(source_query or topic, cands) or _pb._match_work_orders(topic, cands)
+    return int(ids[0]) if ids else None
+
+
+def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str]] = None,
+                   created_by: Optional[int] = None) -> dict:
+    """Create a content batch for one gap and generate a piece per content type. Fail-loud: raises
+    if EVERY piece failed (so the job is marked failed, never a silent 'complete')."""
+    # Budget guard: the batch path calls generate_for_wo directly (bypassing generate()'s guard), so
+    # enforce the monthly cap here or a batch could run past it. The cap is the runaway backstop.
+    _budget_or_raise(business_id)
+    types = content_types or _types_for_gap(gap)
+    topic = gap.get("topic") or ""
+    # Resolve LLM-authored gap prompts to the actual battery prompt text so impact measures a real
+    # cluster (not a silent 0-row match). Empty -> whole-run fallback (coarser but valid).
+    prompts = resolve_prompts(business_id, gap.get("target_prompts") or [])
+    baseline = capture_baseline(business_id, prompts)
+    with db() as conn:
+        biz_row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not biz_row:
+            raise SystemExit(f"No business id {business_id}")
+        biz = dict(biz_row)
+        b = conn.execute(
+            "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
+            "target_prompts, content_types, baseline, status, created_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating',%s) RETURNING id",
+            (business_id, gap.get("gap_key") or _tu.gid("moc", topic), gap.get("gap_source") or "",
+             f"Fill gap: {topic}", topic, json.dumps(prompts), json.dumps(types),
+             json.dumps(baseline), created_by)).fetchone()
+        batch_id = b["id"]
+        conn.commit()
+
+    geo_val = (biz.get("geo") if isinstance(biz, dict) else "") or ""
+    # Link this gap's pieces to the content work order that tracks it, so approve() advances the plan
+    # and the work order is prune-protected once a draft exists. None -> unlinked (still generates).
+    matched_wo = _match_content_wo(business_id, topic, prompts[0] if prompts else topic)
+    made, errors = [], []
+    # Long-form pieces are generated directly; social posts are ATOMIZED from the primary long-form
+    # piece (social_publishing isn't a generatable content capability -- social derives from a page).
+    long_types = [t for t in types if t != "social_post"]
+    want_social = "social_post" in types
+    for ct in long_types:
+        frame, _cap = _TYPE_FRAME.get(ct, ("{t}", "content_writing"))
+        title = frame.format(t=topic, geo=geo_val or "your area")
+        wo = {"title": title, "capability": "content_writing", "execution": "auto",
+              "target_query": topic, "content_type": ct, "_db_id": matched_wo,
+              "instruction": f"{gap.get('why') or ''} (content type: {ct})".strip(),
+              # carry the gap linkage so the draft traces back to the weak answer it fixes
+              "gap_specifics": {"source_query": (prompts[0] if prompts else topic)}}
+        try:
+            did = _cg.generate_for_wo(business_id, wo, biz, content_type=ct, batch_id=batch_id)
+            if did:
+                made.append({"draft_id": did, "content_type": ct})
+            else:
+                errors.append({"content_type": ct, "reason": "skipped (already covered / empty generation)"})
+        except Exception as e:  # noqa: BLE001 -- collect per-piece errors, don't abort the batch
+            log.warning("batch %d: %s piece failed: %s", batch_id, ct, e)
+            errors.append({"content_type": ct, "reason": str(e)[:200]})
+    # Keyword-driven local program: a supporting blog per RANKING KEYWORD so the geo goal is backed by
+    # a content cluster (multiple ranking assets), not one page. Only local gaps carry `keywords`.
+    for kw in (gap.get("keywords") or [])[:3]:
+        if not kw or _norm(kw) == _norm(topic):
+            continue
+        wo = {"title": f"Blog: {kw}", "capability": "content_writing", "execution": "auto",
+              "target_query": kw, "content_type": "blog", "_db_id": matched_wo,
+              "instruction": f"Rank for '{kw}' as part of the local content program for '{topic}'.",
+              "gap_specifics": {"source_query": kw}}
+        try:
+            did = _cg.generate_for_wo(business_id, wo, biz, content_type="blog", batch_id=batch_id)
+            if did:
+                made.append({"draft_id": did, "content_type": "blog"})
+            else:
+                errors.append({"content_type": f"blog:{kw}", "reason": "skipped (already covered / empty)"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("batch %d: keyword blog '%s' failed: %s", batch_id, kw, e)
+            errors.append({"content_type": f"blog:{kw}", "reason": str(e)[:200]})
+    # Social: atomize the primary long-form piece into per-platform posts, tag them into the batch,
+    # and give each its (social-profile) GEO grade.
+    if want_social and made:
+        try:
+            src = made[0]["draft_id"]
+            # batch_id is set atomically at insert -> a grading hiccup can't orphan the posts.
+            res = _cg.atomize_draft(business_id, src, batch_id=batch_id) or {}
+            sids = res.get("draft_ids") or []
+            if sids:
+                _grade_social(business_id, sids)   # grading only; linkage already done
+                for sid in sids:
+                    made.append({"draft_id": sid, "content_type": "social_post"})
+            else:
+                errors.append({"content_type": "social_post", "reason": "atomization produced no posts"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("batch %d: social atomization failed: %s", batch_id, e)
+            errors.append({"content_type": "social_post", "reason": str(e)[:200]})
+
+    status = "drafted" if made else "failed"
+    with db() as conn:
+        conn.execute("UPDATE content_batches SET status=%s, updated_at=now() WHERE id=%s",
+                     (status, batch_id))
+        conn.commit()
+    if not made:
+        raise RuntimeError(
+            f"content batch {batch_id} for gap '{topic}' produced 0 pieces from {len(types)} type(s): "
+            f"{errors}. Not marking successful.")
+    log.info("batch %d '%s': %d/%d pieces produced (%s)", batch_id, topic, len(made), len(types),
+             ", ".join(m["content_type"] for m in made))
+    return {"batch_id": batch_id, "topic": topic, "types": types, "produced": made,
+            "errors": errors, "baseline": baseline}
+
+
+def generate_cluster(business_id: int, cluster: dict, *, max_spokes: int = 4,
+                     created_by: Optional[int] = None) -> dict:
+    """Generate a topic CLUSTER as a connected hub: one comprehensive PILLAR page for the cluster's
+    core topic + a focused SPOKE page per subtopic, CROSS-LINKED (pillar<->spokes). This is the
+    research-backed content model — a pillar/cluster architecture with internal linking builds the
+    topical authority AI answer engines reward (HubSpot: more internal links -> better rankings), vs.
+    isolated one-off pieces. Each piece carries the pipeline's info-gain differentiators (real
+    attributed stats + expert quotes + business specifics). Fail-loud if EVERY piece fails."""
+    _budget_or_raise(business_id)
+    pillar_topic = (cluster.get("pillar") or cluster.get("topic") or "").strip()
+    if not pillar_topic:
+        raise ValueError("cluster has no pillar topic")
+    spoke_topics = [s.strip() for s in (cluster.get("spokes") or []) if s and str(s).strip()][:max_spokes]
+    with db() as conn:
+        biz_row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        if not biz_row:
+            raise SystemExit(f"No business id {business_id}")
+        biz = dict(biz_row)
+        pillar_slug = _cg._slugify(pillar_topic)
+        spoke_plan = [{"title": st, "slug": _cg._slugify(st), "query": st} for st in spoke_topics]
+        b = conn.execute(
+            "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
+            "target_prompts, content_types, baseline, status, created_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating',%s) RETURNING id",
+            (business_id, f"cluster:{pillar_slug}", "topical_authority",
+             f"Topic cluster: {pillar_topic}", pillar_topic, json.dumps([]),
+             json.dumps(["article"] + ["blog"] * len(spoke_plan)), json.dumps({}), created_by)).fetchone()
+        batch_id = b["id"]
+        conn.commit()
+
+    made, errors = [], []
+    # PILLAR first: a comprehensive page that links DOWN to each planned spoke.
+    pillar_wo = {
+        "title": pillar_topic, "capability": "content_writing", "execution": "auto",
+        "target_query": pillar_topic, "content_type": "article",
+        "instruction": (f"Comprehensive PILLAR page for the topic cluster '{pillar_topic}'. Cover the core "
+                        f"topic thoroughly and orient the reader to its sub-topics: "
+                        f"{', '.join(spoke_topics) or 'n/a'}."),
+        "gap_specifics": {"source_query": pillar_topic},
+        "cluster": {"role": "pillar", "pillar_title": pillar_topic, "pillar_slug": pillar_slug,
+                    "spokes": spoke_plan},
+    }
+    try:
+        did = _cg.generate_for_wo(business_id, pillar_wo, biz, content_type="article", batch_id=batch_id)
+        if did:
+            made.append({"draft_id": did, "content_type": "article", "role": "pillar"})
+        else:
+            errors.append({"role": "pillar", "reason": "skipped (already covered / empty)"})
+    except Exception as e:  # noqa: BLE001
+        log.warning("cluster %d: pillar failed: %s", batch_id, e)
+        errors.append({"role": "pillar", "reason": str(e)[:200]})
+    # SPOKES: one focused blog per subtopic, each linking UP to the pillar.
+    for sp in spoke_plan:
+        spoke_wo = {
+            "title": sp["title"], "capability": "content_writing", "execution": "auto",
+            "target_query": sp["query"], "content_type": "blog",
+            "instruction": (f"Focused SPOKE page on '{sp['title']}', a sub-topic of the pillar guide "
+                            f"'{pillar_topic}'. Go deep on this one angle only."),
+            "gap_specifics": {"source_query": sp["query"]},
+            "cluster": {"role": "spoke", "pillar_title": pillar_topic, "pillar_slug": pillar_slug},
+        }
+        try:
+            did = _cg.generate_for_wo(business_id, spoke_wo, biz, content_type="blog", batch_id=batch_id)
+            if did:
+                made.append({"draft_id": did, "content_type": "blog", "role": "spoke", "topic": sp["title"]})
+            else:
+                errors.append({"role": f"spoke:{sp['title']}", "reason": "skipped (already covered / empty)"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("cluster %d: spoke '%s' failed: %s", batch_id, sp["title"], e)
+            errors.append({"role": f"spoke:{sp['title']}", "reason": str(e)[:200]})
+
+    status = "drafted" if made else "failed"
+    with db() as conn:
+        conn.execute("UPDATE content_batches SET status=%s, updated_at=now() WHERE id=%s", (status, batch_id))
+        conn.commit()
+    if not made:
+        raise RuntimeError(f"topic cluster '{pillar_topic}' produced 0 pieces: {errors}")
+    log.info("cluster %d '%s': pillar + %d spoke(s) -> %d pieces", batch_id, pillar_topic,
+             len(spoke_plan), len(made))
+    return {"batch_id": batch_id, "pillar": pillar_topic, "spokes": spoke_topics,
+            "pieces": len(made), "produced": made, "errors": errors}
+
+
+def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *, max_spokes: int = 4,
+                      created_by: Optional[int] = None) -> dict:
+    """Plan + generate the highest-leverage UNCOVERED topic clusters (pillar-first), using the
+    topical-authority planner. This is the CLUSTER-DRIVEN content pipeline (vs. one-off gap pieces):
+    it only builds real hubs (a pillar WITH subtopics), not lone keywords."""
+    try:
+        from . import topical_authority as _ta
+    except ImportError:  # pragma: no cover
+        import topical_authority as _ta  # type: ignore
+    cl = _ta.clusters(business_id).get("clusters", [])
+    targets = [c for c in cl if c.get("needs_content") and c.get("spokes")][:(max_clusters or 3)]
+    results, errors = [], []
+    for c in targets:
+        try:
+            results.append(generate_cluster(business_id, c, max_spokes=max_spokes, created_by=created_by))
+        except SystemExit as e:   # over-budget stop (BaseException) -> stop the sweep, like generate_all_gaps
+            log.warning("generate_clusters: budget stop after %d cluster(s): %s", len(results), e)
+            errors.append({"cluster": c.get("topic"), "reason": "monthly budget reached"})
+            break
+        except Exception as e:  # noqa: BLE001
+            log.warning("generate_clusters: cluster '%s' failed: %s", c.get("topic"), e)
+            errors.append({"cluster": c.get("topic"), "reason": str(e)[:200]})
+    return {"clusters_generated": len(results), "planned": [c.get("topic") for c in targets],
+            "results": results, "errors": errors}
+
+
+def _over_budget(business_id: int) -> bool:
+    try:
+        from . import ai_state_audit as _llm
+        return bool(_llm.cost.over_budget(business_id))
+    except Exception:  # noqa: BLE001 -- budget check best-effort; don't block on a check failure
+        return False
+
+
+def _budget_or_raise(business_id: int) -> None:
+    if _over_budget(business_id):
+        raise SystemExit(
+            f"Business {business_id} is at/over its monthly budget; batch content skipped. "
+            f"Raise monthly_budget_usd in business_config to proceed.")
+
+
+def generate_all_gaps(business_id: int, max_gaps: Optional[int] = None,
+                      created_by: Optional[int] = None) -> dict:
+    """Batch-produce content for every open content gap (the 'fill the plan' button). Budget-guarded:
+    the cap is re-checked BEFORE EACH gap so a multi-gap sweep stops the moment it crosses the ceiling
+    (each gap is several LLM-heavy pieces). Returns a summary; raises if nothing at all was produced."""
+    _budget_or_raise(business_id)
+    gaps = gaps_for_business(business_id)
+    if max_gaps:
+        gaps = gaps[:max_gaps]
+    batches, total_pieces, budget_stopped = [], 0, False
+    for gap in gaps:
+        # stop cleanly the moment the batch spend crosses the monthly cap
+        if _over_budget(business_id):
+            log.warning("Budget cap reached mid-sweep for business %d after %d pieces; stopping.",
+                        business_id, total_pieces)
+            budget_stopped = True
+            break
+        try:
+            res = generate_batch(business_id, gap, created_by=created_by)
+            batches.append({"batch_id": res["batch_id"], "topic": res["topic"],
+                            "pieces": len(res["produced"])})
+            total_pieces += len(res["produced"])
+        except SystemExit:  # budget hit inside generate_batch -> stop the sweep
+            budget_stopped = True
+            break
+        except Exception as e:  # noqa: BLE001 -- one gap failing must not abort the rest
+            log.warning("gap batch failed for '%s': %s", gap.get("topic"), e)
+            batches.append({"topic": gap.get("topic"), "pieces": 0, "error": str(e)[:200]})
+    # A budget-driven stop is NOT a failure (the cap did its job), so it doesn't trip the 0-piece guard.
+    if gaps and total_pieces == 0 and not budget_stopped:
+        raise RuntimeError(f"batch content produced 0 pieces across {len(gaps)} gap(s); check the "
+                           "orchestrator LLM key/budget. Not marking successful.")
+    return {"gaps": len(gaps), "batches": batches, "pieces": total_pieces, "budget_stopped": budget_stopped}

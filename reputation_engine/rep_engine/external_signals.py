@@ -86,6 +86,10 @@ def _normalize_one(business_id: int, signal: dict) -> Optional[dict]:
         res = tools.llm_json(
             NORMALIZE_SYSTEM + "\n" + tools.UNTRUSTED_INSTRUCTION, user,
             business_id=business_id, tier="mid", operation="ingest_normalize",
+            # items[] mirrors the report's rows (keywords/backlinks/issues/pages) and is UNBOUNDED;
+            # a large export blew past the 2000-token default -> truncated JSON -> {} -> the signal
+            # never normalized. 8000 covers most reports (input is already capped at 12k chars).
+            max_tokens=8000, timeout=180,
         )
     except tools.BudgetExceededError:
         return None

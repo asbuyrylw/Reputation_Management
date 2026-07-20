@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Koob Reply Assist",
+  "version": "1.0.0",
+  "description": "Shows the reply Koob already drafted for the Yelp/Reddit/Facebook review or comment you're viewing, so you can review it and paste it in yourself.",
+  "action": { "default_popup": "options.html" },
+  "options_page": "options.html",
+  "permissions": ["storage"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["*://*.yelp.com/*", "*://*.reddit.com/*", "*://*.facebook.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -30,6 +30,12 @@ def _run_audit(business_id: int, args: dict) -> None:
         import ai_state_audit as m  # type: ignore
     m.audit(business_id)
     _persist_audit_rollups(business_id)
+    # A fresh full audit is new evidence: re-measure how far each content batch moved its gap
+    # (SoV + alignment delta, % gap closed). DB-only + best-effort; never breaks the audit.
+    try:
+        _imp("content_impact").measure_all(business_id)
+    except Exception as e:  # noqa: BLE001 -- impact refresh is best-effort
+        log.debug("content impact measure skipped: %s", e)
 
 
 def _run_fast_audit(business_id: int, args: dict) -> None:
@@ -122,6 +128,22 @@ def _run_site_crawl(business_id: int, args: dict) -> None:
     _imp("site_crawl").crawl_cmd(business_id, int(args.get("max_pages", 40)))
 
 
+def _run_ingest_source_material(business_id: int, args: dict) -> dict:
+    # Auto-ingest the client's own website content into the grounding corpus (source_documents),
+    # so generation is grounded in their real pages. Idempotent: replaces the prior site_crawl set.
+    return _imp("source_ingest").ingest_site(
+        business_id, max_pages=int(args.get("max_pages", 20)),
+        created_by=args.get("created_by"))
+
+
+def _run_backfill_coverage(business_id: int, args: dict) -> dict:
+    # Attach the grounding-coverage advisory to EXISTING drafts so the warning shows on the current
+    # library, not only on new drafts. Idempotent jsonb-merge; owner-triggered (never auto on generation).
+    lim = args.get("limit")
+    return _imp("grounding_coverage").backfill_coverage_advisory(
+        business_id, limit=int(lim) if lim else None)
+
+
 def _run_gap_model(business_id: int, args: dict) -> None:
     _imp("ai_state_audit").build_gap_model(business_id)
 
@@ -152,8 +174,63 @@ def _run_generate_drafts(business_id: int, args: dict):
     # "Generate draft" button) instead of the whole batch. Return the created draft ids so the
     # produced_count convention (rec 12) sees a real count -- generate() raises on a 0-draft batch,
     # so a returned list is always non-empty, giving observability without a false 'empty' flag.
-    created = _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"))
+    created = _imp("content_generator").generate(business_id, only_wo=args.get("only_wo"),
+                                                  content_type=args.get("content_type"))
     return {"created": created or []}
+
+
+def _run_generate_content_batches(business_id: int, args: dict):
+    """Gap-driven BATCH content: for each open content gap, produce MULTIPLE types (blog, article,
+    white paper, social) at once and snapshot the gap's baseline Share-of-Voice for later impact
+    measurement. args.gap_key generates one gap's batch; args.max_gaps caps the sweep."""
+    cb = _imp("content_batch")
+    created_by = args.get("requested_by")   # forwarded so content_batches.created_by isn't dropped
+    if args.get("gap_key"):
+        gap = next((g for g in cb.gaps_for_business(business_id) if g["gap_key"] == args["gap_key"]), None)
+        if not gap:
+            return {"batches": [], "pieces": 0, "reason": f"gap {args['gap_key']} not found"}
+        res = cb.generate_batch(business_id, gap, content_types=args.get("content_types"),
+                                created_by=created_by)
+        return {"batches": [{"batch_id": res["batch_id"], "pieces": len(res["produced"])}],
+                "pieces": len(res["produced"])}
+    return cb.generate_all_gaps(business_id, max_gaps=args.get("max_gaps"), created_by=created_by)
+
+
+def _run_generate_clusters(business_id: int, args: dict):
+    """Cluster-driven content: plan the highest-leverage uncovered TOPIC CLUSTERS (pillar + spokes,
+    cross-linked) from the topical-authority planner and generate each as a connected hub."""
+    cb = _imp("content_batch")
+    return cb.generate_clusters(business_id, max_clusters=args.get("max_clusters"),
+                                max_spokes=args.get("max_spokes") or 4,
+                                created_by=args.get("requested_by"))
+
+
+def _run_render_video(business_id: int, args: dict):
+    """Render a real MP4 for an explainer_video/video_script rich-media draft via HeyGen (avatar speaks
+    the vetted script verbatim). Stores it as a video visual_asset + links it to the draft."""
+    rm = _imp("rich_media_generator")
+    return rm.render_video_for_draft(business_id, args.get("draft_id"), reviewer=args.get("requested_by"),
+                                     provider=args.get("provider"))
+
+
+def _run_publish_youtube(business_id: int, args: dict):
+    """Publish a rendered `video` visual_asset to the owner's YouTube channel (+ SRT captions)."""
+    yp = _imp("youtube_publish")
+    return yp.publish_video(business_id, args.get("visual_id"),
+                            privacy=args.get("privacy") or "unlisted")
+
+
+def _run_poll_video_renders(business_id: int, args: dict):
+    """Completion sweep for async v3 Video Agent renders: download + store the MP4 once the Agent
+    finishes (~20-45 min), so the render never blocks the worker. Self-clears its schedule when idle."""
+    rm = _imp("rich_media_generator")
+    return rm.poll_pending_agent_renders(business_id)
+
+
+def _run_measure_content_impact(business_id: int, args: dict):
+    """Measure how far each content batch moved the gap it targets (SoV + alignment delta, % gap
+    closed) against the latest audit. DB-only; safe to run after every audit."""
+    return _imp("content_impact").measure_all(business_id)
 
 
 def _run_report(business_id: int, args: dict) -> None:
@@ -280,10 +357,42 @@ def _run_ingest_ga(business_id: int, args: dict):
     return _imp("ga_data").ingest(business_id)
 
 
+def _run_dataforseo_intel(business_id: int, args: dict):
+    """Competitor keyword gaps (what rivals rank for that we don't) + brand mentions/sentiment via
+    DataForSEO. Cheap synchronous calls; dormant-safe without DataForSEO creds."""
+    return _imp("dataforseo").run_intel(business_id)
+
+
+def _run_dataforseo_reviews(business_id: int, args: dict):
+    """Pull Google (+ optional Trustpilot) reviews for the business via DataForSEO (task-based)."""
+    return _imp("dataforseo").run_reviews(business_id)
+
+
+def _run_enrich_keyword_volume(business_id: int, args: dict):
+    """Batch-enrich ALL of a business's stored target keywords with real search volume/CPC in the
+    fewest provider calls (one request per <=700 keywords). Dormant-safe + balance-guarded."""
+    return _imp("keyword_research").enrich_target_keywords(business_id)
+
+
+def _run_ingest_pagespeed(business_id: int, args: dict):
+    """PageSpeed Insights: grade owned (+ competitor) URLs on Lighthouse + Core Web Vitals.
+    Gated by PAGESPEED_ENABLED; no-op without it. Live scores need a PAGESPEED_API_KEY."""
+    urls = (args or {}).get("urls")
+    strategy = (args or {}).get("strategy")
+    return _imp("pagespeed").ingest(business_id, urls=urls, strategy=strategy)
+
+
 def _run_index_own_content(business_id: int, args: dict):
     """White-hat indexing: ping search engines about the owned-content feed + report GSC index
-    status. Keyless-safe (RSS/ping always work; index check no-ops without GSC)."""
-    return _imp("indexing").run(business_id)
+    status. Keyless-safe (RSS/ping always work; index check no-ops without GSC). Also runs the GSC
+    full-surface inspection (canonical/schema/index-reason harvest + sitemap submit) when a GSC
+    connection exists -- no-ops otherwise."""
+    out = _imp("indexing").run(business_id)
+    try:
+        out["gsc_inspect"] = _imp("gsc_inspect").run(business_id)
+    except Exception as e:  # noqa: BLE001 -- inspection must never fail the indexing job
+        out["gsc_inspect"] = {"error": str(e)[:200]}
+    return out
 
 
 def _run_post_review_replies(business_id: int, args: dict):
@@ -304,20 +413,73 @@ def _run_post_mention_replies(business_id: int, args: dict):
 
 
 def _run_generate_visual(business_id: int, args: dict):
-    """CI-4: generate a human-gated visual (image | quote_card | video_brief). Dormant-safe -- image
-    gen returns {skipped} without a provider key; quote-cards always render locally."""
+    """CI-4: generate a human-gated visual (image | quote_card | video_brief | video). Dormant-safe --
+    image/video gen return {skipped} without a provider key; quote-cards always render locally."""
     vc = _imp("visual_content")
     kind = (args.get("kind") or "image").lower()
     wo = args.get("work_order_id")
     if kind == "quote_card":
-        return vc.generate_quote_card(business_id, args.get("text") or args.get("prompt") or "",
-                                      attribution=args.get("attribution"), work_order_id=wo)
-    if kind == "video_brief":
-        return vc.generate_video_brief(business_id, args.get("topic") or args.get("prompt") or "",
-                                       work_order_id=wo)
-    return vc.generate_image(business_id, args.get("prompt") or "", kind=kind,
-                             size=args.get("size") or "1024x1024", work_order_id=wo,
-                             draft_id=args.get("draft_id"))
+        res = vc.generate_quote_card(business_id, args.get("text") or args.get("prompt") or "",
+                                     attribution=args.get("attribution"), work_order_id=wo)
+    elif kind == "video_brief":
+        res = vc.generate_video_brief(business_id, args.get("topic") or args.get("prompt") or "",
+                                      work_order_id=wo)
+    elif kind == "video":
+        res = vc.generate_video(business_id, args.get("prompt") or args.get("topic") or "",
+                                work_order_id=wo, draft_id=args.get("draft_id"),
+                                aspect_ratio=args.get("aspect_ratio") or "16:9")
+    else:
+        res = vc.generate_image(business_id, args.get("prompt") or "", kind=kind,
+                                size=args.get("size") or "1024x1024", work_order_id=wo,
+                                draft_id=args.get("draft_id"))
+    # Surface a skipped/failed generation as a FAILED job. Unlike the text/rich path (which raises a
+    # 0-draft RuntimeError), the visual generators RETURN {skipped}/{ok:False} dicts, which run_job
+    # would otherwise record as a green 'complete' with no asset -- a silent failure. Raise so the
+    # job is marked failed with the real reason. quote_card always renders locally (never skips).
+    if isinstance(res, dict) and (res.get("skipped") or res.get("ok") is False):
+        reason = res.get("reason") or res.get("error") or "generation produced no asset"
+        raise RuntimeError(f"{kind} generation failed: {reason}")
+    return res
+
+
+def _run_katteb_seo(business_id: int, args: dict):
+    """Run a Katteb SEO/competitor analysis on a draft (HEAVY, 1000 credits, human-triggered) and
+    merge the result into the draft's quality_notes.katteb. Dormant-safe: {skipped} without a key.
+    Takes 1-3 min (Katteb polls), which is why it's a job, not an inline request."""
+    kb = _imp("katteb")
+    if not kb.configured():
+        return {"skipped": True, "reason": "Katteb not configured"}
+    draft_id = args.get("draft_id")
+    if not draft_id:
+        return {"ok": False, "error": "draft_id required"}
+    from ..db import db  # local import: keep jobs.py import-light
+    import json as _json
+    with db() as conn:
+        row = conn.execute(
+            "SELECT body, target_query FROM content_drafts WHERE id=%s AND business_id=%s",
+            (draft_id, business_id)).fetchone()
+    if not row:
+        return {"ok": False, "error": "draft not found"}
+    res = kb.seo_analyze_wait(row["body"] or "", keyword=row.get("target_query") or None, kind="text")
+    if res.get("skipped") or not res.get("ok"):
+        return res
+    katteb_block = {
+        "seo_score": (res.get("article_data") or {}).get("seo_score"),
+        "competitor_scores": (res.get("competitor_data") or {}).get("scores"),
+        "structure": (res.get("competitor_data") or {}).get("structure"),
+        "competitors": (res.get("competitor_data") or {}).get("competitors") or [],
+        "keyword": res.get("keyword"),
+        "analyzed_at": res.get("analyzed_at"),
+        "credits_charged": res.get("credits_charged"),
+    }
+    with db() as conn:
+        conn.execute(
+            "UPDATE content_drafts SET quality_notes = "
+            "COALESCE(quality_notes, '{}'::jsonb) || jsonb_build_object('katteb', %s::jsonb) "
+            "WHERE id=%s AND business_id=%s",
+            (_json.dumps(katteb_block), draft_id, business_id))
+        conn.commit()
+    return {"ok": True, "draft_id": draft_id, "katteb": katteb_block}
 
 
 JOB_DISPATCH = {
@@ -325,11 +487,19 @@ JOB_DISPATCH = {
     "audit": _run_audit,
     "fast_audit": _run_fast_audit,   # rec 9: reduced-battery 'first look' (score fast, no cascade)
     "site_crawl": _run_site_crawl,
+    "ingest_source_material": _run_ingest_source_material,   # crawl -> grounding corpus (G.1)
+    "backfill_coverage": _run_backfill_coverage,             # coverage advisory onto existing drafts
     "audit_socials": _run_audit_socials,
     "gap_model": _run_gap_model,
     "plan": _run_plan,
     "sync_plan": _run_sync_plan,
     "generate_drafts": _run_generate_drafts,
+    "generate_content_batches": _run_generate_content_batches,
+    "generate_clusters": _run_generate_clusters,
+    "render_video": _run_render_video,
+    "publish_youtube": _run_publish_youtube,
+    "poll_video_renders": _run_poll_video_renders,   # multi-type content per gap
+    "measure_content_impact": _run_measure_content_impact,       # did the content move the gap?
     "report": _run_report,
     "cycle": _run_cycle,
     # monitoring + outreach + learning
@@ -360,9 +530,18 @@ JOB_DISPATCH = {
     "post_mention_replies": _run_post_mention_replies,
     # visual content (CI-4)
     "generate_visual": _run_generate_visual,
+    # Katteb SEO/competitor analysis (human-triggered, heavy)
+    "katteb_seo": _run_katteb_seo,
     # search analytics (Wave 1)
     "ingest_gsc": _run_ingest_gsc,
     "ingest_ga": _run_ingest_ga,
+    # technical SEO / Core Web Vitals (adopt batch)
+    "ingest_pagespeed": _run_ingest_pagespeed,
+    # batch keyword-volume enrichment (fewest DataForSEO calls)
+    "enrich_keyword_volume": _run_enrich_keyword_volume,
+    # DataForSEO intelligence: competitor keyword gaps + mentions/sentiment + reviews
+    "dataforseo_intel": _run_dataforseo_intel,
+    "dataforseo_reviews": _run_dataforseo_reviews,
     # white-hat own-content indexing (Wave 3)
     "index_own_content": _run_index_own_content,
 }
@@ -397,6 +576,7 @@ def reap_stale(max_minutes: int = STALE_RUNNING_MINUTES) -> int:
 # re-trigger EXPENSIVE (LLM/search-spending) work over time, so a stuck finger can't run up spend.
 _JOB_RATE_LIMITS = {
     "audit": (4, 3600), "fast_audit": (6, 3600), "cycle": (3, 3600), "benchmark": (6, 3600), "report": (6, 3600),
+    "generate_content_batches": (4, 3600), "measure_content_impact": (12, 3600),
     "discovery": (8, 3600), "enrich_outreach": (6, 3600), "social_verify": (6, 3600),
     "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
@@ -411,9 +591,22 @@ _JOB_RATE_LIMITS = {
     "gbp_reconcile": (2, 3600),
     "post_mention_replies": (12, 3600),
     "generate_visual": (30, 3600),
+    # video render (HeyGen/Veo, cost per render) + YouTube publish + cluster content (multi-piece LLM).
+    "render_video": (6, 3600),
+    "publish_youtube": (6, 3600),
+    "poll_video_renders": (30, 3600),   # scheduled completion sweep for async Video Agent renders
+    "generate_clusters": (4, 3600),
+    # Katteb heavy op = 1000 credits + Katteb's own 6/hour cap; keep the trigger rate under that.
+    "katteb_seo": (6, 3600),
     "ingest_gsc": (6, 3600),
     "ingest_ga": (6, 3600),
+    "ingest_pagespeed": (6, 3600),
+    "enrich_keyword_volume": (6, 3600),
+    "dataforseo_intel": (6, 3600),
+    "dataforseo_reviews": (6, 3600),
     "index_own_content": (4, 3600),
+    "ingest_source_material": (6, 3600),   # crawl the client's site into the grounding corpus
+    "backfill_coverage": (6, 3600),        # re-stamp coverage advisory onto existing drafts
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),
 }
@@ -487,11 +680,12 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
 # we never flip status to failed here.
 _OUTPUT_PRODUCING_JOBS = frozenset({
     "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "keyword_research",
-    "production_briefs", "citation_analyze", "benchmark", "local_rank",
+    "production_briefs", "citation_analyze", "benchmark", "local_rank", "generate_content_batches",
+    "ingest_source_material",
 })
 
 # Keys a handler's return dict commonly uses to report how many items it produced. First hit wins.
-_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored")
+_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored", "pieces", "ingested", "updated")
 
 
 def _derive_produced_count(result) -> Optional[int]:
@@ -606,7 +800,9 @@ def run_job(job_id: int) -> Optional[str]:
     with db() as conn:
         conn.execute(
             "UPDATE api_jobs SET status=%s, error=%s, result=%s, finished_at=now() WHERE id=%s",
-            (status, err, json.dumps(result) if result is not None else None, job_id),
+            # default=str so a handler returning a Decimal/date can never raise out of run_job and
+            # strand the job as 'running' until reap_stale (90m). Records the real status instead.
+            (status, err, json.dumps(result, default=str) if result is not None else None, job_id),
         )
         conn.commit()
     # Fan out a job.finished event to the client's stack (GHL/Zapier/...). No-op until

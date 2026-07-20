@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue } from "@/lib/hooks";
+import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue, useAddWorkOrder, useVisuals, useRichMediaDrafts } from "@/lib/hooks";
+import { apiBase } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
+import { CreateContentButton } from "@/components/CreateContentButton";
 
 function Tile({ k, value, sub, color }: { k: string; value: string; sub: string; color?: string }) {
   return (
@@ -17,11 +19,63 @@ function Tile({ k, value, sub, color }: { k: string; value: string; sub: string;
   );
 }
 
+// A recommended topic -> a real content task (so "needs content" actually produces content):
+// adds it to the board, where it shows up on the briefs page with Generate + its spec.
+function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_keywords?: number; why?: string }; businessId: number | null; canEdit: boolean }) {
+  const add = useAddWorkOrder(businessId);
+  return (
+    <div className="flex items-center gap-3 border-b border-indigo-100 py-2.5 last:border-0">
+      <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={r.why}>{r.topic}</span>
+      <span className="shrink-0 font-mono text-[11px] text-ink-4">{r.covers_keywords} kw</span>
+      {!canEdit ? null : add.isSuccess ? (
+        <Link href="/content/briefs" className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-good hover:bg-indigo-050">✓ Added — produce →</Link>
+      ) : (
+        <button
+          type="button"
+          onClick={() => add.mutate({ title: `Create content: ${r.topic}`, capability: "content_writing", gap_source: "topic authority", source_query: r.topic, area: "content", instruction: r.why, why_helps_ai_rep: r.why })}
+          disabled={add.isPending}
+          className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo hover:bg-indigo-050 disabled:opacity-50"
+        >
+          {add.isPending ? "Adding…" : "+ Add as task"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Content hub landing — "everything content, in one view": what to produce, what's in draft,
 // what's published, and the topic-authority recommendations not yet on the board, plus the
 // outreach that pulls the timeline forward. All read-only; row actions deep-link into the tabs.
+// Recent media — a discoverable strip of the videos / images / podcasts / rich content the engine
+// generated, linking to the full Media gallery. Only renders when there's media to show.
+function RecentMediaCard({ businessId }: { businessId: number | null }) {
+  const visuals = useVisuals(businessId);
+  const rich = useRichMediaDrafts(businessId);
+  const icon = (t: string) => t === "video" ? "▶" : t === "podcast" || t === "report_audio" ? "♪"
+    : t === "slide_deck" ? "▤" : t === "infographic" ? "◫" : (t === "image" || t === "quote_card" || t === "meme") ? "▦" : "¶";
+  const items: { key: string; kind: string; fileUrl?: string }[] = [];
+  for (const v of visuals.data?.visuals ?? []) {
+    if (["image", "quote_card", "meme", "video"].includes(v.kind))
+      items.push({ key: `v${v.id}`, kind: v.kind, fileUrl: businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : undefined });
+  }
+  for (const r of rich.data?.drafts ?? []) items.push({ key: `r${r.id}`, kind: r.asset_type });
+  if (items.length === 0) return null;
+  return (
+    <Card className="mb-6">
+      <SecHead title="Recent media" note="videos, images, podcasts & rich content you've generated" link={{ label: "Media gallery", href: "/content/media" }} />
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+        {items.slice(0, 8).map((it) => (
+          <Link key={it.key} href="/content/media" className="grid aspect-square place-items-center overflow-hidden rounded-[10px] border border-line bg-paper transition hover:border-line-2" title={it.kind.replace(/_/g, " ")}>
+            {it.fileUrl && it.kind !== "video" ? <img src={it.fileUrl} alt="" className="h-full w-full object-cover" loading="lazy" /> : <span className="text-[20px] text-ink-3">{icon(it.kind)}</span>}
+          </Link>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function ContentOverviewPage() {
-  const { businessId, businesses, loading } = useBusiness();
+  const { businessId, businesses, loading, canEdit } = useBusiness();
   const { data: drafts } = useContentDrafts(businessId);
   const { data: briefs } = useProductionBriefs(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
@@ -39,17 +93,24 @@ export default function ContentOverviewPage() {
 
   const toProduce = briefs ?? [];
   const recommended = topical?.next_to_write ?? [];
-  const inDraft = (drafts ?? []).filter((d) => d.status === "pending_review" || d.status === "needs_fix");
-  const published = (drafts ?? []).filter((d) => ["approved", "published", "live"].includes((d.status || "").toLowerCase()));
+  const inDraft = (drafts ?? []).filter((d) => d.status === "pending_review" || d.status === "needs_fix" || d.status === "held");
+  // "Published" = actually LIVE (matches the backend's live-only definition in gap_completion /
+  // content_impact). An approved draft that hasn't gone live yet is surfaced separately, not counted
+  // as published — approved is not the same as live-and-earning-traffic.
+  const published = (drafts ?? []).filter((d) => ["published", "live"].includes((d.status || "").toLowerCase()));
+  const approvedNotLive = (drafts ?? []).filter((d) => (d.status || "").toLowerCase() === "approved");
 
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader eyebrow="Content · Overview" title="Content at a glance" subtitle="What to produce, what's in draft, what's published, what's recommended — plus the outreach that speeds your timeline. Everything content, in one view." />
-        <Link href="/content/briefs" className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong">
-          See what to produce
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <CreateContentButton className="inline-flex h-9 items-center rounded-[10px] bg-indigo px-4 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_-4px_rgba(79,70,229,0.5)] hover:bg-indigo-strong" />
+          <Link href="/content/briefs" className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-line bg-white px-4 text-[13.5px] font-semibold text-ink hover:bg-paper">
+            See what to produce
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[13px] w-[13px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+          </Link>
+        </div>
       </div>
 
       {/* KPI tiles */}
@@ -57,7 +118,7 @@ export default function ContentOverviewPage() {
         <Tile k="To produce" value={String(toProduce.length)} sub="Added from your tasks" />
         <Tile k="Recommended" value={String(recommended.length)} sub="Not yet on your board" color="var(--indigo)" />
         <Tile k="In draft" value={String(inDraft.length)} sub="Awaiting review" />
-        <Tile k="Published" value={String(published.length)} sub="Live & earning traffic" color="var(--good)" />
+        <Tile k="Published" value={String(published.length)} sub={approvedNotLive.length ? `Live · ${approvedNotLive.length} approved awaiting go-live` : "Live & earning traffic"} color="var(--good)" />
       </div>
 
       {/* two columns: from your tasks (produce next) + recommended content */}
@@ -80,23 +141,22 @@ export default function ContentOverviewPage() {
         </Card>
 
         <div className="rounded-[18px] border border-indigo-100 bg-indigo-050 p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-6px_rgba(15,23,42,0.08)]">
-          <SecHead title="Recommended content" link={{ label: "All", href: "/gaps" }} />
-          <p className="mb-3 text-[13px] text-indigo-strong/85">From your topic authority — add any to your tasks to start producing it.</p>
+          <SecHead title="Recommended content" link={{ label: "All", href: "/content/briefs" }} />
+          <p className="mb-3 text-[13px] text-indigo-strong/85">From your topic authority — add any as a content task and it&apos;s ready to produce on the briefs page.</p>
           {recommended.length === 0 ? (
             <p className="text-[13px] text-ink-4">No recommendations yet — run keyword research to build your topic map.</p>
           ) : (
             <div>
               {recommended.slice(0, 5).map((r) => (
-                <div key={r.topic} className="flex items-center gap-3 border-b border-indigo-100 py-2.5 last:border-0">
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={r.why}>{r.topic}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-ink-4">{r.covers_keywords} kw</span>
-                  <Link href="/gaps" className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo hover:bg-indigo-050">+ Add</Link>
-                </div>
+                <RecommendRow key={r.topic} r={r} businessId={businessId} canEdit={canEdit} />
               ))}
             </div>
           )}
         </div>
       </div>
+
+      {/* recent media — discoverable gallery entry point */}
+      <RecentMediaCard businessId={businessId} />
 
       {/* outreach accelerator promo */}
       <Card className="flex flex-wrap items-center gap-4">

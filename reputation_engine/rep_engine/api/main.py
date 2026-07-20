@@ -25,9 +25,14 @@ from .routers import (
     auth_router,
     billing_router,
     businesses,
+    citations_router,
     connections_router,
     content,
+    ext_router,
+    heygen_webhook,
     insights,
+    rich_media_router,
+    katteb_router,
     integrations,
     jobs_router,
     onboarding_router,
@@ -151,7 +156,8 @@ def create_app() -> FastAPI:
     # Public, token-based flows carry their own credential in the body (a single-use token)
     # and never rely on an ambient session cookie, so CSRF protection is moot for them.
     _CSRF_EXEMPT = {"/auth/login", "/auth/logout", "/auth/accept-invite",
-                    "/auth/reset-password", "/auth/forgot-password", "/billing/webhook"}
+                    "/auth/reset-password", "/auth/forgot-password", "/billing/webhook",
+                    "/webhooks/heygen"}
 
     @app.middleware("http")
     async def _csrf_protect(request, call_next):
@@ -243,6 +249,7 @@ def create_app() -> FastAPI:
     app.include_router(businesses.router)
     app.include_router(audits.router)
     app.include_router(insights.router)
+    app.include_router(katteb_router.router)
     app.include_router(content.router)
     app.include_router(rankings.router)
     app.include_router(sustain.router)
@@ -258,6 +265,10 @@ def create_app() -> FastAPI:
     app.include_router(reviews_router.router)
     app.include_router(approvals_router.router)
     app.include_router(visuals_router.router)
+    app.include_router(rich_media_router.router)
+    app.include_router(heygen_webhook.router)
+    app.include_router(ext_router.router)
+    app.include_router(citations_router.router)
     app.include_router(public_router.router)  # unauthenticated lead-magnet funnel
     return app
 

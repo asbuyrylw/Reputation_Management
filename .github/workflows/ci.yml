@@ -6,7 +6,11 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # Run on the long-lived branches AND on active feature branches. Work here ships by
+    # pushing directly to a feature/* branch (which also auto-deploys to Railway), so CI
+    # must run on those pushes to catch the DB-schema bug class (ON CONFLICT on partial
+    # indexes, positional INSERTs, Decimal-vs-float) BEFORE it deploys -- not only on PRs.
+    branches: [main, master, "feature/**"]
   pull_request:
 
 jobs:

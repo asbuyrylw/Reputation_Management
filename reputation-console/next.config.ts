@@ -18,6 +18,11 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_PROXY_TARGET}/:path*` }];
   },
+  async redirects() {
+    // "Recommendations" is retired -- every gap-derived task now lands directly on the task
+    // board (no manual promote step), so the separate recommendations inbox no longer exists.
+    return [{ source: "/next-steps", destination: "/content/work-orders", permanent: false }];
+  },
 };
 
 export default nextConfig;

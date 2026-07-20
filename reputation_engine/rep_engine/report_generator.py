@@ -54,7 +54,7 @@ RUST = "8A3B2E"
 def _run_series(conn, business_id: int) -> list:
     runs = conn.execute(
         "SELECT id, finished_at FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
-        "AND finished_at IS NOT NULL ORDER BY id ASC", (business_id,),
+        "AND finished_at IS NOT NULL AND COALESCE(mode,'full')<>'fast' ORDER BY id ASC", (business_id,),
     ).fetchall()
     series = []
     for r in runs:
@@ -76,7 +76,8 @@ def _run_series(conn, business_id: int) -> list:
 
 def _before_after(conn, business_id: int, limit: int = 4) -> list:
     runs = conn.execute(
-        "SELECT id FROM audit_runs WHERE business_id=%s AND finished_at IS NOT NULL ORDER BY id",
+        "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
+        "AND COALESCE(mode,'full')<>'fast' ORDER BY id",
         (business_id,),
     ).fetchall()
     if len(runs) < 2:
@@ -148,16 +149,16 @@ def _load(business_id: int) -> dict:
             assets_n = conn.execute(
                 "SELECT COUNT(*) n FROM assets WHERE business_id=%s", (business_id,)
             ).fetchone()["n"]
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 -- don't let a client report silently show 0 assets as fact
+            log.warning("report_generator: work-order/asset stats query failed (%s) -- report may under-report.", e)
         try:
             month_cost = float(conn.execute(
                 "SELECT COALESCE(SUM(est_cost_usd),0) s FROM cost_ledger "
                 "WHERE business_id=%s AND created_at >= date_trunc('month', now())",
                 (business_id,),
             ).fetchone()["s"])
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            log.warning("report_generator: month-cost query failed (%s) -- report may show $0 spend.", e)
         attr = conn.execute(
             "SELECT metric, delta, assets_in_window FROM attribution "
             "WHERE business_id=%s ORDER BY id DESC LIMIT 3", (business_id,),
@@ -400,7 +401,6 @@ def _save_report(doc, b) -> str:
     _fix_settings_zoom(path)
     log.info("Report written: %s", path)
     print(path)
-    _record_report(b.get("id"), filename, os.path.abspath(path))
     # A regenerated .docx (same per-day basename) must not keep a STALE colocated .pdf: drop
     # any old sibling before (re)converting, so a failed/absent conversion leaves the fresh
     # .docx as the single source of truth rather than serving last run's mismatched PDF.
@@ -413,6 +413,9 @@ def _save_report(doc, b) -> str:
     pdf = _docx_to_pdf(path)   # best-effort: a colocated <basename>.pdf when LibreOffice is present
     if pdf:
         log.info("Report PDF written: %s", pdf)
+    # Record AFTER the PDF exists so BOTH the .docx and .pdf get durable object-storage keys (a report
+    # on ephemeral disk 410s after a redeploy). Passing the pdf path lets _record_report upload it too.
+    _record_report(b.get("id"), filename, os.path.abspath(path), pdf)
     return path
 
 
@@ -439,16 +442,36 @@ def _docx_to_pdf(docx_path: str) -> Optional[str]:
     return pdf if os.path.isfile(pdf) else None
 
 
-def _record_report(business_id, filename: str, path: str) -> None:
-    """Track the saved report so the console can list + download it. Best-effort: never let
-    a bookkeeping miss (e.g. pre-migration DB) fail an otherwise-good report generation."""
+def _record_report(business_id, filename: str, path: str, pdf_path: Optional[str] = None) -> None:
+    """Track the saved report so the console can list + download it. Uploads the .docx (+ optional
+    .pdf) to durable object storage when configured, so the download survives a redeploy that wipes
+    the local disk (else the report 410s). Best-effort: never let a bookkeeping/storage miss fail an
+    otherwise-good report generation."""
     if not business_id:
         return
+    _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    storage_key = pdf_key = None
+    try:
+        from . import storage as _storage
+    except ImportError:  # pragma: no cover
+        import storage as _storage  # type: ignore
+    if _storage.configured():
+        try:
+            st = _storage.get_storage()
+            with open(path, "rb") as f:
+                storage_key = st.upload_bytes(business_id, f.read(), filename, _DOCX).key
+            if pdf_path and os.path.isfile(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    pdf_key = st.upload_bytes(business_id, f.read(),
+                                              os.path.basename(pdf_path), "application/pdf").key
+        except Exception as e:  # noqa: BLE001 -- storage must not break report generation
+            log.warning("report: object-storage upload failed (%s) -- serving from disk only", e)
     try:
         with db() as conn:
             conn.execute(
-                "INSERT INTO reports (business_id, filename, path, kind) VALUES (%s,%s,%s,'monthly')",
-                (business_id, filename, path),
+                "INSERT INTO reports (business_id, filename, path, kind, storage_key, pdf_storage_key) "
+                "VALUES (%s,%s,%s,'monthly',%s,%s)",
+                (business_id, filename, path, storage_key, pdf_key),
             )
             conn.commit()
     except Exception as e:  # noqa: BLE001 -- bookkeeping must not break report generation
@@ -558,7 +581,7 @@ def _section_production_briefs(heading, body, bullet, business_id, gap=None):
             drafts = conn.execute(
                 "SELECT title, asset_type, target_query, status FROM content_drafts "
                 "WHERE business_id=%s AND asset_type IN ('article','faq','schema') "
-                "AND status IN ('pending_review','needs_fix') ORDER BY id DESC LIMIT 12",
+                "AND status IN ('pending_review','needs_fix','held') ORDER BY id DESC LIMIT 12",
                 (business_id,)).fetchall()
     except Exception as e:  # noqa: BLE001 -- table may be absent on an un-migrated DB
         log.warning("report: content-drafts unavailable for Content-to-Produce (%s)", e)

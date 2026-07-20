@@ -86,9 +86,8 @@ def _score(ga) -> Optional[int]:
 def trend(business_id: int) -> dict:
     """Per-run series of overall + per-engine scores (0-100). Lazily back-fills missing rollups."""
     with db() as conn:
-        runs = conn.execute(
-            "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' "
-            "AND finished_at IS NOT NULL ORDER BY id", (business_id,)).fetchall()
+        from . import audit_runs
+        runs = audit_runs.recent_full_runs(conn, business_id, order="asc", limit=None)
         have = {r["run_id"] for r in conn.execute(
             "SELECT run_id FROM run_metrics WHERE business_id=%s", (business_id,)).fetchall()}
     for r in runs:

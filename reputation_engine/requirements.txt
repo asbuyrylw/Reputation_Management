@@ -19,8 +19,19 @@ psycopg-pool>=3.2      # connection pool for the Postgres checkpointer + the rea
 #     hashing uses stdlib pbkdf2 (no bcrypt/passlib native dep), so nothing else is needed. ---
 fastapi>=0.110         # JSON API for the console
 uvicorn[standard]>=0.29  # ASGI server (python -m uvicorn rep_engine.api.main:app)
+python-multipart>=0.0.9  # required by FastAPI for file uploads (source-material documents)
+pypdf>=4.0             # extract text from uploaded PDF source documents
 pyjwt>=2.8             # JWT auth tokens (HS256)
 stripe>=9.0            # Phase 2c billing (Checkout/Portal/webhooks); imported lazily,
                        # the app runs fine without it until STRIPE_SECRET_KEY is set
 cryptography>=42       # Integrations vault: Fernet at-rest encryption for OAuth tokens /
                        # app-passwords (rep_engine.crypto). Only loaded when connections are used.
+boto3>=1.34            # Central object storage (rep_engine.storage): S3-compatible client for Railway
+                       # Buckets / Cloudflare R2 / AWS S3 / MinIO. Imported lazily and dormant until a
+                       # bucket is configured (BUCKET_* injected by a connected Railway Bucket, or
+                       # REP_STORAGE_*), so the app runs fine without it until storage is set up.
+playwright>=1.45       # Citation/directory-listing automation (rep_engine.citation_builder): drives a
+                       # headless browser under Gemini Computer Use, screenshot-by-screenshot, always
+                       # pausing for a human confirm before any submit-like click. Only imported when a
+                       # citation run is triggered; the app runs fine without the Chromium binary
+                       # installed (citation_builder.configured() reports it, dormant otherwise).

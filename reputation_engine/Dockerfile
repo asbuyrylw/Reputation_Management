@@ -14,6 +14,11 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Chromium + its OS deps for the citation-builder's headless browser (rep_engine.citation_builder).
+# `--with-deps` pulls the handful of shared libs Chromium needs on Debian slim; this is the only
+# reason the image gets meaningfully bigger.
+RUN playwright install --with-deps chromium
+
 COPY . .
 
 EXPOSE 8000

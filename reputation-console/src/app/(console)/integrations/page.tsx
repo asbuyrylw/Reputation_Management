@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
 import {
   useExternalSignals,
@@ -20,14 +20,29 @@ import {
   useZerniaSetup,
   useZerniaConnect,
   useZerniaSync,
+  useExtensionTokens,
+  useCreateExtensionToken,
+  useRevokeExtensionToken,
+  useCitationDirectories,
+  useSetDirectoryCredentials,
+  useCitationRuns,
+  useCitationRun,
+  useStartCitationRun,
+  useConfirmCitationRun,
+  useCancelCitationRun,
+  useWritingStyles,
+  useAnalyzeWritingStyle,
+  useSetActiveStyle,
+  useDeleteWritingStyle,
 } from "@/lib/hooks";
 import { Card, PageHeader, Spinner, Pill, Button, Input } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { TabNav } from "@/components/content/TabNav";
+import { DataSourcesPanel } from "@/components/DataSourcesPanel";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import type { Connection, ZerniaAccount } from "@/lib/types";
 import type { Tone } from "@/lib/uiTokens";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiBase } from "@/lib/api";
 
 const TYPES = ["technical_seo", "keywords", "serp_rank", "backlinks", "brand", "visitors", "other"];
 const TYPE_LABELS: Record<string, string> = {
@@ -91,7 +106,7 @@ function statusTone(status: string): { tone: Tone; label: string } {
 const fmtWhen = (d?: string | null) => (d ? new Date(d).toLocaleString() : "never");
 
 interface ProviderDef {
-  kind: "wordpress_org" | "google_business_profile" | "ayrshare_profile" | "google_search_console" | "google_analytics";
+  kind: "wordpress_org" | "google_business_profile" | "google_search_console" | "google_analytics" | "youtube";
   name: string;
   blurb: string;
   surface: "owned" | "third_party";
@@ -111,12 +126,6 @@ const PROVIDERS: ProviderDef[] = [
     surface: "owned",
   },
   {
-    kind: "ayrshare_profile",
-    name: "Social (Facebook · Instagram · LinkedIn · Pinterest)",
-    blurb: "Third-party social via Ayrshare — drafts are prepared; you post and confirm manually.",
-    surface: "third_party",
-  },
-  {
     kind: "google_search_console",
     name: "Google Search Console",
     blurb: "Import real Google clicks, impressions & ranking — the proof your SEO is working.",
@@ -126,6 +135,12 @@ const PROVIDERS: ProviderDef[] = [
     kind: "google_analytics",
     name: "Google Analytics",
     blurb: "Import sessions, conversions & behavior — see what visitors do after they arrive.",
+    surface: "owned",
+  },
+  {
+    kind: "youtube",
+    name: "YouTube",
+    blurb: "Publish rendered explainer videos (with captions) to your channel — YouTube is the most-cited source in Google's AI answers.",
     surface: "owned",
   },
 ];
@@ -411,20 +426,18 @@ function ProviderCard({
   const [siteUrl, setSiteUrl] = useState("");
   const [wpUser, setWpUser] = useState("");
   const [appPassword, setAppPassword] = useState("");
-  // Ayrshare form
-  const [profileKey, setProfileKey] = useState("");
-  const [displayName, setDisplayName] = useState("");
 
   const status = connection?.status ?? "";
   const { tone, label } = statusTone(status);
   const connected = status === "active";
   const canConnect = canEdit && vaultReady;
 
-  // OAuth start, used by all Google providers (GBP + Search Console + Analytics).
+  // OAuth start, used by all Google providers (GBP + Search Console + Analytics + YouTube).
   const isOauth =
     provider.kind === "google_business_profile" ||
     provider.kind === "google_search_console" ||
-    provider.kind === "google_analytics";
+    provider.kind === "google_analytics" ||
+    provider.kind === "youtube";
   const startOauth = () => {
     setErr(null);
     authorize.mutate(provider.kind, {
@@ -447,20 +460,6 @@ function ProviderCard({
         onSuccess: () => {
           setShowForm(false);
           setSiteUrl(""); setWpUser(""); setAppPassword("");
-        },
-        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save the connection."),
-      },
-    );
-  };
-
-  const submitAyrshare = () => {
-    setErr(null);
-    connect.mutate(
-      { kind: "ayrshare_profile", profile_key: profileKey.trim(), display_name: displayName.trim() || undefined },
-      {
-        onSuccess: () => {
-          setShowForm(false);
-          setProfileKey(""); setDisplayName("");
         },
         onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't save the connection."),
       },
@@ -543,7 +542,7 @@ function ProviderCard({
 
       {testNote && <p className="mt-2 text-xs text-ink-3">{testNote}</p>}
 
-      {/* Direct-credential forms (WordPress app-password / Ayrshare profile key) */}
+      {/* Direct-credential form (WordPress app-password) */}
       {canConnect && showForm && provider.kind === "wordpress_org" && (
         <div className="mt-3 space-y-2 border-t border-line pt-3">
           <p className="text-xs text-ink-3">
@@ -562,21 +561,6 @@ function ProviderCard({
           </Button>
         </div>
       )}
-      {canConnect && showForm && provider.kind === "ayrshare_profile" && (
-        <div className="mt-3 space-y-2 border-t border-line pt-3">
-          <p className="text-xs text-ink-3">
-            Paste your Ayrshare <span className="font-medium">Profile Key</span>. Social posts are prepared as drafts —
-            you review and post them yourself (third-party platforms require manual posting).
-          </p>
-          <Input value={profileKey} onChange={(e) => setProfileKey(e.target.value)} placeholder="Ayrshare profile key"
-            type="password" />
-          <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (optional)" />
-          <Button onClick={submitAyrshare} disabled={connect.isPending || !profileKey}>
-            {connect.isPending ? "Saving…" : "Save connection"}
-          </Button>
-        </div>
-      )}
-
       {/* GSC property picker — choose which verified property to pull, once connected. */}
       {provider.kind === "google_search_console" && connected && connection && canConnect && (
         <GscPropertyPicker connection={connection} businessId={businessId} />
@@ -620,6 +604,8 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
   // Accounts confirmed by the latest in-session sync (merged with what's on the connection meta).
   const [syncedAccounts, setSyncedAccounts] = useState<ZerniaAccount[] | null>(null);
   const [syncNote, setSyncNote] = useState<string | null>(null);
+  // True while the owner is authorizing a network in the Zernio popup — drives the auto-sync on return.
+  const awaitingAuthRef = useRef(false);
 
   const connection = data?.connections.find((c) => c.kind === "zernia");
   // platforms come back from setup; once set up they're stored on the connection meta too.
@@ -653,6 +639,7 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
         if (res.authUrl) {
           const w = window.open(res.authUrl, "_blank");
           if (!w) setErr("Your browser blocked the authorization popup — allow popups for this site and try again.");
+          else awaitingAuthRef.current = true; // pull the account automatically when they come back
         }
       },
       onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start the connection."),
@@ -674,6 +661,25 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
       onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't sync your accounts."),
     });
   };
+
+  // Keep a live ref so the window-focus listener always calls the latest runSync (stable subscription).
+  const runSyncRef = useRef(runSync);
+  useEffect(() => {
+    runSyncRef.current = runSync;
+  });
+
+  // When the owner finishes authorizing in the Zernio popup and returns to this tab, pull the newly
+  // connected account automatically — no need to click Sync. (The manual Sync button still works.)
+  // The short delay gives Zernio's OAuth callback a moment to register the account before we fetch.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!awaitingAuthRef.current) return;
+      awaitingAuthRef.current = false;
+      window.setTimeout(() => runSyncRef.current(), 1200);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   return (
     <Card>
@@ -713,7 +719,7 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
         <div className="mt-3 border-t border-line pt-3">
           <p className="text-xs text-ink-3">
             Your Zernio profile is ready. Click <span className="font-medium">Connect</span> on each network to authorize
-            that account in a Zernio popup, then <span className="font-medium">Sync</span> to confirm.
+            that account in a popup — when you come back, the connected account appears automatically.
           </p>
 
           {platforms.length === 0 ? (
@@ -756,7 +762,7 @@ function ZernioCard({ businessId, canEdit }: { businessId: number | null; canEdi
               {sync.isPending ? "Syncing…" : "Sync connected accounts"}
             </Button>
             <span className="text-xs text-ink-4">
-              After you finish connecting in the popup, click Sync to pull your accounts.
+              Accounts sync automatically when you return from the popup — use this if one doesn&apos;t show up.
             </span>
           </div>
           {syncNote && <p className="mt-2 text-xs text-ink-3">{syncNote}</p>}
@@ -789,12 +795,14 @@ function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; ca
       )}
 
       <Card className="mb-4 bg-indigo-050/50">
-        <div className="text-sm font-semibold text-ink">How publishing honesty works</div>
+        <div className="text-sm font-semibold text-ink">How publishing works</div>
         <p className="mt-1 text-sm text-ink-2">
-          <span className="font-medium">Surfaces you own</span> (your WordPress site, your Google Business Profile) can be
-          published to automatically once you approve. <span className="font-medium">Third-party platforms</span> (Facebook,
-          Instagram, LinkedIn, Pinterest) are draft-only — we prepare the post and alert you, but{" "}
-          <span className="font-medium">you post it manually</span> to stay within each platform&apos;s terms of service.
+          <span className="font-medium">Surfaces you own</span> (your WordPress site, your Google Business Profile) publish
+          automatically once you approve. <span className="font-medium">Social accounts you connect below</span> (Facebook,
+          Instagram, LinkedIn, X, and more) publish through each platform&apos;s official API once you authorize them — and
+          you still approve every post first. A few places with no posting API or stricter terms (Yelp, Reddit) stay
+          draft-only: we prepare the reply and the <span className="font-medium">Reply Assist</span> extension shows it on
+          the page for you to post yourself.
         </p>
       </Card>
 
@@ -812,6 +820,258 @@ function ConnectionsTab({ businessId, canEdit }: { businessId: number | null; ca
         {/* Zernio social publishing — its own connect-your-accounts flow (no vault secret to paste). */}
         <ZernioCard businessId={businessId} canEdit={canEdit} />
       </div>
+    </div>
+  );
+}
+
+// ---- Reply Assist (Chrome extension) tab -----------------------------------------------
+// Yelp/Reddit/Facebook comment replies are read-only in the console (those platforms' terms
+// forbid automated posting, and there's no API to post through anyway). This tab mints a
+// revocable bearer token the extension uses to pull already-drafted replies onto the operator's
+// own screen while they're looking at the review/comment on the platform's own site — they still
+// click "post" themselves, so nothing here touches anyone's terms of service.
+function ReplyAssistTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useExtensionTokens(businessId);
+  const create = useCreateExtensionToken(businessId);
+  const revoke = useRevokeExtensionToken(businessId);
+  const [label, setLabel] = useState("Reply Assist extension");
+  const [freshToken, setFreshToken] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">What this does</div>
+        <p className="mt-1 text-sm text-ink-2">
+          A small Chrome extension shows the reply we already drafted for a Yelp, Reddit, or Facebook review/comment right on
+          that page, so you can review it and paste it in — the platform still requires you to post it yourself. Generate a
+          token below, then paste it into the extension&apos;s options page.
+        </p>
+      </Card>
+
+      {canEdit && (
+        <Card>
+          <div className="text-sm font-semibold text-ink">Generate a token</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} className="max-w-xs" placeholder="e.g. Logan's laptop" />
+            <Button
+              onClick={() => create.mutate(label, { onSuccess: (res) => setFreshToken(res.token) })}
+              disabled={create.isPending}
+            >
+              {create.isPending ? "Generating…" : "+ New token"}
+            </Button>
+          </div>
+          {freshToken && (
+            <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Copy this now — it won&apos;t be shown again
+              </div>
+              <code className="mt-1 block break-all rounded bg-white px-2 py-1.5 text-xs text-ink">{freshToken}</code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(freshToken)}
+                className="mt-2 text-xs font-medium text-indigo-600 hover:underline"
+              >
+                Copy to clipboard
+              </button>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Card>
+        <div className="text-sm font-semibold text-ink">Active tokens</div>
+        {isLoading ? (
+          <Spinner />
+        ) : !data?.tokens.length ? (
+          <p className="mt-1 text-sm text-ink-4">No tokens yet.</p>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {data.tokens.map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">{t.label || "Reply Assist extension"}</div>
+                  <div className="text-xs text-ink-4">
+                    Created {new Date(t.created_at).toLocaleDateString()}
+                    {t.last_used_at ? ` · last used ${new Date(t.last_used_at).toLocaleDateString()}` : " · never used"}
+                    {t.revoked_at && " · revoked"}
+                  </div>
+                </div>
+                {canEdit && !t.revoked_at && (
+                  <button
+                    type="button"
+                    onClick={() => revoke.mutate(t.id)}
+                    disabled={revoke.isPending}
+                    className="text-xs font-medium text-rose-600 hover:underline disabled:opacity-50"
+                  >
+                    Revoke
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Citation builder (computer-use directory listings) tab ---------------------------
+// Drives a headless browser under Gemini Computer Use through a directory's own claim/update
+// flow, pausing for an explicit confirm before any submit-like click. Always triggered by hand;
+// never a background job. See rep_engine.citation_builder for the full safety posture.
+function RunViewer({ businessId, runId, onClose }: { businessId: number | null; runId: number; onClose: () => void }) {
+  const { data: run } = useCitationRun(businessId, runId);
+  const confirm = useConfirmCitationRun(businessId);
+  const cancel = useCancelCitationRun(businessId);
+
+  if (!run) return <Spinner />;
+  const lastStep = run.steps[run.steps.length - 1];
+  const shotUrl = lastStep && businessId != null
+    ? `${apiBase()}/businesses/${businessId}/citation-runs/${runId}/screenshot/${lastStep.step}`
+    : null;
+  const statusWord: Record<string, string> = {
+    running: "Running…", awaiting_confirmation: "Waiting on you", done: "Done", failed: "Failed", cancelled: "Cancelled",
+  };
+
+  return (
+    <Card className="mt-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-ink">Run #{run.id} — {statusWord[run.status] || run.status}</div>
+        <button type="button" onClick={onClose} className="text-xs text-ink-4 hover:underline">Close</button>
+      </div>
+      {shotUrl && (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img src={shotUrl} alt={`Step ${lastStep.step}`} className="mt-2 max-h-80 w-auto rounded border border-line" />
+      )}
+      {run.status === "awaiting_confirmation" && run.pending_action && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Ready to submit — your call</div>
+          <p className="mt-1 text-sm text-ink-2">
+            The next action looks like a final submit/claim/publish click: <code className="text-xs">{JSON.stringify(run.pending_action)}</code>.
+            Nothing gets sent to the directory until you approve it.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button onClick={() => confirm.mutate(runId)} disabled={confirm.isPending}>
+              {confirm.isPending ? "Submitting…" : "Approve & continue"}
+            </Button>
+            <button
+              type="button"
+              onClick={() => cancel.mutate(runId)}
+              disabled={cancel.isPending}
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-slate-50"
+            >
+              Cancel run
+            </button>
+          </div>
+        </div>
+      )}
+      {run.status === "failed" && run.error && (
+        <p className="mt-2 text-sm text-rose-600">{run.error}</p>
+      )}
+      <p className="mt-2 text-xs text-ink-4">{run.steps.length} step{run.steps.length === 1 ? "" : "s"} so far.</p>
+    </Card>
+  );
+}
+
+function CitationBuilderTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useCitationDirectories(businessId);
+  const { data: runsData } = useCitationRuns(businessId);
+  const setCreds = useSetDirectoryCredentials(businessId);
+  const start = useStartCitationRun(businessId);
+  const [editingDir, setEditingDir] = useState<string | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [activeRun, setActiveRun] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (isLoading || !data) return <Spinner />;
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">What this does</div>
+        <p className="mt-1 text-sm text-ink-2">
+          Claiming/updating a directory listing (Apple Maps, Bing Places, Nextdoor Business) has no API — it&apos;s pure
+          click-through toil. This drives a browser through that flow for you, using your saved login, and pauses right
+          before any submit/claim/publish click so you approve it yourself.
+        </p>
+        {!data.configured && (
+          <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-inset ring-amber-200">
+            Not configured yet — set COMPUTER_USE_API_KEY (or GEMINI_API_KEY) and run{" "}
+            <code>playwright install chromium</code> on the server to enable.
+          </p>
+        )}
+      </Card>
+
+      <div className="space-y-3">
+        {data.directories.map((d) => (
+          <Card key={d.key}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-ink">{d.label}</div>
+                <div className="text-xs text-ink-4">{d.has_credentials ? "Login saved" : "No login saved yet"}</div>
+              </div>
+              {canEdit && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setEditingDir(editingDir === d.key ? null : d.key); setUsername(""); setPassword(""); }}
+                    className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-ink-2 hover:bg-slate-50"
+                  >
+                    {d.has_credentials ? "Update login" : "Add login"}
+                  </button>
+                  <Button
+                    onClick={() => {
+                      setErr(null);
+                      start.mutate({ directoryKey: d.key }, {
+                        onSuccess: (res) => setActiveRun(res.run_id),
+                        onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't start the run."),
+                      });
+                    }}
+                    disabled={!data.configured || !d.has_credentials || start.isPending}
+                    title={!d.has_credentials ? "Add a login first" : undefined}
+                  >
+                    {start.isPending ? "Starting…" : "Start run"}
+                  </Button>
+                </div>
+              )}
+            </div>
+            {editingDir === d.key && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-2">
+                <Input placeholder="Username / email" value={username} onChange={(e) => setUsername(e.target.value)} className="max-w-xs" />
+                <Input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="max-w-xs" />
+                <Button
+                  onClick={() => setCreds.mutate({ directoryKey: d.key, username, password }, {
+                    onSuccess: () => { setEditingDir(null); setUsername(""); setPassword(""); },
+                  })}
+                  disabled={!username || !password || setCreds.isPending}
+                >
+                  Save
+                </Button>
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+
+      {err && <p className="text-sm text-rose-600">{err}</p>}
+      {activeRun != null && <RunViewer businessId={businessId} runId={activeRun} onClose={() => setActiveRun(null)} />}
+
+      {!!runsData?.runs.length && (
+        <Card>
+          <div className="text-sm font-semibold text-ink">Past runs</div>
+          <ul className="mt-2 space-y-1.5">
+            {runsData.runs.map((r) => (
+              <li key={r.id} className="flex items-center justify-between text-sm">
+                <button type="button" onClick={() => setActiveRun(r.id)} className="text-indigo-600 hover:underline">
+                  #{r.id} · {r.directory_key} · {r.status}
+                </button>
+                <span className="text-xs text-ink-4">{new Date(r.updated_at).toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </div>
   );
 }
@@ -933,7 +1193,81 @@ function DataImportsTab({ businessId, canEdit }: { businessId: number | null; ca
   );
 }
 
-type Tab = "connections" | "imports";
+// ---- Writing styles tab: clone a brand voice from a URL; the active one shapes generated content ----
+function WritingStylesTab({ businessId, canEdit }: { businessId: number | null; canEdit: boolean }) {
+  const { data, isLoading } = useWritingStyles(businessId);
+  const analyze = useAnalyzeWritingStyle(businessId);
+  const setActive = useSetActiveStyle(businessId);
+  const del = useDeleteWritingStyle(businessId);
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const styles = data?.styles ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-indigo-050/50">
+        <div className="text-sm font-semibold text-ink">Write in your brand&apos;s voice</div>
+        <p className="mt-1 text-sm text-ink-2">
+          Paste a URL to an article that sounds like you (yours or a reference). We analyze its style — tone, sentence length, vocabulary, quirks — and the <span className="font-medium">active</span> style shapes every piece we generate.
+        </p>
+      </Card>
+
+      {canEdit && (
+        <Card>
+          <div className="text-sm font-semibold text-ink">Clone a style from a URL</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/an-article" className="min-w-[260px] flex-1" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional)" className="max-w-[180px]" />
+            <Button
+              onClick={() => { setErr(null); analyze.mutate({ url, name: name || undefined }, { onSuccess: () => { setUrl(""); setName(""); }, onError: (e) => setErr(e instanceof ApiError ? e.message : "Couldn't analyze that URL.") }); }}
+              disabled={analyze.isPending || !url.trim()}
+            >
+              {analyze.isPending ? "Analyzing…" : "Analyze style"}
+            </Button>
+          </div>
+          {err && <p className="mt-1.5 text-xs text-rose-600">{err}</p>}
+        </Card>
+      )}
+
+      <Card>
+        <div className="text-sm font-semibold text-ink">Your styles</div>
+        {isLoading ? <Spinner /> : styles.length === 0 ? (
+          <p className="mt-1 text-sm text-ink-4">No styles yet — analyze a URL above.</p>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {styles.map((s) => (
+              <li key={s.id} className={`rounded-lg border p-3 ${s.active ? "border-indigo-300 bg-indigo-050/40" : "border-line"}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-sm font-medium text-ink">
+                      {s.name}
+                      {s.active && <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold text-white">Active</span>}
+                    </div>
+                    {s.source_url && <a href={s.source_url} target="_blank" rel="noreferrer" className="text-[11px] text-ink-4 hover:text-indigo hover:underline">{s.source_url}</a>}
+                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-2">
+                      {s.active ? (
+                        <button onClick={() => setActive.mutate(null)} className="text-xs font-medium text-ink-3 hover:underline">Deactivate</button>
+                      ) : (
+                        <button onClick={() => setActive.mutate(s.id)} className="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">Use this</button>
+                      )}
+                      <button onClick={() => del.mutate(s.id)} className="text-xs font-medium text-rose-600 hover:underline">Delete</button>
+                    </div>
+                  )}
+                </div>
+                {s.profile && <p className="mt-1.5 text-[12px] leading-relaxed text-ink-2">{s.profile}</p>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+type Tab = "connections" | "imports" | "reply-assist" | "citations" | "writing-styles";
 
 export default function IntegrationsPage() {
   const { businessId, canEdit } = useBusiness();
@@ -948,12 +1282,18 @@ export default function IntegrationsPage() {
 
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
+      {/* What's connected vs. dormant — so features never sit silently empty. */}
+      <div className="mb-4"><DataSourcesPanel businessId={businessId} /></div>
+
       {/* In-page switch — segmented filter (distinct from the Settings hub's underline tab bar above). */}
       <TabNav
         className="mb-4"
         tabs={[
           { key: "connections", label: "Connections" },
           { key: "imports", label: "Data imports" },
+          { key: "reply-assist", label: "Reply Assist extension" },
+          { key: "citations", label: "Citation builder" },
+          { key: "writing-styles", label: "Writing styles" },
         ]}
         active={tab}
         onSelect={(k) => setTab(k as Tab)}
@@ -961,8 +1301,14 @@ export default function IntegrationsPage() {
 
       {tab === "connections" ? (
         <ConnectionsTab businessId={businessId} canEdit={canEdit} />
-      ) : (
+      ) : tab === "imports" ? (
         <DataImportsTab businessId={businessId} canEdit={canEdit} />
+      ) : tab === "reply-assist" ? (
+        <ReplyAssistTab businessId={businessId} canEdit={canEdit} />
+      ) : tab === "citations" ? (
+        <CitationBuilderTab businessId={businessId} canEdit={canEdit} />
+      ) : (
+        <WritingStylesTab businessId={businessId} canEdit={canEdit} />
       )}
     </div>
   );

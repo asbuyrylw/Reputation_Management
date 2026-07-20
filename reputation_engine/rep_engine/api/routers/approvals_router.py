@@ -90,13 +90,22 @@ def integration_settings(business_id: int = Depends(authorize_business),
     except Exception:  # noqa: BLE001
         can_manage = user.get("role") == "admin"
     return {"settings": asdict(s), "can_manage_autopost": bool(can_manage),
-            "autopost_globally_enabled": _autopost_global()}
+            "autopost_globally_enabled": _autopost_global(),
+            "pressranger_enabled": _pressranger_enabled()}
 
 
 def _autopost_global() -> bool:
     try:
         from ...integration_flags import autopost_global_enabled
         return autopost_global_enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _pressranger_enabled() -> bool:
+    try:
+        from ...integration_flags import pressranger_enabled
+        return pressranger_enabled()
     except Exception:  # noqa: BLE001
         return False
 

@@ -31,6 +31,7 @@ _OAUTH_PROVIDERS = {
     "google_business_profile": "google",
     "google_search_console": "google_search_console",
     "google_analytics": "google_analytics",
+    "youtube": "youtube",
 }
 STATE_TTL_MIN = 10
 

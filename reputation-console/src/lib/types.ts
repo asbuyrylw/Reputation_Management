@@ -75,6 +75,9 @@ export interface TargetKeyword {
   intent: string | null;
   priority: number | null;
   rationale: string | null;
+  search_volume?: number | null;      // real monthly searches (keyword-volume provider)
+  keyword_difficulty?: number | null; // 0-100 competition index
+  cpc?: number | null;                // top-of-page bid proxy
 }
 
 // --- billing ---
@@ -151,6 +154,7 @@ export interface WorkOrder {
   planned?: boolean | null;
   promoted_at?: string | null;
   progress_notes?: ProgressNote[] | null;
+  subtasks?: { text: string; done: boolean }[] | null;
   assignee_user_id?: number | null;
   area?: string | null; // website | blog | outreach | social | local | reviews | tracking | content | other
   platform?: string | null; // linkedin | facebook | instagram | x | youtube | tiktok | pinterest | reddit | gbp
@@ -186,6 +190,73 @@ export interface RoadmapItem {
 export interface Roadmap {
   count: number;
   items: RoadmapItem[];
+}
+
+// The detailed Strategy view — three areas, each with the gaps it closes, the approach, the tasks,
+// and the concrete content specs. Assembled server-side from the gap model + work orders + briefs.
+export interface StrategyTask {
+  id: number;
+  wo_code: string | null;
+  title: string | null;
+  status: string;
+  capability: string | null;
+  area: string | null;
+  platform: string | null;
+  instruction: string;
+  target_date: string | null;
+  predicted_ai_points: number | null;
+  why: string;
+}
+export interface StrategySpec {
+  wo_id: number;
+  title: string | null;
+  content_type: string | null;
+  keywords: string[];
+  primary_keyword: string | null;
+  word_count_target: number | null;
+  readability_target: string | null;
+  structure: string | null;
+  publish_to: string;
+  objective: string;
+  coverage?: DraftCoverageAdvisory | null;   // warn-only grounding advisory for this piece's topic
+}
+// Plan-level roll-up of per-piece grounding coverage (warn-only). status: gap>thin>ok, or unknown.
+export interface PlanCoverage {
+  status: "ok" | "thin" | "gap" | "unknown";
+  total_topics: number;
+  grounded: number;
+  thin: number;
+  ungrounded: number;
+  unknown: number;
+  ungrounded_topics: string[];
+  reason: string | null;
+}
+export interface StrategyGroup {
+  title: string;
+  gap_source: string | null;
+  source_query: string | null;
+  section: string;
+  approach: string;
+  why: string;
+  tasks: StrategyTask[];
+  specs: StrategySpec[];
+}
+export interface StrategySection {
+  key: string;
+  label: string;
+  narrative: string;
+  groups: StrategyGroup[];
+}
+export interface StrategyView {
+  summary: string;
+  sections: StrategySection[];
+  counts: Record<string, number>;
+  // True when the gap analysis produced no gap-derived work — the plan is baseline setup only and
+  // should be re-run, not presented as finished. degraded_reason is the client-facing explanation.
+  degraded?: boolean;
+  degraded_reason?: string | null;
+  // Warn-only: how many planned pieces have (no / thin) source material for their topic.
+  coverage?: PlanCoverage | null;
 }
 
 // One logged completed action (from a work order marked done/verified or a brief marked
@@ -264,6 +335,15 @@ export interface ContentDraft {
   highlighted_sections?: { type?: string; note?: string }[] | null;
   placeholders_pending?: string[] | null;
   wo_instruction?: string | null;
+  // richer content typing + denormalized GEO grade + batch grouping (content-program)
+  content_type?: string | null;   // blog | article | white_paper | landing_page | local_page | social_post
+  geo_score?: number | null;
+  batch_id?: number | null;
+  // Phase 1 — the gap this draft traces back to (joined from its work order)
+  gap_source?: string | null;
+  why_helps_ai_rep?: string | null;
+  why_helps_seo?: string | null;
+  gap_specifics?: { source_query?: string } | null;
   quality_notes?:
     | ({
         keyword_coverage?: KeywordCoverage;
@@ -274,14 +354,120 @@ export interface ContentDraft {
         structure?: DraftStructure;
         keyword_density?: DraftKeywordDensity;
         readability?: DraftReadability;
+        distinctiveness?: DraftDistinctiveness;
         aeo?: DraftAeo;
+        geo?: DraftGeo;
+        serp?: DraftSerp;
         term_coverage?: DraftTermCoverage;
         intent_serp?: DraftIntentSerp;
         topic_coverage?: DraftTopicCoverage;
         suggested_links?: DraftSuggestedLink[];
         image_markers?: DraftImageMarker[];
+        katteb?: DraftKatteb;
+        coverage_advisory?: DraftCoverageAdvisory;
       } & Record<string, unknown>)
     | null;
+}
+
+// Warning-only grounding-coverage advisory: was this draft's topic backed by the client's source
+// corpus? Pure metadata — never blocks generation. The card shows a notice only for thin/ungrounded.
+export interface DraftCoverageAdvisory {
+  topic: string;
+  grounded: boolean | null;   // null only in the "unknown" state (renders nothing)
+  matched_docs: number;
+  rank: number;
+  entity_risk: boolean;
+  status: "grounded" | "thin" | "ungrounded" | "unknown";
+  note: string | null;
+}
+
+// Katteb SEO/competitor analysis stored on a draft (from a human-triggered ~1000-credit run).
+export interface DraftKattebCompetitor {
+  url?: string; domain?: string; words?: number; images?: number; headings?: number;
+  entities?: number; seo_score?: number;
+}
+export interface DraftKatteb {
+  seo_score?: number | null;                 // our content's Katteb SEO score
+  competitor_scores?: { avg?: number; top?: number };
+  structure?: {
+    images_avg?: number; images_top?: number; headings_avg?: number; headings_top?: number;
+    word_count_avg?: number; word_count_top?: number;
+  };
+  competitors?: DraftKattebCompetitor[];
+  keyword?: string;
+  analyzed_at?: string;
+  credits_charged?: number;
+}
+
+// GEO/citability grade (0–100), weighted for the content type. Social posts use their own rubric.
+export interface DraftGeo {
+  score: number | null;
+  band?: string;              // strong | solid | weak | n/a
+  content_type?: string;
+  profile?: string;
+  suggested_schema?: string | null;
+  checks?: { label: string; ok: boolean; points: number; max: number; fix?: string }[];
+  note?: string;
+}
+
+// SERP-competitor benchmark grade: term coverage + word-count-in-range vs the ranking pages.
+export interface DraftSerp {
+  skipped?: boolean;
+  reason?: string;
+  score?: number | null;
+  covered_pct?: number | null;
+  terms_covered?: string[];
+  terms_missing?: string[];
+  our_words?: number;
+  target_words?: number | null;
+  in_range?: boolean;
+  competitors?: { title?: string; link?: string; words?: number | null }[];
+  questions?: string[];
+}
+
+// One gap-driven content batch (multiple types) + its measured impact.
+export interface ContentBatch {
+  id: number;
+  gap_key: string;
+  gap_source: string;
+  label: string;
+  target_topic: string;
+  target_prompts: string[];
+  content_types: string[];
+  baseline: Record<string, unknown>;
+  status: string;             // planned | generating | drafted | published | measured | failed
+  created_at: string;
+  pieces: { id: number; content_type: string | null; asset_type: string | null; title: string | null; status: string; geo_score: number | null; quality_score: number | null; published_asset_id: number | null }[];
+  impact: ContentImpactRow | null;
+}
+
+export interface ContentImpactRow {
+  baseline_sov: number | null;
+  measured_sov: number | null;
+  sov_delta: number | null;
+  baseline_alignment: number | null;
+  measured_alignment: number | null;
+  alignment_delta: number | null;
+  gap_pct_closed: number | null;
+  per_type?: Record<string, { pieces: number; approved: number; published: number }>;
+  notes?: string;
+  run_before?: number | null;
+  run_after?: number | null;
+  measured_at?: string;
+  target_topic?: string;
+  label?: string;
+}
+
+export interface GapCompletion {
+  gap_key: string;
+  topic: string;
+  gap_source: string;
+  target_prompts: string[];
+  batch_id: number | null;
+  batch_status: string | null;
+  pieces_drafted: number;
+  pieces_published: number;
+  impact: { gap_pct_closed: number | null; alignment_delta: number | null; sov_delta: number | null } | null;
 }
 
 // NeuronWriter SERP content-optimization score for a draft — how well its term coverage
@@ -346,6 +532,20 @@ export interface SocialAudit {
     signals?: Record<string, unknown>;
   } | null;
   last_checked_at: string | null;
+}
+
+// The deterministic content spec for a to-produce piece, shown before drafting.
+export interface ContentBrief {
+  asset_type: string;
+  content_type: string;
+  primary_keyword: string | null;
+  keywords: string[];
+  word_count_target: number;
+  readability_target: string;
+  structure: string;
+  closes_gap: string | null;
+  gap_source: string | null;
+  coverage?: DraftCoverageAdvisory | null;   // warn-only: does source material cover this topic?
 }
 
 export interface DiscoveryTarget {
@@ -1093,6 +1293,7 @@ export interface IntegrationSettingsResponse {
   settings: IntegrationSettings;
   can_manage_autopost: boolean; // is the current user an org manager (may change auto-post fields)?
   autopost_globally_enabled: boolean; // platform-wide kill-switch state (read-only)
+  pressranger_enabled: boolean; // PRESSRANGER_ENABLED env flag — off until the Claude MCP is set up
 }
 
 // =====================================================================================
@@ -1137,7 +1338,7 @@ export interface VisualAsset {
   id: number;
   work_order_id: number | null;
   draft_id: number | null;
-  kind: string; // image | quote_card | video_brief
+  kind: string; // image | quote_card | video_brief | video
   provider: string | null;
   model: string | null;
   prompt: string | null;
@@ -1408,6 +1609,14 @@ export interface DraftReadability {
   target?: string;
   issues: { label: string; fix: string }[];
 }
+export interface DraftDistinctiveness {
+  score: number; // 0..100, 100 = clean (no generic "AI slop" tells)
+  band: string;
+  tells: number;
+  distinct_tells: number;
+  examples: string[];
+  fix?: string;
+}
 export interface DraftAeo {
   score: number; // 0..100 across pillars
   suggested_schema: string;
@@ -1635,4 +1844,272 @@ export interface Location {
   phone: string | null;
   is_primary: boolean;
   created_at: string;
+}
+
+// ---- PageSpeed / Core Web Vitals (technical-SEO layer) ----
+export interface PageSpeedRow {
+  url: string;
+  strategy: string;
+  performance: number | null;
+  seo: number | null;
+  accessibility: number | null;
+  best_practices: number | null;
+  lcp_ms: number | null;
+  cls: number | null;
+  tbt_ms: number | null;
+  field_lcp_ms: number | null;
+  field_inp_ms: number | null;
+  field_cls: number | null;
+  cwv_pass: boolean | null;
+  is_our_content: boolean;
+  asset_id: number | null;
+  fetched_at: string | null;
+}
+export interface PageSpeedTechGap {
+  url: string;
+  asset_id: number | null;
+  strategy: string;
+  issues: string[];
+  performance: number | null;
+  seo: number | null;
+}
+export interface PageSpeed {
+  has_data: boolean;
+  enabled: boolean;
+  pages?: PageSpeedRow[];
+  owned_count?: number;
+  avg_performance?: number | null;
+  avg_seo?: number | null;
+  cwv_failing?: string[];
+  slow_pages?: string[];
+  technical_gaps?: PageSpeedTechGap[];
+}
+
+// ---- Brand guardrails + source material ----
+export interface SourceDocument {
+  id: number;
+  title: string | null;
+  source_type: string;
+  source_url: string | null;
+  tokens: number | null;
+  active: boolean;
+  created_at: string | null;
+}
+
+// ---- Admin cost dashboard (itemized real spend) ----
+export interface CostCategoryRow { category: string; label: string; cost_usd: number; events: number; units: number | null; unit_label: string | null; }
+export interface CostProviderRow { provider: string; cost_usd: number; events: number; }
+export interface CostOperationRow { operation: string; category: string; cost_usd: number; events: number; }
+export interface CostContentRow { content_type: string; api: string; cost_usd: number; events: number; }
+export interface CostRunRow { run_id: number | null; cost_usd: number; events: number; started: string | null; }
+export interface CostBreakdown {
+  days: number;
+  business_id: number | null;
+  total_usd: number;
+  events: number;
+  by_category: CostCategoryRow[];
+  by_provider: CostProviderRow[];
+  by_operation: CostOperationRow[];
+  by_content: CostContentRow[];
+  by_run: CostRunRow[];
+}
+export interface CostBusinessRow { business_id: number | null; name: string; cost_usd: number; events: number; }
+export interface CostLineItem {
+  business_id: number | null; run_id: number | null; category: string | null; provider: string | null;
+  operation: string | null; model: string | null; cost_usd: number; units: number | null;
+  unit_label: string | null; detail: Record<string, unknown> | null; at: string | null;
+}
+export interface CostDashboard {
+  days: number;
+  scope: string;
+  breakdown: CostBreakdown;
+  by_business: CostBusinessRow[] | null;
+  recent: CostLineItem[];
+}
+
+// ---- Rich media (podcast / deck / infographic / explainer / long-form) ----
+export interface RichMediaDraft {
+  id: number;
+  asset_type: string;   // podcast | slide_deck | infographic | explainer_video | research_brief | deep_article | blog_series | newsletter | report_audio
+  title: string | null;
+  audio_url: string | null;
+  notebook_url?: string | null;   // deep link to NotebookLM Studio (assisted podcast) — listen/download there
+  generator?: string | null;      // notebooklm | llm — which engine produced it
+  transcript?: string | null;
+  duration_secs: number | null;
+  status: string;       // pending_review | approved | rejected
+  compliance_pass: boolean | null;
+  compliance_flags?: unknown;
+  has_body?: boolean;
+  has_transcript?: boolean;
+  body?: string | null; // only on the detail fetch
+  created_at: string | null;
+  updated_at: string | null;
+}
+export interface RichMediaList {
+  configured: boolean;  // NotebookLM audio path available (text always works)
+  drafts: RichMediaDraft[];
+}
+export interface DataSourceStatus {
+  connected?: boolean;
+  configured?: boolean;
+  property?: string | null;
+  synced_at?: string | null;
+  env_key?: string;
+  unlocks: string;
+}
+export interface DataForSeoStatus extends DataSourceStatus {
+  competitor_gaps?: number;
+  has_mentions?: boolean;
+  review_platforms?: string[];
+}
+export interface DataSources {
+  google_search_console: DataSourceStatus;
+  google_analytics: DataSourceStatus;
+  pagespeed: DataSourceStatus;
+  keyword_volume: DataSourceStatus;
+  dataforseo?: DataForSeoStatus;
+}
+
+// ---- Create content (user-initiated generation) ----
+export interface ContentTypeOption {
+  content_type: string;
+  label: string;
+  family: "text" | "rich_media" | "visual";
+  ready: boolean;
+  needs: string | null;
+}
+export interface ContentTypeCatalogue {
+  types: ContentTypeOption[];
+  image_configured: boolean;
+  video_configured: boolean;
+  notebooklm_live: boolean;
+}
+export interface CustomContentResult {
+  job_id: number | null;
+  job_type: string;
+  work_order_id: number;
+  family: "visual" | "content";
+  content_type: string;
+  status: string;
+}
+
+// ---- Reputation signals (DataForSEO mentions + reviews, stored between audits) ----
+export interface ReviewSnapshot {
+  platform: string;
+  rating: { value?: number; votes_count?: number } | number | null;
+  reviews_count: number | null;
+  reviews: { rating: number | null; text: string | null; author: string | null; date: string | null }[];
+  created_at: string | null;
+}
+export interface MentionSnapshot {
+  keyword: string | null;
+  total_count: number | null;
+  sentiment: Record<string, number> | null;
+  sample: { url: string; title: string | null; sentiment: Record<string, number> }[];
+  created_at: string | null;
+}
+export interface ReputationSignals {
+  mentions: MentionSnapshot | null;
+  reviews: ReviewSnapshot[];
+}
+
+// ---- GSC full-surface: URL Inspection (index / canonical / schema health) ----
+export interface IndexHealthPage {
+  url: string;
+  asset_id: number | null;
+  verdict: string | null;
+  coverage_state: string | null;
+  indexing_state: string | null;
+  robots_state: string | null;
+  fetch_state: string | null;
+  last_crawl: string | null;
+  google_canonical: string | null;
+  user_canonical: string | null;
+  canonical_mismatch: boolean;
+  is_indexed: boolean | null;
+  rich_verdict: string | null;
+  schema_issues: { type: string; name?: string; severity?: string; message?: string }[];
+  mobile_verdict: string | null;
+  inspected_at: string | null;
+}
+export interface IndexHealthGap {
+  url: string;
+  asset_id: number | null;
+  issues: string[];
+}
+export interface IndexHealth {
+  has_data: boolean;
+  pages?: IndexHealthPage[];
+  checked?: number;
+  indexed?: number;
+  not_indexed?: string[];
+  canonical_loss?: string[];
+  schema_invalid?: string[];
+  technical_gaps?: IndexHealthGap[];
+}
+
+// ---- Strategy Advisor (PDCA loop) ----
+export type PdcaStatus =
+  | "on_track" | "needs_action" | "stalled" | "awaiting_measurement" | "insufficient_data";
+export interface AdvisorGoal {
+  goal: string;
+  business: string;
+  current_alignment: number | null;
+  target_alignment: number;
+  gap_to_goal: number | null;
+  summary: string;
+  has_gap_model: boolean;
+  gap_model_age_days: number | null;
+}
+export interface AdvisorGapPrediction {
+  pieces_needed: number | null;
+  eta_weeks: number | null;
+  confidence: string;
+  basis: string;
+}
+export interface AdvisorGap {
+  batch_id: number;
+  gap_key: string;
+  gap_source: string;
+  topic: string;
+  content_types: string[];
+  pieces: number;
+  approved: number;
+  published: number;
+  batch_status: string;
+  weeks_live: number;
+  gap_pct_closed: number | null;
+  alignment_delta: number | null;
+  velocity_per_week: number | null;
+  status: string;   // not_published | awaiting_measurement | regressing | stalled | on_track | gap_closing
+  measured_at: string | null;
+  prediction: AdvisorGapPrediction;
+}
+export interface AdvisorAction {
+  priority: number;
+  action: string;   // publish | revise | change_approach | produce_more | technical_fix | new_content
+  gap: string;
+  detail: string;
+  expected_impact: string;
+}
+export interface AdvisorOverall {
+  gaps_worked: number;
+  gaps_measured: number;
+  avg_gap_closed: number | null;
+  avg_velocity_per_week: number | null;
+  projected_weeks_to_goal: number | null;
+  total_pieces_recommended: number;
+  published_pieces: number;
+}
+export interface Advisor {
+  business_id: number;
+  pdca_status: PdcaStatus;
+  goal: AdvisorGoal;
+  overall: AdvisorOverall;
+  gaps: AdvisorGap[];
+  recommended_actions: AdvisorAction[];
+  signals: Record<string, unknown>;
+  briefing: string;
+  generated_at: string;
 }

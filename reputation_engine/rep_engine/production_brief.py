@@ -61,6 +61,8 @@ VIDEO_SYSTEM = (
     '"keywords":[".."],"hook":"first 3 seconds","outline":["beat",".."],"on_screen_text":[".."],'
     '"description":"keyword-rich video description","tags":[".."],"thumbnail_concept":"..",'
     '"cta":".."}]}'
+    + tools.LICENSE_CONTENT_POLICY
+    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 SOCIAL_SYSTEM = (
@@ -69,13 +71,15 @@ SOCIAL_SYSTEM = (
     "would be ACCURATE owned content supporting the target queries. You are NOT writing the "
     "final copy -- you are writing a PRODUCTION BRIEF a social manager can create from. Never "
     "fabricate facts or make compliance-risky claims (guarantees, '#1'/'best', 'risk-free'); "
-    "use [INSERT: ...] placeholders for facts you lack. Respond with ONE minified JSON object "
+    "use the business's REAL details (name, website, services from the context) and WRITE AROUND anything unknown -- omit it or use general wording / point to the website -- rather than leaving [INSERT] placeholders. Respond with ONE minified JSON object"
     "and nothing else: "
     '{"briefs":[{"title":"..","platform":"x|linkedin|facebook|instagram|reddit|threads",'
     '"format":"single-image|carousel|short-video|text|thread","target_length":"e.g. 5-slide '
     'carousel or ~120 words or 280 chars","target_query":"the query this supports",'
     '"keywords":[".."],"hook":"scroll-stopping first line","outline":["point",".."],'
     '"visual_concept":"..","cta":"..","cadence":"suggested posting cadence"}]}'
+    + tools.LICENSE_CONTENT_POLICY
+    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 
@@ -198,9 +202,13 @@ def _normalize(channel: str, it: dict) -> dict | None:
 # ----------------------------------------------------------------------------
 def _generate(channel: str, system: str, user: str, business_id: int, limit: int) -> list:
     try:
+        # A briefs object holds "a few" items x ~13 fields each -> ~3-4k output tokens; the default
+        # 2000-token cap truncated it mid-JSON so it parsed to {} and produced ZERO briefs. Give it
+        # real headroom (and a longer timeout for the bigger generation).
         res = tools.llm_json(system + "\n" + tools.UNTRUSTED_INSTRUCTION, user,
                              business_id=business_id, tier="mid",
-                             operation=f"production_brief_{channel}")
+                             operation=f"production_brief_{channel}",
+                             max_tokens=5000, timeout=180)
     except tools.BudgetExceededError:
         log.warning("production_brief: over budget -- skipping %s briefs", channel)
         return []
