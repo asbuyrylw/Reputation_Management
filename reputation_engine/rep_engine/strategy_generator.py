@@ -284,23 +284,17 @@ def predict_impact(business_id: int, capability: str) -> dict:
     basis = ""
     confidence = "low"
     if lever:
+        # ONE canonical gain source (roi_predictor.gain_for): this-client learned -> cross-client
+        # prior -> static baseline, correctly normalized to 0-100 POINTS (the old code here used *100,
+        # 2x too high, while roadmap/predict_plan used the ga value as points, ~50x too low). Routing
+        # both through gain_for makes plan-ROI and roadmap-ROI agree.
         try:
-            from . import feedback_loop as _fb, acceleration_advisor as _acc
-        except ImportError:  # pragma: no cover
-            import feedback_loop as _fb  # type: ignore
-            import acceleration_advisor as _acc  # type: ignore
-        learned = {}
-        try:
-            learned = _fb.learned_lever_weights(business_id) or {}
+            from . import roi_predictor as _roi
+            ai_points, basis, confidence = _roi.gain_for(capability, business_id)
+            if basis == "this client":
+                basis = "measured from your results"
         except Exception:  # noqa: BLE001 -- prediction must never break planning
-            learned = {}
-        if lever in learned and learned[lever] > 0:
-            gain = learned[lever]
-            basis, confidence = "measured from your results", "medium"
-        else:
-            gain = (_acc.LEVERS.get(lever, {}) or {}).get("weight", 0.0)
-            basis, confidence = "industry baseline", "low"
-        ai_points = round(gain * 100.0, 1)  # 0-1 alignment gain per unit -> 0-100 score points
+            ai_points, basis, confidence = None, "", "low"
     seo_impact = _CAPABILITY_SEO.get(capability, "—")
     # ROI = expected impact x confidence / effort. Use the AI-score points when a lever exists,
     # else the SEO points-equivalent, so structural tasks rank fairly against scored ones.

@@ -28,10 +28,10 @@ import logging
 
 try:
     from .db import db
-    from .feedback_loop import TYPE_TO_LEVER, learned_lever_weights, learned_baseline
+    from .feedback_loop import learned_lever_weights, learned_baseline
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
-    from feedback_loop import TYPE_TO_LEVER, learned_lever_weights, learned_baseline  # type: ignore
+    from feedback_loop import learned_lever_weights, learned_baseline  # type: ignore
 
 log = logging.getLogger("roi_predictor")
 
@@ -52,15 +52,55 @@ _EFFORT = {
 }
 
 
-def _gain_for(cap, own, priors):
-    """Best available gain-per-unit for a capability: this client -> cross-client -> static."""
-    from .feedback_loop import TYPE_TO_LEVER as _T2L
-    lever = _T2L.get(cap, "third_party_articles")
-    if lever in own:
-        return own[lever], "this client", "medium"
-    if lever in priors:
-        return priors[lever]["gain_per_unit"], "cross-client", priors[lever]["confidence"]
-    return _STATIC_GAIN.get(cap, 1.0), "industry baseline", "low"
+# Score = (goal_alignment + 1)/2 * 100, so d(score)/d(goal_alignment) = 50 (NOT 100). Learned/prior
+# gains are goal_alignment-per-unit; convert them to 0-100 SCORE POINTS with this factor.
+_GA_TO_POINTS = 50.0
+_MAX_TASK_POINTS = 25.0   # defensive cap: no single task credibly moves the 0-100 score by >25 pts
+
+
+def _lever_for(capability: str) -> str:
+    """Canonical capability/asset-type -> lever, resolved ONE way for every ROI path: the strategy
+    capability map first, then the feedback-loop asset-type map, then a safe default (lazy imports so
+    no module-load cycle)."""
+    from .feedback_loop import TYPE_TO_LEVER
+    try:
+        from .strategy_generator import _CAPABILITY_TO_LEVER
+        if capability in _CAPABILITY_TO_LEVER:
+            return _CAPABILITY_TO_LEVER[capability]
+    except Exception:  # noqa: BLE001 -- never let an import-order quirk break ROI
+        pass
+    return TYPE_TO_LEVER.get(capability, "third_party_articles")
+
+
+def gain_for(capability, business_id=None, *, own=None, priors=None):
+    """THE canonical expected one-time AI-score POINTS (0-100 scale) for one task of `capability`,
+    plus (basis, confidence). Prefers this client's learned effectiveness, then the anonymized
+    cross-client prior, then a static industry baseline.
+
+    UNIT DISCIPLINE (the bug this centralizes away): learned/prior gains are goal_alignment-per-unit
+    (ga-scale, e.g. 0.05); the score is (ga+1)/2*100 so d(score)/d(ga)=50 -> convert via _GA_TO_POINTS
+    (=50, NOT 100). _STATIC_GAIN is ALREADY in points. Before this, predict_impact used *100 (2x high)
+    while roadmap/predict_plan used the ga value as points (~50x low), so plan-ROI and roadmap-ROI
+    disagreed by many x. Every ROI surface now routes through here, so they can't diverge again.
+    Pass own/priors to reuse one query across a loop. Returns (points, basis, confidence)."""
+    lever = _lever_for(capability or "")
+    if own is None:
+        try:
+            own = learned_lever_weights(business_id) if business_id is not None else {}
+        except Exception:  # noqa: BLE001 -- prediction must never break planning
+            own = {}
+    if priors is None:
+        try:
+            priors = cross_client_priors()
+        except Exception:  # noqa: BLE001
+            priors = {}
+    if lever in own and own[lever] > 0:
+        return min(round(own[lever] * _GA_TO_POINTS, 2), _MAX_TASK_POINTS), "this client", "medium"
+    p = (priors or {}).get(lever)
+    if p and p.get("gain_per_unit", 0) > 0:
+        return (min(round(p["gain_per_unit"] * _GA_TO_POINTS, 2), _MAX_TASK_POINTS),
+                "cross-client", p.get("confidence", "low"))
+    return float(_STATIC_GAIN.get(capability, 1.0)), "industry baseline", "low"
 
 
 def roadmap(business_id: int, limit: int = 40) -> dict:
@@ -82,8 +122,9 @@ def roadmap(business_id: int, limit: int = 40) -> dict:
     items = []
     for w in wos:
         cap = w["capability"] or ""
-        gain, basis, conf = _gain_for(cap, own, priors)
+        gain, basis, conf = gain_for(cap, own=own, priors=priors)   # canonical POINTS (0-100 scale)
         # prefer the planner's own per-task points estimate when it's richer than our lever gain
+        # (both now on the SAME points scale via gain_for, so this max is a genuine best-estimate).
         pap = float(w["predicted_ai_points"]) if w["predicted_ai_points"] is not None else None
         expected = round(max(gain, pap or 0), 2)
         effort = _EFFORT.get(cap, 2)
@@ -144,17 +185,11 @@ def predict_plan(business_id: int) -> dict:
     for t in tasks:
         cap = t["capability"] or ""
         n = int(t["n"])
-        lever = TYPE_TO_LEVER.get(cap, "third_party_articles")
-        if lever in own:
-            gpu, basis, conf = own[lever], "this client", "medium"
-        elif lever in priors:
-            gpu, basis, conf = priors[lever]["gain_per_unit"], "cross-client", priors[lever]["confidence"]
-        else:
-            gpu, basis, conf = _STATIC_GAIN.get(cap, 1.0), "industry baseline", "low"
-        pts = round(gpu * n, 2)
+        gain_pts, basis, conf = gain_for(cap, own=own, priors=priors)   # canonical POINTS per task
+        pts = round(gain_pts * n, 2)
         total += pts
         basis_counts[basis] += n
-        by_cap.append({"capability": cap, "open_tasks": n, "gain_per_task": round(gpu, 3),
+        by_cap.append({"capability": cap, "open_tasks": n, "gain_per_task": round(gain_pts, 2),
                        "predicted_points": pts, "basis": basis, "confidence": conf})
     by_cap.sort(key=lambda x: x["predicted_points"], reverse=True)
     # overall confidence = the strongest basis that carries most of the predicted lift
