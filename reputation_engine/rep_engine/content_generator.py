@@ -46,10 +46,12 @@ from pydantic import ValidationError
 try:
     from . import ai_state_audit as llm   # reuse the orchestrator LLM plumbing
     from . import textutils as _tu
+    from . import grounding_coverage as _gc
     from .llm_schemas import ComplianceResult, EvalResult
 except ImportError:  # pragma: no cover
     import ai_state_audit as llm  # type: ignore
     import textutils as _tu  # type: ignore
+    import grounding_coverage as _gc  # type: ignore
     from llm_schemas import ComplianceResult, EvalResult  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -383,7 +385,7 @@ def piece_brief(business_id: int, wo: dict) -> dict:
     and the exact AI gap it closes. (The full grounding + outline are still computed at draft time.)"""
     at = _asset_type_for(wo) or "article"
     ct = wo.get("content_type") or at
-    tq = wo.get("target_query") or (wo.get("gap_specifics") or {}).get("source_query") or wo.get("title") or ""
+    tq = _gc.scope_query(wo)   # same topic-key the draft grounds on -> plan advisory can't drift from draft
     keywords: list = []
     try:
         with db() as conn:
@@ -394,6 +396,13 @@ def piece_brief(business_id: int, wo: dict) -> dict:
         keywords = [k["keyword"] for k in _scope_keywords(allkw, tq, limit=8) if k.get("keyword")]
     except Exception:  # noqa: BLE001 -- best-effort: no keyword table -> empty
         keywords = []
+    # Grounding-coverage advisory for the plan/To-Produce surface: will this piece have source facts?
+    # Wrapped independently -- GET /work-orders/{id}/brief has no outer guard, and coverage() (though
+    # total) must never 500 this read endpoint. Same scope_query key as the draft, so no drift.
+    try:
+        coverage = _gc.coverage(business_id, tq)
+    except Exception:  # noqa: BLE001
+        coverage = None
     return {
         "asset_type": at, "content_type": ct,
         "primary_keyword": keywords[0] if keywords else None,
@@ -403,6 +412,7 @@ def piece_brief(business_id: int, wo: dict) -> dict:
         "structure": _BRIEF_STRUCT.get(ct, _BRIEF_STRUCT.get(at, "Answer-first; clear H2/H3 headings; a short FAQ.")),
         "closes_gap": (wo.get("gap_specifics") or {}).get("source_query"),
         "gap_source": wo.get("gap_source"),
+        "coverage": coverage,
     }
 
 
@@ -1474,7 +1484,6 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # best-effort, so a failure just omits the key. HARD RULE: never call source_material.* here (those
     # are fail-loud re-raisers and would crash generation).
     try:
-        from . import grounding_coverage as _gc
         quality_notes["coverage_advisory"] = _gc.coverage(business_id, _scope_q)
     except Exception as e:  # noqa: BLE001
         log.debug("coverage advisory skipped: %s", e)

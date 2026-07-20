@@ -286,6 +286,10 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
                 </div>
                 <div><span className="font-semibold text-ink-3">Structure:</span> {brief.data.structure}</div>
                 {brief.data.closes_gap && <div><span className="font-semibold text-rose-600">Closes the AI gap:</span> “{brief.data.closes_gap}”</div>}
+                {brief.data.coverage && brief.data.coverage.status !== "grounded" && brief.data.coverage.status !== "unknown" && (
+                  <div><span className="font-semibold text-amber">Grounding:</span> {brief.data.coverage.status === "ungrounded" ? "no source material for this topic yet — " : "only thin source material — "}
+                    <Link href="/content/source" className="font-semibold text-amber hover:underline">add it in Source Material →</Link></div>
+                )}
               </div>
             ) : (
               <div className="mt-1 text-[11px] text-ink-4">Spec unavailable.</div>

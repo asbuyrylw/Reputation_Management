@@ -218,6 +218,18 @@ export interface StrategySpec {
   structure: string | null;
   publish_to: string;
   objective: string;
+  coverage?: DraftCoverageAdvisory | null;   // warn-only grounding advisory for this piece's topic
+}
+// Plan-level roll-up of per-piece grounding coverage (warn-only). status: gap>thin>ok, or unknown.
+export interface PlanCoverage {
+  status: "ok" | "thin" | "gap" | "unknown";
+  total_topics: number;
+  grounded: number;
+  thin: number;
+  ungrounded: number;
+  unknown: number;
+  ungrounded_topics: string[];
+  reason: string | null;
 }
 export interface StrategyGroup {
   title: string;
@@ -243,6 +255,8 @@ export interface StrategyView {
   // should be re-run, not presented as finished. degraded_reason is the client-facing explanation.
   degraded?: boolean;
   degraded_reason?: string | null;
+  // Warn-only: how many planned pieces have (no / thin) source material for their topic.
+  coverage?: PlanCoverage | null;
 }
 
 // One logged completed action (from a work order marked done/verified or a brief marked
@@ -531,6 +545,7 @@ export interface ContentBrief {
   structure: string;
   closes_gap: string | null;
   gap_source: string | null;
+  coverage?: DraftCoverageAdvisory | null;   // warn-only: does source material cover this topic?
 }
 
 export interface DiscoveryTarget {

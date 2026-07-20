@@ -668,8 +668,11 @@ def strategy_view(business_id: int) -> dict:
     covers, the approach to close each, the tasks that do it, and the content specs to produce."""
     try:
         from . import content_generator as _cg
+        from . import grounding_coverage as _gc
     except ImportError:  # pragma: no cover
         import content_generator as _cg  # type: ignore
+        import grounding_coverage as _gc  # type: ignore
+    cov_sigs: list = []   # per-content-piece coverage signals (from piece_brief) -> plan rollup
     with db() as conn:
         gm = conn.execute(
             "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
@@ -711,6 +714,9 @@ def strategy_view(business_id: int) -> dict:
                 b = _cg.piece_brief(business_id, w)
                 pub = _PLATFORM_PUBLISH.get((w.get("platform") or "").lower()) \
                     or _PUBLISH_TO.get(b.get("content_type") or b.get("asset_type") or "", "Your website")
+                cov = b.get("coverage")
+                if isinstance(cov, dict):
+                    cov_sigs.append(cov)
                 g["specs"].append({
                     "wo_id": w["id"], "title": w.get("title"),
                     "content_type": b.get("content_type") or b.get("asset_type"),
@@ -719,6 +725,7 @@ def strategy_view(business_id: int) -> dict:
                     "readability_target": b.get("readability_target"),
                     "structure": b.get("structure"), "publish_to": pub,
                     "objective": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or "",
+                    "coverage": cov,   # warn-only grounding advisory for this piece's topic
                 })
             except Exception as e:  # noqa: BLE001 -- a spec failure must never break the whole view
                 log.debug("piece_brief failed for wo %s: %s", w.get("id"), e)
@@ -740,6 +747,14 @@ def strategy_view(business_id: int) -> dict:
     # Same degraded signal assemble_plan flags: if the gap model carries no gap-derived content, the
     # Strategy page is baseline boilerplate -- tell the client to re-run, don't present it as finished.
     degraded = _is_degraded(gap)
+    # Plan-level grounding advisory (warn-only): roll up the per-piece coverage signals piece_brief
+    # already computed (SAME scope_query key the draft grounds on -> plan and draft can't disagree).
+    # Wrapped: any failure -> coverage=None so GET /strategy always returns.
+    try:
+        coverage = _gc.plan_coverage(cov_sigs)
+    except Exception as e:  # noqa: BLE001
+        log.debug("plan_coverage rollup skipped: %s", e)
+        coverage = None
     return {
         "summary": gap.get("summary", ""),
         "sections": [sections[k] for k in ("ai_visibility", "seo", "search")],
@@ -749,6 +764,7 @@ def strategy_view(business_id: int) -> dict:
             "This plan was built from an empty or failed gap analysis, so it shows only standard "
             "setup tasks — not work targeted at your specific gaps. Re-run the gap analysis to "
             "generate a strategy tailored to your business." if degraded else None),
+        "coverage": coverage,
     }
 
 
