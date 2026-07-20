@@ -175,6 +175,16 @@ def for_business(business_id: int) -> dict:
     return derive(biz, overrides=overrides, local_signal=local_signal)
 
 
+def license_policy_for_business(business_id: int) -> str:
+    """Convenience for prompt-build call sites: the license/sensitive-ID policy string for a business
+    id (loads + derives its profile). Fail-safe -> '' on any error. On hot paths where the biz dict is
+    already loaded, call license_policy_for(derive(biz)) directly to avoid the extra query."""
+    try:
+        return license_policy_for(for_business(business_id))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def enrich_at_onboarding(business_id: int) -> dict:
     """Off-hot-path onboarding hook: derive the profile (the alias table + derive() resolve a
     free-text industry deterministically today; a future version may add an LLM normalization pass

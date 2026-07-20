@@ -1654,7 +1654,7 @@ def refresh_failed_answers(business_id: int, engines: Optional[list[str]] = None
 # ----------------------------------------------------------------------------
 # GAP MODEL: structured output the strategy/work-order layer consumes
 # ----------------------------------------------------------------------------
-GAP_SYSTEM = (
+_GAP_SYSTEM_BASE = (
     "You are a reputation strategist building a TWO-TRACK plan. TRACK 1 -- CROWD OUT: out-produce "
     "and out-corroborate accurate positive content to displace negative/contested narratives (never "
     "suppress or hide legitimate third-party views). TRACK 2 -- ESTABLISH & DISAMBIGUATE: where the "
@@ -1750,16 +1750,24 @@ GAP_SYSTEM = (
     "plus disambiguation/identity content where the engines confuse the business with a "
     "different same-named entity. "
     "All actions must be honest reputation-building, not manipulation. JSON only."
-    + LICENSE_CONTENT_POLICY
-    + NO_NEGATIVE_DISAMBIGUATION_POLICY
-    + UNTRUSTED_INSTRUCTION
 )
+
+
+def _gap_system(license_policy: str = "") -> str:
+    """The gap-model system prompt with the tenant's license/sensitive-ID policy spliced in-position
+    (finance suppresses specific license numbers; generic passes '' -> finance-free). NO_NEGATIVE +
+    UNTRUSTED stay agnostic + always appended. `GAP_SYSTEM` is the finance-free module alias so the
+    import-time approx_tokens/re-export sites keep a valid string; build_gap_model builds per tenant."""
+    return _GAP_SYSTEM_BASE + license_policy + NO_NEGATIVE_DISAMBIGUATION_POLICY + UNTRUSTED_INSTRUCTION
+
+
+GAP_SYSTEM = _gap_system()   # finance-free GENERIC alias (module-level string for approx_tokens/re-exports)
 
 # Completeness critic -- the adversarial self-check that makes the plan the BEST possible one, not
 # just a plausible one. It re-reads the draft plan against the coverage matrix + the real
 # first-party signals and returns an IMPROVED plan (fills under-addressed dimensions, grounds
 # vague actions in the actual metrics). Same output schema as GAP_SYSTEM.
-GAP_CRITIC_SYSTEM = (
+_GAP_CRITIC_BASE = (
     "You are a senior SEO/reputation reviewer auditing a DRAFT plan for COMPLETENESS and GROUNDING. "
     "Input: {draft_plan, first_party_signals, coverage_dimensions}. Critique the draft, then return "
     "the SAME JSON schema as the draft plan, IMPROVED: (1) for every coverage dimension marked "
@@ -1771,10 +1779,16 @@ GAP_CRITIC_SYSTEM = (
     "impressions/impact first). Keep the same honest crowding-out rules (no contested-keyword "
     "pages; legitimacy/corroboration assets for contested frames). If the draft is already "
     "complete and grounded, return it unchanged. STRICT JSON only."
-    + LICENSE_CONTENT_POLICY
-    + NO_NEGATIVE_DISAMBIGUATION_POLICY
-    + UNTRUSTED_INSTRUCTION
 )
+
+
+def _gap_critic_system(license_policy: str = "") -> str:
+    """Completeness-critic system prompt with the tenant license policy spliced in-position; the
+    module-level GAP_CRITIC_SYSTEM alias is finance-free."""
+    return _GAP_CRITIC_BASE + license_policy + NO_NEGATIVE_DISAMBIGUATION_POLICY + UNTRUSTED_INSTRUCTION
+
+
+GAP_CRITIC_SYSTEM = _gap_critic_system()
 
 
 # Coverage matrix the gap model must explicitly evaluate every cycle -- so a dimension is never
@@ -1798,8 +1812,13 @@ def _gap_critic_refine(draft: dict, first_party_signals: dict,
     try:
         crit_user = json.dumps({"draft_plan": draft, "first_party_signals": first_party_signals,
                                 "coverage_dimensions": _COVERAGE_DIMENSIONS}, default=str)
+        try:
+            from . import business_profile as _bp
+            _crit_sys = _gap_critic_system(_bp.license_policy_for_business(business_id) if business_id else "")
+        except Exception:  # noqa: BLE001 -- profile read must never break the critic
+            _crit_sys = GAP_CRITIC_SYSTEM
         crit = orchestrator_json(
-            GAP_CRITIC_SYSTEM, crit_user,
+            _crit_sys, crit_user,
             tier=GAP_MODEL_TIER, max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
         # Ledger the critic pass spend too (rec 10b) -- best-effort, never breaks the refine.
         if business_id is not None:
@@ -1808,7 +1827,7 @@ def _gap_critic_refine(draft: dict, first_party_signals: dict,
                 if _cm is None:
                     _, _cm = _model_for(GAP_MODEL_TIER)
                 cost.record(business_id, run_id, ORCHESTRATOR, "gap_critic", _cm,
-                            cost.approx_tokens(GAP_CRITIC_SYSTEM + crit_user),
+                            cost.approx_tokens(_crit_sys + crit_user),
                             cost.approx_tokens(json.dumps(crit, default=str) if isinstance(crit, dict) else ""))
             except Exception:  # noqa: BLE001 -- cost logging must never break the critic
                 pass
@@ -2227,7 +2246,14 @@ def build_gap_model(business_id: int) -> dict:
         # 12000 (was 8000): the gap model now also emits local_seo_gaps, competitor_defense,
         # and site_technical_gaps, so the JSON runs longer -- too small a cap truncates it
         # mid-object and the synthesis is discarded as unparseable.
-        model = orchestrator_json(GAP_SYSTEM, payload, tier=GAP_MODEL_TIER,
+        # Per-tenant system prompt: splice in THIS business's license/sensitive-ID policy (finance
+        # suppresses specific numbers; generic gets none). Same string reused for the cost estimate.
+        try:
+            from . import business_profile as _bp
+            _gap_sys = _gap_system(_bp.license_policy_for_business(business_id))
+        except Exception:  # noqa: BLE001 -- profile read must never break the gap model
+            _gap_sys = GAP_SYSTEM
+        model = orchestrator_json(_gap_sys, payload, tier=GAP_MODEL_TIER,
                                   max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
         # Ledger the synthesis spend (rec 10b) so the gap model's cost is visible in COGS and counts
         # against the monthly cap, like audit answers do. Recorded even on a failed/empty synthesis:
@@ -2237,7 +2263,7 @@ def build_gap_model(business_id: int) -> dict:
         if _gm_model is None:
             _, _gm_model = _model_for(GAP_MODEL_TIER)
         cost.record(business_id, run["id"], ORCHESTRATOR, "gap_model", _gm_model,
-                    cost.approx_tokens(GAP_SYSTEM + payload),
+                    cost.approx_tokens(_gap_sys + payload),
                     cost.approx_tokens(json.dumps(model) if isinstance(model, dict) else ""))
         # A failed/empty synthesis must NOT overwrite the last good gap model.
         # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
