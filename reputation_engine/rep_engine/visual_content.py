@@ -189,21 +189,49 @@ _MIME_BY_EXT = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "
                 "mp4": "video/mp4", "webm": "video/webm"}
 
 
+def _store_bytes(business_id: int, raw: bytes, filename: str,
+                 mime: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[bytes]]:
+    """Persist generated media durably. Returns (storage_key, public_url, file_path, file_bytes).
+
+    Prefer central object storage (G.3) when configured -- durable across redeploys AND keeps the
+    bytes OUT of the Postgres BYTEA column (no DB bloat). When storage isn't configured, keep the
+    legacy local-file + DB-blob path (dormant-safe). On a storage error, fall back to the DB blob so
+    generation still succeeds durably -- logged loudly, never a silent drop."""
+    try:
+        from . import storage as _storage
+    except ImportError:  # pragma: no cover
+        import storage as _storage  # type: ignore
+    if _storage.configured():
+        try:
+            obj = _storage.require_storage().upload_bytes(business_id, raw, filename, mime)
+            return obj.key, obj.public_url, None, None
+        except Exception as e:  # noqa: BLE001
+            log.error("storage upload failed for business %s (%s) -- falling back to DB blob: %s",
+                      business_id, filename, e)
+    ext = filename.rsplit(".", 1)[-1] if "." in filename else "png"
+    path = _save_png(business_id, raw, ext=ext)
+    return None, None, path, raw
+
+
 def _persist(business_id: int, *, kind: str, provider: Optional[str], model: Optional[str],
              prompt: str, file_path: Optional[str], url: Optional[str], compliance_note: Optional[str],
              work_order_id=None, draft_id=None, width=None, height=None, meta=None,
-             file_bytes: Optional[bytes] = None, mime: Optional[str] = None) -> int:
-    # Store the bytes in the DB too (shared across API/worker) so the file serves even when the
-    # generating worker's local disk isn't the one the API reads from. Derive mime from the path ext.
+             file_bytes: Optional[bytes] = None, mime: Optional[str] = None,
+             storage_key: Optional[str] = None, public_url: Optional[str] = None) -> int:
+    # Durable delivery: object storage (storage_key) when configured, else the DB blob (file_bytes,
+    # shared across API/worker) so the file serves even when the generating worker's local disk isn't
+    # the one the API reads from. Derive mime from the path ext when not given.
     if mime is None and file_path:
         mime = _MIME_BY_EXT.get(os.path.splitext(file_path)[1].lstrip(".").lower())
     with db() as conn:
         row = conn.execute(
             "INSERT INTO visual_assets (business_id, work_order_id, draft_id, kind, provider, model, "
-            "prompt, file_path, url, width, height, compliance_note, meta, file_bytes, mime) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "prompt, file_path, url, width, height, compliance_note, meta, file_bytes, mime, "
+            "storage_key, public_url) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (business_id, work_order_id, draft_id, kind, provider, model, prompt, file_path, url,
-             width, height, compliance_note, Json(meta or {}), file_bytes, mime)).fetchone()
+             width, height, compliance_note, Json(meta or {}), file_bytes, mime,
+             storage_key, public_url)).fetchone()
         conn.commit()
     return int(row["id"])
 
@@ -234,10 +262,11 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
         return {"ok": False, "error": str(e)}
     if not raw:
         return {"ok": False, "error": "provider returned no image"}
-    path = _save_png(business_id, raw)
+    skey, purl, path, fbytes = _store_bytes(business_id, raw, "image.png", "image/png")
     vid = _persist(business_id, kind=kind, provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
-                   work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw)
+                   work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="image/png",
+                   storage_key=skey, public_url=purl)
     try:  # itemized cost: one generated image (best-effort)
         from . import cost as _cost
         _cost.record_cost(business_id, None, "image", provider or "image", "generate_image",
@@ -397,14 +426,14 @@ def generate_quote_card(business_id: int, text: str, *, attribution: Optional[st
         draw.text((80, y), ln, font=font, fill=(241, 245, 249)); y += 70
     if attribution:
         draw.text((80, y + 30), f"— {attribution}", font=small, fill=(148, 163, 184))
-    raw_path = _save_png_image(business_id, img)
     import io as _io
     _buf = _io.BytesIO()
     img.save(_buf, "PNG")
+    skey, purl, raw_path, fbytes = _store_bytes(business_id, _buf.getvalue(), "quote-card.png", "image/png")
     vid = _persist(business_id, kind="quote_card", provider="local", model="pillow",
                    prompt=text, file_path=raw_path, url=None, compliance_note=None,
                    work_order_id=work_order_id, width=W, height=H,
-                   file_bytes=_buf.getvalue(), mime="image/png")
+                   file_bytes=fbytes, mime="image/png", storage_key=skey, public_url=purl)
     return {"ok": True, "visual_id": vid, "file_path": raw_path}
 
 
@@ -531,10 +560,11 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
             return {"ok": False, "error": "video generation timed out or returned no video"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
-    path = _save_png(business_id, raw, ext="mp4")
+    skey, purl, path, fbytes = _store_bytes(business_id, raw, "video.mp4", "video/mp4")
     vid = _persist(business_id, kind="video", provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
-                   work_order_id=work_order_id, draft_id=draft_id, file_bytes=raw, mime="video/mp4")
+                   work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",
+                   storage_key=skey, public_url=purl)
     try:  # itemized cost: video billed per second (Veo). Default 8s clip unless VIDEO_SECONDS set.
         from . import cost as _cost
         secs = float(os.getenv("VIDEO_SECONDS", "8") or 8)
@@ -578,15 +608,27 @@ def visual_file_path(visual_id: int, business_id: int) -> Optional[str]:
 
 
 def visual_file_blob(visual_id: int, business_id: int) -> Optional[tuple[bytes, str]]:
-    """The visual's bytes + mime from the DB (tenancy-scoped). This is the cross-service fallback:
-    on a split API/worker deploy the API serves from here when the worker-written local file isn't
-    on the API's disk. Returns None if absent."""
+    """The visual's bytes + mime (tenancy-scoped). The durable, cross-service source every consumer
+    (serving route, YouTube publish, ...) reads through. Prefers object storage (storage_key) when
+    present, then the DB blob (legacy / storage-not-configured), so a split API/worker deploy serves
+    everywhere. Returns None if absent. Raises on a real storage read error (never a silent empty)."""
     with db() as conn:
-        r = conn.execute("SELECT file_bytes, mime FROM visual_assets WHERE id=%s AND business_id=%s",
-                         (visual_id, business_id)).fetchone()
-    if not r or not r.get("file_bytes"):
+        r = conn.execute("SELECT file_bytes, mime, storage_key FROM visual_assets "
+                         "WHERE id=%s AND business_id=%s", (visual_id, business_id)).fetchone()
+    if not r:
         return None
-    return bytes(r["file_bytes"]), (r.get("mime") or "application/octet-stream")
+    mime = r.get("mime") or "application/octet-stream"
+    if r.get("file_bytes"):
+        return bytes(r["file_bytes"]), mime
+    skey = r.get("storage_key")
+    if skey:
+        try:
+            from . import storage as _storage
+        except ImportError:  # pragma: no cover
+            import storage as _storage  # type: ignore
+        if _storage.configured():
+            return _storage.get_storage().fetch(skey), mime   # raises StorageError on a real failure
+    return None
 
 
 def set_visual_status(visual_id: int, status: str, reviewer: str, business_id: int) -> bool:
