@@ -136,6 +136,14 @@ def _run_ingest_source_material(business_id: int, args: dict) -> dict:
         created_by=args.get("created_by"))
 
 
+def _run_backfill_coverage(business_id: int, args: dict) -> dict:
+    # Attach the grounding-coverage advisory to EXISTING drafts so the warning shows on the current
+    # library, not only on new drafts. Idempotent jsonb-merge; owner-triggered (never auto on generation).
+    lim = args.get("limit")
+    return _imp("grounding_coverage").backfill_coverage_advisory(
+        business_id, limit=int(lim) if lim else None)
+
+
 def _run_gap_model(business_id: int, args: dict) -> None:
     _imp("ai_state_audit").build_gap_model(business_id)
 
@@ -480,6 +488,7 @@ JOB_DISPATCH = {
     "fast_audit": _run_fast_audit,   # rec 9: reduced-battery 'first look' (score fast, no cascade)
     "site_crawl": _run_site_crawl,
     "ingest_source_material": _run_ingest_source_material,   # crawl -> grounding corpus (G.1)
+    "backfill_coverage": _run_backfill_coverage,             # coverage advisory onto existing drafts
     "audit_socials": _run_audit_socials,
     "gap_model": _run_gap_model,
     "plan": _run_plan,
@@ -597,6 +606,7 @@ _JOB_RATE_LIMITS = {
     "dataforseo_reviews": (6, 3600),
     "index_own_content": (4, 3600),
     "ingest_source_material": (6, 3600),   # crawl the client's site into the grounding corpus
+    "backfill_coverage": (6, 3600),        # re-stamp coverage advisory onto existing drafts
     # "run everything" enqueues the whole pipeline (~$8-12 of LLM/search spend) — once a day.
     "run_everything": (1, 86400),
 }
@@ -675,7 +685,7 @@ _OUTPUT_PRODUCING_JOBS = frozenset({
 })
 
 # Keys a handler's return dict commonly uses to report how many items it produced. First hit wins.
-_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored", "pieces", "ingested")
+_PRODUCED_COUNT_KEYS = ("created", "count", "n", "rows", "drafts", "keywords", "items", "stored", "pieces", "ingested", "updated")
 
 
 def _derive_produced_count(result) -> Optional[int]:

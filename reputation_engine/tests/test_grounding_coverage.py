@@ -111,3 +111,41 @@ def test_coverage_over_real_fts(fresh_schema):
     # a topic the corpus doesn't cover -> ungrounded (corpus reachable, nothing matches)
     u = gc.coverage(bid, "underwater basket weaving championship")
     assert u["status"] == "ungrounded" and u["grounded"] is False
+
+
+@requires_db
+def test_backfill_stamps_existing_drafts(fresh_schema):
+    conn = fresh_schema
+    bid = conn.execute(
+        "INSERT INTO businesses (name, domain, goal, geo) VALUES ('Acme','a.com','win','Denver CO') "
+        "RETURNING id").fetchone()["id"]
+    for i in range(2):   # >= SOLID_DOCS so the covered topic reads "grounded", not "thin"
+        conn.execute(
+            "INSERT INTO source_documents (business_id, title, source_type, content, tokens, active, kind) "
+            "VALUES (%s,%s,'upload',%s,50,true,'general')",
+            (bid, f"Pricing {i}", "Our growth plan retainer pricing is 2500 per month growth plan pricing retainer."))
+    # two existing drafts with NO coverage_advisory yet: one whose topic is grounded, one that isn't
+    d_g = conn.execute(
+        "INSERT INTO content_drafts (business_id, asset_type, title, body, target_query, status, quality_notes) "
+        "VALUES (%s,'article','P','b','growth plan pricing retainer','pending_review','{}'::jsonb) RETURNING id",
+        (bid,)).fetchone()["id"]
+    d_u = conn.execute(
+        "INSERT INTO content_drafts (business_id, asset_type, title, body, target_query, status, quality_notes) "
+        "VALUES (%s,'article','Q','b','underwater basket weaving','pending_review',"
+        "'{\"geo\":{\"score\":80}}'::jsonb) RETURNING id", (bid,)).fetchone()["id"]
+    conn.commit()
+
+    out = gc.backfill_coverage_advisory(bid)
+    assert out["updated"] == 2 and out["scanned"] == 2
+
+    rows = {r["id"]: r["quality_notes"] for r in conn.execute(
+        "SELECT id, quality_notes FROM content_drafts WHERE business_id=%s", (bid,)).fetchall()}
+    assert rows[d_g]["coverage_advisory"]["status"] == "grounded"
+    assert rows[d_u]["coverage_advisory"]["status"] == "ungrounded"
+    # merge preserved the sibling key on the second draft (|| doesn't clobber)
+    assert rows[d_u]["geo"]["score"] == 80
+
+    # idempotent: re-running doesn't duplicate or error, still one coverage_advisory key
+    gc.backfill_coverage_advisory(bid)
+    again = conn.execute("SELECT quality_notes FROM content_drafts WHERE id=%s", (d_g,)).fetchone()["quality_notes"]
+    assert again["coverage_advisory"]["status"] == "grounded"

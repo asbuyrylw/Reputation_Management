@@ -22,6 +22,7 @@ surfaces >= 1 fact above the floor" -- the draft flag and the plan flag can't dr
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -121,3 +122,47 @@ def plan_coverage(signals: list) -> dict:
     return {"status": status, "total_topics": total, "grounded": grounded, "thin": thin,
             "ungrounded": ungrounded, "unknown": unknown,
             "ungrounded_topics": ungrounded_topics, "reason": reason}
+
+
+def _draft_topic(row: dict) -> str:
+    """Reconstruct the EXACT topic a stored draft grounded on (== scope_query at generation time):
+    the draft's own target_query, else the work order's gap_specifics.source_query, else the title."""
+    gs = row.get("gap_specifics")
+    gs = gs if isinstance(gs, dict) else (json.loads(gs) if gs else {})
+    return (row.get("target_query") or (gs or {}).get("source_query") or row.get("title") or "").strip()
+
+
+def backfill_coverage_advisory(business_id: int, *, limit=None) -> dict:
+    """Attach coverage_advisory to EXISTING content_drafts so the warning shows on the current library,
+    not only on new drafts. Idempotent: the `||` jsonb merge refreshes the one key without clobbering
+    sibling quality_notes producers, so re-running is safe (and keeps the advisory current as the
+    corpus grows). Best-effort per draft; a single failure never aborts the sweep. Returns
+    {updated, scanned}. Owner-triggered job -- never runs automatically on the generation path."""
+    from .db import db   # local: keep coverage()/scope_query()/plan_coverage() import-light + pure
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT d.id, d.target_query, d.title, w.gap_specifics "
+                "FROM content_drafts d LEFT JOIN work_orders w ON w.id = d.work_order_id "
+                "WHERE d.business_id=%s ORDER BY d.id DESC" + (" LIMIT %s" if limit else ""),
+                ((business_id, int(limit)) if limit else (business_id,))).fetchall()
+    except Exception as e:  # noqa: BLE001 -- dormant/absent table -> nothing to backfill
+        log.debug("backfill_coverage_advisory: draft read skipped: %s", e)
+        return {"updated": 0, "scanned": 0}
+    updated = 0
+    for r in rows:
+        r = dict(r)
+        sig = coverage(business_id, _draft_topic(r))   # total function -- never raises
+        try:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE content_drafts SET quality_notes = "
+                    "COALESCE(quality_notes, '{}'::jsonb) || jsonb_build_object('coverage_advisory', %s::jsonb) "
+                    "WHERE id=%s AND business_id=%s",
+                    (json.dumps(sig), r["id"], business_id))
+                conn.commit()
+            updated += 1
+        except Exception as e:  # noqa: BLE001 -- one draft failing must not abort the rest
+            log.debug("backfill_coverage_advisory: draft %s skipped: %s", r.get("id"), e)
+    log.info("backfill_coverage_advisory business=%s: updated %d of %d drafts", business_id, updated, len(rows))
+    return {"updated": updated, "scanned": len(rows)}
