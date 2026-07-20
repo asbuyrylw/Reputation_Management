@@ -28,8 +28,10 @@ from collections import defaultdict
 
 try:
     from .db import db
+    from .answer_flags import is_wrong_entity
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    from answer_flags import is_wrong_entity  # type: ignore
 
 log = logging.getLogger("narrative_score")
 
@@ -53,8 +55,8 @@ def _classify(a: dict) -> str:
 def _score_rows(rows: list[dict]) -> dict:
     # Wrong-entity answers (a different, same-named business) are not about us. Exclude them
     # entirely -- rather than letting them fall through to 'neutral' -- so they never dilute the
-    # denominator and drag the headline toward 50. Consistent with challenge._compute.
-    rows = [a for a in rows if not a.get("entity_confusion")]
+    # denominator and drag the headline toward 50. Same NULL-safe rule as challenge (answer_flags).
+    rows = [a for a in rows if not is_wrong_entity(a)]
     total = len(rows)
     if not total:
         return {"score": None, "desired_pct": None, "contested_pct": None, "neutral_pct": None,
