@@ -11,7 +11,14 @@ Two things that make generated content actually the CLIENT's, not generic web fi
      so every asset is built on the client's REAL facts.
 
 `grounding_block()` returns the combined guardrail + corpus, ready to prepend to any generator's
-prompt. Everything is dormant-safe: no guardrail / no docs -> empty string, generation unaffected.
+prompt.
+
+FAIL-LOUD (reputation-safety invariant): a BROKEN read must never look identical to "no facts."
+For a reputation product, silently generating ungrounded content because a corpus read errored is
+the exact harm the product sells against. So the reads here catch ONLY the legitimately-dormant
+"table/column not created yet" case (pre-migration) and return empty for it; every OTHER failure is
+logged at ERROR and re-raised, so a grounding job fails loudly (and is retried) instead of quietly
+shipping ungrounded content that masquerades as "the client uploaded no facts."
 """
 from __future__ import annotations
 
@@ -25,19 +32,36 @@ except ImportError:  # pragma: no cover
 
 log = logging.getLogger("source_material")
 
+# Postgres SQLSTATEs for the ONLY errors that legitimately mean "not set up yet" (dormant-safe):
+# undefined_table / undefined_column. Everything else is a real read failure that must fail loud.
+_DORMANT_SQLSTATES = ("42P01", "42703")
+
+
+def _is_dormant_schema(exc: Exception) -> bool:
+    """True only for 'relation/column does not exist yet' (pre-migration) — the sole case allowed to
+    return empty silently. Any other DB error is a genuine failure and must NOT masquerade as an
+    empty corpus. Reads the SQLSTATE (psycopg3 `.sqlstate` / psycopg2 `.pgcode`), driver-agnostic."""
+    code = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    return code in _DORMANT_SQLSTATES
+
 
 def _approx_tokens(text: str) -> int:
     return max(1, int(len(text or "") / 4))
 
 
 def guardrails(business_id: int) -> str:
-    """The business's hard branding/voice rules (empty string if none set)."""
+    """The business's hard branding/voice rules (empty string if none set). Raises loudly on a real
+    read error rather than returning '' (which would silently drop the client's brand rules)."""
     try:
         with db() as conn:
             r = conn.execute("SELECT brand_guardrails FROM businesses WHERE id=%s", (business_id,)).fetchone()
         return (r["brand_guardrails"] or "").strip() if r else ""
-    except Exception:  # noqa: BLE001 -- column may not exist yet
-        return ""
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            return ""  # column not migrated yet -- legitimately no guardrails
+        log.error("source_material.guardrails read FAILED for business %s (NOT empty — a broken read): %s",
+                  business_id, e, exc_info=True)
+        raise
 
 
 def set_guardrails(business_id: int, text: str) -> bool:
@@ -66,9 +90,12 @@ def add_document(business_id: int, content: str, *, title: Optional[str] = None,
                  _approx_tokens(content), created_by)).fetchone()
             conn.commit()
         return r["id"]
-    except Exception as e:  # noqa: BLE001 -- table may not exist yet
-        log.warning("source_material.add_document failed: %s", e)
-        return None
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            log.warning("source_material.add_document: table not migrated yet")
+            return None
+        log.error("source_material.add_document FAILED for business %s: %s", business_id, e, exc_info=True)
+        raise
 
 
 def list_documents(business_id: int) -> list[dict]:
@@ -80,8 +107,12 @@ def list_documents(business_id: int) -> list[dict]:
         return [{"id": r["id"], "title": r["title"], "source_type": r["source_type"],
                  "source_url": r["source_url"], "tokens": r["tokens"], "active": r["active"],
                  "created_at": r["created_at"].isoformat() if r["created_at"] else None} for r in rows]
-    except Exception:  # noqa: BLE001
-        return []
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            return []  # table not migrated yet -- legitimately no documents
+        log.error("source_material.list_documents read FAILED for business %s (NOT empty): %s",
+                  business_id, e, exc_info=True)
+        raise
 
 
 def delete_document(business_id: int, doc_id: int) -> bool:
@@ -91,8 +122,12 @@ def delete_document(business_id: int, doc_id: int) -> bool:
                              (doc_id, business_id)).rowcount
             conn.commit()
         return bool(n)
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            return False
+        log.error("source_material.delete_document FAILED (doc %s / business %s): %s",
+                  doc_id, business_id, e, exc_info=True)
+        raise
 
 
 def set_active(business_id: int, doc_id: int, active: bool) -> bool:
@@ -102,19 +137,28 @@ def set_active(business_id: int, doc_id: int, active: bool) -> bool:
                              (active, doc_id, business_id)).rowcount
             conn.commit()
         return bool(n)
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            return False
+        log.error("source_material.set_active FAILED (doc %s / business %s): %s",
+                  doc_id, business_id, e, exc_info=True)
+        raise
 
 
 def corpus(business_id: int, max_tokens: int = 6000) -> str:
-    """Concatenate the active source docs, newest first, trimmed to a token budget."""
+    """Concatenate the active source docs, newest first, trimmed to a token budget. Raises loudly on
+    a real read error — a broken corpus read must NOT return '' and let ungrounded content ship."""
     try:
         with db() as conn:
             rows = conn.execute(
                 "SELECT title, content, tokens FROM source_documents WHERE business_id=%s AND active "
                 "ORDER BY id DESC", (business_id,)).fetchall()
-    except Exception:  # noqa: BLE001
-        return ""
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            return ""  # table not migrated yet -- legitimately no corpus
+        log.error("source_material.corpus read FAILED for business %s (NOT empty — a broken read that "
+                  "must not masquerade as 'no facts'): %s", business_id, e, exc_info=True)
+        raise
     parts, used = [], 0
     for r in rows:
         t = int(r["tokens"] or _approx_tokens(r["content"]))
@@ -131,7 +175,9 @@ def corpus(business_id: int, max_tokens: int = 6000) -> str:
 
 def grounding_block(business_id: int, max_tokens: int = 4500) -> str:
     """The combined brand-guardrails + source-corpus block to prepend to any generator's prompt.
-    Empty string when nothing is configured (generation is unaffected)."""
+    Empty string when nothing is configured (generation is unaffected). Propagates a real read
+    failure (from guardrails/corpus) so a broken grounding read fails the job rather than shipping
+    ungrounded content."""
     g = guardrails(business_id)
     c = corpus(business_id, max_tokens=max_tokens)
     if not g and not c:

@@ -294,10 +294,15 @@ def log_action(conn, *, business_id: int, capability: str | None, title: str | N
             "title, completed_on, logged_by, notes")
     vals = (business_id, work_order_id, production_brief_id, source, capability, area, platform,
             title, completed_on, logged_by, notes)
-    if key_col:  # upsert on the work_order/brief unique index
+    if key_col:  # upsert on the work_order/brief PARTIAL unique index
+        # The unique indexes are partial (uq_actions_wo/uq_actions_brief WHERE <col> IS NOT NULL,
+        # migration 0061). Postgres cannot infer a partial index as the ON CONFLICT arbiter unless
+        # the SAME predicate is repeated here -- a bare `ON CONFLICT (col)` raises 42P10 and rolls
+        # back the whole txn (incl. the status change) + 500s the caller. key_col is a fixed literal.
         conn.execute(
             f"INSERT INTO actions_taken ({cols}) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-            f"ON CONFLICT ({key_col}) DO UPDATE SET completed_on=EXCLUDED.completed_on, "
+            f"ON CONFLICT ({key_col}) WHERE {key_col} IS NOT NULL DO UPDATE SET "
+            f"completed_on=EXCLUDED.completed_on, "
             f"capability=EXCLUDED.capability, area=EXCLUDED.area, platform=EXCLUDED.platform, "
             f"title=EXCLUDED.title, source=EXCLUDED.source, notes=EXCLUDED.notes, logged_at=now()",
             vals)
