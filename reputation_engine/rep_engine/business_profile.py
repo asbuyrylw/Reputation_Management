@@ -21,6 +21,7 @@ bucket reproduces the finance pilot's, so those seam swaps won't regress the pil
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Optional
 
 try:
@@ -29,6 +30,8 @@ try:
 except ImportError:  # pragma: no cover
     import industry_profiles as _ip  # type: ignore
     from db import db  # type: ignore
+
+log = logging.getLogger("business_profile")
 
 _FINANCE_FIRMS = ("ria", "broker_dealer", "insurance")
 
@@ -169,7 +172,11 @@ def for_business(business_id: int) -> dict:
             except Exception:  # noqa: BLE001
                 pass
             local_signal = _local_signal(conn, business_id)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 -- fail-safe to GENERIC, but make the downgrade OBSERVABLE:
+        # a transient DB error here silently drops a finance tenant to a generic profile (no license
+        # suppression / finance compliance / finance sources for THIS call), so log it at WARNING.
+        log.warning("for_business(%s): profile load failed, using GENERIC profile (a regulated-finance "
+                    "tenant loses its finance seams for this call): %s", business_id, e)
         biz = {}
     overrides = biz.get("strategy_profile") if isinstance(biz.get("strategy_profile"), dict) else None
     return derive(biz, overrides=overrides, local_signal=local_signal)

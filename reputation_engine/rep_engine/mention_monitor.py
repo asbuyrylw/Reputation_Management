@@ -390,16 +390,20 @@ _SENTIMENT_SYS = (
 )
 
 
-def score_sentiment(text: str, business_id: int | None = None) -> str:
+def score_sentiment(text: str, business_id: int | None = None,
+                    extra_neg: set | None = None) -> str:
     """Sentiment of a mention. Uses the orchestrator LLM when one is configured (far better
     on sarcasm/context than keyword counting) and falls back to the keyword heuristic offline
     or on any failure. Opt out with MENTION_LLM_SENTIMENT=0. Called only from the (job-run)
-    discovery path, so no LLM spend ever happens in an HTTP request."""
+    discovery path, so no LLM spend ever happens in an HTTP request. `extra_neg` may be a PRE-COMPUTED
+    declared-negative-lexicon set (hoisted once by the caller) to avoid a per-mention profile load in a
+    discovery loop; when None it is derived from business_id."""
     txt = (text or "").strip()
     # The heuristic fallback unions the tenant's DECLARED negative lexicon (contested_terms) with the
     # universal negativity words -- so Team Unstoppable still flags 'pyramid'/'mlm' (they declared them)
-    # while a generic tenant does not. Computed once; the LLM path (when configured) ignores it.
-    extra_neg = _negative_lexicon_words(business_id)
+    # while a generic tenant does not. The LLM path (when configured) ignores it.
+    if extra_neg is None:
+        extra_neg = _negative_lexicon_words(business_id)
     if not txt or os.getenv("MENTION_LLM_SENTIMENT", "1") == "0":
         return _sentiment(txt, extra_neg)
     try:
@@ -480,6 +484,9 @@ def discover(business_id: int, sources: Optional[list[str]] = None, quiet: bool 
             "SELECT name, services, geo, contested_terms FROM businesses WHERE id=%s",
             (business_id,),
         ).fetchone()
+        # Hoist the tenant's declared negative lexicon ONCE (a profile load) instead of re-deriving it
+        # per discovered mention inside the loops below -- avoids an N+1 profile query on the scan path.
+        _extra_neg = _negative_lexicon_words(business_id)
         for kw in pos_kw:
             for src in use:
                 adapter = SOURCES.get(src)
@@ -515,7 +522,7 @@ def discover(business_id: int, sources: Optional[list[str]] = None, quiet: bool 
                                ON CONFLICT (dedup_hash) DO NOTHING RETURNING id""",
                             (business_id, it.get("source"), it.get("source_url"), it.get("external_id"),
                              it.get("author"), it.get("title"), it.get("body"), kw,
-                             score_sentiment(text, business_id), rel, h),
+                             score_sentiment(text, business_id, extra_neg=_extra_neg), rel, h),
                         ).fetchone()
                         if r:
                             found += 1
@@ -556,10 +563,20 @@ def draft_replies(business_id: int, limit: int = 50, tone: str = "helpful, factu
         except Exception:  # noqa: BLE001
             rp = None
 
+        # A regulated-finance tenant's brand replies must also pass the finance deterministic hard-rules
+        # (a finance reply must not promise returns / claim risk-free). Derived once from the loaded
+        # business row (pure, no extra query). Fail-safe -> False (universal-only).
+        try:
+            from . import business_profile as _bp
+            _reg_fin = bool(_bp.derive(dict(biz)).get("regulated_financial"))
+        except Exception:  # noqa: BLE001
+            _reg_fin = False
+
         for mt in mentions:
             draft = _draft_one(biz, dict(mt), tone, cg)
             # mention/review brand replies are reply-screened (FTC voice/solicitation/impersonation)
-            comp = cg._compliance(draft, is_reply=True) if draft else {"pass": None, "flags": ["no draft produced"]}
+            comp = (cg._compliance(draft, is_reply=True, regulated_financial=_reg_fin)
+                    if draft else {"pass": None, "flags": ["no draft produced"]})
             surface = "third_party"
             auto_policy = "manual"
             if rp is not None:

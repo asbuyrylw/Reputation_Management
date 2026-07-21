@@ -143,7 +143,10 @@ def _context(business_id: int) -> tuple:
                           (business_id,)).fetchone()
         gm = conn.execute("SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
                           (business_id,)).fetchone()
-    biz = {k: b[k] for k in ("name", "domain", "goal", "contested_terms", "services", "geo")}
+    # industry + regulatory_profile are carried so plan() can derive the StrategyProfile (license policy)
+    # from this already-loaded row instead of a second, fail-prone for_business round-trip.
+    biz = {k: b[k] for k in ("name", "domain", "goal", "contested_terms", "services", "geo",
+                             "industry", "regulatory_profile")}
     rc_model = (rc.get("model") if rc else None) or {}
     if not isinstance(rc_model, dict):
         rc_model = {}
@@ -349,8 +352,12 @@ def plan(business_id: int, *, max_per_channel: int | None = None) -> dict:
         return {"business_id": business_id, "n": 0, "briefs": [], "video": 0, "social": 0}
     biz, user = _context(business_id)
     # Business-agnostic license/sensitive-ID policy for this tenant (spliced into both briefs' prompts).
-    # '' for a generic tenant; a regulated-finance tenant reproduces today's license ban. Fail-safe -> ''.
-    _lic = _bp.license_policy_for_business(business_id)
+    # '' for a generic tenant; a regulated-finance tenant reproduces today's license ban. Derived from
+    # the row _context already loaded (no extra query); fail-safe -> '' on any error.
+    try:
+        _lic = _bp.license_policy_for(_bp.derive(biz))
+    except Exception:  # noqa: BLE001
+        _lic = ""
     briefs = _generate("video", _video_system(_lic), user, business_id, max_per_channel)
     briefs += _generate("social", _social_system(_lic), user, business_id, max_per_channel)
     if briefs:

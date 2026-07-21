@@ -26,7 +26,7 @@ def test_remediation_plans_drafts_links_and_gates(fresh_schema, monkeypatch):
 
     monkeypatch.setattr(g.tools, "over_budget", lambda bid: False)
     monkeypatch.setattr(g.tools, "llm_text", lambda *a, **k: "Accurate, owned content about Acme.")
-    monkeypatch.setattr(g._cg, "_compliance", lambda body: {"pass": True, "flags": []})
+    monkeypatch.setattr(g._cg, "_compliance", lambda body, **k: {"pass": True, "flags": []})
 
     def fake_json(system, user, *, business_id, tier="full", operation="agent"):
         if operation == "remediation_plan":
@@ -65,7 +65,7 @@ def test_remediation_compliance_failure_marks_needs_fix(fresh_schema, monkeypatc
     monkeypatch.setattr(g.tools, "over_budget", lambda bid: False)
     monkeypatch.setattr(g.tools, "llm_text", lambda *a, **k: "We guarantee #1 risk-free results.")
     # the verified gate blocks it
-    monkeypatch.setattr(g._cg, "_compliance", lambda body: {"pass": False, "flags": ["guaranteed results"]})
+    monkeypatch.setattr(g._cg, "_compliance", lambda body, **k: {"pass": False, "flags": ["guaranteed results"]})
     monkeypatch.setattr(g.tools, "llm_json",
                         lambda system, user, **k: {"assets": [{"channel": "article", "title": "t",
                                                                "topic": "x", "keywords": []}]}
@@ -87,7 +87,7 @@ def test_remediation_reentry_does_not_duplicate(fresh_schema, monkeypatch):
     bid = _biz(conn)
     monkeypatch.setattr(g.tools, "over_budget", lambda bid: False)
     monkeypatch.setattr(g.tools, "llm_text", lambda *a, **k: "owned content")
-    monkeypatch.setattr(g._cg, "_compliance", lambda body: {"pass": True, "flags": []})
+    monkeypatch.setattr(g._cg, "_compliance", lambda body, **k: {"pass": True, "flags": []})
     monkeypatch.setattr(g.tools, "llm_json",
                         lambda system, user, **k: {"assets": [{"channel": "article", "title": "t",
                                                                "topic": "x", "keywords": []}]}

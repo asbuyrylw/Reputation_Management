@@ -337,7 +337,7 @@ def _scope_keywords(allkw: list, target_query: str | None, limit: int = 12) -> l
     return [t[3] for t in (relevant if relevant else scored)[:limit]]
 
 
-def _grounding_context(business_id: int, target_query: str | None = None) -> dict:
+def _grounding_context(business_id: int, target_query: str | None = None, biz: dict | None = None) -> dict:
     """Pull the REAL grounding for content generation, so the writer works from facts and the
     right language instead of generic filler:
       - site_facts: what the business's own website actually says (latest crawl summary),
@@ -386,7 +386,11 @@ def _grounding_context(business_id: int, target_query: str | None = None) -> dic
     authoritative = ""
     try:
         from . import business_profile as _bp
-        if (_bp.for_business(business_id).get("authoritative_source_pack") or "") == "financial":
+        # Use the already-loaded biz row (pure derive, no query) when the caller passes it; only fall
+        # back to a for_business load when it doesn't -- avoids a duplicate profile query per piece.
+        _pack = (_bp.derive(biz) if biz is not None else _bp.for_business(business_id)
+                 ).get("authoritative_source_pack") or ""
+        if _pack == "financial":
             from . import authoritative_sources as _authsrc
             authoritative = _authsrc.grounding_for_business(business_id)
     except Exception:  # noqa: BLE001 -- best-effort
@@ -1352,7 +1356,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # back to their gap query / title so single-draft pieces also get on-topic keywords, not the
     # business-wide top-15.
     _scope_q = wo.get("target_query") or (wo.get("gap_specifics") or {}).get("source_query") or wo.get("title")
-    grounding = _grounding_context(business_id, target_query=_scope_q)
+    grounding = _grounding_context(business_id, target_query=_scope_q, biz=biz)
     # SERP-competitor benchmark (Phase 3): the shared terms + word-count target from the pages
     # actually ranking for this query, so the draft can be graded "vs. the competition" rather than
     # absolute. Dormant-safe: {skipped} with no SERPER_API_KEY, and never raises.

@@ -165,6 +165,11 @@ def _node_draft(state: RemState) -> dict:
         _profile = None
     _lic = _bp.license_policy_for(_profile)
     _reg_fin = bool(_profile and _profile.get("regulated_financial"))
+    # Per-tenant compliance SCREENER prompt (finance screener + firm-type rules for a finance tenant,
+    # universal for a generic one) -- so a regulated-finance tenant's agent-authored drafts get the
+    # finance LLM screen, not just the deterministic rules. reg = the tenant's regulatory_profile.
+    _reg = (biz.get("regulatory_profile") if isinstance(biz, dict) else None) or {}
+    _comp_system = _cg._compliance_system(_reg, _profile)
     drafts = []
     for a in state.get("plan", [])[:MAX_ASSETS]:
         if tools.over_budget(state["business_id"]):
@@ -204,7 +209,7 @@ def _node_draft(state: RemState) -> dict:
             break
         if not body:
             continue
-        comp = _cg._compliance(body, regulated_financial=_reg_fin)   # VERIFIED deterministic+LLM gate
+        comp = _cg._compliance(body, system=_comp_system, regulated_financial=_reg_fin)   # VERIFIED gate
         status = "needs_fix" if comp.get("pass") is False else "pending_review"
         with db() as conn:
             row = conn.execute(
