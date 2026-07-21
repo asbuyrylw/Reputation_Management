@@ -459,28 +459,50 @@ def category_local_prompts(b: dict) -> list[str]:
 
 
 # Personas/locations to probe so we can see how the answer differs by audience.
-# Kept small to control cost; ('', '') is the generic baseline lens. PH (tune per client).
-_RECRUIT_RE = re.compile(r"\b(career|careers|recruit|recruiting|hiring|hire|agent|agents|job|jobs|"
-                         r"opportunity|opportunities|work at|join (our|the) team|become an?)\b", re.I)
-
-
-def _is_recruiting_business(b: dict) -> bool:
-    """True when the business recruits/hires (its services or goal mention careers/agents/jobs).
-    For these the job-seeker/recruit audience is a distinct, high-negativity lens (the MLM/scam
-    narrative hits recruits hardest) that must be measured separately from customers."""
-    blob = " ".join(str(b.get(k) or "") for k in ("services", "goal", "description", "industry"))
-    return bool(_RECRUIT_RE.search(blob))
+# Kept small to control cost; ('', '') is the generic baseline lens. The audience set is now
+# PROFILE-DRIVEN (business_profile.personas) instead of a keyword regex: the 'recruit' lens (the
+# audience the MLM/scam narrative hits hardest) is present ONLY for a vertical whose profile declares
+# it (the financial_services bucket), so a staffing agency or hiring SaaS is no longer silently tagged
+# with the recruit/MLM lens.
+def _tenant_profile(b: dict) -> dict:
+    """Derive the StrategyProfile from an already-loaded biz dict (pure, no DB). Fail-safe -> {}."""
+    try:
+        from . import business_profile as _bp
+        return _bp.derive(b)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _persona_lenses(b: dict) -> list[tuple[str, str]]:
+    """The (persona, location) probe lenses for this business, from profile.personas. Maps the
+    profile's 'generic' label to the '' persona the answers/lens layer persists. The local_customer
+    lens is emitted ONLY when the tenant has a geo AND a real local presence (has_local_presence) --
+    a b2b_saas/ecommerce tenant with an HQ geo does NOT get a local audience lens."""
     geo = b.get("geo") or ""
-    lenses = [("", "")]  # generic
-    if geo:
-        lenses.append(("local_customer", geo))
-    lenses.append(("prospective_client", ""))
-    if _is_recruiting_business(b):
-        lenses.append(("recruit", ""))   # job-seeker / prospective agent audience
+    profile = _tenant_profile(b)
+    personas = profile.get("personas") or ["generic", "local_customer", "prospective_client"]
+    has_local = profile.get("has_local_presence", True)
+    lenses: list[tuple[str, str]] = []
+    for p in personas:
+        if p == "generic":
+            lenses.append(("", ""))
+        elif p == "local_customer":
+            if geo and has_local:
+                lenses.append(("local_customer", geo))
+        elif p == "recruit":
+            lenses.append(("recruit", ""))
+        else:
+            lenses.append((p, ""))
+    if ("", "") not in lenses:      # the generic baseline lens is always present
+        lenses.insert(0, ("", ""))
     return lenses
+
+
+def _contested_accusation(contested_terms: str) -> str:
+    """A natural accusation phrase built from the tenant's OWN declared contested_terms (e.g.
+    'MLM, pyramid scheme, scam' -> 'MLM or pyramid scheme or scam'). Never planted by industry."""
+    parts = [t.strip() for t in (contested_terms or "").replace(";", ",").split(",") if t.strip()]
+    return " or ".join(parts[:3]) if parts else "a scam"
 
 
 def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
@@ -490,6 +512,11 @@ def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
     multiplying the full battery (cost control)."""
     name = b["name"]
     svc = b.get("services") or "its services"
+    # Contested-frame probe (MLM/"pyramid scheme"/etc.) fires ONLY when the tenant DECLARED contested
+    # terms -- the accusation wording comes from their own contested_terms, never planted by industry.
+    _profile = _tenant_profile(b)
+    _contested_probe = bool(_profile.get("contested_probe"))
+    _accusation = _contested_accusation(_profile.get("contested_terms") or "")
     out: list[tuple[str, str, str]] = []
     seen: set[str] = set()
 
@@ -511,11 +538,16 @@ def build_prompt_battery_lensed(b: dict) -> list[tuple[str, str, str]]:
     # audience the MLM/scam narrative hits hardest and the growth engine for a recruiting business.
     def _focused_for(persona: str, location: str) -> list[str]:
         if persona == "recruit":
-            return [
+            qs = [
                 f"Is a career at {name} a good opportunity?",
                 f"What is it like to work at {name}?",
-                f"Is {name} a legitimate way to build a career, or a pyramid scheme?",
             ]
+            # The contested-accusation question ONLY when the tenant declared contested terms, and the
+            # accusation is THEIR declared framing -- never a hardcoded 'pyramid scheme' planted on
+            # every recruiting business.
+            if _contested_probe:
+                qs.append(f"Is {name} a legitimate way to build a career, or is it seen as {_accusation}?")
+            return qs
         if persona == "prospective_client":
             return [
                 f"As a potential customer, is {name} trustworthy for {svc}?",
@@ -1705,8 +1737,9 @@ _GAP_SYSTEM_BASE = (
     "each top action most helps. "
     "If 'challenge_profile' is provided: when its unaware_rate is high / recognition_gap is large, "
     "make ESTABLISHING RECOGNITION a top priority -- foundational missing_owned_content (homepage / "
-    "about / services / careers pages that state plainly who the business is, what it does, where, "
-    "and its credentials), not only negative-defense; mark coverage.awareness_recognition addressed. "
+    "about / services pages, and a careers page if the business hires, that state plainly who the "
+    "business is, what it does, where, and its credentials), not only negative-defense; mark "
+    "coverage.awareness_recognition addressed. "
     "When entity_confusion_rate is material, REQUIRE (a) a missing_owned_content item that is an "
     "authoritative About/entity page that ESTABLISHES this business's identity POSITIVELY and "
     "specifically -- its exact name, what it does, where, its people/credentials, and its parent/"
@@ -1733,23 +1766,50 @@ _GAP_SYSTEM_BASE = (
     "-> add answer-first intros; low avg_question_coverage -> add FAQ blocks for the unanswered "
     "questions; few pages_with_freshness_date -> add visible update dates; low avg_title_alignment -> "
     "retitle pages to the target question; low_readiness_pages -> prioritize those for optimization. "
-    "Do NOT propose content whose topic is a CONTESTED term itself (e.g. a page 'about "
-    "<scam/pyramid scheme/MLM>') -- a naive keyword page REINFORCES the negative association. "
+    "Do NOT propose content whose topic is a CONTESTED term itself (e.g. a page whose title IS the "
+    "contested accusation) -- a naive keyword page REINFORCES the negative association. "
     "Where a contested frame is the problem, the right asset is a LEGITIMACY / TRANSPARENCY / "
-    "third-party-CORROBORATION asset (e.g. licensing/regulatory proof, an honest income/"
-    "compensation disclosure, independent reviews/ratings) that answers the concern factually, "
-    "plus disambiguation/identity content where the engines confuse the business with a "
-    "different same-named entity. "
+    "third-party-CORROBORATION asset (e.g. independent reviews/ratings, transparent credentials, "
+    "verifiable customer proof) that answers the concern factually, plus disambiguation/identity "
+    "content where the engines confuse the business with a different same-named entity. "
     "All actions must be honest reputation-building, not manipulation. JSON only."
 )
 
 
-def _gap_system(license_policy: str = "") -> str:
-    """The gap-model system prompt with the tenant's license/sensitive-ID policy spliced in-position
-    (finance suppresses specific license numbers; generic passes '' -> finance-free). NO_NEGATIVE +
-    UNTRUSTED stay agnostic + always appended. `GAP_SYSTEM` is the finance-free module alias so the
-    import-time approx_tokens/re-export sites keep a valid string; build_gap_model builds per tenant."""
-    return _GAP_SYSTEM_BASE + license_policy + NO_NEGATIVE_DISAMBIGUATION_POLICY + UNTRUSTED_INSTRUCTION
+# Appended ONLY for a tenant with no local/storefront presence (b2b_saas / ecommerce): local SEO and
+# Google Business Profile are irrelevant, so tell the model to leave those surfaces empty instead of
+# fabricating local gaps. The output schema keys stay present (downstream reads them defensively).
+_GAP_NON_LOCAL_MODULE = (
+    " NOTE -- THIS BUSINESS HAS NO LOCAL / STOREFRONT PRESENCE: return an EMPTY array for "
+    "local_seo_gaps and OMIT the google_business surface_action; do NOT invent local page-1 gaps, "
+    "'near me' queries, or Google Business Profile actions -- focus on national/organic, category, "
+    "and comparison surfaces instead."
+)
+
+# Appended ONLY for a regulated-finance tenant: the finance-specific legitimacy/corroboration remedies
+# that would be nonsensical for a dentist or SaaS (licensing/regulatory proof, income disclosure).
+_GAP_FINANCE_REMEDY_MODULE = (
+    " For this regulated-finance business, legitimacy/corroboration assets may also include "
+    "licensing/regulatory proof (a general licensing statement + the relevant regulator), an honest "
+    "income/compensation disclosure, and regulated-affiliate disclosure -- alongside the universal "
+    "reviews/credentials/customer-proof remedies."
+)
+
+
+def _gap_system(license_policy: str = "", *, has_local_presence: bool = True,
+                regulated_financial: bool = False) -> str:
+    """The gap-model system prompt for ONE tenant. The tenant's license/sensitive-ID policy is spliced
+    in-position (finance suppresses specific license numbers; generic passes '' -> finance-free). A
+    non-local tenant gets the NON_LOCAL module (no fabricated local gaps); a regulated-finance tenant
+    gets the finance-remedy module. NO_NEGATIVE + UNTRUSTED stay agnostic + always appended. `GAP_SYSTEM`
+    is the finance-free, local-default module alias so import-time approx_tokens/re-export sites keep a
+    valid string; build_gap_model builds the per-tenant prompt."""
+    prompt = _GAP_SYSTEM_BASE
+    if not has_local_presence:
+        prompt += _GAP_NON_LOCAL_MODULE
+    if regulated_financial:
+        prompt += _GAP_FINANCE_REMEDY_MODULE
+    return prompt + license_policy + NO_NEGATIVE_DISAMBIGUATION_POLICY + UNTRUSTED_INSTRUCTION
 
 
 GAP_SYSTEM = _gap_system()   # finance-free GENERIC alias (module-level string for approx_tokens/re-exports)
@@ -2057,6 +2117,17 @@ def _prioritize_gap_answers(rows, cap: int) -> list:
 def build_gap_model(business_id: int) -> dict:
     with db() as conn:
         b = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        # Business-agnostic StrategyProfile (with the real local signal): gates the local surfaces in
+        # the gap prompt + the local_rank_gaps payload, the finance-remedy module, and the license
+        # policy. Fail-safe -> generic. db() opens a fresh connection per call, so this nested read
+        # never disturbs the connection this function holds open.
+        try:
+            from . import business_profile as _bp
+            _profile = _bp.for_business(business_id)
+        except Exception:  # noqa: BLE001
+            _bp, _profile = None, {}
+        _has_local = bool(_profile.get("has_local_presence", True))
+        _reg_fin = bool(_profile.get("regulated_financial"))
         # Only synthesize off a COMPLETED run. A budget-aborted/in-progress run keeps
         # finished_at NULL (and status != 'complete'); building a strategy from a partial,
         # biased sample of the prompt battery would violate the same invariant diff(),
@@ -2125,17 +2196,20 @@ def build_gap_model(business_id: int) -> dict:
         local_rank_gaps: dict = {}
         competitor_gaps: dict = {}
         site_crawl_gaps: dict = {}
-        try:
-            from . import local_seo as _ls
-            lr = _ls.latest(business_id) or {}
-            summ = lr.get("summary") or {}
-            not_p1 = [q.get("query") for q in (lr.get("queries") or [])
-                      if q.get("query") and (q.get("subject") or {}).get("on_page_one") is not True]
-            local_rank_gaps = {"page_one_rate": summ.get("page_one_rate"),
-                               "avg_organic_rank": summ.get("avg_organic_rank"),
-                               "queries_not_on_page_1": not_p1[:12]}
-        except Exception as e:  # noqa: BLE001
-            log.warning("gap model: local-rank gaps unavailable (%s)", e)
+        # Only feed local-ranking data for a tenant with a real local presence; a b2b_saas/ecommerce
+        # tenant has none, so injecting local ranks would let the model hallucinate local_seo_gaps.
+        if _has_local:
+            try:
+                from . import local_seo as _ls
+                lr = _ls.latest(business_id) or {}
+                summ = lr.get("summary") or {}
+                not_p1 = [q.get("query") for q in (lr.get("queries") or [])
+                          if q.get("query") and (q.get("subject") or {}).get("on_page_one") is not True]
+                local_rank_gaps = {"page_one_rate": summ.get("page_one_rate"),
+                                   "avg_organic_rank": summ.get("avg_organic_rank"),
+                                   "queries_not_on_page_1": not_p1[:12]}
+            except Exception as e:  # noqa: BLE001
+                log.warning("gap model: local-rank gaps unavailable (%s)", e)
         try:
             from . import competitor as _cmp
             cc = _cmp.compare(business_id, quiet=True) or {}
@@ -2238,10 +2312,12 @@ def build_gap_model(business_id: int) -> dict:
         # and site_technical_gaps, so the JSON runs longer -- too small a cap truncates it
         # mid-object and the synthesis is discarded as unparseable.
         # Per-tenant system prompt: splice in THIS business's license/sensitive-ID policy (finance
-        # suppresses specific numbers; generic gets none). Same string reused for the cost estimate.
+        # suppresses specific numbers; generic gets none), gate the local surfaces on has_local_presence,
+        # and add the finance-remedy module only for a regulated-finance tenant. Reuses the profile
+        # loaded above (no extra query). Same string reused for the cost estimate.
         try:
-            from . import business_profile as _bp
-            _gap_sys = _gap_system(_bp.license_policy_for_business(business_id))
+            _gap_sys = _gap_system(_bp.license_policy_for(_profile) if _bp else "",
+                                   has_local_presence=_has_local, regulated_financial=_reg_fin)
         except Exception:  # noqa: BLE001 -- profile read must never break the gap model
             _gap_sys = GAP_SYSTEM
         model = orchestrator_json(_gap_sys, payload, tier=GAP_MODEL_TIER,
