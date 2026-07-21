@@ -204,11 +204,10 @@ _GEN_SYSTEM_BASE = (
     "stubs in the body. If a specific detail is NOT available from the website/profile, WRITE AROUND "
     "it -- omit it gracefully, use accurate general wording, or point the reader to the website / "
     "contact form -- rather than inserting a placeholder or inventing the detail. NEVER output the "
-    "literal characters '[INSERT'. Handle the common cases WITHOUT a placeholder: for a "
-    "securities/broker-dealer disclosure, name the affiliate by its known public name from the context "
-    "or say 'the affiliated broker-dealer' generally; do NOT state a specific star rating or review "
-    "count -- instead point readers to 'our reviews on Google' and never guess a number; reference any "
-    "income-disclosure statement only in general terms. If completing a sentence would require a "
+    "literal characters '[INSERT'. Handle the common cases WITHOUT a placeholder: do NOT state a "
+    "specific star rating or review count -- instead point readers to 'our reviews on Google' and never "
+    "guess a number; for any affiliate/partner you cannot name specifically, refer to it generally. If "
+    "completing a sentence would require a "
     "specific you don't have, state it generally or LEAVE THE SENTENCE OUT entirely. "
     "WRITE AS A FINISHED, PUBLISHED PAGE in a confident voice -- state the business's facts plainly as "
     "fact. Do NOT hedge every fact with 'at time of drafting', 'may change', 'should be independently "
@@ -228,11 +227,12 @@ _GEN_SYSTEM_BASE = (
     "FAQ / Q&A section near the end; (4) give a concrete, ATTRIBUTABLE statistic roughly every 150-200 "
     "words -- use ONLY real numbers you can source (industry data, official/regulatory figures, the "
     "parent company's public data) and NEVER invent one; (5) CITE authoritative primary sources INLINE "
-    "as markdown links (.gov/.edu/official -- e.g. the state regulator, SEC/EDGAR, the parent company's "
-    "investor page): inline citations to authoritative sources are a top AI-citation lever; "
+    "as markdown links (.gov/.edu/official -- e.g. the relevant regulator or licensing body, official "
+    "statistics agencies (.gov), or a recognized industry association): inline citations to "
+    "authoritative sources are a top AI-citation lever; "
     "(5b) present AT LEAST TWO of the provided real statistics AS SHORT DIRECT QUOTATIONS with inline "
     "attribution -- put the quantitative claim in quotation marks and attribute it to its source, e.g. "
-    "\"About 51% of U.S. adults own life insurance,\" according to [LIMRA's 2024 Barometer Study](url) "
+    "\"<a real figure from your provided sources>,\" according to [the named source](url) "
     "-- because ADDING ATTRIBUTED QUOTATIONS is the single strongest MEASURED lever for getting content "
     "quoted by AI answer engines (Princeton GEO study, +41% vs +33% for a bare stat); quote ONLY the "
     "real, provided sources/numbers, and NEVER invent a quote or attribute words to a specific named "
@@ -248,8 +248,8 @@ _GEN_SYSTEM_BASE = (
     "keyword-stuff). Only cover "
     "topics and FAQ questions that are SPECIFIC to this business and directly serve THIS page's "
     "stated purpose and the business's actual services -- do NOT pad the page with generic industry "
-    "questions that don't fit it (e.g. broad medical-underwriting eligibility questions, or unrelated "
-    "career/licensing-exam trivia); drop any provided keyword that doesn't genuinely belong here. "
+    "questions that don't fit it (e.g. broad 'how to enter this industry' or generic eligibility "
+    "questions unrelated to THIS page); drop any provided keyword that doesn't genuinely belong here. "
     "Directly address the gap / narrative the content is meant to fix. Never fabricate facts, "
     "credentials, reviews, or statistics. "
     # --- Anti-generic ("AI slop") spec: what separates distinctive, authoritative content from
@@ -273,13 +273,31 @@ _GEN_SYSTEM_BASE = (
 )
 
 
-def _gen_system(license_policy: str = "") -> str:
+# Finance-specific writing EXEMPLARS, appended ONLY for a regulated-finance tenant. The base prompt's
+# rules (write around a missing specific; cite authoritative sources; >=2 attributed quotations) stay
+# universal; these just give the finance tenant its concrete examples back (broker-dealer affiliate,
+# income disclosure, SEC/EDGAR, a LIMRA quotation).
+_GEN_FINANCE_MODULE = (
+    " For this regulated-finance business specifically: for a securities/broker-dealer disclosure, name "
+    "the affiliate by its known public name from the context or say 'the affiliated broker-dealer' "
+    "generally, and reference any income-disclosure statement only in general terms; good authoritative "
+    "sources to cite inline include the state regulator, SEC/EDGAR, and the parent company's investor "
+    "page; a strong attributed-quotation example is \"About 51% of U.S. adults own life insurance,\" "
+    "according to [LIMRA's 2024 Barometer Study](url)."
+)
+
+
+def _gen_system(license_policy: str = "", regulated_financial: bool = False) -> str:
     """The generation system prompt for ONE tenant. `license_policy` is the profile-driven license /
     sensitive-ID ban -- empty ('') for a tenant that doesn't suppress specific credential numbers (the
-    GENERIC default: NO license-number ban at all). NO_NEGATIVE_DISAMBIGUATION stays agnostic and is
-    always present. The module `GEN_SYSTEM` alias below = this with NO license (the finance-free
-    default); per-tenant prompts are built at the generation call site from the business's profile."""
-    return _GEN_SYSTEM_BASE + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
+    GENERIC default: NO license-number ban at all). `regulated_financial` appends the finance writing
+    exemplars. NO_NEGATIVE_DISAMBIGUATION stays agnostic and is always present. The module `GEN_SYSTEM`
+    alias below = this with NO license + no finance module (the finance-free default); per-tenant
+    prompts are built at the generation call site from the business's profile."""
+    prompt = _GEN_SYSTEM_BASE
+    if regulated_financial:
+        prompt += _GEN_FINANCE_MODULE
+    return prompt + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 
 
 GEN_SYSTEM = _gen_system()   # finance-free GENERIC alias; per-tenant prompt built at the call site
@@ -610,7 +628,8 @@ _ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
-                  outline: str = "", voice: str = "", license_policy: str = "") -> str:
+                  outline: str = "", voice: str = "", license_policy: str = "",
+                  regulated_financial: bool = False) -> str:
     tier = _ASSET_TIER.get(asset_type, "mid")
     # Size the output cap to the piece's target length (+ headroom for headings/citations/byline), so a
     # long-form asset isn't truncated mid-draft. A flat 2600 clipped deep_article (2.5k words ~3.3k
@@ -620,7 +639,7 @@ def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict
     # draft mid-sentence; oversizing is free.
     target_words = _BRIEF_WORDS.get(asset_type, 1200)
     max_tokens = max(3200, min(int(target_words * 2.5) + 800, 6500))
-    return llm.orchestrator_text(_gen_system(license_policy),
+    return llm.orchestrator_text(_gen_system(license_policy, regulated_financial),
                                  _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
                                  max_tokens=max_tokens, tier=tier)
 
@@ -1100,16 +1119,26 @@ def _add_cluster_links(body: str, cluster: dict | None) -> str:
 _BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed by )", re.I | re.M)
 
 
-def _ensure_byline(body: str, business_name: str) -> str:
-    """E-E-A-T authorship signal. Financial content is YMYL: Google's rater guidelines rate a page
-    with no clear author background 'Lowest', and named authorship is a top measured citation signal
-    (+30.6% correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 --
-    truthful given the human review-before-publish workflow, and NEVER a specific person or license
-    number. Best-effort; skipped if a byline already exists or the business name is unknown."""
+def _ensure_byline(body: str, business_name: str, reviewer: str = "editorial team") -> str:
+    """E-E-A-T authorship signal. For YMYL content Google's rater guidelines rate a page with no clear
+    author background 'Lowest', and named authorship is a top measured citation signal (+30.6%
+    correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 -- truthful
+    given the human review-before-publish workflow, and NEVER a specific person or license number. The
+    reviewer NOUN is profile-driven (`byline_reviewer`): 'editorial team' by default, 'licensed
+    professionals' for finance, 'a licensed attorney'/'a licensed clinician' for legal/medical, etc.
+    Best-effort; skipped if a byline already exists or the business name is unknown."""
     if not body or not (business_name or "").strip() or _BYLINE_RE.search(body):
         return body
     name = business_name.strip()
-    line = f"*By {name} · Reviewed by {name}’s licensed professionals*"
+    reviewer = (reviewer or "editorial team").strip()
+    # byline_reviewer may be a bare noun ('editorial team', 'licensed professionals') -> possessive,
+    # or article-prefixed ('a licensed attorney', 'a licensed clinician') -> drop the possessive so the
+    # grammar reads right ("Reviewed by a licensed attorney", not "Reviewed by X's a licensed attorney").
+    if reviewer.lower().startswith(("a ", "an ", "the ")):
+        review_part = f"Reviewed by {reviewer}"
+    else:
+        review_part = f"Reviewed by {name}’s {reviewer}"
+    line = f"*By {name} · {review_part}*"
     lines = body.split("\n")
     for i, ln in enumerate(lines):
         if ln.lstrip().startswith("# "):
@@ -1390,7 +1419,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # Pass 1 (long-form): a keyword-mapped outline the draft writes from.
     outline = _outline(biz, wo, asset_type, grounding) if asset_type in ("article", "faq") else ""
     # Pass 2: the grounded draft.
-    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice, license_policy=_lic)
+    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice,
+                         license_policy=_lic, regulated_financial=_reg_fin)
     if not body:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
@@ -1491,7 +1521,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     if asset_type not in ("schema", "social_post", "gbp_post", "x_post", "facebook_post", "instagram_post"):
         body = _ensure_freshness(body, f"{datetime.now(timezone.utc):%B %Y}")
         # E-E-A-T authorship (YMYL requirement): add a general, compliance-safe byline/reviewer line.
-        body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "")
+        # The reviewer noun is profile-driven ('editorial team' generic, 'licensed professionals' finance).
+        body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "",
+                              reviewer=(_profile.get("byline_reviewer") if _profile else "") or "editorial team")
         # Plain-language backstop: the Opus tier writes grade ~15 despite the prompt + fluency signal,
         # so force a readability rewrite when the grade is too high (preserves facts/citations/quotes).
         body = _ensure_readability(body, asset_type, _score_q, content_type,
@@ -1948,18 +1980,44 @@ def reject(draft_id: int, reviewer: str, notes: Optional[str]) -> None:
 # ----------------------------------------------------------------------------
 # Social atomization (Phase 5) -- turn one long-form piece into per-platform posts
 # ----------------------------------------------------------------------------
-ATOMIZE_SYSTEM = (
-    "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
-    "social posts, ONE per platform: LinkedIn, X (Twitter), Facebook, Instagram. GROUND every claim in "
-    "the article -- NEVER add facts, statistics, offers, credentials, or claims not present in it. Match "
-    "each platform: LinkedIn = professional, 1-2 short paragraphs + a takeaway; X = one punchy post under "
-    "280 characters; Facebook = warm + conversational, 2-3 sentences; Instagram = a hook-led caption with "
-    "3-5 relevant hashtags. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
-    '{"atoms":[{"surface":"linkedin","text":"..."},{"surface":"x","text":"..."},'
-    '{"surface":"facebook","text":"..."},{"surface":"instagram","text":"..."}]}'
-)
+# Per-platform format hints for atomization. The SET of platforms is profile-driven (social_channels),
+# so a b2b_saas tenant gets LinkedIn+X, an ecommerce/beauty tenant gets Instagram/TikTok/Pinterest, etc.
+_CHANNEL_HINTS = {
+    "linkedin": "LinkedIn = professional, 1-2 short paragraphs + a takeaway",
+    "x": "X = one punchy post under 280 characters",
+    "twitter": "X = one punchy post under 280 characters",
+    "facebook": "Facebook = warm + conversational, 2-3 sentences",
+    "instagram": "Instagram = a hook-led caption with 3-5 relevant hashtags",
+    "tiktok": "TikTok = a short hook-led caption / on-screen text idea with 3-5 hashtags",
+    "pinterest": "Pinterest = a keyword-rich pin description with a clear value hook",
+    "youtube": "YouTube = a Shorts caption / hook plus a one-line description",
+    "threads": "Threads = a casual, conversational short post",
+}
+_DEFAULT_ATOMIZE_CHANNELS = ["linkedin", "x", "facebook", "instagram"]
+
+
+def _atomize_system(channels: Optional[list] = None) -> str:
+    """Build the atomization prompt for the tenant's actual social channels (profile.social_channels).
+    Unknown channels are dropped; an empty/invalid set falls back to the generic 4-channel default."""
+    chans = [c for c in (channels or _DEFAULT_ATOMIZE_CHANNELS) if c in _CHANNEL_HINTS]
+    chans = list(dict.fromkeys(chans)) or list(_DEFAULT_ATOMIZE_CHANNELS)
+    surfaces = ", ".join(chans)
+    hint_lines = "; ".join(_CHANNEL_HINTS[c] for c in chans)
+    atoms_shape = ",".join('{"surface":"%s","text":"..."}' % c for c in chans)
+    return (
+        "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
+        f"social posts, ONE per platform: {surfaces}. GROUND every claim in the article -- NEVER add "
+        "facts, statistics, offers, credentials, or claims not present in it. Match each platform: "
+        f"{hint_lines}. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
+        '{"atoms":[' + atoms_shape + "]}"
+    )
+
+
+ATOMIZE_SYSTEM = _atomize_system()   # generic-default alias; per-tenant built in atomize_draft
 _SURFACE_LABEL = {"linkedin": "LinkedIn", "x": "X/Twitter", "twitter": "X/Twitter",
-                  "facebook": "Facebook", "instagram": "Instagram"}
+                  "facebook": "Facebook", "instagram": "Instagram", "tiktok": "TikTok",
+                  "pinterest": "Pinterest", "youtube": "YouTube", "threads": "Threads",
+                  "gbp": "Google Business Profile"}
 
 
 def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = None) -> dict:
@@ -1978,7 +2036,14 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
     if len(body) < 120:
         return {"ok": False, "error": "draft is too short to atomize into social posts"}
     payload = json.dumps({"title": d.get("title") or "", "article": body[:6000]})
-    res = llm.orchestrator_json(ATOMIZE_SYSTEM, payload, tier="mid",
+    # Atomize to the tenant's ACTUAL social channels (b2b_saas -> LinkedIn+X; ecommerce -> +TikTok/
+    # Pinterest), not a fixed 4-channel set. Fail-safe -> the generic default channels.
+    try:
+        from . import business_profile as _bp
+        _channels = _bp.for_business(business_id).get("social_channels") or _DEFAULT_ATOMIZE_CHANNELS
+    except Exception:  # noqa: BLE001
+        _channels = _DEFAULT_ATOMIZE_CHANNELS
+    res = llm.orchestrator_json(_atomize_system(_channels), payload, tier="mid",
                                 bill={"business_id": business_id, "operation": "atomize"}) or {}
     atoms = res.get("atoms") if isinstance(res, dict) else None
     if not isinstance(atoms, list) or not atoms:
