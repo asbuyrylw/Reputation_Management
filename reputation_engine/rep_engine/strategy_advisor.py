@@ -29,10 +29,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 try:
     from .db import db
@@ -75,9 +73,24 @@ def _f(v):
 # ---------------------------------------------------------------------------
 # PLAN -- goal + current standing
 # ---------------------------------------------------------------------------
+def _target_alignment_for(biz: dict) -> float:
+    """The goal_alignment 'goal reached' bar for this business, profile-aware (nonprofit 0.6 vs generic
+    0.5). Fall back to the env/module default. Matches content_impact._target_alignment so the advisor
+    % and the per-batch % agree (both derive from the same StrategyProfile). Fail-safe -> default."""
+    try:
+        from . import business_profile as _bp
+        v = _bp.derive(biz or {}).get("target_alignment")
+        if v is not None:
+            return max(-1.0, min(1.0, float(v)))
+    except Exception:  # noqa: BLE001
+        pass
+    return _TARGET_ALIGNMENT
+
+
 def _goal_state(business_id: int) -> dict:
     with db() as conn:
-        biz = conn.execute("SELECT name, goal, domain FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        biz = conn.execute("SELECT name, goal, domain, industry, geo, regulatory_profile, contested_terms "
+                           "FROM businesses WHERE id=%s", (business_id,)).fetchone()
         gm = conn.execute("SELECT model, run_id, created_at FROM gap_models WHERE business_id=%s "
                           "ORDER BY id DESC LIMIT 1", (business_id,)).fetchone()
         run = conn.execute(
@@ -92,7 +105,7 @@ def _goal_state(business_id: int) -> dict:
     model = {}
     if gm:
         model = gm["model"] if isinstance(gm["model"], dict) else json.loads(gm["model"] or "{}")
-    target = _TARGET_ALIGNMENT
+    target = _target_alignment_for(dict(biz) if biz else {})
     remaining = None
     if cur_align is not None:
         remaining = max(0.0, target - cur_align)

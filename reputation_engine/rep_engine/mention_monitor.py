@@ -326,7 +326,10 @@ def remove_keyword(business_id: int, keyword_id: int) -> bool:
 # ----------------------------------------------------------------------------
 # Relevance + sentiment (lightweight heuristics; LLM optional via content gen)
 # ----------------------------------------------------------------------------
-_NEG = set("scam ripoff fraud terrible awful worst avoid lawsuit complaint pyramid mlm".split())
+# Universal negativity words (apply to every tenant). Vertical-specific terms like 'pyramid'/'mlm' are
+# NOT baked here -- they come from the tenant's own declared contested_terms (profile.negative_lexicon),
+# so a generic business is never scored against MLM vocabulary it never declared.
+_NEG = set("scam ripoff fraud terrible awful worst avoid lawsuit complaint".split())
 _POS = set("great excellent love recommend trusted helpful reliable best amazing".split())
 
 
@@ -352,9 +355,27 @@ def _relevance(text: str, keyword: str) -> float:
     return round(hits / len(words), 3)
 
 
-def _sentiment(text: str) -> str:
+def _negative_lexicon_words(business_id: int | None) -> set:
+    """Single-word tokens from the tenant's declared negative_lexicon (e.g. 'MLM, pyramid scheme' ->
+    {'mlm','pyramid','scheme'}), unioned into the heuristic negativity set so a tenant that DECLARED
+    contested terms flags them -- and no vertical is auto-accused. Fail-safe -> empty set."""
+    if not business_id:
+        return set()
+    try:
+        from . import business_profile as _bp
+        lex = _bp.for_business(business_id).get("negative_lexicon") or []
+        words: set = set()
+        for term in lex:
+            words.update(w for w in re.findall(r"[a-z]+", str(term).lower()) if len(w) >= 3)
+        return words
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _sentiment(text: str, extra_neg: set | None = None) -> str:
     t = set(re.findall(r"[a-z]+", (text or "").lower()))
-    neg, pos = len(t & _NEG), len(t & _POS)
+    neg_terms = _NEG | (extra_neg or set())
+    neg, pos = len(t & neg_terms), len(t & _POS)
     if neg > pos:
         return "negative"
     if pos > neg:
@@ -375,13 +396,17 @@ def score_sentiment(text: str, business_id: int | None = None) -> str:
     or on any failure. Opt out with MENTION_LLM_SENTIMENT=0. Called only from the (job-run)
     discovery path, so no LLM spend ever happens in an HTTP request."""
     txt = (text or "").strip()
+    # The heuristic fallback unions the tenant's DECLARED negative lexicon (contested_terms) with the
+    # universal negativity words -- so Team Unstoppable still flags 'pyramid'/'mlm' (they declared them)
+    # while a generic tenant does not. Computed once; the LLM path (when configured) ignores it.
+    extra_neg = _negative_lexicon_words(business_id)
     if not txt or os.getenv("MENTION_LLM_SENTIMENT", "1") == "0":
-        return _sentiment(txt)
+        return _sentiment(txt, extra_neg)
     try:
         from . import ai_state_audit as _ai
         orch_key = _ai.ANTHROPIC_API_KEY if _ai.ORCHESTRATOR == "anthropic" else _ai.OPENAI_API_KEY
         if "YOUR_" in orch_key:
-            return _sentiment(txt)
+            return _sentiment(txt, extra_neg)
         # fence the untrusted mention text as DATA so it can't act as an instruction
         out = _ai.orchestrator_json(_SENTIMENT_SYS, _ai._fence_untrusted(txt[:1500]),
                                     tier="cheap", max_tokens=30,
@@ -391,7 +416,7 @@ def score_sentiment(text: str, business_id: int | None = None) -> str:
             return s
     except Exception as e:  # noqa: BLE001 -- never let scoring break discovery
         log.debug("LLM sentiment unavailable, using heuristic: %s", e)
-    return _sentiment(txt)
+    return _sentiment(txt, extra_neg)
 
 
 def _matches_negative(text: str, neg_terms: list[str]) -> bool:

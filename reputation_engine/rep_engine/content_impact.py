@@ -34,6 +34,17 @@ _TARGET_ALIGNMENT = max(-1.0, min(1.0, float(os.getenv("CONTENT_IMPACT_TARGET_AL
 
 
 def _target_alignment(biz: dict) -> float:
+    """The goal_alignment level that counts as 'goal reached', profile-aware (e.g. a nonprofit's
+    success bar is 0.6, not the generic 0.5). Derived from the business's StrategyProfile; falls back to
+    the env/module default. Fail-safe -> module default. (strategy_advisor derives the SAME value from
+    the same profile so the advisor % and the per-batch % stay in agreement.)"""
+    try:
+        from . import business_profile as _bp
+        v = _bp.derive(biz or {}).get("target_alignment")
+        if v is not None:
+            return max(-1.0, min(1.0, float(v)))
+    except Exception:  # noqa: BLE001
+        pass
     return _TARGET_ALIGNMENT
 
 

@@ -378,12 +378,17 @@ def _grounding_context(business_id: int, target_query: str | None = None) -> dic
             keywords = _scope_keywords(allkw, target_query)
     except Exception:  # noqa: BLE001 -- best-effort: missing table or empty result degrades to no keywords
         keywords = []
-    # Authoritative citation sources + real datable statistics (the #1 GEO/citability lever). So the
-    # writer can cite .gov/regulator/industry/academic sources INLINE and quote REAL numbers.
+    # Authoritative citation sources + real datable statistics (the #1 GEO/citability lever). The
+    # authoritative_sources registry is the FINANCE source pack (LIMRA/ACLI/SEC/FINRA/IRS), so inject
+    # it ONLY for a tenant whose profile selects that pack (authoritative_source_pack == 'financial').
+    # A generic tenant gets '' here -- the prompt still tells it to cite .gov/official sources inline,
+    # sourced dynamically -- so no finance sources leak into a dentist's or SaaS's draft.
     authoritative = ""
     try:
-        from . import authoritative_sources as _authsrc
-        authoritative = _authsrc.grounding_for_business(business_id)
+        from . import business_profile as _bp
+        if (_bp.for_business(business_id).get("authoritative_source_pack") or "") == "financial":
+            from . import authoritative_sources as _authsrc
+            authoritative = _authsrc.grounding_for_business(business_id)
     except Exception:  # noqa: BLE001 -- best-effort
         authoritative = ""
     return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords,

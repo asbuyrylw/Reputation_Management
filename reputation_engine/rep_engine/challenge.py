@@ -87,29 +87,39 @@ _TRACKS = {
 
 
 def _classify(unaware_rate: Optional[float], negative_score: float,
-              avg_alignment: float) -> str:
-    """Pick the primary-challenge profile from the two diagnostic signals."""
+              avg_alignment: float, thresholds: Optional[dict] = None) -> str:
+    """Pick the primary-challenge profile from the two diagnostic signals. `thresholds` (the tenant's
+    StrategyProfile, or None) may override the module-constant defaults; GENERIC equals the constants,
+    so behavior is unchanged for current buckets and adjusts only for a bucket that tunes them."""
+    t = thresholds or {}
+    void_high = t.get("void_high", VOID_HIGH)
+    void_low = t.get("void_low", VOID_LOW)
+    neg_low = t.get("neg_low", NEG_LOW)
+    neg_high = t.get("neg_high", NEG_HIGH)
+    healthy = t.get("healthy_alignment", HEALTHY_ALIGNMENT)
+    void_material = t.get("void_material", VOID_MATERIAL)
+    neg_material = t.get("neg_material", NEG_MATERIAL)
     if unaware_rate is None:
         # No awareness signal yet (legacy run scored before the awareness column).
         # Fall back to negativity alone.
-        if negative_score >= NEG_HIGH:
+        if negative_score >= neg_high:
             return "negative_narrative"
-        if negative_score < NEG_LOW and avg_alignment >= HEALTHY_ALIGNMENT:
+        if negative_score < neg_low and avg_alignment >= healthy:
             return "established_positive"
         return "mixed"
     # Both a real void AND real negatives -> genuinely two-track, regardless of which is
     # marginally larger. A sizable recognition gap means you cannot call the challenge a pure
     # "negative narrative" (and vice-versa); the strategy must run both tracks.
-    if unaware_rate >= VOID_MATERIAL and negative_score >= NEG_MATERIAL:
+    if unaware_rate >= void_material and negative_score >= neg_material:
         return "mixed"
     # Dominant void, little negativity -> an awareness gap (a void to fill, faster).
-    if unaware_rate >= VOID_HIGH and negative_score < NEG_LOW + 0.05:
+    if unaware_rate >= void_high and negative_score < neg_low + 0.05:
         return "awareness_gap"
     # Dominant negativity with only a SMALL void -> an entrenched negative narrative.
-    if negative_score >= NEG_HIGH and unaware_rate < VOID_MATERIAL:
+    if negative_score >= neg_high and unaware_rate < void_material:
         return "negative_narrative"
     # Well-known, low negativity, healthy alignment -> defend the position.
-    if unaware_rate < VOID_LOW and negative_score < NEG_LOW and avg_alignment >= HEALTHY_ALIGNMENT:
+    if unaware_rate < void_low and negative_score < neg_low and avg_alignment >= healthy:
         return "established_positive"
     return "mixed"
 
@@ -248,13 +258,24 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
                 "goal_alignment FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)",
                 (run_id,)).fetchall()
 
+    # Business-agnostic thresholds + timeline multipliers: the StrategyProfile carries the challenge
+    # thresholds (void_high/low, neg_high/low, void/neg_material, healthy_alignment) and the
+    # void_fill_factors. GENERIC defaults equal the module constants, so this is behavior-preserving for
+    # current buckets; a bucket that overrides them shifts only its own classification. Fail-safe -> {}.
+    try:
+        from . import business_profile as _bp
+        _sprofile = _bp.for_business(business_id)
+    except Exception:  # noqa: BLE001
+        _sprofile = {}
+    _fill_factors = _sprofile.get("void_fill_factors") or VOID_FILL_FACTORS
+
     n = len(rows)
     if n == 0:
         profile = "unknown"
         out = {
             "business": name, "run_id": run_id, "profile": profile,
             "label": _LABELS[profile], "track": _TRACKS[profile],
-            "void_fill_factor": VOID_FILL_FACTORS[profile],
+            "void_fill_factor": _fill_factors.get(profile, VOID_FILL_FACTORS.get(profile, 1.0)),
             "sample_size": 0,
             "headline": _headline(profile, None, 0, name),
             "recommendation": _recommendation(profile),
@@ -273,7 +294,7 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
     # mean the engine doesn't correctly know THIS business and both fill via identity
     # grounding. Legacy runs (no awareness signal) pass recognition_gap=None -> the
     # negativity-only fallback in _classify.
-    profile = _classify(c["recognition_gap"], c["negative_score"], c["avg_alignment"])
+    profile = _classify(c["recognition_gap"], c["negative_score"], c["avg_alignment"], thresholds=_sprofile)
     gap_pct = round(c["recognition_gap"] * 100) if c["recognition_gap"] is not None else None
     negative_pct = round(c["negative_score"] * 100)
 
@@ -284,7 +305,8 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
     for e in engines:
         erows = [r for r in rows if r["engine"] == e]
         ec = _compute(erows)
-        eprofile = _classify(ec["recognition_gap"], ec["negative_score"], ec["avg_alignment"])
+        eprofile = _classify(ec["recognition_gap"], ec["negative_score"], ec["avg_alignment"],
+                             thresholds=_sprofile)
         by_engine[e] = {
             "profile": eprofile,
             "label": _LABELS[eprofile],
@@ -304,7 +326,7 @@ def challenge_profile(business_id: int, run_id: Optional[int] = None,
         "profile": profile,
         "label": _LABELS[profile],
         "track": _TRACKS[profile],
-        "void_fill_factor": VOID_FILL_FACTORS[profile],
+        "void_fill_factor": _fill_factors.get(profile, VOID_FILL_FACTORS.get(profile, 1.0)),
         "sample_size": n,
         "headline": _headline(profile, gap_pct, negative_pct, name),
         "recommendation": _recommendation(profile),
