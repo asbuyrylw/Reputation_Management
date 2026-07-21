@@ -264,15 +264,39 @@ _SEO_POINTS = {"High": 15.0, "Medium": 8.0, "Low": 3.0, "—": 0.0}
 
 # The AREA a task belongs to, so the plan groups by website / blog / outreach / social / local /
 # reviews instead of a flat capability list. surface_actions override this per platform.
+# The single source of truth for "producible CONTENT" -- a draftable/generatable piece (article, video,
+# podcast, blog series, slide deck, infographic, research brief). BOTH the strategy view's content specs
+# AND the Content "To Produce" section derive from THIS set, so the two can never disagree. Technical /
+# structural work (schema, site speed/freshness/titles, internal links, alt-text, link building) is
+# deliberately NOT content -- it belongs on the website-fixes board, never in the content section.
+CONTENT_CAPABILITIES = frozenset({
+    "content_writing", "video_creation", "explainer_video", "deep_content",
+    "podcast_creation", "slide_deck", "infographic", "research_brief", "local_content_creation",
+})
+
 _CAPABILITY_AREA = {
-    "content_writing": "content", "video_creation": "content",
-    "schema_markup": "website", "link_building": "website",
+    # producible content -> the Content "To Produce" section
+    "content_writing": "content", "video_creation": "content", "explainer_video": "content",
+    "deep_content": "content", "podcast_creation": "content", "slide_deck": "content",
+    "infographic": "content", "research_brief": "content",
+    "local_content_creation": "local",          # a local page-1 PROGRAM (its own area)
+    # website / technical -- NOT content (website-fixes board)
+    "schema_markup": "website", "technical_seo": "website", "link_building": "website",
     "press_outreach": "outreach", "media_list_building": "outreach",
     "social_publishing": "social",
     "review_generation": "reviews",
-    "local_content_creation": "local", "gbp_optimization": "local",
+    "gbp_optimization": "local",
     "ai_visibility_tracking": "tracking",
 }
+
+# Topics an LLM sometimes emits as "missing_owned_content" that are actually TECHNICAL/structural site
+# work (not a draftable article) -- route these to technical_seo so they don't render as content.
+import re as _re_tech
+_TECHNICAL_TOPIC_RE = _re_tech.compile(
+    r"\b(internal link|alt[- ]?text|image (audit|optimi|quality)|site[- ]?wide (image|link|audit)|"
+    r"page ?speed|core web vital|\blcp\b|\bcls\b|\bttfb\b|canonical|sitemap|robots\.txt|redirect|"
+    r"crawl budget|index(ation|ing)?|url structure|duplicate content|301|meta (tag|description) audit)\b",
+    _re_tech.I)
 
 
 def predict_impact(business_id: int, capability: str) -> dict:
@@ -370,6 +394,14 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
         topic = item.get("topic", f"topic {i+1}")
         atype = item.get("asset_type", "article")
         why = item.get("why", "")
+        # Some LLM-emitted "missing content" items are really TECHNICAL site work (internal-link audit,
+        # alt-text/image audit, page-speed) -- route those to technical_seo so they land on the website-
+        # fixes board, not the content section as a fake article.
+        if _TECHNICAL_TOPIC_RE.search(f"{topic} {atype}"):
+            add(f"Fix site: {topic}", "technical_seo",
+                f"On-site technical work: {why or topic}. Not a draftable article -- implement on the "
+                f"website (dev/SEO task).", 3, gap_source="audited gap: site technical", why=why)
+            continue
         cap = "video_creation" if "video" in atype.lower() else "content_writing"
         add(f"Create owned asset: {topic}", cap,
             f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
@@ -475,7 +507,9 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
     for i, g in enumerate(gap.get("site_technical_gaps", []) or []):
         issue = g.get("issue", f"site issue {i + 1}")
         rec = g.get("recommendation", "Fix the on-site issue so AI engines can extract your facts.")
-        scap = "schema_markup" if "schema" in f"{issue} {rec}".lower() else "content_writing"
+        # A site-crawl technical gap is NEVER a draftable article: schema -> schema_markup, everything
+        # else (LCP/speed, freshness dates, title alignment, duplicate URLs, front-loading) -> technical_seo.
+        scap = "schema_markup" if "schema" in f"{issue} {rec}".lower() else "technical_seo"
         add(f"Fix site: {issue}", scap, rec, 3,
             gap_source="site crawl", why=g.get("why", ""))
 
@@ -623,7 +657,7 @@ def _section_for(gap_source: str | None, capability: str | None, area: str | Non
     gs, cap, ar = (gap_source or "").lower(), (capability or "").lower(), (area or "").lower()
     if "local search" in gs or cap in ("local_content_creation", "gbp_optimization") or ar == "local":
         return "search"
-    if "schema" in gs or "site crawl" in gs or cap == "schema_markup":
+    if "schema" in gs or "site crawl" in gs or "site technical" in gs or cap in ("schema_markup", "technical_seo"):
         return "seo"
     return "ai_visibility"
 
@@ -659,8 +693,9 @@ def _gap_approach_index(gap: dict) -> dict:
 # Capabilities that produce an actual WRITTEN/PRODUCED piece worth a content spec (keywords, length,
 # structure). schema_markup is a developer task, not content; local goals fan out to a program (no
 # single spec) -- both are excluded so the strategy shows a spec only where a piece is really written.
-_SPEC_CAPS = {"content_writing", "video_creation"}
-_CONTENT_CAPS = {"content_writing", "local_content_creation", "video_creation", "schema_markup"}
+# The strategy view attaches a content spec for EXACTLY the producible-content capabilities -- the same
+# set the Content section shows -- so the plan's "content to produce" and the content page always match.
+_SPEC_CAPS = CONTENT_CAPABILITIES
 
 
 def strategy_view(business_id: int) -> dict:

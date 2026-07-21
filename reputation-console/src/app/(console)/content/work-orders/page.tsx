@@ -29,11 +29,18 @@ function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset })
   return null;
 }
 
-// Capabilities whose work the AI can draft for you (the per-item "Generate draft" button).
-// schema_markup excluded — schema is a website/developer task, not content we draft in-app.
-const DRAFTABLE = new Set(["content_writing", "review_generation", "local_content_creation"]);
+// Producible content the AI drafts for you (the per-item "Generate draft" button). MUST mirror the
+// backend source of truth (strategy_generator.CONTENT_CAPABILITIES) so every surface agrees on what is
+// content. Technical work (schema_markup, technical_seo) is excluded — it's a website/dev task.
+const DRAFTABLE = new Set([
+  "content_writing", "video_creation", "explainer_video", "deep_content",
+  "podcast_creation", "slide_deck", "infographic", "research_brief",
+]);
 // Copy we draft IN-APP — point these at OUR pipeline (Generate draft → Drafts), not external tools.
-const IN_APP_CONTENT = new Set(["content_writing", "local_content_creation"]);
+const IN_APP_CONTENT = new Set([
+  "content_writing", "local_content_creation", "explainer_video", "deep_content",
+  "podcast_creation", "slide_deck", "infographic", "research_brief",
+]);
 
 const COLUMNS = ["pending", "in_progress", "done", "verified", "blocked", "skipped"];
 const LABEL: Record<string, string> = {

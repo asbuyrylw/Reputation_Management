@@ -11,7 +11,12 @@ import { PageHeader, Spinner, Card } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import type { WorkOrder } from "@/lib/types";
 
-const CONTENT_CAPS = new Set(["content_writing", "local_content_creation", "video_creation", "review_generation"]);
+// Producible content — MUST mirror strategy_generator.CONTENT_CAPABILITIES (backend source of truth)
+// so the calendar shows the same content the Strategy plan + Content section do.
+const CONTENT_CAPS = new Set([
+  "content_writing", "video_creation", "explainer_video", "deep_content",
+  "podcast_creation", "slide_deck", "infographic", "research_brief", "local_content_creation",
+]);
 const isContent = (w: WorkOrder) => CONTENT_CAPS.has(w.capability ?? "");
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

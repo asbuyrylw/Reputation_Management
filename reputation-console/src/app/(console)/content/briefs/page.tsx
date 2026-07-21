@@ -188,19 +188,35 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
     .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
 }
 
-// The content the gap analysis says to produce (these are work-orders), vs. the off-platform
-// video/social recipes (production_briefs). video_creation appears here but is produced from a recipe.
-// schema_markup is intentionally EXCLUDED — schema (JSON-LD) is a website/developer task, not
-// editorial content, so it stays on the task board under "website fixes", not in the content section.
-const CONTENT_CAPS = new Set(["content_writing", "review_generation", "local_content_creation", "video_creation"]);
-const DRAFTABLE = new Set(["content_writing", "review_generation", "local_content_creation"]);
+// PRODUCIBLE CONTENT = every draftable/generatable piece (article, video, podcast, blog series, slide
+// deck, infographic, research brief, local page). This set MUST mirror the backend source of truth
+// (strategy_generator.CONTENT_CAPABILITIES) so the Strategy plan's "content to produce" and this page
+// can never disagree. Technical/structural work (schema, site speed/freshness/titles, internal links,
+// alt-text) is deliberately NOT here — it lives on the website-fixes board, not in the content section.
+const CONTENT_CAPS = new Set([
+  "content_writing", "video_creation", "explainer_video", "deep_content",
+  "podcast_creation", "slide_deck", "infographic", "research_brief", "local_content_creation",
+]);
+// The pieces that generate on click (content_writing + all rich-media route through generate_for_wo →
+// rich_media_generator). local_content_creation is a multi-piece PROGRAM, handled separately below.
+const DRAFTABLE = new Set([
+  "content_writing", "video_creation", "explainer_video", "deep_content",
+  "podcast_creation", "slide_deck", "infographic", "research_brief",
+]);
 
 const CAP_LABEL: Record<string, string> = {
-  content_writing: "Website content",
-  schema_markup: "Website code (schema)",
-  review_generation: "Reviews",
-  local_content_creation: "Local / geo page",
+  content_writing: "Article / web page",
   video_creation: "Video",
+  explainer_video: "Explainer video",
+  deep_content: "Blog series + long-form",
+  podcast_creation: "Podcast",
+  slide_deck: "Slide deck",
+  infographic: "Infographic",
+  research_brief: "Research brief",
+  local_content_creation: "Local / geo page",
+  review_generation: "Reviews",
+  schema_markup: "Website code (schema)",
+  technical_seo: "Website fix",
 };
 
 // Lifecycle stage for a content item, derived from its latest draft + any published asset.
