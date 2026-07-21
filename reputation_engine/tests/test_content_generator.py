@@ -262,17 +262,21 @@ def test_deterministic_compliance_overrides_llm_pass(fresh_schema, monkeypatch):
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
+    # Mocks accept **kwargs (the real orchestrator_json takes bill=/max_tokens=), so downstream
+    # grading (fact_check etc.) doesn't spuriously error on an unexpected kwarg.
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": "We guarantee 30% returns, risk-free.")
+                        lambda system, user, *a, **k: "We guarantee 30% returns, risk-free.")
     # eval passes; the LLM compliance screen is spoofed to 'pass' -- deterministic wins
     monkeypatch.setattr(cg.llm, "orchestrator_json",
-                        lambda system, user, tier="full": {"score": 0.9, "fixes": []}
+                        lambda system, user, *a, **k: {"score": 0.9, "fixes": []}
                         if "QA reviewer" in system else {"pass": True, "flags": []})
 
     created = cg.generate(bid)
     d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
-    assert d["compliance_pass"] is False                 # deterministic override
-    assert d["status"] == "needs_fix"
+    assert d["compliance_pass"] is False                 # deterministic override (finance rules fire)
+    # A draft that fails compliance/quality is HELD (needs_fix is folded into 'held' so the review
+    # queue only ever holds clean drafts).
+    assert d["status"] == "held"
     assert "guaranteed" in json.dumps(d["compliance_flags"]).lower()
 
 
