@@ -80,15 +80,20 @@ RICH_TYPES: dict[str, tuple[str, str]] = {
 # Default set generated per cycle (audio generation is the slowest/costliest).
 DEFAULT_TYPES = list(RICH_TYPES.keys())
 
-# Hard financial-marketing prohibitions — mirrors Module 6's compliance gate.
-_COMPLIANCE_PATTERNS = [
+# Hard prohibitions — mirrors Module 6's compliance gate (content_generator._UNIVERSAL_RULES /
+# _FINANCIAL_RULES). Split so the finance rules apply ONLY to a regulated-finance tenant: the
+# unverifiable-superlative rule is UNIVERSAL (every tenant); the guaranteed-returns / risk-free /
+# performance-promise rules are FINANCE-only, so a generic clip's 'risk-free trial' isn't failed.
+_UNIVERSAL_PATTERNS = [
+    (re.compile(r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b", re.I),
+     "unverifiable superlative (#1 / best)"),
+]
+_FINANCIAL_PATTERNS = [
     (re.compile(
         r"\bguarantee[ds]?\b[^.\n]{0,40}\b(returns?|profits?|income|results?|gains?|growth)\b",
         re.I), "implies guaranteed returns/results"),
     (re.compile(r"\b(risk[-\s]?free|no[-\s]?risk|zero[-\s]?risk)\b", re.I),
      "claims risk-free"),
-    (re.compile(r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b", re.I),
-     "unverifiable superlative (#1 / best)"),
     (re.compile(
         r"\b\d{1,3}\s?%[^.\n]{0,30}\b(guaranteed|returns?|profits?|gains?)\b", re.I),
      "specific performance promise"),
@@ -272,14 +277,17 @@ _NEGATION_RE = re.compile(r"\b(no|not|never|without|none|don'?t|do not|cannot|ca
                           r"make no|zero)\b", re.I)
 
 
-def _compliance_check(text: str) -> tuple[Optional[bool], list[str]]:
-    """Deterministic compliance screen. Returns (pass, flags). A match immediately preceded by a
-    NEGATION ('no guaranteed returns', 'there are no guarantees of income') is a compliant DISCLAIMER,
-    not a violation -- skip it (this was falsely failing scripts that CONTAIN the required disclosure)."""
+def _compliance_check(text: str, *, regulated_financial: bool = False) -> tuple[Optional[bool], list[str]]:
+    """Deterministic compliance screen. Returns (pass, flags). The universal deceptive-claims rules run
+    for every tenant; the finance rules (guaranteed returns / risk-free / performance promises) run ONLY
+    for a regulated-finance tenant (regulated_financial). A match immediately preceded by a NEGATION
+    ('no guaranteed returns', 'there are no guarantees of income') is a compliant DISCLAIMER, not a
+    violation -- skip it (this was falsely failing scripts that CONTAIN the required disclosure)."""
     if not text:
         return None, ["no content to screen"]
     flags: list[str] = []
-    for pat, msg in _COMPLIANCE_PATTERNS:
+    patterns = _UNIVERSAL_PATTERNS + (_FINANCIAL_PATTERNS if regulated_financial else [])
+    for pat, msg in patterns:
         for m in pat.finditer(text):
             if _NEGATION_RE.search(text[max(0, m.start() - 28):m.start()]):
                 continue
@@ -364,49 +372,49 @@ _LLM_PROMPTS = {
         "everywhere else; mention the city ONCE or twice at most. NEVER repeat the name or city in "
         "consecutive sentences — over-repetition sounds like a robotic keyword-stuffed ad, which lowers "
         "trust AND is penalized by AI answer engines. (5) Quote at least one REAL, attributed statistic "
-        "from the provided authoritative sources (e.g. \"About 51% of U.S. adults own life insurance,\" "
-        "according to LIMRA's 2024 study) — never invent a number. (6) End with ONE clear call to action. "
+        "from the provided authoritative sources (e.g. \"<a real figure from the provided sources>,\" "
+        "according to the named source)— never invent a number. (6) End with ONE clear call to action. "
         "Sound like a real, warm person actually talking — contractions, natural rhythm, believable. Use "
         "PLAIN SPOKEN language (grade 6-8, short sentences). Format each segment as a line '[m:ss] narration' "
         "followed by an '(On-screen: ...)' text cue. Ground every claim in the context; WRITE AROUND "
-        "anything unknown (no [INSERT] placeholders). No guaranteed returns, no 'risk-free', no "
-        "'#1'/'best'. Output ONLY the script."
+        "anything unknown (no [INSERT] placeholders). No unverifiable '#1'/'best' claims stated as fact. "
+        "Output ONLY the script."
     ),
     "podcast": (
         "Write a natural, engaging TWO-HOST podcast SCRIPT (~600-900 words, ~5 minutes) about "
         "{name}, in the style of a NotebookLM Audio Overview: two hosts (label them 'Host A:' and "
         "'Host B:') in warm back-and-forth dialogue that explains the topic clearly for a general "
         "audience. Ground every claim in the provided context — do NOT fabricate facts; write around "
-        "anything you lack (omit it or use general wording). No guaranteed returns, no 'risk-free', "
-        "no '#1'/'best'. Output ONLY the script with speaker labels."
+        "anything you lack (omit it or use general wording). No unverifiable '#1'/'best' claims stated "
+        "as fact. Output ONLY the script with speaker labels."
     ),
     "report_audio": (
         "Write a single-narrator AUDIO BRIEFING SCRIPT (~500-700 words) that summarizes the key "
         "points about {name} for a spoken monthly report. Warm, credible, factual, easy to read "
         "aloud. Ground in the provided context; write around unknowns (omit or general wording). No "
-        "guaranteed-return language or unverifiable superlatives. Output ONLY the narration script."
+        "unverifiable '#1'/'best' superlatives stated as fact. Output ONLY the narration script."
     ),
     "deep_article": (
         "Write a long-form thought-leadership article (1 500-2 500 words) in markdown with "
         "a clear H1, H2 subheadings, and a concrete conclusion. The article should help "
         "{name} establish authority by addressing the contested narrative head-on with accurate "
         "facts, expert tone, and verifiable claims. Do NOT fabricate statistics or quotes — "
-        "write around facts you lack (omit or general wording). Do not include guarantees, "
-        "'#1'/'best', or any performance promises."
+        "write around facts you lack (omit or general wording). Do not include unverifiable "
+        "'#1'/'best' claims stated as fact."
     ),
     "blog_series": (
         "Generate outlines for THREE related blog posts for {name}. Each outline must include: "
         "title, target AI/search query it should win, 5-7 heading structure, key points under "
         "each heading, recommended word count, and a CTA. Format each outline clearly in "
-        "markdown. Do NOT fabricate facts — write around anything you lack (omit or general wording). No performance "
-        "promises, no 'best'/'#1'/'risk-free' claims."
+        "markdown. Do NOT fabricate facts — write around anything you lack (omit or general wording). "
+        "No unverifiable 'best'/'#1' claims stated as fact."
     ),
     "newsletter": (
         "Write a newsletter brief (400-600 words) for {name}'s monthly client or community "
         "newsletter. Include: subject-line options (3), preview text, intro paragraph, 3-4 "
         "content sections with headers, key takeaway, and a CTA. Tone: warm, credible, "
         "informative. Write around specific facts/figures you lack (omit or general wording). "
-        "No guaranteed-return language or unverifiable superlatives."
+        "No unverifiable '#1'/'best' superlatives stated as fact."
     ),
 }
 
@@ -437,18 +445,26 @@ def _fallback_llm(
             "Using the context below, generate a {asset_type} for {{name}}. "
             "Format clearly in markdown. No fabricated facts, no performance promises."
         ).format(asset_type=asset_type.replace("_", " "))
+    # Load the StrategyProfile ONCE: regulated_financial gates the finance-compliance clause + the
+    # license ban. A generic tenant gets neither (only the universal deceptive-claims rule). Fail-safe.
+    try:
+        _profile = _bp.for_business(business_id)
+    except Exception:  # noqa: BLE001
+        _profile = None
+    _fin_clause = (" Apply financial-marketing compliance: no guaranteed returns, no 'risk-free', no "
+                   "performance promises.") if (_profile and _profile.get("regulated_financial")) else ""
     system = (
         "You are an expert reputation marketing strategist. Write structured, accurate "
         "content for reputation management. Never fabricate statistics, credentials, or "
         "performance data; the business's own website/profile (in the context) is authoritative "
         "for its name, address, services, and website URL -- use those real facts and WRITE AROUND "
         "anything unknown (omit it or use general wording / point to the website) instead of leaving "
-        "[INSERT] placeholders. Apply "
-        "financial-marketing compliance: no guaranteed returns, no 'risk-free', no '#1' "
-        "or 'best' as stated fact. Output ONLY the asset content in markdown."
+        "[INSERT] placeholders. Do NOT use unverifiable '#1' or 'best' claims as stated fact. Output "
+        "ONLY the asset content in markdown."
+        + _fin_clause
         # Business-agnostic license/sensitive-ID ban: '' for a generic tenant, today's finance policy
-        # for a regulated-finance tenant. Fail-safe -> '' on any lookup error.
-        + _bp.license_policy_for_business(business_id)
+        # for a regulated-finance tenant. Reuses the profile loaded above (no extra query).
+        + _bp.license_policy_for(_profile)
         + _tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
     )
     prompt_text = template.format(name=biz.get("name", "the business"))
@@ -526,7 +542,7 @@ def _persist(
     if body and asset_type in ("explainer_video", "video_script"):
         try:
             from . import content_quality as _cq
-            _q = f"{business_name} {geo} financial services".strip()
+            _q = f"{business_name} {geo}".strip()   # neutral scoring query (was hardcoded 'financial services')
             vg = _cq.video_score(body, target_query=_q, business_name=business_name, geo=geo,
                                  asset_type=asset_type)
             quality_notes, geo_grade = vg, vg.get("score")
@@ -606,6 +622,14 @@ def generate(
         if not biz_row:
             raise SystemExit(f"No business id {business_id}")
     biz = dict(biz_row)
+    # StrategyProfile for this tenant, derived once from the already-loaded row (pure, no extra query):
+    # regulated_financial gates the finance compliance rules + the finance clause in the LLM prompt so a
+    # generic tenant's rich media isn't screened/worded as a financial firm. Fail-safe -> generic.
+    try:
+        _profile = _bp.derive(biz)
+    except Exception:  # noqa: BLE001
+        _profile = None
+    _reg_fin = bool(_profile and _profile.get("regulated_financial"))
 
     # Assemble corpus sources once; reuse across all generation calls.
     sources = _build_sources(business_id, biz)
@@ -640,7 +664,7 @@ def generate(
                     log.info("rich_media: %s skipped (no audio result)", asset_type)
                     continue
                 transcript = result.get("transcript") or ""
-                comp_pass, comp_flags = _compliance_check(transcript)
+                comp_pass, comp_flags = _compliance_check(transcript, regulated_financial=_reg_fin)
                 draft_id = _persist(
                     business_id, asset_type, title,
                     body=transcript,
@@ -660,7 +684,7 @@ def generate(
                 if not body:
                     log.info("rich_media: %s produced no content — skipping", asset_type)
                     continue
-                comp_pass, comp_flags = _compliance_check(body)
+                comp_pass, comp_flags = _compliance_check(body, regulated_financial=_reg_fin)
                 draft_id = _persist(
                     business_id, asset_type, title,
                     body=body,
@@ -678,7 +702,7 @@ def generate(
                 if not body:
                     log.info("rich_media: %s produced no content — skipping", asset_type)
                     continue
-                comp_pass, comp_flags = _compliance_check(body)
+                comp_pass, comp_flags = _compliance_check(body, regulated_financial=_reg_fin)
                 draft_id = _persist(
                     business_id, asset_type, title,
                     body=body,
@@ -800,7 +824,7 @@ def _render_veo(business_id: int, draft_id: int, d: dict, script: str) -> dict:
         return {"skipped": True,
                 "reason": "Veo not configured — set VIDEO_PROVIDER=veo + VIDEO_API_KEY (or GEMINI_API_KEY)"}
     narration = _hg.narration_from_script(script)[:600]
-    prompt = ("A short, professional explainer clip for a trustworthy financial-services team: a warm, "
+    prompt = ("A short, professional explainer clip for a trustworthy professional team: a warm, "
               "credible presenter in a bright modern office, clean corporate look, no on-screen text. "
               f"Spoken narration (say verbatim): \"{narration}\"")
     res = _vc.generate_video(business_id, prompt, draft_id=None, work_order_id=d.get("work_order_id"))

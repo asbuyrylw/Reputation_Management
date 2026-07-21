@@ -675,6 +675,21 @@ def _revise(body: str, fixes: list) -> str:
 # ----------------------------------------------------------------------------
 # Compliance gate (first-class)
 # ----------------------------------------------------------------------------
+# The UNIVERSAL deceptive-claims screener -- applies to EVERY tenant (FTC truth-in-advertising, not
+# securities/insurance rules). A generic (non-finance) tenant gets ONLY this, so finance vocabulary
+# (broker-dealer, guaranteed returns) never colours a dentist's or SaaS's compliance screen.
+UNIVERSAL_DECEPTIVE_SYSTEM = (
+    "You are a truthful-marketing compliance screener. Review the content and return STRICT JSON only: "
+    "{\"pass\": bool, \"flags\": [strings]}. Flag any of: demonstrably FALSE or misleading factual "
+    "claims; unverifiable superlatives ('best', '#1', 'the leading', 'guaranteed results') stated as "
+    "objective fact; testimonials or outcomes presented as typical without context; fabricated "
+    "statistics, credentials, or endorsements. Do NOT demand industry-specific regulatory disclosures "
+    "-- this is the universal deceptive-claims screen; any vertical-specific rules are applied "
+    "separately where they apply. Pass ordinary, accurate, well-sourced marketing content."
+)
+
+# The FINANCE screener -- selected ONLY for a regulated-finance tenant (compliance_packs contains
+# "financial"). Reproduces the pilot's exact finance screen; a generic tenant never receives it.
 COMPLIANCE_SYSTEM = (
     "You are a financial-services marketing compliance screener. Review the content "
     "and return STRICT JSON only: {\"pass\": bool, \"flags\": [strings]}. Flag any of: "
@@ -714,8 +729,21 @@ def _reg_profile(business_id: int) -> dict:
         return {}
 
 
-def _compliance_system(reg: dict | None) -> str:
-    """Adapt the base compliance prompt to the tenant's firm type + required disclosures."""
+def _is_financial_pack(profile: dict | None) -> bool:
+    """True when the tenant's StrategyProfile carries the finance compliance pack. This -- NOT the
+    regulatory_profile firm_type -- is what turns the finance screener/rules ON. Fail-safe: a None
+    profile is treated as GENERIC (no finance pack), so an un-threaded caller never gets finance rules
+    on a generic tenant. (regulatory_profile.firm_type still sub-specializes WITHIN the finance pack.)"""
+    return bool(profile and "financial" in (profile.get("compliance_packs") or []))
+
+
+def _compliance_system(reg: dict | None, profile: dict | None = None) -> str:
+    """The LLM compliance screener prompt for a tenant. A GENERIC tenant gets the UNIVERSAL
+    deceptive-claims screener; a regulated-finance tenant (financial compliance pack) gets the finance
+    screener + firm-type sub-rules + required disclosures. `reg` is the regulatory_profile (firm_type /
+    disclosures); `profile` is the StrategyProfile that gates the pack on/off."""
+    if not _is_financial_pack(profile):
+        return UNIVERSAL_DECEPTIVE_SYSTEM
     if not reg:
         return COMPLIANCE_SYSTEM
     extra = []
@@ -728,34 +756,44 @@ def _compliance_system(reg: dict | None) -> str:
     return COMPLIANCE_SYSTEM + ("\n\n" + "\n".join(extra) if extra else "")
 
 
-# Hard financial-marketing prohibitions, matched deterministically. Unlike the LLM
-# screen these cannot be talked out of their verdict by a hostile/garbled draft, so
-# a hit here is AUTHORITATIVE: the content is non-compliant regardless of the LLM.
-_COMPLIANCE_RULES: list[tuple[str, str]] = [
+# Hard prohibitions, matched deterministically. Unlike the LLM screen these cannot be talked out of
+# their verdict by a hostile/garbled draft, so a hit here is AUTHORITATIVE. Split into two sets:
+#  - UNIVERSAL (FTC truth-in-advertising) applies to EVERY tenant.
+#  - FINANCIAL (securities/insurance marketing) applies ONLY to a regulated-finance tenant, so a
+#    generic tenant's legitimate copy ("risk-free trial", "guaranteed results or your money back")
+#    isn't falsely failed.
+_UNIVERSAL_RULES: list[tuple[str, str]] = [
+    (r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b",
+     "unverifiable superlative (#1 / best)"),
+]
+_FINANCIAL_RULES: list[tuple[str, str]] = [
     (r"\bguarantee[ds]?\b[^.\n]{0,40}\b(returns?|profits?|income|results?|gains?|growth)\b",
      "implies guaranteed returns/results"),
     (r"\b(risk[-\s]?free|no[-\s]?risk|zero[-\s]?risk)\b", "claims risk-free"),
-    (r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b",
-     "unverifiable superlative (#1 / best)"),
     (r"\b\d{1,3}\s?%[^.\n]{0,30}\b(guaranteed|returns?|profits?|gains?)\b",
      "specific performance promise"),
 ]
-_COMPLIANCE_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _COMPLIANCE_RULES]
+_UNIVERSAL_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _UNIVERSAL_RULES]
+_FINANCIAL_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _FINANCIAL_RULES]
 
 
 _NEGATION_RE = re.compile(r"\b(no|not|never|without|none|don'?t|do not|cannot|can'?t|are ?n'?t|is ?n'?t|"
                           r"n'?t|makes? no|make no|zero)\b", re.I)
 
 
-def _deterministic_compliance(body: str) -> list[str]:
-    """Non-LLM, non-prompt-injectable screen for hard financial-marketing rules.
+def _deterministic_compliance(body: str, *, regulated_financial: bool = False) -> list[str]:
+    """Non-LLM, non-prompt-injectable hard-rule screen. The UNIVERSAL rules (unverifiable '#1'/'best'
+    superlatives) run for every tenant; the FINANCIAL rules (guaranteed returns, risk-free, specific
+    performance promises) run ONLY for a regulated-finance tenant, so a generic tenant's 'risk-free
+    trial' isn't falsely failed. Fail-safe default (regulated_financial=False) = universal-only.
     Returns the list of triggered-rule descriptions (empty == nothing tripped). A match immediately
     preceded by a NEGATION ('no guarantees of income', 'we do not guarantee returns', 'no guaranteed
     returns') is a compliant DISCLAIMER, not a violation -- skip it (this was falsely failing the exact
     disclosure language compliance requires)."""
     text = body or ""
+    patterns = _UNIVERSAL_PATTERNS + (_FINANCIAL_PATTERNS if regulated_financial else [])
     flags: list[str] = []
-    for pat, msg in _COMPLIANCE_PATTERNS:
+    for pat, msg in patterns:
         for m in pat.finditer(text):
             if _NEGATION_RE.search(text[max(0, m.start() - 28):m.start()]):
                 continue   # negated -> disclaimer, not a violation
@@ -764,9 +802,11 @@ def _deterministic_compliance(body: str) -> list[str]:
     return list(dict.fromkeys(flags))
 
 
-def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = False) -> dict:
-    # Deterministic, non-injectable screen first -- its verdict is authoritative.
-    det_flags = _deterministic_compliance(body)
+def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = False,
+                regulated_financial: bool = False) -> dict:
+    # Deterministic, non-injectable screen first -- its verdict is authoritative. The finance hard rules
+    # run only for a regulated-finance tenant (regulated_financial); universal rules always.
+    det_flags = _deterministic_compliance(body, regulated_financial=regulated_financial)
     # Reply paths (review/mention brand replies) carry FTC/ToS risk the generic financial screen
     # misses (it passes anything "non-financial"). Run the deterministic reply screen on every
     # reply and use the reply-aware LLM prompt so a reply is never rubber-stamped as non-financial.
@@ -779,8 +819,9 @@ def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = Fal
         if system is None:
             system = _rc.REPLY_COMPLIANCE_SYSTEM
     # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini). `system` is the
-    # firm-type-adapted prompt (falls back to the generic financial screen).
-    res = llm.orchestrator_json(system or COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
+    # profile-adapted prompt from _compliance_system; fall back to the UNIVERSAL screen (not the
+    # finance one) so a caller that omits `system` never finance-screens a generic tenant.
+    res = llm.orchestrator_json(system or UNIVERSAL_DECEPTIVE_SYSTEM, json.dumps({"content": body}), tier="cheap")
     # default-safe: if the screener couldn't run (no keys), mark unknown -> needs
     # human; but if the deterministic rules tripped, FAIL CLOSED regardless of LLM.
     if not res:
@@ -1144,6 +1185,20 @@ def _maximize_geo(body: str, sq: str, content_type: str, asset_type: str,
     return best
 
 
+# UNIVERSAL compliance-fix editor -- used for every generic tenant. Strips deceptive claims only; no
+# finance/broker-dealer/disclosure vocabulary.
+_COMPLIANCE_FIX_UNIVERSAL_BASE = (
+    "You are a marketing-claims compliance editor. Revise the content to RESOLVE the listed compliance "
+    "issues while preserving the accurate, helpful message. REMOVE false or misleading claims, "
+    "unverifiable superlatives ('best'/'#1'/'the leading' stated as fact), and any 'guaranteed results' "
+    "promise. Do NOT fabricate facts, and do NOT use [INSERT: ...] placeholders -- write around anything "
+    "you don't have with accurate general wording. Put any added disclaimer in ONE short block at the "
+    "very END of the content -- NEVER before the page's opening answer, and keep that answer-first "
+    "opening intact. Do NOT hedge every fact or add editor-facing notes ('before publication...', "
+    "'verify before publishing'). Output ONLY the revised content, no preamble."
+)
+
+# FINANCE compliance-fix editor -- used ONLY for a regulated-finance tenant.
 _COMPLIANCE_FIX_BASE = (
     "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
     "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
@@ -1160,29 +1215,36 @@ _COMPLIANCE_FIX_BASE = (
 )
 
 
-def _compliance_fix_system(license_policy: str = "") -> str:
-    """The compliance-autofix editor prompt for ONE tenant. `license_policy` = the profile-driven
-    license/sensitive-ID ban ('' for a non-suppressing / generic tenant). NO_NEGATIVE_DISAMBIGUATION
-    stays agnostic + always present. The `COMPLIANCE_FIX_SYSTEM` alias = this with NO license."""
-    return _COMPLIANCE_FIX_BASE + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
+def _compliance_fix_system(license_policy: str = "", regulated_financial: bool = False) -> str:
+    """The compliance-autofix editor prompt for ONE tenant. A generic tenant gets the UNIVERSAL editor
+    (deceptive-claims only); a regulated-finance tenant gets the finance editor (broker-dealer /
+    disclosure rules). `license_policy` = the profile-driven license ban ('' for generic).
+    NO_NEGATIVE_DISAMBIGUATION stays agnostic + always present. The `COMPLIANCE_FIX_SYSTEM` alias =
+    this with NO license + the universal editor (the finance-free default)."""
+    base = _COMPLIANCE_FIX_BASE if regulated_financial else _COMPLIANCE_FIX_UNIVERSAL_BASE
+    return base + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 
 
-COMPLIANCE_FIX_SYSTEM = _compliance_fix_system()   # finance-free GENERIC alias
+COMPLIANCE_FIX_SYSTEM = _compliance_fix_system()   # finance-free GENERIC alias (universal editor)
 
 
 def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None,
-                        license_policy: str = "") -> Optional[str]:
+                        license_policy: str = "", regulated_financial: bool = False) -> Optional[str]:
     """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
-    disclosures (using what we know about the business + its regulatory profile). Returns the
-    revised body, or None. The caller re-screens the result -- this never decides compliance."""
+    disclosures (using what we know about the business + its regulatory profile). A generic tenant gets
+    the universal editor and no broker-dealer-disclosure instruction; a regulated-finance tenant gets
+    the finance editor + firm-type framing. Returns the revised body, or None. The caller re-screens
+    the result -- this never decides compliance."""
     reg = reg or {}
     ft = (reg.get("firm_type") or "").lower()
     disc = reg.get("disclosures") or []
     reg_line = ""
-    if ft:
+    # Firm-type / broker-dealer framing is finance-only; a generic tenant never gets it.
+    if regulated_financial and ft:
         reg_line = f"Firm type: {ft}. "
         if ft == "non_financial":
             reg_line += "Do NOT add any financial/broker-dealer disclosures. "
+    # Required disclosures a tenant explicitly persisted apply regardless of vertical.
     if disc:
         reg_line += "Use ONLY these required disclosures (verbatim where possible): " + "; ".join(str(d) for d in disc) + ". "
     ctx = (
@@ -1192,7 +1254,8 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
         "Compliance issues to resolve:\n- " + "\n- ".join(str(f) for f in (flags or []))
         + f"\n\nContent to revise:\n{body}"
     )
-    revised = llm.orchestrator_text(_compliance_fix_system(license_policy), ctx, max_tokens=2400, tier="mid")
+    revised = llm.orchestrator_text(_compliance_fix_system(license_policy, regulated_financial),
+                                    ctx, max_tokens=2400, tier="mid")
     return (revised or "").strip() or None
 
 
@@ -1311,17 +1374,19 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001
         log.debug("brand/source grounding unavailable: %s", e)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
-    comp_system = _compliance_system(reg)
-    # Business-agnostic license/sensitive-ID policy: load the tenant's StrategyProfile ONCE and derive
-    # both the prompt-level license ban (spliced into GEN_SYSTEM / the compliance-fix editor) and the
-    # post-processing scrub gate. A generic tenant gets '' (no ban) + no scrub; a regulated-finance
-    # tenant reproduces today's license policy. Fail-safe: any error -> generic ('' + run the scrub).
+    # Business-agnostic StrategyProfile: load it ONCE and derive everything vertical-specific -- the
+    # license ban (spliced into GEN_SYSTEM / the compliance-fix editor), the post-processing scrub gate,
+    # and the compliance PACK (universal-only for a generic tenant vs the finance screener + hard rules
+    # for a regulated-finance tenant). A generic tenant gets '' (no license ban), no scrub, and the
+    # universal deceptive-claims screen. Fail-safe: any error -> generic.
     try:
         from . import business_profile as _bp
         _profile = _bp.for_business(business_id)
         _lic = _bp.license_policy_for(_profile)
     except Exception:  # noqa: BLE001 -- never block generation on the profile lookup
         _profile, _lic = None, ""
+    _reg_fin = bool(_profile and _profile.get("regulated_financial"))
+    comp_system = _compliance_system(reg, _profile)
     # Pass 1 (long-form): a keyword-mapped outline the draft writes from.
     outline = _outline(biz, wo, asset_type, grounding) if asset_type in ("article", "faq") else ""
     # Pass 2: the grounded draft.
@@ -1386,8 +1451,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                              (biz.get("name") if isinstance(biz, dict) else "") or "",
                              (biz.get("geo") if isinstance(biz, dict) else "") or "")
 
-    # compliance gate (firm-type-adapted)
-    comp = _compliance(body, system=comp_system)
+    # compliance gate (profile-adapted: universal for a generic tenant, finance rules for a finance one)
+    comp = _compliance(body, system=comp_system, regulated_financial=_reg_fin)
     comp_pass = comp.get("pass")
     comp_flags = comp.get("flags", [])
 
@@ -1397,9 +1462,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # and record WHAT was changed so the human can confirm the added language is accurate.
     highlighted: list = []
     if comp_pass is False and not eval_unavailable:
-        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic)
+        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic,
+                                    regulated_financial=_reg_fin)
         if fixed and fixed != body:
-            recheck = _compliance(fixed, system=comp_system)
+            recheck = _compliance(fixed, system=comp_system, regulated_financial=_reg_fin)
             if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews
                 body = fixed
                 highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
@@ -1971,7 +2037,15 @@ def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[s
             conn.commit()   # release the FOR UPDATE lock
             return False
         new_body = body if body is not None else d["body"]
-        flags = _deterministic_compliance(new_body or "")
+        # Re-screen with the tenant's compliance pack: finance hard-rules only for a regulated-finance
+        # tenant, universal-only otherwise (so a generic tenant's edit isn't failed on finance patterns).
+        _reg_fin = False
+        try:
+            from . import business_profile as _bp
+            _reg_fin = bool(_bp.for_business(d["business_id"]).get("regulated_financial"))
+        except Exception:  # noqa: BLE001
+            _reg_fin = False
+        flags = _deterministic_compliance(new_body or "", regulated_financial=_reg_fin)
         comp_pass = False if flags else None
         comp_flags = flags or ["content edited after screening -- re-screen recommended"]
         # Re-extract the [INSERT: ...] checklist from the edited body (the human may have filled
