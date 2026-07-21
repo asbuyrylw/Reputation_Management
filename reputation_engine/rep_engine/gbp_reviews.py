@@ -37,6 +37,20 @@ log = logging.getLogger("gbp_reviews")
 SERPER_BASE = os.getenv("SERPER_BASE_URL", "https://google.serper.dev")
 
 
+def _reg_financial(business_id: int) -> bool:
+    """Whether this tenant is regulated-finance, so the finance deterministic hard-rules (guaranteed
+    returns / risk-free / performance promises) run on its reply drafts too -- a finance brand reply
+    must not promise returns. Fail-safe -> False (universal-only, like a generic tenant)."""
+    try:
+        from . import business_profile as _bp
+    except ImportError:  # pragma: no cover
+        import business_profile as _bp  # type: ignore
+    try:
+        return bool(_bp.for_business(business_id).get("regulated_financial"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _serper(endpoint: str, body: dict) -> Optional[dict]:
     # Routed through the shared TTL cache (Phase E): GBP ingest + the social audit issue the same
     # places query, so this collapses duplicate paid calls. Falls back to a live call on any cache
@@ -240,12 +254,13 @@ def _draft_pending(business_id: int, limit: int = 20) -> int:
             "WHERE business_id=%s AND status='new' ORDER BY id DESC LIMIT %s",
             (business_id, limit)).fetchall()
     drafted = 0
+    _reg_fin = _reg_financial(business_id)   # once per run, not per review
     for r in rows:
         payload = {"rating": r.get("rating"), "sentiment": r.get("sentiment"),
                    "review_title": _fence(r.get("title")), "review_text": _fence(r.get("body"))}
         draft = cg.draft_reply(REVIEW_SYSTEM, payload, max_tokens=300,
                                fallback="[DRAFT unavailable -- write a brief thank-you reply]")
-        comp = cg._compliance(draft or "", is_reply=True)
+        comp = cg._compliance(draft or "", is_reply=True, regulated_financial=_reg_fin)
         auto = _auto_reply_ok(settings, r.get("rating"), r.get("sentiment"), r.get("body"), draft, comp)
         init_status = "auto_posted_pending" if auto else "pending_review"
         try:
@@ -370,7 +385,7 @@ def edit_reply(reply_id: int, new_draft: str, editor: str, business_id: int) -> 
     """Edit a queued reply: re-screen (reply-aware), reset compliance_pass (never to True), and
     append to the FTC edit trail. Stays pending_review."""
     cg = _cg()
-    comp = cg._compliance(new_draft or "", is_reply=True)
+    comp = cg._compliance(new_draft or "", is_reply=True, regulated_financial=_reg_financial(business_id))
     # editing resets to False (hard hit) or None (unscreened) -- never auto-True
     new_pass = False if comp.get("pass") is False else None
     with db() as conn:

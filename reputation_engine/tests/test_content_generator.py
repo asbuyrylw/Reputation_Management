@@ -9,10 +9,15 @@ from conftest import requires_db
 
 
 def _seed_business(conn, name="Acme Co"):
+    # A regulated-finance/insurance business (matching its data: life insurance, MLM, Cincinnati OH), so
+    # the finance seams (compliance rules, GEN finance module, license policy) are exercised. industry +
+    # regulatory_profile.firm_type are what the StrategyProfile keys off (6.1).
+    import json as _json
     row = conn.execute(
-        "INSERT INTO businesses (name, domain, services, goal, contested_terms, geo) "
-        "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-        (name, "acme.com", "life insurance", "win local queries", "MLM", "Cincinnati OH"),
+        "INSERT INTO businesses (name, domain, services, goal, contested_terms, geo, industry, "
+        "regulatory_profile) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (name, "acme.com", "life insurance", "win local queries", "MLM", "Cincinnati OH",
+         "financial services / insurance", _json.dumps({"firm_type": "insurance"})),
     ).fetchone()
     conn.commit()
     return row["id"]
@@ -229,13 +234,22 @@ def test_eval_malformed_routes_to_human_not_needs_fix(fresh_schema, monkeypatch)
 
 
 def test_deterministic_compliance_rules():
-    """The non-LLM screen flags hard financial-marketing violations and is quiet on
-    ordinary copy -- no DB / no LLM needed."""
+    """The non-LLM screen: the '#1/best' unverifiable-superlative rule is UNIVERSAL (every tenant); the
+    finance rules (guaranteed returns, risk-free) fire ONLY for a regulated-finance tenant, so a generic
+    tenant's 'risk-free trial' isn't falsely failed (6.1 Slice C). No DB / no LLM needed."""
     from rep_engine import content_generator as cg
-    assert cg._deterministic_compliance("We guarantee 30% returns") != []
-    assert cg._deterministic_compliance("A totally risk-free plan") != []
+    # universal deceptive-claims rule -> flagged for BOTH generic and finance
     assert cg._deterministic_compliance("We are the best-in-class agency") != []
+    assert cg._deterministic_compliance("We are the best-in-class agency", regulated_financial=True) != []
+    # finance rules -> quiet for a generic tenant, flagged only for a regulated-finance tenant
+    assert cg._deterministic_compliance("We guarantee 30% returns") == []
+    assert cg._deterministic_compliance("We guarantee 30% returns", regulated_financial=True) != []
+    assert cg._deterministic_compliance("A totally risk-free plan") == []
+    assert cg._deterministic_compliance("A totally risk-free plan", regulated_financial=True) != []
+    # ordinary copy -> quiet either way
     assert cg._deterministic_compliance("Helpful, factual content for local families.") == []
+    assert cg._deterministic_compliance("Helpful, factual content for local families.",
+                                        regulated_financial=True) == []
     assert cg._deterministic_compliance(None) == []
 
 
@@ -248,17 +262,21 @@ def test_deterministic_compliance_overrides_llm_pass(fresh_schema, monkeypatch):
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
+    # Mocks accept **kwargs (the real orchestrator_json takes bill=/max_tokens=), so downstream
+    # grading (fact_check etc.) doesn't spuriously error on an unexpected kwarg.
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": "We guarantee 30% returns, risk-free.")
+                        lambda system, user, *a, **k: "We guarantee 30% returns, risk-free.")
     # eval passes; the LLM compliance screen is spoofed to 'pass' -- deterministic wins
     monkeypatch.setattr(cg.llm, "orchestrator_json",
-                        lambda system, user, tier="full": {"score": 0.9, "fixes": []}
+                        lambda system, user, *a, **k: {"score": 0.9, "fixes": []}
                         if "QA reviewer" in system else {"pass": True, "flags": []})
 
     created = cg.generate(bid)
     d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
-    assert d["compliance_pass"] is False                 # deterministic override
-    assert d["status"] == "needs_fix"
+    assert d["compliance_pass"] is False                 # deterministic override (finance rules fire)
+    # A draft that fails compliance/quality is HELD (needs_fix is folded into 'held' so the review
+    # queue only ever holds clean drafts).
+    assert d["status"] == "held"
     assert "guaranteed" in json.dumps(d["compliance_flags"]).lower()
 
 

@@ -224,7 +224,7 @@ def gaps_for_business(business_id: int) -> list[dict]:
     return out
 
 
-def _types_for_gap(gap: dict) -> list[str]:
+def _types_for_gap(gap: dict, default_types: Optional[list[str]] = None) -> list[str]:
     at = (gap.get("asset_type") or "").lower()
     topic = (gap.get("topic") or "").lower()
     # Video is an explicit asset intent -> a shootable script spread, not a text article.
@@ -234,7 +234,11 @@ def _types_for_gap(gap: dict) -> list[str]:
         return _LOCAL_TYPES
     if at in ("landing_page", "comparison") or "landing" in topic or any(k in topic for k in ("best", "vs", "compare", "top ")):
         return _COMMERCIAL_TYPES
-    return _DEFAULT_TYPES
+    # DEFAULT branch: the tenant's profile-driven content spread (generic drops the finance
+    # 'white_paper' and carries 'faq'; finance keeps 'white_paper'), restricted to the content types the
+    # batch pipeline can frame + generate so an unknown type never becomes a mislabeled generic blog.
+    dts = [t for t in (default_types or _DEFAULT_TYPES) if t in _TYPE_FRAME]
+    return dts or list(_DEFAULT_TYPES)
 
 
 def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
@@ -333,7 +337,15 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
     # Budget guard: the batch path calls generate_for_wo directly (bypassing generate()'s guard), so
     # enforce the monthly cap here or a batch could run past it. The cap is the runaway backstop.
     _budget_or_raise(business_id)
-    types = content_types or _types_for_gap(gap)
+    # The default content-type spread is profile-driven (generic drops the finance 'white_paper' and
+    # carries 'faq'); an explicit content_types from the caller still wins. Fail-safe -> module default.
+    _default_types = None
+    try:
+        from . import business_profile as _bp
+        _default_types = _bp.for_business(business_id).get("default_content_types")
+    except Exception:  # noqa: BLE001
+        _default_types = None
+    types = content_types or _types_for_gap(gap, _default_types)
     topic = gap.get("topic") or ""
     # Resolve LLM-authored gap prompts to the actual battery prompt text so impact measures a real
     # cluster (not a silent 0-row match). Empty -> whole-run fallback (coarser but valid).

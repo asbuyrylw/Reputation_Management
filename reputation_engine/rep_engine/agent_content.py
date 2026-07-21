@@ -36,11 +36,13 @@ try:
     from . import agent_tools as tools
     from . import content_generator as _cg
     from . import rich_media_generator as _rmg
+    from . import business_profile as _bp
     from .db import db
 except ImportError:  # pragma: no cover -- loose-script fallback
     import agent_tools as tools  # type: ignore
     import content_generator as _cg  # type: ignore
     import rich_media_generator as _rmg  # type: ignore
+    import business_profile as _bp  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("agent_content")
@@ -82,15 +84,28 @@ PLAN_SYSTEM = (
     "synthesising multiple sources."
 )
 
-DRAFT_SYSTEM = (
+_DRAFT_SYSTEM_BASE = (
     "You are an expert content writer. Draft the requested asset for the given channel: accurate, on-brand, "
     "and optimized to be CITED by AI answer engines (front-load the direct answer; cover the key entities "
     "and questions). For social_post: short and platform-appropriate. For landing_page: a headline plus a "
-    "few sections. For video_script: a short spoken script. Never fabricate and never make compliance-risky "
-    "claims (guarantees of results, '#1'/'best', 'risk-free'). Output ONLY the asset body as plain text."
-    + tools.LICENSE_CONTENT_POLICY
-    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
+    "few sections. For video_script: a short spoken script. Never fabricate and never make unverifiable "
+    "'#1'/'best' claims stated as fact."
 )
+
+# Finance-only compliance clause, spliced in ONLY for a regulated-finance tenant.
+_DRAFT_FINANCE_CLAUSE = " Do NOT make guaranteed-return, performance, or 'risk-free' claims."
+
+
+def _draft_system(license_policy: str = "", regulated_financial: bool = False) -> str:
+    """The remediation draft prompt for ONE tenant. `license_policy` = the profile-driven license/
+    sensitive-ID ban ('' for a generic tenant); `regulated_financial` gates the finance compliance
+    clause. NO_NEGATIVE_DISAMBIGUATION stays agnostic + always on."""
+    fin = _DRAFT_FINANCE_CLAUSE if regulated_financial else ""
+    return (_DRAFT_SYSTEM_BASE + fin + " Output ONLY the asset body as plain text."
+            + license_policy + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY)
+
+
+DRAFT_SYSTEM = _draft_system()   # finance-free GENERIC alias; per-tenant built at the draft call site
 
 LINKS_SYSTEM = (
     "Given a set of newly drafted owned assets, propose internal links BETWEEN them (and to obvious owned "
@@ -141,6 +156,20 @@ def _node_plan(state: RemState) -> dict:
 
 def _node_draft(state: RemState) -> dict:
     biz = state["business"]
+    # Business-agnostic seam: load the tenant's StrategyProfile ONCE (not per asset). The license ban is
+    # spliced into the draft prompt; regulated_financial gates the finance compliance rules in the
+    # verified _cg._compliance gate. Fail-safe -> generic ('' license, universal-only compliance).
+    try:
+        _profile = _bp.for_business(state["business_id"])
+    except Exception:  # noqa: BLE001
+        _profile = None
+    _lic = _bp.license_policy_for(_profile)
+    _reg_fin = bool(_profile and _profile.get("regulated_financial"))
+    # Per-tenant compliance SCREENER prompt (finance screener + firm-type rules for a finance tenant,
+    # universal for a generic one) -- so a regulated-finance tenant's agent-authored drafts get the
+    # finance LLM screen, not just the deterministic rules. reg = the tenant's regulatory_profile.
+    _reg = (biz.get("regulatory_profile") if isinstance(biz, dict) else None) or {}
+    _comp_system = _cg._compliance_system(_reg, _profile)
     drafts = []
     for a in state.get("plan", [])[:MAX_ASSETS]:
         if tools.over_budget(state["business_id"]):
@@ -169,7 +198,7 @@ def _node_draft(state: RemState) -> dict:
         # → content_drafts as pending_review.
         try:
             body = tools.llm_text(
-                DRAFT_SYSTEM,
+                _draft_system(_lic, _reg_fin),
                 json.dumps({"business": biz.get("name"), "goal": biz.get("goal"),
                             "channel": channel, "platform": a.get("platform"),
                             "title": a.get("title"), "topic": a.get("topic"),
@@ -180,7 +209,7 @@ def _node_draft(state: RemState) -> dict:
             break
         if not body:
             continue
-        comp = _cg._compliance(body)               # the VERIFIED deterministic+LLM gate
+        comp = _cg._compliance(body, system=_comp_system, regulated_financial=_reg_fin)   # VERIFIED gate
         status = "needs_fix" if comp.get("pass") is False else "pending_review"
         with db() as conn:
             row = conn.execute(

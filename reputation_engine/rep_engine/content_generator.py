@@ -192,7 +192,7 @@ def _duplicate_body(business_id: int, content_hash: str) -> bool:
 # ----------------------------------------------------------------------------
 # Generation
 # ----------------------------------------------------------------------------
-GEN_SYSTEM = (
+_GEN_SYSTEM_BASE = (
     "You are an expert content writer AND answer-engine-optimization (AEO/GEO) + SEO strategist for "
     "a reputation program that publishes ACCURATE, helpful, well-structured content so it becomes "
     "what AI assistants (ChatGPT, Perplexity, Gemini, Google AI Overview) and Google surface about a "
@@ -204,11 +204,10 @@ GEN_SYSTEM = (
     "stubs in the body. If a specific detail is NOT available from the website/profile, WRITE AROUND "
     "it -- omit it gracefully, use accurate general wording, or point the reader to the website / "
     "contact form -- rather than inserting a placeholder or inventing the detail. NEVER output the "
-    "literal characters '[INSERT'. Handle the common cases WITHOUT a placeholder: for a "
-    "securities/broker-dealer disclosure, name the affiliate by its known public name from the context "
-    "or say 'the affiliated broker-dealer' generally; do NOT state a specific star rating or review "
-    "count -- instead point readers to 'our reviews on Google' and never guess a number; reference any "
-    "income-disclosure statement only in general terms. If completing a sentence would require a "
+    "literal characters '[INSERT'. Handle the common cases WITHOUT a placeholder: do NOT state a "
+    "specific star rating or review count -- instead point readers to 'our reviews on Google' and never "
+    "guess a number; for any affiliate/partner you cannot name specifically, refer to it generally. If "
+    "completing a sentence would require a "
     "specific you don't have, state it generally or LEAVE THE SENTENCE OUT entirely. "
     "WRITE AS A FINISHED, PUBLISHED PAGE in a confident voice -- state the business's facts plainly as "
     "fact. Do NOT hedge every fact with 'at time of drafting', 'may change', 'should be independently "
@@ -228,11 +227,12 @@ GEN_SYSTEM = (
     "FAQ / Q&A section near the end; (4) give a concrete, ATTRIBUTABLE statistic roughly every 150-200 "
     "words -- use ONLY real numbers you can source (industry data, official/regulatory figures, the "
     "parent company's public data) and NEVER invent one; (5) CITE authoritative primary sources INLINE "
-    "as markdown links (.gov/.edu/official -- e.g. the state regulator, SEC/EDGAR, the parent company's "
-    "investor page): inline citations to authoritative sources are a top AI-citation lever; "
+    "as markdown links (.gov/.edu/official -- e.g. the relevant regulator or licensing body, official "
+    "statistics agencies (.gov), or a recognized industry association): inline citations to "
+    "authoritative sources are a top AI-citation lever; "
     "(5b) present AT LEAST TWO of the provided real statistics AS SHORT DIRECT QUOTATIONS with inline "
     "attribution -- put the quantitative claim in quotation marks and attribute it to its source, e.g. "
-    "\"About 51% of U.S. adults own life insurance,\" according to [LIMRA's 2024 Barometer Study](url) "
+    "\"<a real figure from your provided sources>,\" according to [the named source](url) "
     "-- because ADDING ATTRIBUTED QUOTATIONS is the single strongest MEASURED lever for getting content "
     "quoted by AI answer engines (Princeton GEO study, +41% vs +33% for a bare stat); quote ONLY the "
     "real, provided sources/numbers, and NEVER invent a quote or attribute words to a specific named "
@@ -248,8 +248,8 @@ GEN_SYSTEM = (
     "keyword-stuff). Only cover "
     "topics and FAQ questions that are SPECIFIC to this business and directly serve THIS page's "
     "stated purpose and the business's actual services -- do NOT pad the page with generic industry "
-    "questions that don't fit it (e.g. broad medical-underwriting eligibility questions, or unrelated "
-    "career/licensing-exam trivia); drop any provided keyword that doesn't genuinely belong here. "
+    "questions that don't fit it (e.g. broad 'how to enter this industry' or generic eligibility "
+    "questions unrelated to THIS page); drop any provided keyword that doesn't genuinely belong here. "
     "Directly address the gap / narrative the content is meant to fix. Never fabricate facts, "
     "credentials, reviews, or statistics. "
     # --- Anti-generic ("AI slop") spec: what separates distinctive, authoritative content from
@@ -270,9 +270,37 @@ GEN_SYSTEM = (
     "active voice, one idea per paragraph (<=150 words), scannable with descriptive headings, bullets, "
     "and tables. "
     "Output ONLY the asset content -- no preamble."
-    + llm.LICENSE_CONTENT_POLICY
-    + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
+
+
+# Finance-specific writing EXEMPLARS, appended ONLY for a regulated-finance tenant. The base prompt's
+# rules (write around a missing specific; cite authoritative sources; >=2 attributed quotations) stay
+# universal; these just give the finance tenant its concrete examples back (broker-dealer affiliate,
+# income disclosure, SEC/EDGAR, a LIMRA quotation).
+_GEN_FINANCE_MODULE = (
+    " For this regulated-finance business specifically: for a securities/broker-dealer disclosure, name "
+    "the affiliate by its known public name from the context or say 'the affiliated broker-dealer' "
+    "generally, and reference any income-disclosure statement only in general terms; good authoritative "
+    "sources to cite inline include the state regulator, SEC/EDGAR, and the parent company's investor "
+    "page; a strong attributed-quotation example is \"About 51% of U.S. adults own life insurance,\" "
+    "according to [LIMRA's 2024 Barometer Study](url)."
+)
+
+
+def _gen_system(license_policy: str = "", regulated_financial: bool = False) -> str:
+    """The generation system prompt for ONE tenant. `license_policy` is the profile-driven license /
+    sensitive-ID ban -- empty ('') for a tenant that doesn't suppress specific credential numbers (the
+    GENERIC default: NO license-number ban at all). `regulated_financial` appends the finance writing
+    exemplars. NO_NEGATIVE_DISAMBIGUATION stays agnostic and is always present. The module `GEN_SYSTEM`
+    alias below = this with NO license + no finance module (the finance-free default); per-tenant
+    prompts are built at the generation call site from the business's profile."""
+    prompt = _GEN_SYSTEM_BASE
+    if regulated_financial:
+        prompt += _GEN_FINANCE_MODULE
+    return prompt + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+GEN_SYSTEM = _gen_system()   # finance-free GENERIC alias; per-tenant prompt built at the call site
 
 
 # Common words that must NOT count as topical relevance in keyword scoping. Without this, a shared
@@ -309,7 +337,7 @@ def _scope_keywords(allkw: list, target_query: str | None, limit: int = 12) -> l
     return [t[3] for t in (relevant if relevant else scored)[:limit]]
 
 
-def _grounding_context(business_id: int, target_query: str | None = None) -> dict:
+def _grounding_context(business_id: int, target_query: str | None = None, biz: dict | None = None) -> dict:
     """Pull the REAL grounding for content generation, so the writer works from facts and the
     right language instead of generic filler:
       - site_facts: what the business's own website actually says (latest crawl summary),
@@ -350,12 +378,21 @@ def _grounding_context(business_id: int, target_query: str | None = None) -> dic
             keywords = _scope_keywords(allkw, target_query)
     except Exception:  # noqa: BLE001 -- best-effort: missing table or empty result degrades to no keywords
         keywords = []
-    # Authoritative citation sources + real datable statistics (the #1 GEO/citability lever). So the
-    # writer can cite .gov/regulator/industry/academic sources INLINE and quote REAL numbers.
+    # Authoritative citation sources + real datable statistics (the #1 GEO/citability lever). The
+    # authoritative_sources registry is the FINANCE source pack (LIMRA/ACLI/SEC/FINRA/IRS), so inject
+    # it ONLY for a tenant whose profile selects that pack (authoritative_source_pack == 'financial').
+    # A generic tenant gets '' here -- the prompt still tells it to cite .gov/official sources inline,
+    # sourced dynamically -- so no finance sources leak into a dentist's or SaaS's draft.
     authoritative = ""
     try:
-        from . import authoritative_sources as _authsrc
-        authoritative = _authsrc.grounding_for_business(business_id)
+        from . import business_profile as _bp
+        # Use the already-loaded biz row (pure derive, no query) when the caller passes it; only fall
+        # back to a for_business load when it doesn't -- avoids a duplicate profile query per piece.
+        _pack = (_bp.derive(biz) if biz is not None else _bp.for_business(business_id)
+                 ).get("authoritative_source_pack") or ""
+        if _pack == "financial":
+            from . import authoritative_sources as _authsrc
+            authoritative = _authsrc.grounding_for_business(business_id)
     except Exception:  # noqa: BLE001 -- best-effort
         authoritative = ""
     return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords,
@@ -600,7 +637,8 @@ _ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
-                  outline: str = "", voice: str = "") -> str:
+                  outline: str = "", voice: str = "", license_policy: str = "",
+                  regulated_financial: bool = False) -> str:
     tier = _ASSET_TIER.get(asset_type, "mid")
     # Size the output cap to the piece's target length (+ headroom for headings/citations/byline), so a
     # long-form asset isn't truncated mid-draft. A flat 2600 clipped deep_article (2.5k words ~3.3k
@@ -610,7 +648,7 @@ def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict
     # draft mid-sentence; oversizing is free.
     target_words = _BRIEF_WORDS.get(asset_type, 1200)
     max_tokens = max(3200, min(int(target_words * 2.5) + 800, 6500))
-    return llm.orchestrator_text(GEN_SYSTEM,
+    return llm.orchestrator_text(_gen_system(license_policy, regulated_financial),
                                  _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
                                  max_tokens=max_tokens, tier=tier)
 
@@ -665,6 +703,21 @@ def _revise(body: str, fixes: list) -> str:
 # ----------------------------------------------------------------------------
 # Compliance gate (first-class)
 # ----------------------------------------------------------------------------
+# The UNIVERSAL deceptive-claims screener -- applies to EVERY tenant (FTC truth-in-advertising, not
+# securities/insurance rules). A generic (non-finance) tenant gets ONLY this, so finance vocabulary
+# (broker-dealer, guaranteed returns) never colours a dentist's or SaaS's compliance screen.
+UNIVERSAL_DECEPTIVE_SYSTEM = (
+    "You are a truthful-marketing compliance screener. Review the content and return STRICT JSON only: "
+    "{\"pass\": bool, \"flags\": [strings]}. Flag any of: demonstrably FALSE or misleading factual "
+    "claims; unverifiable superlatives ('best', '#1', 'the leading', 'guaranteed results') stated as "
+    "objective fact; testimonials or outcomes presented as typical without context; fabricated "
+    "statistics, credentials, or endorsements. Do NOT demand industry-specific regulatory disclosures "
+    "-- this is the universal deceptive-claims screen; any vertical-specific rules are applied "
+    "separately where they apply. Pass ordinary, accurate, well-sourced marketing content."
+)
+
+# The FINANCE screener -- selected ONLY for a regulated-finance tenant (compliance_packs contains
+# "financial"). Reproduces the pilot's exact finance screen; a generic tenant never receives it.
 COMPLIANCE_SYSTEM = (
     "You are a financial-services marketing compliance screener. Review the content "
     "and return STRICT JSON only: {\"pass\": bool, \"flags\": [strings]}. Flag any of: "
@@ -704,8 +757,21 @@ def _reg_profile(business_id: int) -> dict:
         return {}
 
 
-def _compliance_system(reg: dict | None) -> str:
-    """Adapt the base compliance prompt to the tenant's firm type + required disclosures."""
+def _is_financial_pack(profile: dict | None) -> bool:
+    """True when the tenant's StrategyProfile carries the finance compliance pack. This -- NOT the
+    regulatory_profile firm_type -- is what turns the finance screener/rules ON. Fail-safe: a None
+    profile is treated as GENERIC (no finance pack), so an un-threaded caller never gets finance rules
+    on a generic tenant. (regulatory_profile.firm_type still sub-specializes WITHIN the finance pack.)"""
+    return bool(profile and "financial" in (profile.get("compliance_packs") or []))
+
+
+def _compliance_system(reg: dict | None, profile: dict | None = None) -> str:
+    """The LLM compliance screener prompt for a tenant. A GENERIC tenant gets the UNIVERSAL
+    deceptive-claims screener; a regulated-finance tenant (financial compliance pack) gets the finance
+    screener + firm-type sub-rules + required disclosures. `reg` is the regulatory_profile (firm_type /
+    disclosures); `profile` is the StrategyProfile that gates the pack on/off."""
+    if not _is_financial_pack(profile):
+        return UNIVERSAL_DECEPTIVE_SYSTEM
     if not reg:
         return COMPLIANCE_SYSTEM
     extra = []
@@ -718,34 +784,44 @@ def _compliance_system(reg: dict | None) -> str:
     return COMPLIANCE_SYSTEM + ("\n\n" + "\n".join(extra) if extra else "")
 
 
-# Hard financial-marketing prohibitions, matched deterministically. Unlike the LLM
-# screen these cannot be talked out of their verdict by a hostile/garbled draft, so
-# a hit here is AUTHORITATIVE: the content is non-compliant regardless of the LLM.
-_COMPLIANCE_RULES: list[tuple[str, str]] = [
+# Hard prohibitions, matched deterministically. Unlike the LLM screen these cannot be talked out of
+# their verdict by a hostile/garbled draft, so a hit here is AUTHORITATIVE. Split into two sets:
+#  - UNIVERSAL (FTC truth-in-advertising) applies to EVERY tenant.
+#  - FINANCIAL (securities/insurance marketing) applies ONLY to a regulated-finance tenant, so a
+#    generic tenant's legitimate copy ("risk-free trial", "guaranteed results or your money back")
+#    isn't falsely failed.
+_UNIVERSAL_RULES: list[tuple[str, str]] = [
+    (r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b",
+     "unverifiable superlative (#1 / best)"),
+]
+_FINANCIAL_RULES: list[tuple[str, str]] = [
     (r"\bguarantee[ds]?\b[^.\n]{0,40}\b(returns?|profits?|income|results?|gains?|growth)\b",
      "implies guaranteed returns/results"),
     (r"\b(risk[-\s]?free|no[-\s]?risk|zero[-\s]?risk)\b", "claims risk-free"),
-    (r"\b(?:#\s?1|number[-\s]one|the\sbest|best[-\s]in[-\s]class)\b",
-     "unverifiable superlative (#1 / best)"),
     (r"\b\d{1,3}\s?%[^.\n]{0,30}\b(guaranteed|returns?|profits?|gains?)\b",
      "specific performance promise"),
 ]
-_COMPLIANCE_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _COMPLIANCE_RULES]
+_UNIVERSAL_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _UNIVERSAL_RULES]
+_FINANCIAL_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _FINANCIAL_RULES]
 
 
 _NEGATION_RE = re.compile(r"\b(no|not|never|without|none|don'?t|do not|cannot|can'?t|are ?n'?t|is ?n'?t|"
                           r"n'?t|makes? no|make no|zero)\b", re.I)
 
 
-def _deterministic_compliance(body: str) -> list[str]:
-    """Non-LLM, non-prompt-injectable screen for hard financial-marketing rules.
+def _deterministic_compliance(body: str, *, regulated_financial: bool = False) -> list[str]:
+    """Non-LLM, non-prompt-injectable hard-rule screen. The UNIVERSAL rules (unverifiable '#1'/'best'
+    superlatives) run for every tenant; the FINANCIAL rules (guaranteed returns, risk-free, specific
+    performance promises) run ONLY for a regulated-finance tenant, so a generic tenant's 'risk-free
+    trial' isn't falsely failed. Fail-safe default (regulated_financial=False) = universal-only.
     Returns the list of triggered-rule descriptions (empty == nothing tripped). A match immediately
     preceded by a NEGATION ('no guarantees of income', 'we do not guarantee returns', 'no guaranteed
     returns') is a compliant DISCLAIMER, not a violation -- skip it (this was falsely failing the exact
     disclosure language compliance requires)."""
     text = body or ""
+    patterns = _UNIVERSAL_PATTERNS + (_FINANCIAL_PATTERNS if regulated_financial else [])
     flags: list[str] = []
-    for pat, msg in _COMPLIANCE_PATTERNS:
+    for pat, msg in patterns:
         for m in pat.finditer(text):
             if _NEGATION_RE.search(text[max(0, m.start() - 28):m.start()]):
                 continue   # negated -> disclaimer, not a violation
@@ -754,9 +830,11 @@ def _deterministic_compliance(body: str) -> list[str]:
     return list(dict.fromkeys(flags))
 
 
-def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = False) -> dict:
-    # Deterministic, non-injectable screen first -- its verdict is authoritative.
-    det_flags = _deterministic_compliance(body)
+def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = False,
+                regulated_financial: bool = False) -> dict:
+    # Deterministic, non-injectable screen first -- its verdict is authoritative. The finance hard rules
+    # run only for a regulated-finance tenant (regulated_financial); universal rules always.
+    det_flags = _deterministic_compliance(body, regulated_financial=regulated_financial)
     # Reply paths (review/mention brand replies) carry FTC/ToS risk the generic financial screen
     # misses (it passes anything "non-financial"). Run the deterministic reply screen on every
     # reply and use the reply-aware LLM prompt so a reply is never rubber-stamped as non-financial.
@@ -769,8 +847,9 @@ def _compliance(body: str, system: Optional[str] = None, *, is_reply: bool = Fal
         if system is None:
             system = _rc.REPLY_COMPLIANCE_SYSTEM
     # compliance screen is classification -> cheap tier (Haiku/gpt-4o-mini). `system` is the
-    # firm-type-adapted prompt (falls back to the generic financial screen).
-    res = llm.orchestrator_json(system or COMPLIANCE_SYSTEM, json.dumps({"content": body}), tier="cheap")
+    # profile-adapted prompt from _compliance_system; fall back to the UNIVERSAL screen (not the
+    # finance one) so a caller that omits `system` never finance-screens a generic tenant.
+    res = llm.orchestrator_json(system or UNIVERSAL_DECEPTIVE_SYSTEM, json.dumps({"content": body}), tier="cheap")
     # default-safe: if the screener couldn't run (no keys), mark unknown -> needs
     # human; but if the deterministic rules tripped, FAIL CLOSED regardless of LLM.
     if not res:
@@ -912,9 +991,14 @@ def _scrub_negative_disambiguation(body: str) -> str:
     return "\n".join(out)
 
 
-def _scrub_license_phrasing(body: str) -> str:
-    """Remove any 'license number' reference from content (owner policy). Idempotent; safe on content
-    that has none."""
+def _scrub_license_phrasing(body: str, profile: Optional[dict] = None) -> str:
+    """Remove any 'license number' reference from content -- ONLY for a tenant whose profile SUPPRESSES
+    specific credential numbers (a regulated-finance client). For a generic tenant (profile that does
+    NOT suppress) this is a NO-OP: a plumber, electrician, or attorney MAY publish their license number.
+    Fail-safe: profile None (an un-threaded caller) => run the scrub, preserving today's behavior.
+    Idempotent; safe on content that has none."""
+    if profile is not None and not profile.get("suppress_specific_credential_numbers"):
+        return body
     if not body or "licen" not in body.lower():
         return body
     body = _LICNUM_ALT_RE.sub("", body)
@@ -1044,16 +1128,26 @@ def _add_cluster_links(body: str, cluster: dict | None) -> str:
 _BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed by )", re.I | re.M)
 
 
-def _ensure_byline(body: str, business_name: str) -> str:
-    """E-E-A-T authorship signal. Financial content is YMYL: Google's rater guidelines rate a page
-    with no clear author background 'Lowest', and named authorship is a top measured citation signal
-    (+30.6% correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 --
-    truthful given the human review-before-publish workflow, and NEVER a specific person or license
-    number. Best-effort; skipped if a byline already exists or the business name is unknown."""
+def _ensure_byline(body: str, business_name: str, reviewer: str = "editorial team") -> str:
+    """E-E-A-T authorship signal. For YMYL content Google's rater guidelines rate a page with no clear
+    author background 'Lowest', and named authorship is a top measured citation signal (+30.6%
+    correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 -- truthful
+    given the human review-before-publish workflow, and NEVER a specific person or license number. The
+    reviewer NOUN is profile-driven (`byline_reviewer`): 'editorial team' by default, 'licensed
+    professionals' for finance, 'a licensed attorney'/'a licensed clinician' for legal/medical, etc.
+    Best-effort; skipped if a byline already exists or the business name is unknown."""
     if not body or not (business_name or "").strip() or _BYLINE_RE.search(body):
         return body
     name = business_name.strip()
-    line = f"*By {name} · Reviewed by {name}’s licensed professionals*"
+    reviewer = (reviewer or "editorial team").strip()
+    # byline_reviewer may be a bare noun ('editorial team', 'licensed professionals') -> possessive,
+    # or article-prefixed ('a licensed attorney', 'a licensed clinician') -> drop the possessive so the
+    # grammar reads right ("Reviewed by a licensed attorney", not "Reviewed by X's a licensed attorney").
+    if reviewer.lower().startswith(("a ", "an ", "the ")):
+        review_part = f"Reviewed by {reviewer}"
+    else:
+        review_part = f"Reviewed by {name}’s {reviewer}"
+    line = f"*By {name} · {review_part}*"
     lines = body.split("\n")
     for i, ln in enumerate(lines):
         if ln.lstrip().startswith("# "):
@@ -1129,7 +1223,21 @@ def _maximize_geo(body: str, sq: str, content_type: str, asset_type: str,
     return best
 
 
-COMPLIANCE_FIX_SYSTEM = (
+# UNIVERSAL compliance-fix editor -- used for every generic tenant. Strips deceptive claims only; no
+# finance/broker-dealer/disclosure vocabulary.
+_COMPLIANCE_FIX_UNIVERSAL_BASE = (
+    "You are a marketing-claims compliance editor. Revise the content to RESOLVE the listed compliance "
+    "issues while preserving the accurate, helpful message. REMOVE false or misleading claims, "
+    "unverifiable superlatives ('best'/'#1'/'the leading' stated as fact), and any 'guaranteed results' "
+    "promise. Do NOT fabricate facts, and do NOT use [INSERT: ...] placeholders -- write around anything "
+    "you don't have with accurate general wording. Put any added disclaimer in ONE short block at the "
+    "very END of the content -- NEVER before the page's opening answer, and keep that answer-first "
+    "opening intact. Do NOT hedge every fact or add editor-facing notes ('before publication...', "
+    "'verify before publishing'). Output ONLY the revised content, no preamble."
+)
+
+# FINANCE compliance-fix editor -- used ONLY for a regulated-finance tenant.
+_COMPLIANCE_FIX_BASE = (
     "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
     "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
     "(guaranteed/implied returns, performance promises, 'risk-free', unverifiable superlatives "
@@ -1142,23 +1250,39 @@ COMPLIANCE_FIX_SYSTEM = (
     "before the page's opening answer, and keep that answer-first opening intact. Do NOT hedge every "
     "fact or add editor-facing notes ('before publication...', 'verify before publishing'). Output "
     "ONLY the revised content, no preamble."
-    + llm.LICENSE_CONTENT_POLICY
-    + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 
-def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None) -> Optional[str]:
+def _compliance_fix_system(license_policy: str = "", regulated_financial: bool = False) -> str:
+    """The compliance-autofix editor prompt for ONE tenant. A generic tenant gets the UNIVERSAL editor
+    (deceptive-claims only); a regulated-finance tenant gets the finance editor (broker-dealer /
+    disclosure rules). `license_policy` = the profile-driven license ban ('' for generic).
+    NO_NEGATIVE_DISAMBIGUATION stays agnostic + always present. The `COMPLIANCE_FIX_SYSTEM` alias =
+    this with NO license + the universal editor (the finance-free default)."""
+    base = _COMPLIANCE_FIX_BASE if regulated_financial else _COMPLIANCE_FIX_UNIVERSAL_BASE
+    return base + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+COMPLIANCE_FIX_SYSTEM = _compliance_fix_system()   # finance-free GENERIC alias (universal editor)
+
+
+def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None,
+                        license_policy: str = "", regulated_financial: bool = False) -> Optional[str]:
     """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
-    disclosures (using what we know about the business + its regulatory profile). Returns the
-    revised body, or None. The caller re-screens the result -- this never decides compliance."""
+    disclosures (using what we know about the business + its regulatory profile). A generic tenant gets
+    the universal editor and no broker-dealer-disclosure instruction; a regulated-finance tenant gets
+    the finance editor + firm-type framing. Returns the revised body, or None. The caller re-screens
+    the result -- this never decides compliance."""
     reg = reg or {}
     ft = (reg.get("firm_type") or "").lower()
     disc = reg.get("disclosures") or []
     reg_line = ""
-    if ft:
+    # Firm-type / broker-dealer framing is finance-only; a generic tenant never gets it.
+    if regulated_financial and ft:
         reg_line = f"Firm type: {ft}. "
         if ft == "non_financial":
             reg_line += "Do NOT add any financial/broker-dealer disclosures. "
+    # Required disclosures a tenant explicitly persisted apply regardless of vertical.
     if disc:
         reg_line += "Use ONLY these required disclosures (verbatim where possible): " + "; ".join(str(d) for d in disc) + ". "
     ctx = (
@@ -1168,7 +1292,8 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
         "Compliance issues to resolve:\n- " + "\n- ".join(str(f) for f in (flags or []))
         + f"\n\nContent to revise:\n{body}"
     )
-    revised = llm.orchestrator_text(COMPLIANCE_FIX_SYSTEM, ctx, max_tokens=2400, tier="mid")
+    revised = llm.orchestrator_text(_compliance_fix_system(license_policy, regulated_financial),
+                                    ctx, max_tokens=2400, tier="mid")
     return (revised or "").strip() or None
 
 
@@ -1231,7 +1356,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # back to their gap query / title so single-draft pieces also get on-topic keywords, not the
     # business-wide top-15.
     _scope_q = wo.get("target_query") or (wo.get("gap_specifics") or {}).get("source_query") or wo.get("title")
-    grounding = _grounding_context(business_id, target_query=_scope_q)
+    grounding = _grounding_context(business_id, target_query=_scope_q, biz=biz)
     # SERP-competitor benchmark (Phase 3): the shared terms + word-count target from the pages
     # actually ranking for this query, so the draft can be graded "vs. the competition" rather than
     # absolute. Dormant-safe: {skipped} with no SERPER_API_KEY, and never raises.
@@ -1287,11 +1412,24 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001
         log.debug("brand/source grounding unavailable: %s", e)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
-    comp_system = _compliance_system(reg)
+    # Business-agnostic StrategyProfile: load it ONCE and derive everything vertical-specific -- the
+    # license ban (spliced into GEN_SYSTEM / the compliance-fix editor), the post-processing scrub gate,
+    # and the compliance PACK (universal-only for a generic tenant vs the finance screener + hard rules
+    # for a regulated-finance tenant). A generic tenant gets '' (no license ban), no scrub, and the
+    # universal deceptive-claims screen. Fail-safe: any error -> generic.
+    try:
+        from . import business_profile as _bp
+        _profile = _bp.for_business(business_id)
+        _lic = _bp.license_policy_for(_profile)
+    except Exception:  # noqa: BLE001 -- never block generation on the profile lookup
+        _profile, _lic = None, ""
+    _reg_fin = bool(_profile and _profile.get("regulated_financial"))
+    comp_system = _compliance_system(reg, _profile)
     # Pass 1 (long-form): a keyword-mapped outline the draft writes from.
     outline = _outline(biz, wo, asset_type, grounding) if asset_type in ("article", "faq") else ""
     # Pass 2: the grounded draft.
-    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice)
+    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice,
+                         license_policy=_lic, regulated_financial=_reg_fin)
     if not body:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
@@ -1352,8 +1490,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                              (biz.get("name") if isinstance(biz, dict) else "") or "",
                              (biz.get("geo") if isinstance(biz, dict) else "") or "")
 
-    # compliance gate (firm-type-adapted)
-    comp = _compliance(body, system=comp_system)
+    # compliance gate (profile-adapted: universal for a generic tenant, finance rules for a finance one)
+    comp = _compliance(body, system=comp_system, regulated_financial=_reg_fin)
     comp_pass = comp.get("pass")
     comp_flags = comp.get("flags", [])
 
@@ -1363,9 +1501,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # and record WHAT was changed so the human can confirm the added language is accurate.
     highlighted: list = []
     if comp_pass is False and not eval_unavailable:
-        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg)
+        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic,
+                                    regulated_financial=_reg_fin)
         if fixed and fixed != body:
-            recheck = _compliance(fixed, system=comp_system)
+            recheck = _compliance(fixed, system=comp_system, regulated_financial=_reg_fin)
             if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews
                 body = fixed
                 highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
@@ -1377,7 +1516,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # placeholders a regulated specific anyway). Runs AFTER the compliance gate so it also cleans any
     # placeholder a disclosure auto-fix introduced.
     body = _strip_placeholders(body)
-    body = _scrub_license_phrasing(body)
+    body = _scrub_license_phrasing(body, _profile)
     body = _scrub_negative_disambiguation(body)   # no 'not to be confused with X' — positive identity only
     # De-generic pass: strip the safest formulaic AI-slop lead-ins deterministically ('In conclusion,',
     # 'It's important to note that', 'In today's fast-paced world,'). Buzzwords mid-sentence are left to
@@ -1391,7 +1530,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     if asset_type not in ("schema", "social_post", "gbp_post", "x_post", "facebook_post", "instagram_post"):
         body = _ensure_freshness(body, f"{datetime.now(timezone.utc):%B %Y}")
         # E-E-A-T authorship (YMYL requirement): add a general, compliance-safe byline/reviewer line.
-        body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "")
+        # The reviewer noun is profile-driven ('editorial team' generic, 'licensed professionals' finance).
+        body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "",
+                              reviewer=(_profile.get("byline_reviewer") if _profile else "") or "editorial team")
         # Plain-language backstop: the Opus tier writes grade ~15 despite the prompt + fluency signal,
         # so force a readability rewrite when the grade is too high (preserves facts/citations/quotes).
         body = _ensure_readability(body, asset_type, _score_q, content_type,
@@ -1848,18 +1989,44 @@ def reject(draft_id: int, reviewer: str, notes: Optional[str]) -> None:
 # ----------------------------------------------------------------------------
 # Social atomization (Phase 5) -- turn one long-form piece into per-platform posts
 # ----------------------------------------------------------------------------
-ATOMIZE_SYSTEM = (
-    "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
-    "social posts, ONE per platform: LinkedIn, X (Twitter), Facebook, Instagram. GROUND every claim in "
-    "the article -- NEVER add facts, statistics, offers, credentials, or claims not present in it. Match "
-    "each platform: LinkedIn = professional, 1-2 short paragraphs + a takeaway; X = one punchy post under "
-    "280 characters; Facebook = warm + conversational, 2-3 sentences; Instagram = a hook-led caption with "
-    "3-5 relevant hashtags. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
-    '{"atoms":[{"surface":"linkedin","text":"..."},{"surface":"x","text":"..."},'
-    '{"surface":"facebook","text":"..."},{"surface":"instagram","text":"..."}]}'
-)
+# Per-platform format hints for atomization. The SET of platforms is profile-driven (social_channels),
+# so a b2b_saas tenant gets LinkedIn+X, an ecommerce/beauty tenant gets Instagram/TikTok/Pinterest, etc.
+_CHANNEL_HINTS = {
+    "linkedin": "LinkedIn = professional, 1-2 short paragraphs + a takeaway",
+    "x": "X = one punchy post under 280 characters",
+    "twitter": "X = one punchy post under 280 characters",
+    "facebook": "Facebook = warm + conversational, 2-3 sentences",
+    "instagram": "Instagram = a hook-led caption with 3-5 relevant hashtags",
+    "tiktok": "TikTok = a short hook-led caption / on-screen text idea with 3-5 hashtags",
+    "pinterest": "Pinterest = a keyword-rich pin description with a clear value hook",
+    "youtube": "YouTube = a Shorts caption / hook plus a one-line description",
+    "threads": "Threads = a casual, conversational short post",
+}
+_DEFAULT_ATOMIZE_CHANNELS = ["linkedin", "x", "facebook", "instagram"]
+
+
+def _atomize_system(channels: Optional[list] = None) -> str:
+    """Build the atomization prompt for the tenant's actual social channels (profile.social_channels).
+    Unknown channels are dropped; an empty/invalid set falls back to the generic 4-channel default."""
+    chans = [c for c in (channels or _DEFAULT_ATOMIZE_CHANNELS) if c in _CHANNEL_HINTS]
+    chans = list(dict.fromkeys(chans)) or list(_DEFAULT_ATOMIZE_CHANNELS)
+    surfaces = ", ".join(chans)
+    hint_lines = "; ".join(_CHANNEL_HINTS[c] for c in chans)
+    atoms_shape = ",".join('{"surface":"%s","text":"..."}' % c for c in chans)
+    return (
+        "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
+        f"social posts, ONE per platform: {surfaces}. GROUND every claim in the article -- NEVER add "
+        "facts, statistics, offers, credentials, or claims not present in it. Match each platform: "
+        f"{hint_lines}. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
+        '{"atoms":[' + atoms_shape + "]}"
+    )
+
+
+ATOMIZE_SYSTEM = _atomize_system()   # generic-default alias; per-tenant built in atomize_draft
 _SURFACE_LABEL = {"linkedin": "LinkedIn", "x": "X/Twitter", "twitter": "X/Twitter",
-                  "facebook": "Facebook", "instagram": "Instagram"}
+                  "facebook": "Facebook", "instagram": "Instagram", "tiktok": "TikTok",
+                  "pinterest": "Pinterest", "youtube": "YouTube", "threads": "Threads",
+                  "gbp": "Google Business Profile"}
 
 
 def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = None) -> dict:
@@ -1878,7 +2045,14 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
     if len(body) < 120:
         return {"ok": False, "error": "draft is too short to atomize into social posts"}
     payload = json.dumps({"title": d.get("title") or "", "article": body[:6000]})
-    res = llm.orchestrator_json(ATOMIZE_SYSTEM, payload, tier="mid",
+    # Atomize to the tenant's ACTUAL social channels (b2b_saas -> LinkedIn+X; ecommerce -> +TikTok/
+    # Pinterest), not a fixed 4-channel set. Fail-safe -> the generic default channels.
+    try:
+        from . import business_profile as _bp
+        _channels = _bp.for_business(business_id).get("social_channels") or _DEFAULT_ATOMIZE_CHANNELS
+    except Exception:  # noqa: BLE001
+        _channels = _DEFAULT_ATOMIZE_CHANNELS
+    res = llm.orchestrator_json(_atomize_system(_channels), payload, tier="mid",
                                 bill={"business_id": business_id, "operation": "atomize"}) or {}
     atoms = res.get("atoms") if isinstance(res, dict) else None
     if not isinstance(atoms, list) or not atoms:
@@ -1937,7 +2111,15 @@ def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[s
             conn.commit()   # release the FOR UPDATE lock
             return False
         new_body = body if body is not None else d["body"]
-        flags = _deterministic_compliance(new_body or "")
+        # Re-screen with the tenant's compliance pack: finance hard-rules only for a regulated-finance
+        # tenant, universal-only otherwise (so a generic tenant's edit isn't failed on finance patterns).
+        _reg_fin = False
+        try:
+            from . import business_profile as _bp
+            _reg_fin = bool(_bp.for_business(d["business_id"]).get("regulated_financial"))
+        except Exception:  # noqa: BLE001
+            _reg_fin = False
+        flags = _deterministic_compliance(new_body or "", regulated_financial=_reg_fin)
         comp_pass = False if flags else None
         comp_flags = flags or ["content edited after screening -- re-screen recommended"]
         # Re-extract the [INSERT: ...] checklist from the edited body (the human may have filled
