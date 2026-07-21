@@ -192,7 +192,7 @@ def _duplicate_body(business_id: int, content_hash: str) -> bool:
 # ----------------------------------------------------------------------------
 # Generation
 # ----------------------------------------------------------------------------
-GEN_SYSTEM = (
+_GEN_SYSTEM_BASE = (
     "You are an expert content writer AND answer-engine-optimization (AEO/GEO) + SEO strategist for "
     "a reputation program that publishes ACCURATE, helpful, well-structured content so it becomes "
     "what AI assistants (ChatGPT, Perplexity, Gemini, Google AI Overview) and Google surface about a "
@@ -270,9 +270,19 @@ GEN_SYSTEM = (
     "active voice, one idea per paragraph (<=150 words), scannable with descriptive headings, bullets, "
     "and tables. "
     "Output ONLY the asset content -- no preamble."
-    + llm.LICENSE_CONTENT_POLICY
-    + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
+
+
+def _gen_system(license_policy: str = "") -> str:
+    """The generation system prompt for ONE tenant. `license_policy` is the profile-driven license /
+    sensitive-ID ban -- empty ('') for a tenant that doesn't suppress specific credential numbers (the
+    GENERIC default: NO license-number ban at all). NO_NEGATIVE_DISAMBIGUATION stays agnostic and is
+    always present. The module `GEN_SYSTEM` alias below = this with NO license (the finance-free
+    default); per-tenant prompts are built at the generation call site from the business's profile."""
+    return _GEN_SYSTEM_BASE + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+GEN_SYSTEM = _gen_system()   # finance-free GENERIC alias; per-tenant prompt built at the call site
 
 
 # Common words that must NOT count as topical relevance in keyword scoping. Without this, a shared
@@ -600,7 +610,7 @@ _ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
-                  outline: str = "", voice: str = "") -> str:
+                  outline: str = "", voice: str = "", license_policy: str = "") -> str:
     tier = _ASSET_TIER.get(asset_type, "mid")
     # Size the output cap to the piece's target length (+ headroom for headings/citations/byline), so a
     # long-form asset isn't truncated mid-draft. A flat 2600 clipped deep_article (2.5k words ~3.3k
@@ -610,7 +620,7 @@ def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict
     # draft mid-sentence; oversizing is free.
     target_words = _BRIEF_WORDS.get(asset_type, 1200)
     max_tokens = max(3200, min(int(target_words * 2.5) + 800, 6500))
-    return llm.orchestrator_text(GEN_SYSTEM,
+    return llm.orchestrator_text(_gen_system(license_policy),
                                  _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
                                  max_tokens=max_tokens, tier=tier)
 
@@ -912,9 +922,14 @@ def _scrub_negative_disambiguation(body: str) -> str:
     return "\n".join(out)
 
 
-def _scrub_license_phrasing(body: str) -> str:
-    """Remove any 'license number' reference from content (owner policy). Idempotent; safe on content
-    that has none."""
+def _scrub_license_phrasing(body: str, profile: Optional[dict] = None) -> str:
+    """Remove any 'license number' reference from content -- ONLY for a tenant whose profile SUPPRESSES
+    specific credential numbers (a regulated-finance client). For a generic tenant (profile that does
+    NOT suppress) this is a NO-OP: a plumber, electrician, or attorney MAY publish their license number.
+    Fail-safe: profile None (an un-threaded caller) => run the scrub, preserving today's behavior.
+    Idempotent; safe on content that has none."""
+    if profile is not None and not profile.get("suppress_specific_credential_numbers"):
+        return body
     if not body or "licen" not in body.lower():
         return body
     body = _LICNUM_ALT_RE.sub("", body)
@@ -1129,7 +1144,7 @@ def _maximize_geo(body: str, sq: str, content_type: str, asset_type: str,
     return best
 
 
-COMPLIANCE_FIX_SYSTEM = (
+_COMPLIANCE_FIX_BASE = (
     "You are a financial-services compliance editor. Revise the content to RESOLVE the listed "
     "compliance issues while preserving the accurate, helpful message. REMOVE prohibited claims "
     "(guaranteed/implied returns, performance promises, 'risk-free', unverifiable superlatives "
@@ -1142,12 +1157,21 @@ COMPLIANCE_FIX_SYSTEM = (
     "before the page's opening answer, and keep that answer-first opening intact. Do NOT hedge every "
     "fact or add editor-facing notes ('before publication...', 'verify before publishing'). Output "
     "ONLY the revised content, no preamble."
-    + llm.LICENSE_CONTENT_POLICY
-    + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
 
-def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None) -> Optional[str]:
+def _compliance_fix_system(license_policy: str = "") -> str:
+    """The compliance-autofix editor prompt for ONE tenant. `license_policy` = the profile-driven
+    license/sensitive-ID ban ('' for a non-suppressing / generic tenant). NO_NEGATIVE_DISAMBIGUATION
+    stays agnostic + always present. The `COMPLIANCE_FIX_SYSTEM` alias = this with NO license."""
+    return _COMPLIANCE_FIX_BASE + license_policy + llm.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+COMPLIANCE_FIX_SYSTEM = _compliance_fix_system()   # finance-free GENERIC alias
+
+
+def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None,
+                        license_policy: str = "") -> Optional[str]:
     """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
     disclosures (using what we know about the business + its regulatory profile). Returns the
     revised body, or None. The caller re-screens the result -- this never decides compliance."""
@@ -1168,7 +1192,7 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
         "Compliance issues to resolve:\n- " + "\n- ".join(str(f) for f in (flags or []))
         + f"\n\nContent to revise:\n{body}"
     )
-    revised = llm.orchestrator_text(COMPLIANCE_FIX_SYSTEM, ctx, max_tokens=2400, tier="mid")
+    revised = llm.orchestrator_text(_compliance_fix_system(license_policy), ctx, max_tokens=2400, tier="mid")
     return (revised or "").strip() or None
 
 
@@ -1288,10 +1312,20 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         log.debug("brand/source grounding unavailable: %s", e)
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
     comp_system = _compliance_system(reg)
+    # Business-agnostic license/sensitive-ID policy: load the tenant's StrategyProfile ONCE and derive
+    # both the prompt-level license ban (spliced into GEN_SYSTEM / the compliance-fix editor) and the
+    # post-processing scrub gate. A generic tenant gets '' (no ban) + no scrub; a regulated-finance
+    # tenant reproduces today's license policy. Fail-safe: any error -> generic ('' + run the scrub).
+    try:
+        from . import business_profile as _bp
+        _profile = _bp.for_business(business_id)
+        _lic = _bp.license_policy_for(_profile)
+    except Exception:  # noqa: BLE001 -- never block generation on the profile lookup
+        _profile, _lic = None, ""
     # Pass 1 (long-form): a keyword-mapped outline the draft writes from.
     outline = _outline(biz, wo, asset_type, grounding) if asset_type in ("article", "faq") else ""
     # Pass 2: the grounded draft.
-    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice)
+    body = _generate_one(biz, wo, asset_type, grounding, outline=outline, voice=voice, license_policy=_lic)
     if not body:
         log.warning("Generation produced no content (LLM unavailable?) for '%s'", topic)
         return None
@@ -1363,7 +1397,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # and record WHAT was changed so the human can confirm the added language is accurate.
     highlighted: list = []
     if comp_pass is False and not eval_unavailable:
-        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg)
+        fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic)
         if fixed and fixed != body:
             recheck = _compliance(fixed, system=comp_system)
             if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews
@@ -1377,7 +1411,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # placeholders a regulated specific anyway). Runs AFTER the compliance gate so it also cleans any
     # placeholder a disclosure auto-fix introduced.
     body = _strip_placeholders(body)
-    body = _scrub_license_phrasing(body)
+    body = _scrub_license_phrasing(body, _profile)
     body = _scrub_negative_disambiguation(body)   # no 'not to be confused with X' — positive identity only
     # De-generic pass: strip the safest formulaic AI-slop lead-ins deterministically ('In conclusion,',
     # 'It's important to note that', 'In today's fast-paced world,'). Buzzwords mid-sentence are left to

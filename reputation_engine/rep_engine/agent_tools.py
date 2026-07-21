@@ -41,8 +41,11 @@ log = logging.getLogger("agent_tools")
 # Re-export so graph nodes fence with the exact same delimiter/instruction the
 # audit + content paths use.
 UNTRUSTED_INSTRUCTION = _audit.UNTRUSTED_INSTRUCTION
-# Re-export so content/brief generators (production_brief, rich_media, agent_content) can append the
-# owner's "no specific license numbers in content" policy to their prompts from one source of truth.
+# Back-compat re-export of the finance-FREE license default (now ''). The license/sensitive-ID policy is
+# profile-driven: content/brief generators (production_brief, rich_media, agent_content, content_assist)
+# compose it per tenant via business_profile.license_policy_for(profile) at their prompt-build call
+# sites -- they no longer append this constant. Kept so any lingering `_tools.LICENSE_CONTENT_POLICY`
+# reference resolves to the safe generic default rather than raising.
 LICENSE_CONTENT_POLICY = _audit.LICENSE_CONTENT_POLICY
 NO_NEGATIVE_DISAMBIGUATION_POLICY = _audit.NO_NEGATIVE_DISAMBIGUATION_POLICY
 

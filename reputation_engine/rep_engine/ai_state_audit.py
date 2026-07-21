@@ -142,25 +142,16 @@ GAP_MODEL_TIMEOUT = int(os.getenv("GAP_MODEL_TIMEOUT", "480"))
 GAP_MAX_ANSWERS = int(os.getenv("GAP_MAX_ANSWERS", "90"))
 GAP_ANSWER_CHARS = int(os.getenv("GAP_ANSWER_CHARS", "800"))
 
-# Business-owner policy (ABSOLUTE): auto-generated content AND strategy recommendations must never
-# surface SPECIFIC regulated license identifiers. A general "our agents are all licensed" statement is
-# encouraged; specific numbers are not (the system can't verify them, so they'd only ever be
-# unfillable [INSERT] placeholders that also read as legalistic/defensive). Appended to every
-# content-writing + strategy/recommendation system prompt so the whole pipeline honors it.
-LICENSE_CONTENT_POLICY = (
-    " LICENSE POLICY (ABSOLUTE — overrides any other instruction): You MAY state GENERALLY that the "
-    "business's agents/professionals are all licensed (e.g. 'our agents are licensed insurance "
-    "professionals'). You must NEVER include, request, recommend, or leave an [INSERT] placeholder for "
-    "any SPECIFIC license identifier — no individual/agent state insurance license numbers, no FINRA "
-    "CRD numbers, no NPN numbers — and NEVER create or recommend any content, page, section, FAQ, or "
-    "corroboration/proof item that depends on listing specific license numbers. Do NOT reference "
-    "'license number(s)' in the content AT ALL — not as a value, not as a search field, and not as a "
-    "verification step (e.g. never write 'search by license number'). A general statement that the "
-    "agents are licensed is sufficient; if you mention verification, phrase it generally (e.g. 'you "
-    "can confirm our agents are licensed through the Ohio Department of Insurance'). Establish "
-    "legitimacy through OTHER means (a general licensing statement, regulated-affiliate disclosure, "
-    "third-party reviews/ratings, awards, transparent compensation) — never through license numbers."
-)
+# Business-owner license/sensitive-ID policy is now PROFILE-DRIVEN, not a global constant. It is composed
+# per tenant by business_profile.license_policy_for(profile): empty ("") for a tenant that does NOT
+# suppress specific credential numbers (the GENERIC default -- a plumber/bakery MAY publish a license
+# number), and the full finance policy (verbatim: "no ... FINRA CRD ... NPN ...", "the Ohio Department of
+# Insurance", "our agents are licensed insurance professionals") for a regulated-finance tenant.
+# Prompt builders splice the per-tenant string at their call sites; this module constant is kept as the
+# finance-FREE default ("") so nothing bakes finance vocabulary into a generic prompt.
+# (business_profile._LICENSE_POLICY_TEMPLATE holds the scaffold; tests/test_business_profile.py freezes
+# the exact finance literal as the golden drift guard.)
+LICENSE_CONTENT_POLICY = ""
 
 # Positive-only self-distinction. Negative disambiguation ("Not to be confused with X", "we are not
 # Y", "unlike the [other] brand") is poor marketing: it names/associates competitors or unrelated

@@ -47,10 +47,12 @@ from typing import Optional
 try:
     from . import agent_tools as _tools
     from . import notebooklm_client as _nlm
+    from . import business_profile as _bp
     from .db import db
 except ImportError:  # pragma: no cover -- loose-script fallback
     import agent_tools as _tools  # type: ignore
     import notebooklm_client as _nlm  # type: ignore
+    import business_profile as _bp  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("rich_media_generator")
@@ -444,7 +446,9 @@ def _fallback_llm(
         "[INSERT] placeholders. Apply "
         "financial-marketing compliance: no guaranteed returns, no 'risk-free', no '#1' "
         "or 'best' as stated fact. Output ONLY the asset content in markdown."
-        + _tools.LICENSE_CONTENT_POLICY
+        # Business-agnostic license/sensitive-ID ban: '' for a generic tenant, today's finance policy
+        # for a regulated-finance tenant. Fail-safe -> '' on any lookup error.
+        + _bp.license_policy_for_business(business_id)
         + _tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
     )
     prompt_text = template.format(name=biz.get("name", "the business"))
@@ -508,7 +512,10 @@ def _persist(
         try:
             from . import content_generator as _cg
             from . import content_quality as _cqs
-            body = _cg._scrub_license_phrasing(_cg._strip_placeholders(body))
+            # License-number scrub is gated on the tenant's profile: a generic tenant keeps license
+            # numbers; a regulated-finance tenant has them scrubbed. Fail-safe: profile None -> scrub runs.
+            _profile = _bp.for_business(business_id)
+            body = _cg._scrub_license_phrasing(_cg._strip_placeholders(body), _profile)
             body = _cqs.scrub_slop(body)   # de-generic: strip formulaic AI-slop lead-ins
         except Exception as e:  # noqa: BLE001 -- cleanup must never block persistence
             log.debug("rich_media: body cleanup skipped: %s", e)

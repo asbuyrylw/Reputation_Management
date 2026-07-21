@@ -123,13 +123,40 @@ def test_derive_is_pure_no_shared_mutation():
 
 # --- Slice A: license_policy_for builder + regulated_financial + real-signal local presence ---------
 
-def test_license_policy_for_finance_reproduces_live_literal_byte_for_byte():
-    # The builder must compose EXACTLY today's LICENSE_CONTENT_POLICY for the finance pilot, so Slice B
-    # can replace the module constant with license_policy_for(profile) without regressing the pilot.
-    from rep_engine import ai_state_audit as llm
+# FROZEN copy of the finance pilot's license/sensitive-ID policy -- the exact literal that ai_state_audit
+# carried before Slice B moved it into the profile-driven builder. Kept here (independent of the module,
+# which is now the finance-FREE default '') as the golden drift guard: license_policy_for(finance) MUST
+# still reproduce this byte-for-byte, so Team Unstoppable's policy never silently changes.
+_FINANCE_LICENSE_LITERAL = (
+    " LICENSE POLICY (ABSOLUTE — overrides any other instruction): You MAY state GENERALLY that the "
+    "business's agents/professionals are all licensed (e.g. 'our agents are licensed insurance "
+    "professionals'). You must NEVER include, request, recommend, or leave an [INSERT] placeholder for "
+    "any SPECIFIC license identifier — no individual/agent state insurance license numbers, no FINRA "
+    "CRD numbers, no NPN numbers — and NEVER create or recommend any content, page, section, FAQ, or "
+    "corroboration/proof item that depends on listing specific license numbers. Do NOT reference "
+    "'license number(s)' in the content AT ALL — not as a value, not as a search field, and not as a "
+    "verification step (e.g. never write 'search by license number'). A general statement that the "
+    "agents are licensed is sufficient; if you mention verification, phrase it generally (e.g. 'you "
+    "can confirm our agents are licensed through the Ohio Department of Insurance'). Establish "
+    "legitimacy through OTHER means (a general licensing statement, regulated-affiliate disclosure, "
+    "third-party reviews/ratings, awards, transparent compensation) — never through license numbers."
+)
+
+
+def test_license_policy_for_finance_reproduces_frozen_literal_byte_for_byte():
+    # The builder must compose EXACTLY the finance pilot's license policy, byte-for-byte, so the seam
+    # can drive it from the profile without regressing Team Unstoppable. Anchored to the FROZEN copy
+    # above -- independent of the module constant (now '') -- so drift in the builder is still caught.
     p = bp.derive({"industry": "financial_services", "firm_type": "insurance",
                    "geo": "Cincinnati, OH", "contested_terms": "MLM,pyramid scheme,scam"})
-    assert bp.license_policy_for(p) == llm.LICENSE_CONTENT_POLICY   # byte-for-byte (em-dashes + leading space)
+    assert bp.license_policy_for(p) == _FINANCE_LICENSE_LITERAL   # byte-for-byte (em-dashes + leading space)
+
+
+def test_module_license_constant_is_finance_free_default():
+    # After Slice B the global LICENSE_CONTENT_POLICY is the finance-FREE default ('') -- the policy is
+    # now profile-driven so nothing bakes finance vocabulary into a generic prompt.
+    from rep_engine import ai_state_audit as llm
+    assert llm.LICENSE_CONTENT_POLICY == ""
 
 
 def test_license_policy_for_generic_is_empty():

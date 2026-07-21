@@ -341,8 +341,8 @@ def _narrative(business_id: int, goal: dict, overall: dict, gaps: list[dict],
     deterministic fallback sentence if the LLM path is unavailable or fails."""
     fallback = _fallback_narrative(goal, overall, recs)
     try:
-        from .ai_state_audit import (LICENSE_CONTENT_POLICY, NO_NEGATIVE_DISAMBIGUATION_POLICY,
-                                     orchestrator_json)
+        from .ai_state_audit import NO_NEGATIVE_DISAMBIGUATION_POLICY, orchestrator_json
+        from . import business_profile as _bp
     except Exception:  # noqa: BLE001
         return fallback
     payload = json.dumps({"goal": goal, "overall": overall,
@@ -361,7 +361,9 @@ def _narrative(business_id: int, goal: dict, overall: dict, gaps: list[dict],
         "'**Highest-leverage moves next:**' with the 2-3 top moves — put each move on its OWN line "
         "starting with '1.' / '2.' / '3.' (real newlines '\\n' between items, not one run-on sentence). "
         "No hype, no guarantees, no invented facts. Return ONE JSON object: {\"briefing\": \"...\"}."
-        + LICENSE_CONTENT_POLICY + NO_NEGATIVE_DISAMBIGUATION_POLICY)
+        # Business-agnostic license/sensitive-ID ban ('' for a generic tenant, finance policy for a
+        # regulated-finance tenant). Fail-safe -> '' on any lookup error.
+        + _bp.license_policy_for_business(business_id) + NO_NEGATIVE_DISAMBIGUATION_POLICY)
     try:
         out = orchestrator_json(system, payload, tier="cheap", max_tokens=700, timeout=90,
                                 bill={"business_id": business_id, "operation": "advisor"})

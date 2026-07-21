@@ -35,9 +35,11 @@ import os
 
 try:
     from . import agent_tools as tools
+    from . import business_profile as _bp
     from .db import db
 except ImportError:  # pragma: no cover -- loose-script fallback
     import agent_tools as tools  # type: ignore
+    import business_profile as _bp  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("production_brief")
@@ -47,7 +49,7 @@ _VIDEO_PLATFORMS = {"youtube", "youtube_shorts", "tiktok", "instagram_reels", "f
 _SOCIAL_PLATFORMS = {"x", "linkedin", "facebook", "instagram", "reddit", "threads"}
 _DEFAULT_PLATFORM = {"video": "youtube", "social": "linkedin"}
 
-VIDEO_SYSTEM = (
+_VIDEO_SYSTEM_BASE = (
     "You are a reputation-marketing video producer. Given a business + the contested "
     "narrative to out-compete, plan a few SHORT videos that, once produced and published, "
     "would be ACCURATE owned content AI answer engines and searchers surface for the target "
@@ -61,11 +63,16 @@ VIDEO_SYSTEM = (
     '"keywords":[".."],"hook":"first 3 seconds","outline":["beat",".."],"on_screen_text":[".."],'
     '"description":"keyword-rich video description","tags":[".."],"thumbnail_concept":"..",'
     '"cta":".."}]}'
-    + tools.LICENSE_CONTENT_POLICY
-    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
 
-SOCIAL_SYSTEM = (
+
+def _video_system(license_policy: str = "") -> str:
+    return _VIDEO_SYSTEM_BASE + license_policy + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+VIDEO_SYSTEM = _video_system()   # finance-free GENERIC alias; per-tenant built in plan()
+
+_SOCIAL_SYSTEM_BASE = (
     "You are a reputation-marketing social producer. Given a business + the contested "
     "narrative to out-compete, plan a few social posts that, once produced and published, "
     "would be ACCURATE owned content supporting the target queries. You are NOT writing the "
@@ -78,9 +85,14 @@ SOCIAL_SYSTEM = (
     'carousel or ~120 words or 280 chars","target_query":"the query this supports",'
     '"keywords":[".."],"hook":"scroll-stopping first line","outline":["point",".."],'
     '"visual_concept":"..","cta":"..","cadence":"suggested posting cadence"}]}'
-    + tools.LICENSE_CONTENT_POLICY
-    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
+
+
+def _social_system(license_policy: str = "") -> str:
+    return _SOCIAL_SYSTEM_BASE + license_policy + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+SOCIAL_SYSTEM = _social_system()   # finance-free GENERIC alias; per-tenant built in plan()
 
 
 # ----------------------------------------------------------------------------
@@ -336,8 +348,11 @@ def plan(business_id: int, *, max_per_channel: int | None = None) -> dict:
         log.warning("production_brief: business %s over budget -- no briefs generated", business_id)
         return {"business_id": business_id, "n": 0, "briefs": [], "video": 0, "social": 0}
     biz, user = _context(business_id)
-    briefs = _generate("video", VIDEO_SYSTEM, user, business_id, max_per_channel)
-    briefs += _generate("social", SOCIAL_SYSTEM, user, business_id, max_per_channel)
+    # Business-agnostic license/sensitive-ID policy for this tenant (spliced into both briefs' prompts).
+    # '' for a generic tenant; a regulated-finance tenant reproduces today's license ban. Fail-safe -> ''.
+    _lic = _bp.license_policy_for_business(business_id)
+    briefs = _generate("video", _video_system(_lic), user, business_id, max_per_channel)
+    briefs += _generate("social", _social_system(_lic), user, business_id, max_per_channel)
     if briefs:
         _persist(business_id, briefs)
     return {"business_id": business_id, "n": len(briefs), "briefs": briefs,

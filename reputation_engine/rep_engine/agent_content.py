@@ -36,11 +36,13 @@ try:
     from . import agent_tools as tools
     from . import content_generator as _cg
     from . import rich_media_generator as _rmg
+    from . import business_profile as _bp
     from .db import db
 except ImportError:  # pragma: no cover -- loose-script fallback
     import agent_tools as tools  # type: ignore
     import content_generator as _cg  # type: ignore
     import rich_media_generator as _rmg  # type: ignore
+    import business_profile as _bp  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("agent_content")
@@ -82,15 +84,22 @@ PLAN_SYSTEM = (
     "synthesising multiple sources."
 )
 
-DRAFT_SYSTEM = (
+_DRAFT_SYSTEM_BASE = (
     "You are an expert content writer. Draft the requested asset for the given channel: accurate, on-brand, "
     "and optimized to be CITED by AI answer engines (front-load the direct answer; cover the key entities "
     "and questions). For social_post: short and platform-appropriate. For landing_page: a headline plus a "
     "few sections. For video_script: a short spoken script. Never fabricate and never make compliance-risky "
     "claims (guarantees of results, '#1'/'best', 'risk-free'). Output ONLY the asset body as plain text."
-    + tools.LICENSE_CONTENT_POLICY
-    + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
 )
+
+
+def _draft_system(license_policy: str = "") -> str:
+    """The remediation draft prompt for ONE tenant. `license_policy` = the profile-driven license/
+    sensitive-ID ban ('' for a generic tenant). NO_NEGATIVE_DISAMBIGUATION stays agnostic + always on."""
+    return _DRAFT_SYSTEM_BASE + license_policy + tools.NO_NEGATIVE_DISAMBIGUATION_POLICY
+
+
+DRAFT_SYSTEM = _draft_system()   # finance-free GENERIC alias; per-tenant built at the draft call site
 
 LINKS_SYSTEM = (
     "Given a set of newly drafted owned assets, propose internal links BETWEEN them (and to obvious owned "
@@ -141,6 +150,10 @@ def _node_plan(state: RemState) -> dict:
 
 def _node_draft(state: RemState) -> dict:
     biz = state["business"]
+    # Business-agnostic license/sensitive-ID policy for this tenant (spliced into the draft prompt).
+    # '' for a generic tenant; a regulated-finance tenant gets today's license ban. Loaded once here,
+    # not per asset. Fail-safe -> '' on any error.
+    _lic = _bp.license_policy_for_business(state["business_id"])
     drafts = []
     for a in state.get("plan", [])[:MAX_ASSETS]:
         if tools.over_budget(state["business_id"]):
@@ -169,7 +182,7 @@ def _node_draft(state: RemState) -> dict:
         # → content_drafts as pending_review.
         try:
             body = tools.llm_text(
-                DRAFT_SYSTEM,
+                _draft_system(_lic),
                 json.dumps({"business": biz.get("name"), "goal": biz.get("goal"),
                             "channel": channel, "platform": a.get("platform"),
                             "title": a.get("title"), "topic": a.get("topic"),
