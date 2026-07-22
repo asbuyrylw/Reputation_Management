@@ -84,6 +84,18 @@ def test_postprocess_ranks_commercial_first():
     assert s["campaigns"][0]["pieces"][0]["week"] <= s["campaigns"][1]["pieces"][0]["week"]
 
 
+def test_cadence_burst_then_drip():
+    """Pieces spread across a real calendar: the initial dump front-loads weeks 1..BURST_WEEKS, then
+    a drip tail extends past it (posts out gradually, not all clumped)."""
+    s = cs._postprocess(_MODEL, _GAP)
+    weeks = [pc["week"] for c in s["campaigns"] for pc in c["pieces"]]
+    assert min(weeks) == 1                              # the initial dump starts week 1
+    assert max(weeks) > cs._BURST_WEEKS + 1            # a genuine drip tail beyond the burst window
+    assert len([w for w in weeks if w <= cs._BURST_WEEKS]) >= 4   # front-loaded burst
+    assert len(set(weeks)) >= 4                         # gradual rollout, not one big clump
+    assert s["cadence"]["last_week"] == max(weeks)
+
+
 def test_postprocess_comparison_piece_for_commercial():
     s = cs._postprocess(_MODEL, _GAP)
     commercial = next(c for c in s["campaigns"] if c["intent"] == "commercial")

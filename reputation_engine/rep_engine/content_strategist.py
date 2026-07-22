@@ -68,6 +68,14 @@ _MAX_CAMPAIGNS = int(os.getenv("STRATEGIST_MAX_CAMPAIGNS", "10"))
 _MAX_CLUSTERS = int(os.getenv("STRATEGIST_MAX_CLUSTERS", "12"))
 _MAX_TOTAL_PIECES = int(os.getenv("STRATEGIST_MAX_PIECES", "150"))
 
+# Cadence (Phase 2): front-loaded cluster BURSTS then a governed DRIP -- the research-backed pattern
+# (dump the foundational network fast, then steady ~2/week so content posts out gradually over a
+# year). Every knob env-overridable. A new domain drips slower (spam-safety / indexation headroom).
+_BURST_WEEKS = int(os.getenv("STRATEGIST_BURST_WEEKS", "4"))            # the initial-dump window
+_BURST_PER_CAMPAIGN = int(os.getenv("STRATEGIST_BURST_PER_CAMPAIGN", "5"))  # pillar + first clusters
+_DRIP_PER_WEEK = int(os.getenv("STRATEGIST_DRIP_PER_WEEK", "2"))        # steady-state pace after the burst
+_HORIZON_WEEKS = int(os.getenv("STRATEGIST_HORIZON_WEEKS", "52"))       # a full year of runway
+
 # Business-value weight by search intent (commercial/transactional convert; informational builds the
 # top of funnel). Drives severity ranking so the plan leads with the highest-leverage campaigns.
 _INTENT_WEIGHT = {"commercial": 3, "transactional": 3, "investigational": 3,
@@ -246,6 +254,33 @@ def _flatten_pieces(camp: dict, rank: int) -> list[dict]:
     return pieces
 
 
+def _assign_cadence(campaigns: list[dict], *, new_domain: bool = False) -> None:
+    """Spread every campaign piece across a real BURST-then-DRIP calendar (mutates piece['week']).
+    Weeks 1..BURST_WEEKS front-load each campaign's pillar + first clusters (campaigns staggered so
+    the initial dump touches several topics fast); the remainder drips ~DRIP_PER_WEEK per week,
+    round-robin across campaigns, out to the horizon -- so content posts out gradually, not all at
+    once. week -> target_date downstream, so the calendar shows the rollout with no FE change."""
+    drip = max(1, _DRIP_PER_WEEK - (1 if new_domain else 0))
+    # BURST: pillar + first clusters of each campaign inside the front-load window.
+    for ci, camp in enumerate(campaigns):
+        start = min(_BURST_WEEKS, 1 + ci)                       # stagger campaign starts (wk1, wk2, ...)
+        for j, pc in enumerate((camp.get("pieces") or [])[:_BURST_PER_CAMPAIGN]):
+            pc["week"] = min(_BURST_WEEKS, start + (j // 2))    # ~2 pieces/week within the burst
+            pc["_placed"] = True
+    # DRIP: everything else, interleaved across campaigns so each drip week touches multiple topics.
+    queues = [[pc for pc in (c.get("pieces") or []) if not pc.get("_placed")] for c in campaigns]
+    ordered: list[dict] = []
+    while any(queues):
+        for q in queues:
+            if q:
+                ordered.append(q.pop(0))
+    for k, pc in enumerate(ordered):
+        pc["week"] = min(_HORIZON_WEEKS, _BURST_WEEKS + 1 + (k // drip))
+    for camp in campaigns:
+        for pc in (camp.get("pieces") or []):
+            pc.pop("_placed", None)
+
+
 def _postprocess(model: dict, gap: dict) -> dict:
     """Deterministic guards + enrichment over the raw LLM plan: clamp counts, rank campaigns by
     severity (SoV-gap x value), assign each campaign a stable id + cadence-weeked pieces, and cap
@@ -285,8 +320,14 @@ def _postprocess(model: dict, gap: dict) -> dict:
         })
     if not out:
         return {}
+    # Assign the real burst-then-drip cadence across ALL campaigns (mutates each piece's week ->
+    # target_date downstream), so a year of content posts out gradually instead of clumping.
+    _assign_cadence(out)
     return {"summary": model.get("summary", ""), "campaigns": out,
-            "counts": {"campaigns": len(out), "pieces": total}}
+            "counts": {"campaigns": len(out), "pieces": total},
+            "cadence": {"burst_weeks": _BURST_WEEKS, "drip_per_week": _DRIP_PER_WEEK,
+                        "horizon_weeks": _HORIZON_WEEKS,
+                        "last_week": max((pc["week"] for c in out for pc in c["pieces"]), default=0)}}
 
 
 def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
