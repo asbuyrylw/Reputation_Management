@@ -184,6 +184,13 @@ def run_cycle(args) -> None:
     rs.step("audit", lambda: m1.audit(bid), "CYCLE audit")
     _maybe_batch_score(rs, bid)
     rs.step("gap_model", lambda: m1.build_gap_model(bid), "CYCLE gap model")
+    # RE-PLAN off the fresh gap model (the closed loop, Phase 4). The Content Strategist re-runs and,
+    # because it dedupes against what's now PUBLISHED and reads the post-content gap model, it drops
+    # topics now covered, keeps attacking what's still weak, and adds campaigns for any new gaps -- a
+    # measure -> re-plan cycle. Previously run_cycle rebuilt the gap model but NEVER re-planned, so the
+    # strategy went stale. plan_cmd/sync_plan are fail-safe (strategist outage -> deterministic template).
+    rs.step("plan", lambda: m2.plan_cmd(bid, None), "CYCLE strategy re-plan")
+    rs.step("sync_plan", lambda: m5.sync_plan(bid), "CYCLE sync work orders")
     rs.step("attribution", lambda: m5.attribute(bid), "CYCLE attribution")
     rs.step("alert", lambda: m5.check_alert(bid), "CYCLE alert check")
     rs.step("citation", lambda: m10.analyze(bid, quiet=True), "CYCLE citation analytics")
