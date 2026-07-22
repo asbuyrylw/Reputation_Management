@@ -113,7 +113,9 @@ export default function StrategyPage() {
   const totalGroups = sections.reduce((a, s) => a + s.groups.length, 0);
   const allTasks = sections.flatMap((s) => s.groups.flatMap((g) => g.tasks));
   const openTasks = allTasks.length;
-  const scoreLift = Math.round(allTasks.reduce((a, t) => a + (t.predicted_ai_points ?? 0), 0));
+  // NOTE: no static "estimated score lift" — summing per-task predicted points overshoots the 0-100
+  // scale (it read +162), and lift can't be honestly projected up front. Impact is measured DYNAMICALLY
+  // from real score movement over time (dashboard / performance), not estimated here.
   const todaysFocus = (roadmap?.items ?? []).slice(0, 5);
 
   const score = dash?.series ? dashboardScore(dash.series).score : null;
@@ -162,7 +164,19 @@ export default function StrategyPage() {
             <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800">
               {strat.coverage?.reason || "Some planned pieces have no source material for their topic, so they'll be written without your verified facts."}
             </p>
-            <Link href="/content/source" className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-amber-900 hover:underline">Add source material →</Link>
+            {/* Name the SPECIFIC pieces that need source material (backend already sends the list) so
+                the owner knows exactly what to add, not just a count. */}
+            {(strat.coverage?.ungrounded_topics?.length ?? 0) > 0 && (
+              <ul className="mt-2 space-y-1">
+                {strat.coverage!.ungrounded_topics.map((t) => (
+                  <li key={t} className="flex items-start gap-1.5 text-[12.5px] text-amber-900">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+                    <span className="font-medium">{t}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <Link href="/content/source" className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-amber-900 hover:underline">Add source material for these →</Link>
           </div>
         </div>
       )}
@@ -182,11 +196,10 @@ export default function StrategyPage() {
         </div>
       )}
 
-      {/* compact overview */}
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {/* compact overview — impact is measured dynamically (dashboard), not estimated here */}
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Tile k="Gaps to close" value={String(totalGroups)} sub="Across the three areas" color="var(--score)" />
         <Tile k="Open tasks" value={String(openTasks)} sub="Every gap is already a task" />
-        <Tile k="Est. score lift" value={scoreLift > 0 ? `+${scoreLift}` : "—"} sub="If the plan is completed" color="var(--good)" />
         <Tile k="Time to goal" value={aiDate ? fmtDate(aiDate) : "—"} sub={aiMonths != null ? `~${aiMonths} months out` : "Run an audit to project"} color="var(--indigo)" />
       </div>
 

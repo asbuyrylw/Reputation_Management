@@ -60,6 +60,30 @@ export function DataGrid<T>({
 
   useEffect(() => { savePersist(storageKey, { widths, hidden: [...hidden] }); }, [widths, hidden, storageKey]);
 
+  // --- synced sticky TOP horizontal scrollbar: scroll the table left/right from the top, without
+  // having to scroll all the way down to reach the bottom scrollbar. A thin top bar mirrors the
+  // table's scroll width and both directions stay in sync.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const [scroll, setScroll] = useState({ w: 0, c: 0 });
+  const measure = useCallback(() => {
+    const el = bodyRef.current;
+    if (el) setScroll({ w: el.scrollWidth, c: el.clientWidth });
+  }, []);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure]);
+  // re-measure when columns are resized / shown-hidden / rows change (these change table width)
+  useEffect(() => { measure(); }, [measure, widths, hidden, rows.length]);
+  const syncTop = () => { if (bodyRef.current && topRef.current) bodyRef.current.scrollLeft = topRef.current.scrollLeft; };
+  const syncBody = () => { if (bodyRef.current && topRef.current) topRef.current.scrollLeft = bodyRef.current.scrollLeft; };
+  const overflowing = scroll.w > scroll.c + 1;
+
   const visible = columns.filter((c) => !hidden.has(c.key));
 
   // --- column resize (drag the handle on a header's right edge) ---
@@ -131,7 +155,15 @@ export function DataGrid<T>({
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      {/* sticky top horizontal scrollbar (mirrors the table) — only when the table overflows */}
+      {overflowing && (
+        <div ref={topRef} onScroll={syncTop}
+          className="sticky top-0 z-10 overflow-x-auto overflow-y-hidden rounded-t-xl border border-b-0 border-slate-200 bg-white">
+          <div style={{ width: scroll.w, height: 1 }} />
+        </div>
+      )}
+      <div ref={bodyRef} onScroll={syncBody}
+        className={`overflow-x-auto border border-slate-200 bg-white ${overflowing ? "rounded-b-xl border-t-0" : "rounded-xl"}`}>
         <table className="text-left text-sm" style={{ tableLayout: "fixed", width: "max-content", minWidth: "100%" }}>
           <colgroup>
             {selectable && <col style={{ width: 36 }} />}
