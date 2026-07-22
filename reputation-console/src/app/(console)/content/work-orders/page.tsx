@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
 import { useBusiness } from "@/lib/business";
 import { useAddWorkOrder, useSetWorkOrderStatus, useWorkOrders, useGenerateDraftForWo, useEditWorkOrder, useAddWorkOrderNote, useContentDrafts, useAssets, useTeam, useActionsTaken, useTaskImpact, useRoadmap, useSetSubtasks, useIntegrationSettings } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
@@ -497,99 +498,10 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[status] ?? "bg-slate-100 text-slate-600"}`}>{LABEL[status] ?? status}</span>;
 }
 
-// One row of the task TABLE: a compact, scannable summary — title, area, status, due, assignee,
-// whether it's a content task, and predicted impact — that expands on click into the existing
-// (unchanged) WorkOrderCard for the full detail, subtasks, notes, and actions. This is the
-// "streamlined, less information by default" view; nothing about WorkOrderCard's behavior changes,
-// it's just collapsed until asked for.
-function TaskTableRow({
-  w, businessId, canEdit, onStatus, draft, asset, rank, impactOverride, defaultOpen,
-}: {
-  w: WorkOrder; businessId: number | null; canEdit: boolean;
-  onStatus: (s: string, completedOn?: string) => void;
-  draft?: ContentDraft; asset?: Asset; rank?: number; impactOverride?: number | null; defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(
-    defaultOpen || (typeof window !== "undefined" && window.location.hash === `#wo-${w.id}`),
-  );
-  const isContent = IN_APP_CONTENT.has(w.capability ?? "") || DRAFTABLE.has(w.capability ?? "");
-  const impact = impactOverride ?? w.predicted_ai_points ?? null;
-  return (
-    <>
-      <tr id={`wo-${w.id}`} className="scroll-mt-24 cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 target:ring-2 target:ring-indigo-400" onClick={() => setOpen((o) => !o)}>
-        <td className="w-6 py-2 pl-3 text-slate-400">{open ? "▾" : "▸"}</td>
-        {rank != null && (
-          <td className="py-2 pr-1 text-center">
-            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">{rank}</span>
-          </td>
-        )}
-        <td className="max-w-0 py-2 pr-3">
-          <div className="truncate text-sm font-medium text-slate-800">{w.title || "Untitled task"}</div>
-          {/* the "why" lives on the Strategy page now — deep-link straight to this task there */}
-          <Link href={`/strategy#wo-${w.id}`} onClick={(e) => e.stopPropagation()} className="text-[11px] font-medium text-indigo-600 hover:underline">why this →</Link>
-        </td>
-        <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">
-          {w.area ? (AREA_LABEL[areaKey(w.area)] ?? w.area) : "—"}
-        </td>
-        <td className="whitespace-nowrap py-2 pr-3" onClick={(e) => e.stopPropagation()}>
-          {canEdit ? (
-            <select
-              value={w.status}
-              onChange={(e) => onStatus(e.target.value)}
-              className={`cursor-pointer rounded-full border-0 px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[w.status] ?? "bg-slate-100 text-slate-600"}`}
-            >
-              {COLUMNS.map((s) => <option key={s} value={s}>{LABEL[s]}</option>)}
-            </select>
-          ) : <StatusPill status={w.status} />}
-        </td>
-        <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">{w.target_date ? fmtDate(w.target_date) : "—"}</td>
-        <td className="whitespace-nowrap py-2 pr-3 text-xs text-slate-500">{w.assignee || "—"}</td>
-        <td className="whitespace-nowrap py-2 pr-3 text-center text-xs" title={isContent ? "Produced in this console" : "Done outside the console"}>
-          {isContent ? "✍️" : "—"}
-        </td>
-        <td className="whitespace-nowrap py-2 pr-3 text-right text-xs font-semibold text-emerald-700">
-          {impact ? `+${impact.toFixed(1)}` : "—"}
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td colSpan={rank != null ? 8 : 7} className="border-b border-slate-100 bg-slate-50/60 p-3">
-            <WorkOrderCard wo={w} businessId={businessId} canEdit={canEdit} onStatus={onStatus} draft={draft} asset={asset} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-// The task board's table shell — header + rows. `renderRow` builds each fully-wired
-// <TaskTableRow> (same closure pattern the page already uses for `renderCard`), so this component
-// only owns the table markup, not the data plumbing (onStatus/draft/asset/roadmap lookups).
-function TaskTable({ rows, renderRow, showRank }: {
-  rows: WorkOrder[]; renderRow: (w: WorkOrder, i: number) => ReactNode; showRank?: boolean;
-}) {
-  if (rows.length === 0) return <p className="px-1 text-xs text-slate-300">—</p>;
-  return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-      <table className="w-full text-left">
-        <thead>
-          <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
-            <th className="py-2 pl-3"></th>
-            {showRank && <th className="py-2 pr-1"></th>}
-            <th className="py-2 pr-3">Task</th>
-            <th className="py-2 pr-3">Area</th>
-            <th className="py-2 pr-3">Status</th>
-            <th className="py-2 pr-3">Due</th>
-            <th className="py-2 pr-3">Assignee</th>
-            <th className="py-2 pr-3 text-center">Content</th>
-            <th className="py-2 pr-3 text-right">Impact</th>
-          </tr>
-        </thead>
-        <tbody>{rows.map((w, i) => renderRow(w, i))}</tbody>
-      </table>
-    </div>
-  );
-}
+// (TaskTableRow / TaskTable were removed — the board now renders via <DataGrid> (woColumns in
+// WorkOrdersPage) with a row-click detail DRAWER holding the full WorkOrderCard. This gives the
+// column picker / resize / wrap / sticky-top-scroll the owner asked for, and puts the "why" in a
+// column instead of a click-to-expand dropdown.)
 
 function AddTask({ businessId }: { businessId: number | null }) {
   const add = useAddWorkOrder(businessId);
@@ -842,6 +754,16 @@ export default function WorkOrdersPage() {
   const [filters, setFilters] = useState<Record<string, string>>(EMPTY_FILTERS);
   // Fast = just "Today's focus" (3 tasks); Deep = the full board + why/impact detail.
   const [mode, setMode] = useState<"fast" | "deep">("deep");
+  // The task detail opens in a side DRAWER (row click) instead of an inline expand, so the board is
+  // a real column grid (pick/resize/wrap/scroll) and the "why" lives in a column, not a dropdown.
+  const [detailWo, setDetailWo] = useState<WorkOrder | null>(null);
+
+  // Deep-link support: /content/work-orders#wo-<id> opens that task's detail drawer.
+  useEffect(() => {
+    if (typeof window === "undefined" || !data) return;
+    const m = window.location.hash.match(/^#wo-(\d+)$/);
+    if (m) { const w = data.find((x) => x.id === Number(m[1])); if (w) setDetailWo(w); }
+  }, [data]);
 
   if (isLoading || !data) return <Spinner />;
 
@@ -897,18 +819,46 @@ export default function WorkOrdersPage() {
   const inProgress = visible.filter((w) => w.status === "in_progress").length;
   const donePct = total ? Math.round((done / total) * 100) : 0;
 
-  const renderRow = (w: WorkOrder, rank?: number, impactOverride?: number | null) => (
-    <TaskTableRow
-      key={w.id}
-      w={w}
-      businessId={businessId}
-      canEdit={canEdit}
-      onStatus={(st, completedOn) => setStatus.mutate({ woId: w.id, status: st, completed_on: completedOn })}
-      draft={draftByWo.get(w.id)}
-      asset={assetByWo.get(w.id)}
-      rank={rank}
-      impactOverride={impactOverride}
-    />
+  const isContentWO = (w: WorkOrder) => IN_APP_CONTENT.has(w.capability ?? "") || DRAFTABLE.has(w.capability ?? "");
+
+  // The board is a real column grid (DataGrid: pick/resize/wrap columns + a synced top scrollbar).
+  // The "why" is a COLUMN (no click-to-expand-to-read); a row click opens the full detail DRAWER
+  // (WorkOrderCard) for actions/subtasks/notes. Status stays inline-editable in its own cell.
+  const woColumns: DataGridColumn<WorkOrder>[] = [
+    { key: "title", label: "Task", width: 300, minWidth: 160, hideable: false, wrap: true,
+      sortValue: (w) => (w.title ?? "").toLowerCase(),
+      render: (w) => (
+        <span className="font-medium text-slate-800">
+          {isContentWO(w) && <span className="mr-1 text-[11px] text-indigo-600" title="Produced in this console">✍️</span>}
+          {w.title || "Untitled task"}
+        </span>
+      ) },
+    { key: "why", label: "Why it matters", width: 320, wrap: true,
+      render: (w) => <span className="text-xs text-slate-600">{w.why_helps_ai_rep || w.why_helps_seo || (w.rationale?.why ?? "") || "—"}</span> },
+    { key: "area", label: "Area", width: 120, sortValue: (w) => w.area ?? "",
+      render: (w) => <span className="text-xs text-slate-500">{w.area ? (AREA_LABEL[areaKey(w.area)] ?? w.area) : "—"}</span> },
+    { key: "status", label: "Status", width: 150, sortValue: (w) => w.status,
+      render: (w) => canEdit ? (
+        <select value={w.status} onClick={(e) => e.stopPropagation()}
+          onChange={(e) => setStatus.mutate({ woId: w.id, status: e.target.value })}
+          className={`cursor-pointer rounded-full border-0 px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[w.status] ?? "bg-slate-100 text-slate-600"}`}>
+          {COLUMNS.map((s) => <option key={s} value={s}>{LABEL[s]}</option>)}
+        </select>
+      ) : <StatusPill status={w.status} /> },
+    { key: "due", label: "Due", width: 110, sortValue: (w) => w.target_date ?? "",
+      render: (w) => <span className="text-xs text-slate-500">{w.target_date ? fmtDate(w.target_date) : "—"}</span> },
+    { key: "assignee", label: "Assignee", width: 130, sortValue: (w) => w.assignee ?? "",
+      render: (w) => <span className="text-xs text-slate-500">{w.assignee || "—"}</span> },
+    { key: "gap", label: "From (gap)", width: 180, wrap: true, defaultHidden: true,
+      render: (w) => <span className="text-xs text-slate-500">{w.gap_source || "—"}</span> },
+    { key: "type", label: "Type", width: 150, defaultHidden: true, sortValue: (w) => w.capability ?? "",
+      render: (w) => <span className="text-xs text-slate-500">{capLabel(w.capability ?? "")}</span> },
+    { key: "impact", label: "Impact", width: 100, align: "right", sortValue: (w) => w.predicted_ai_points ?? -1,
+      render: (w) => <span className="text-xs font-semibold text-emerald-700">{w.predicted_ai_points != null && w.predicted_ai_points > 0 ? `+${w.predicted_ai_points.toFixed(1)}` : "—"}</span> },
+  ];
+  const grid = (rows: WorkOrder[], cols: DataGridColumn<WorkOrder>[] = woColumns) => (
+    <DataGrid columns={cols} rows={rows} getId={(w) => w.id} storageKey="work-orders"
+      onRowClick={(w) => setDetailWo(w)} emptyText="—" />
   );
 
   // Grouping for the "by area" view. Each area is a labeled, collapsible section (default open).
@@ -968,6 +918,14 @@ export default function WorkOrdersPage() {
   const priorityPairs = roadmapItems
     .map((item) => ({ item, wo: woById.get(item.wo_id) }))
     .filter((p): p is { item: RoadmapItem; wo: WorkOrder } => !!p.wo);
+  // Priority view = the base grid with a rank (#) column reflecting roadmap impact order.
+  const rankById = new Map<number, number>();
+  priorityPairs.forEach((p, i) => rankById.set(p.wo.id, i + 1));
+  const priorityColumns: DataGridColumn<WorkOrder>[] = [
+    { key: "rank", label: "#", width: 50, minWidth: 44, align: "center", hideable: false,
+      render: (w) => <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">{rankById.get(w.id) ?? "—"}</span> },
+    ...woColumns,
+  ];
 
   const TABS: { key: ViewMode; label: string }[] = [
     { key: "all", label: "All tasks" },
@@ -1111,19 +1069,13 @@ export default function WorkOrdersPage() {
 
           {/* All tasks — one flat table; set status per row via the dropdown, and filter/sort with
               the controls above (status is just another filter now, not a wall of kanban columns). */}
-          {view === "all" && (
-            <TaskTable rows={sortRows(filtered)} renderRow={(w) => renderRow(w)} />
-          )}
+          {view === "all" && grid(sortRows(filtered))}
 
           {/* By priority — ALL open tasks in roadmap impact order, ranked 1..N with the impact
               math (impact_score / effort / basis) folded into the Impact column + expanded detail. */}
           {view === "priority" && (
             priorityPairs.length > 0 ? (
-              <TaskTable
-                rows={priorityPairs.map((p) => p.wo)}
-                showRank
-                renderRow={(w, i) => renderRow(w, i + 1, priorityPairs[i].item.expected_points)}
-              />
+              grid(priorityPairs.map((p) => p.wo), priorityColumns)
             ) : (
               <EmptyState
                 title="No ranked tasks yet"
@@ -1135,7 +1087,7 @@ export default function WorkOrdersPage() {
 
           {view === "mine" && (
             myTasks.length > 0 ? (
-              <TaskTable rows={myTasks} renderRow={(w) => renderRow(w)} />
+              grid(myTasks)
             ) : (
               <EmptyState
                 title="Nothing assigned to you yet"
@@ -1157,7 +1109,7 @@ export default function WorkOrdersPage() {
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </summary>
                   <div className="border-t border-slate-100 px-4 py-3">
-                    <TaskTable rows={g.items} renderRow={(w) => renderRow(w)} />
+                    {grid(g.items)}
                   </div>
                 </details>
               ))}
@@ -1172,7 +1124,7 @@ export default function WorkOrdersPage() {
                     <span className="text-sm font-semibold text-slate-700">👤 {g.name}</span>
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </div>
-                  <TaskTable rows={g.items} renderRow={(w) => renderRow(w)} />
+                  {grid(g.items)}
                 </div>
               ))}
             </div>
@@ -1186,13 +1138,40 @@ export default function WorkOrdersPage() {
                     <span className={`text-sm font-semibold ${g.label === "Overdue" ? "text-rose-600" : "text-slate-700"}`}>{g.label}</span>
                     <span className="text-xs text-slate-400">{g.items.length}</span>
                   </div>
-                  <TaskTable rows={g.items} renderRow={(w) => renderRow(w)} />
+                  {grid(g.items)}
                 </div>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {/* Task detail DRAWER — opens on a row click; holds the full WorkOrderCard (status, generate
+          draft, notes, subtasks, assign/dates), so the board itself stays a clean column grid. The
+          WO is re-read from the live list so edits reflect immediately. */}
+      {detailWo && (() => {
+        const w = data.find((x) => x.id === detailWo.id) ?? detailWo;
+        return (
+          <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40" onClick={() => setDetailWo(null)}>
+            <div className="h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+                <span className="text-sm font-bold text-slate-800">Task detail</span>
+                <button onClick={() => setDetailWo(null)} className="rounded p-1 text-lg leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">×</button>
+              </div>
+              <div className="p-4">
+                <WorkOrderCard
+                  wo={w}
+                  businessId={businessId}
+                  canEdit={canEdit}
+                  onStatus={(st, completedOn) => setStatus.mutate({ woId: w.id, status: st, completed_on: completedOn })}
+                  draft={draftByWo.get(w.id)}
+                  asset={assetByWo.get(w.id)}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Work completed + which task types correlate with score gains (below the board) */}
       <WorkCompletedSection businessId={businessId} />
