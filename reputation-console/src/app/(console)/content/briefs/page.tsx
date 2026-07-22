@@ -467,14 +467,18 @@ export default function BriefsPage() {
     .filter((g) => g.items.length > 0);
   const notStarted = contentItems.filter((w) => !draftByWo.get(w.id) && !assetByWo.get(w.id)).length;
 
-  // "By section" filter: All + each area that has pieces + a "Video & social" chip for the recipes.
+  // "By section" filter: All + each area that has pieces.
   const areaChips = [
     { key: "all", label: "All" },
     ...grouped.map((g) => ({ key: g.key, label: g.label })),
-    ...(recipes.length > 0 ? [{ key: "recipes", label: "Video & social" }] : []),
   ];
   const visibleGroups = areaFilter === "all" ? grouped : grouped.filter((g) => g.key === areaFilter);
-  const showRecipes = recipes.length > 0 && (areaFilter === "all" || areaFilter === "recipes");
+  // The strategist now creates VIDEO (+ atomized social) as WORK ORDERS with a clickable Generate ->
+  // HeyGen flow, so the legacy production-brief "recipes" (which only had a manual "Mark produced"
+  // button, not a Generate) are no longer the produce path. Hide them so the page shows only the
+  // actionable, generatable pieces. (Social posts are created automatically when a long-form piece is
+  // approved -> atomized, so they don't need a separate to-produce card.)
+  const showRecipes = false;
 
   return (
     <div>
