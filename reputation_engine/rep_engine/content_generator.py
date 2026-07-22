@@ -1796,12 +1796,16 @@ def generate(business_id: int, only_wo: Optional[int] = None,
     eligible = 0   # WOs that are a generatable content type + auto/semi (i.e. we actually try them)
     budget_stopped = False
     for wo in wos:
-        if only_wo and wo.get("_db_id") != only_wo:
+        # An explicitly TARGETED work order (only_wo) is a direct 'generate this' click: honor it
+        # regardless of JIT window or manual execution (this is how an opt-in per-campaign video plan
+        # is produced on click). Batch/JIT runs still apply both filters below.
+        targeted = bool(only_wo) and wo.get("_db_id") == only_wo
+        if only_wo and not targeted:
             continue
         # JIT filter (due_within_days): draft ONLY near-due, not-yet-drafted, still-open pieces --
         # so the year's plan generates gradually into each drip slot, under the budget cap, instead
         # of drafting all 50+ pieces up front.
-        if due_within_days is not None:
+        if due_within_days is not None and not targeted:
             if wo.get("superseded") or wo.get("has_draft"):
                 continue
             if (wo.get("status") or "pending") not in ("pending", "in_progress"):
@@ -1813,8 +1817,8 @@ def generate(business_id: int, only_wo: Optional[int] = None,
             _sd = td if isinstance(td, _dt.date) else _dt.date.fromisoformat(str(td)[:10])
             if _sd > _dt.date.today() + _dt.timedelta(days=due_within_days):
                 continue
-        # only attempt auto-executable content work orders
-        if (wo.get("execution") or "auto") not in ("auto", "semi"):
+        # only auto/semi content WOs run in a BATCH; a targeted WO generates regardless of execution.
+        if not targeted and (wo.get("execution") or "auto") not in ("auto", "semi"):
             continue
         if not _asset_type_for(wo):
             continue  # not a generatable content type (schema-only manual tasks, etc.)

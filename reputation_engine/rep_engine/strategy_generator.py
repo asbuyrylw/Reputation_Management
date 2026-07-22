@@ -380,7 +380,8 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         return bool(t) and any(len(t & c) >= 2 for c in _covered_tokens)
 
     def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
-            source="audited gap", area=None, platform="", source_query="", campaign=None):
+            source="audited gap", area=None, platform="", source_query="", campaign=None,
+            execution=None):
         # Foundational Phase-0 tasks (AI-visibility baseline, GBP claim, review sequence) legitimately
         # trace to no single gap, so they default to gap_source='baseline setup' -> the console shows
         # "From: baseline setup" instead of a blank "why". Gap-derived add() calls pass gap_source
@@ -399,7 +400,9 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             specifics.update(campaign)
         wos.append(WorkOrder(
             wo_id=f"WO-{n:03d}", title=title, capability=capability,
-            execution=(tool.execution.value if tool else "manual"),
+            # execution override lets an opt-in piece (e.g. a per-campaign video plan) be 'manual'
+            # so it isn't auto-drafted in a batch -- the owner generates it on click.
+            execution=(execution or (tool.execution.value if tool else "manual")),
             recommended_tool=(tool.name if tool else None),
             alternatives=alts,
             instruction=instruction, phase=_phase_for_week(week), week=week,
@@ -446,7 +449,11 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                     gap_source="content strategy", why=pc.get("why") or camp.get("why") or "",
                     source_query=pc.get("target_query") or title,
                     campaign={**cmeta, "role": role, "publish_week": pc.get("week"),
-                              "content_type": pc.get("content_type")})
+                              "content_type": pc.get("content_type")},
+                    # Per-campaign video plans are opt-in: 'manual' so they surface as options but
+                    # aren't auto-drafted in a batch -- the owner generates the script (+ captions +
+                    # VideoObject schema) and renders the MP4 on click.
+                    execution=("manual" if pc.get("on_click") else None))
 
     # --- Phase 1: owned content for each missing topic + schema ---
     for i, item in enumerate(gap.get("missing_owned_content", []) or []):
@@ -863,7 +870,7 @@ def strategy_view(business_id: int) -> dict:
     # Attach the approach/why to each group and bucket into the three sections.
     sections = {k: {"key": k, "label": _SECTION_LABELS[k], "narrative": _SECTION_NARRATIVE[k], "groups": []}
                 for k in ("ai_visibility", "seo", "search")}
-    _role_rank = {"pillar": 0, "cluster": 1, "comparison": 2}
+    _role_rank = {"pillar": 0, "cluster": 1, "comparison": 2, "video": 3}
     for gkey in order:
         g = groups[gkey]
         appr = approach_idx.get(_norm_q(g.get("source_query")), {})

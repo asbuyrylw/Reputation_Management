@@ -76,6 +76,11 @@ _BURST_PER_CAMPAIGN = int(os.getenv("STRATEGIST_BURST_PER_CAMPAIGN", "4"))  # pi
 _DRIP_PER_WEEK = int(os.getenv("STRATEGIST_DRIP_PER_WEEK", "2"))        # steady-state pace after the burst
 _HORIZON_WEEKS = int(os.getenv("STRATEGIST_HORIZON_WEEKS", "52"))       # a full year of runway
 
+# Video plan (Phase 5): plan a VIDEO option for each campaign's pillar + top N clusters. Each is a
+# ready-to-produce plan (generate -> script + SRT captions + VideoObject schema; render -> MP4 on
+# demand), so video is a big per-campaign part of the mix -- the owner picks which to actually make.
+_VIDEO_CLUSTERS = int(os.getenv("STRATEGIST_VIDEO_CLUSTERS", "3"))
+
 # Business-value weight by search intent (commercial/transactional convert; informational builds the
 # top of funnel). Drives severity ranking so the plan leads with the highest-leverage campaigns.
 _INTENT_WEIGHT = {"commercial": 3, "transactional": 3, "investigational": 3,
@@ -281,6 +286,30 @@ def _assign_cadence(campaigns: list[dict], *, new_domain: bool = False) -> None:
             pc.pop("_placed", None)
 
 
+def _add_video_plan(campaigns: list[dict]) -> None:
+    """Plan a VIDEO option for each campaign's pillar + top clusters (Phase 5). Generating one yields
+    a script + SRT captions + VideoObject schema (content_quality); rendering an MP4 (HeyGen/Veo) is a
+    separate on-demand click. Opt-in (on_click=True) so a LOT of video options surface without being
+    auto-drafted -- the owner picks which to produce. Each video inherits its source piece's cadence
+    week so it sits beside its article."""
+    for camp in campaigns:
+        pieces = camp.get("pieces") or []
+        pillar = next((p for p in pieces if p.get("role") == "pillar"), None)
+        clusters = [p for p in pieces if p.get("role") == "cluster"][:_VIDEO_CLUSTERS]
+        vids = []
+        for src in ([pillar] if pillar else []) + clusters:
+            vids.append({
+                "title": f"Video: {src['title']}", "capability": "explainer_video", "role": "video",
+                "week": src.get("week", 3), "content_type": "video_script",
+                "target_query": src.get("target_query") or src["title"],
+                "why": (f"Explainer video of '{src['title']}' — generate the script + captions + "
+                        f"VideoObject schema, then render an MP4 on demand."),
+                "on_click": True,
+            })
+        pieces.extend(vids)
+        camp["pieces"] = pieces
+
+
 def _postprocess(model: dict, gap: dict) -> dict:
     """Deterministic guards + enrichment over the raw LLM plan: clamp counts, rank campaigns by
     severity (SoV-gap x value), assign each campaign a stable id + cadence-weeked pieces, and cap
@@ -323,8 +352,14 @@ def _postprocess(model: dict, gap: dict) -> dict:
     # Assign the real burst-then-drip cadence across ALL campaigns (mutates each piece's week ->
     # target_date downstream), so a year of content posts out gradually instead of clumping.
     _assign_cadence(out)
+    # Plan per-campaign video options (pillar + top clusters) AFTER cadence, so videos inherit their
+    # source's week and don't perturb the drip.
+    _add_video_plan(out)
+    total_pieces = sum(len(c["pieces"]) for c in out)
+    video_count = sum(1 for c in out for p in c["pieces"] if p.get("role") == "video")
     return {"summary": model.get("summary", ""), "campaigns": out,
-            "counts": {"campaigns": len(out), "pieces": total},
+            "counts": {"campaigns": len(out), "pieces": total_pieces, "content": total,
+                       "videos": video_count},
             "cadence": {"burst_weeks": _BURST_WEEKS, "drip_per_week": _DRIP_PER_WEEK,
                         "horizon_weeks": _HORIZON_WEEKS,
                         "last_week": max((pc["week"] for c in out for pc in c["pieces"]), default=0)}}

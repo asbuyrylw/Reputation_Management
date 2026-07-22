@@ -96,6 +96,20 @@ def test_cadence_burst_then_drip():
     assert s["cadence"]["last_week"] == max(weeks)
 
 
+def test_video_plan_per_campaign():
+    """Every campaign gets VIDEO options (pillar + top clusters) as opt-in explainer_video plans, so
+    video is a big per-campaign part of the mix (not 1 for the whole strategy)."""
+    s = cs._postprocess(_MODEL, _GAP)
+    assert s["counts"]["videos"] >= 2
+    for c in s["campaigns"]:
+        vids = [p for p in c["pieces"] if p["role"] == "video"]
+        assert vids, f"campaign {c['id']} has no video plan"
+        assert all(p["capability"] == "explainer_video" and p.get("on_click") for p in vids)
+        assert len(vids) <= 1 + cs._VIDEO_CLUSTERS          # pillar + up to N clusters
+        # a video sits beside its source article (inherits its cadence week, within the plan range)
+        assert all(isinstance(p["week"], int) for p in vids)
+
+
 def test_postprocess_comparison_piece_for_commercial():
     s = cs._postprocess(_MODEL, _GAP)
     commercial = next(c for c in s["campaigns"] if c["intent"] == "commercial")
@@ -135,6 +149,11 @@ def test_build_work_orders_with_strategy():
     # campaign content pieces are 'content' area -> render in the Content section
     camp_pieces = [w for w in wos if (w.gap_specifics or {}).get("campaign_id")]
     assert camp_pieces and all(w.area == "content" for w in camp_pieces)
+
+    # per-campaign video plans materialize as OPT-IN (manual) explainer_video WOs (generate on click)
+    vids = [w for w in wos if w.capability == "explainer_video"
+            and (w.gap_specifics or {}).get("campaign_id")]
+    assert vids and all(w.execution == "manual" for w in vids)
 
 
 def test_build_work_orders_fallback_without_strategy():
