@@ -3,14 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords, useRenderRichMediaVideo } from "@/lib/hooks";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
-import { VisualContentPanel } from "@/components/VisualContentPanel";
 import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent, ProductionBrief } from "@/lib/types";
 
 // Today as a YYYY-MM-DD string in the local timezone (default for "produced on").
@@ -254,6 +253,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   wo: WorkOrder; draft?: ContentDraft; asset?: Asset; businessId: number | null; canEdit: boolean;
 }) {
   const gen = useGenerateDraftForWo(businessId);
+  const renderVideo = useRenderRichMediaVideo(businessId);
   const genProgram = useGenerateContentBatch(businessId);
   const [showSpec, setShowSpec] = useState(false);
   const brief = useContentBrief(businessId, showSpec ? wo.id : null);
@@ -263,6 +263,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   // A local page-1 GOAL isn't one draftable piece — it needs a PROGRAM (geo page + blogs + FAQ +
   // social) to rank. "Produce content program" generates that multi-piece batch for this gap.
   const isLocalGoal = wo.capability === "local_content_creation";
+  const isVideo = wo.capability === "video_creation" || wo.capability === "explainer_video";
   const localQuery = (wo.gap_specifics?.source_query || wo.title || "").toLowerCase();
   const canDraft = canEdit && DRAFTABLE.has(wo.capability ?? "") && !isLocalGoal && !draft && !asset;
   return (
@@ -320,8 +321,20 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
             onClick={() => gen.mutate({ woId: wo.id })}
             disabled={gen.isPending || gen.isSuccess}
           >
-            {gen.isPending ? "Generating draft…" : gen.isSuccess ? "Draft queued ✓" : "✨ Generate draft"}
+            {gen.isPending ? "Generating…" : gen.isSuccess ? "Queued ✓" : (isVideo ? "✨ Generate video script" : "✨ Generate draft")}
           </Button>
+        )}
+        {/* Video: once the script draft exists, one click sends it to HeyGen to render a real MP4. */}
+        {canEdit && isVideo && draft && !published && (
+          <button
+            type="button"
+            onClick={() => renderVideo.mutate({ draftId: draft.id, provider: "heygen" })}
+            disabled={renderVideo.isPending || renderVideo.isSuccess}
+            className="inline-flex items-center rounded-md bg-indigo px-2.5 py-1 font-semibold text-white hover:bg-indigo-strong disabled:opacity-60"
+            title="Send this video script to HeyGen to render an MP4"
+          >
+            {renderVideo.isPending ? "Sending to HeyGen…" : renderVideo.isSuccess ? "HeyGen render queued ✓" : "▶ Generate with HeyGen"}
+          </button>
         )}
         {canEdit && isLocalGoal && !draft && !asset && (
           <button
@@ -343,13 +356,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
         ) : published ? (
           <Link href="/content/finalized" className="font-medium text-emerald-700 hover:underline">View published →</Link>
         ) : null}
-        {!canDraft && !draft && (wo.capability === "video_creation") && (
-          <span className="text-ink-4">Produce from a recipe below</span>
-        )}
       </div>
-      {/* generate a visual (image / video / quote card) for this content piece — lives here in
-          Content, not on the task board */}
-      <VisualContentPanel businessId={businessId} workOrderId={wo.id} canEdit={canEdit} />
     </Card>
   );
 }
