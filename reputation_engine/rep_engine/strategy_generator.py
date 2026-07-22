@@ -344,16 +344,43 @@ def _phase_for_week(week: int) -> str:
     return PHASES[-1][0]
 
 
-def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
+def _strat_tokens(s: str) -> set[str]:
+    """Significant word tokens for coverage matching between a flat gap item and the strategist's
+    campaign pieces (so we only absorb a gap item a campaign really addresses -- never DROP one it
+    missed)."""
+    return {t for t in _re_tech.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 3}
+
+
+def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
     # Media/press angles must reflect THIS business's geo + industry, never a hardcoded example.
     biz = business or {}
     geo = (biz.get("geo") or "").strip() or "your local area"
     industry = (biz.get("industry") or "").strip() or "local-business"
+    # When the Content Strategist produced a program, its cluster CAMPAIGNS replace the deterministic
+    # one-WO-per-gap owned-content + competitor-defense loops (the strategist read those same gaps and
+    # fanned them into a real multi-piece program). Everything else (baseline, schema, corroboration,
+    # rich-media, social, local page-1, site-technical, monitor) is unchanged. A strategist outage ->
+    # strategy is falsy -> the original template runs, so planning never breaks.
+    has_strategy = bool(strategy and strategy.get("campaigns"))
+    # Topics the strategist's campaigns already cover (token sets of every piece's title + target
+    # query + the campaign topic). We skip a flat gap item ONLY when a campaign actually addresses it
+    # -- an owned-content / competitor gap the strategist MISSED still gets its own task, so the plan
+    # never loses a foundational topic (owner rule: err toward too much content, never too little).
+    _covered_tokens: list[set] = []
+    if has_strategy:
+        for _camp in strategy.get("campaigns", []):
+            _covered_tokens.append(_strat_tokens(_camp.get("topic", "")))
+            for _pc in (_camp.get("pieces") or []):
+                _covered_tokens.append(_strat_tokens(f"{_pc.get('title', '')} {_pc.get('target_query', '')}"))
+
+    def _covered(text: str) -> bool:
+        t = _strat_tokens(text)
+        return bool(t) and any(len(t & c) >= 2 for c in _covered_tokens)
 
     def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
-            source="audited gap", area=None, platform="", source_query=""):
+            source="audited gap", area=None, platform="", source_query="", campaign=None):
         # Foundational Phase-0 tasks (AI-visibility baseline, GBP claim, review sequence) legitimately
         # trace to no single gap, so they default to gap_source='baseline setup' -> the console shows
         # "From: baseline setup" instead of a blank "why". Gap-derived add() calls pass gap_source
@@ -362,6 +389,14 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
         n += 1
         tool = best_tool(capability)
         alts = [t.name for t in registry_for(capability)[1:4]]
+        # source_query links a task to the worst AI query/topic it fixes; campaign (optional) carries
+        # the strategist's campaign linkage (id/role/topic/intent/publish_week) so the strategy view
+        # can group a campaign's pillar + clusters into one tree and the calendar can drip them.
+        specifics = {}
+        if source_query:
+            specifics["source_query"] = source_query
+        if campaign:
+            specifics.update(campaign)
         wos.append(WorkOrder(
             wo_id=f"WO-{n:03d}", title=title, capability=capability,
             execution=(tool.execution.value if tool else "manual"),
@@ -369,14 +404,13 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
             alternatives=alts,
             instruction=instruction, phase=_phase_for_week(week), week=week,
             depends_on=deps or [],
-            rationale={"gap_source": gap_source, "why": why, "source": source},
+            rationale={"gap_source": gap_source, "why": why, "source": source,
+                       **({"campaign_rank": campaign["campaign_rank"]} if campaign and "campaign_rank" in campaign else {})},
             why_helps_ai_rep=_WHY_AI.get(capability, ""),
             why_helps_seo=_WHY_SEO.get(capability, ""),
             area=area or _CAPABILITY_AREA.get(capability, "other"),
             platform=platform,
-            # source_query is the topic/query string the LLM also names in weak_queries[].addressed_by,
-            # so a worst answer can be linked to the exact task that fixes it.
-            gap_specifics={"source_query": source_query} if source_query else {},
+            gap_specifics=specifics,
         ))
 
     # --- Phase 0: fast wins (reviews, tracking baseline, one explainer) ---
@@ -389,6 +423,31 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
         "Verify GBP; complete categories, services, photos, NAP consistency; enable reviews.", 1,
         area="local", platform="gbp")
 
+    # --- Content Strategist PROGRAM: the multi-piece content campaigns (pillar + clusters + comparison)
+    # that REPLACE the old 1-WO-per-gap owned-content + competitor-defense loops. Each piece is a real,
+    # draftable content asset; campaign metadata rides in gap_specifics so the strategy view groups a
+    # campaign's pillar + clusters into one tree and the calendar can drip them by publish_week. A
+    # constant gap_source + the per-piece target_query keep each task's identity stable across re-plans
+    # (sync_plan keys on capability|gap_source|source_query), independent of the rank-based campaign id.
+    if has_strategy:
+        for camp in strategy.get("campaigns", []):
+            cmeta = {"campaign_id": camp.get("id"), "campaign_topic": camp.get("topic"),
+                     "campaign_intent": camp.get("intent"), "campaign_rank": camp.get("priority_rank", 0),
+                     "funnel_stage": camp.get("funnel_stage")}
+            for pc in (camp.get("pieces") or []):
+                title = pc.get("title") or camp.get("topic") or "Content piece"
+                role = pc.get("role") or "cluster"
+                add(title, pc.get("capability") or "content_writing",
+                    f"{pc.get('why') or camp.get('why') or ''} This is the {role} of the "
+                    f"'{camp.get('topic')}' content campaign — a {pc.get('content_type') or 'article'} "
+                    f"answering: {pc.get('target_query') or title}. Draft via engine-native LLM; "
+                    f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}",
+                    int(pc.get("week") or 3),
+                    gap_source="content strategy", why=pc.get("why") or camp.get("why") or "",
+                    source_query=pc.get("target_query") or title,
+                    campaign={**cmeta, "role": role, "publish_week": pc.get("week"),
+                              "content_type": pc.get("content_type")})
+
     # --- Phase 1: owned content for each missing topic + schema ---
     for i, item in enumerate(gap.get("missing_owned_content", []) or []):
         topic = item.get("topic", f"topic {i+1}")
@@ -396,11 +455,17 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
         why = item.get("why", "")
         # Some LLM-emitted "missing content" items are really TECHNICAL site work (internal-link audit,
         # alt-text/image audit, page-speed) -- route those to technical_seo so they land on the website-
-        # fixes board, not the content section as a fake article.
+        # fixes board, not the content section as a fake article. (This runs even WITH a strategist plan
+        # so technical items still reach the website-fixes board; only the CONTENT branch is absorbed.)
         if _TECHNICAL_TOPIC_RE.search(f"{topic} {atype}"):
             add(f"Fix site: {topic}", "technical_seo",
                 f"On-site technical work: {why or topic}. Not a draftable article -- implement on the "
                 f"website (dev/SEO task).", 3, gap_source="audited gap: site technical", why=why)
+            continue
+        # When a strategist campaign already COVERS this topic, skip the flat 1-per-gap content task
+        # (the campaign produced a pillar + clusters for it). A topic no campaign covers still gets
+        # its own task -- never dropped.
+        if has_strategy and _covered(f"{topic} {atype}"):
             continue
         cap = "video_creation" if "video" in atype.lower() else "content_writing"
         add(f"Create owned asset: {topic}", cap,
@@ -496,8 +561,13 @@ def build_work_orders(gap: dict, business=None) -> list[WorkOrder]:
             gap_source="local search ranking", why=g.get("why", ""), source_query=q)
 
     # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
+    # Absorbed into the strategist's campaigns when one COVERS the query (comparison / defense
+    # content); an uncovered query still gets its own task, and the flat loop is the no-strategist
+    # fallback.
     for i, g in enumerate(gap.get("competitor_defense", []) or []):
         q = g.get("query", f"query {i + 1}")
+        if has_strategy and _covered(q):
+            continue
         rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
         add(f"Compete for '{q}'", "content_writing",
             f"{rec} A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.", 4,
@@ -549,8 +619,12 @@ def _is_degraded(gap: dict) -> bool:
     return not any((gap or {}).get(k) for k in _GAP_CONTENT_KEYS)
 
 
-def assemble_plan(business: dict, gap: dict, start: date) -> dict:
-    wos = build_work_orders(gap, business)
+def assemble_plan(business: dict, gap: dict, start: date, strategy: Optional[dict] = None) -> dict:
+    # strategy (optional ContentStrategy from content_strategist.plan): when present its cluster
+    # campaigns drive the content work orders (a real multi-piece program) instead of the flat
+    # 1-per-gap template. Campaign severity is already encoded as earlier cadence weeks, so the
+    # within-phase ROI sort below is unchanged.
+    wos = build_work_orders(gap, business, strategy=strategy)
     bid = business.get("id")
     for w in wos:
         w_start = start + timedelta(weeks=w.week)
@@ -721,17 +795,35 @@ def strategy_view(business_id: int) -> dict:
     gap = {} if not gm else (gm["model"] if isinstance(gm["model"], dict) else json.loads(gm["model"]))
     approach_idx = _gap_approach_index(gap)
 
-    # Group work orders by the gap they close: (source_query) when present, else (gap_source|title).
+    # Group work orders by the gap they close. A Content Strategist CAMPAIGN groups by its campaign_id
+    # so its pillar + clusters render as ONE tree; everything else groups by (source_query) when
+    # present, else (gap_source|title) -- the prior behavior.
     groups: dict = {}
     order: list = []
     for w in rows:
         w = dict(w)
-        specs_q = (w.get("gap_specifics") or {}).get("source_query") if isinstance(w.get("gap_specifics"), dict) else None
-        gkey = _norm_q(specs_q) or f"{(w.get('gap_source') or '').lower()}|{_norm_q(w.get('title'))}"
+        gspec = w.get("gap_specifics") if isinstance(w.get("gap_specifics"), dict) else {}
+        specs_q = gspec.get("source_query")
+        camp_id = gspec.get("campaign_id")
+        if camp_id:
+            gkey = f"campaign|{camp_id}"
+        else:
+            gkey = _norm_q(specs_q) or f"{(w.get('gap_source') or '').lower()}|{_norm_q(w.get('title'))}"
         if gkey not in groups:
-            groups[gkey] = {"source_query": specs_q, "gap_source": w.get("gap_source"),
-                            "section": _section_for(w.get("gap_source"), w.get("capability"), w.get("area")),
-                            "tasks": [], "specs": []}
+            if camp_id:
+                # A campaign is one coherent content unit -> keep its pillar+clusters in ONE section
+                # (local campaigns land in Search, everything else in AI Visibility) so the tree
+                # isn't split across sections.
+                c_intent = (gspec.get("campaign_intent") or "").lower()
+                section = "search" if c_intent == "local" else "ai_visibility"
+                groups[gkey] = {"source_query": specs_q, "gap_source": w.get("gap_source"),
+                                "section": section, "tasks": [], "specs": [],
+                                "campaign": {"id": camp_id, "topic": gspec.get("campaign_topic"),
+                                             "intent": c_intent, "funnel_stage": gspec.get("funnel_stage")}}
+            else:
+                groups[gkey] = {"source_query": specs_q, "gap_source": w.get("gap_source"),
+                                "section": _section_for(w.get("gap_source"), w.get("capability"), w.get("area")),
+                                "tasks": [], "specs": []}
             order.append(gkey)
         g = groups[gkey]
         rationale = w.get("rationale") if isinstance(w.get("rationale"), dict) else {}
@@ -741,6 +833,9 @@ def strategy_view(business_id: int) -> dict:
             "platform": w.get("platform"), "instruction": w.get("instruction") or "",
             "target_date": w["target_date"].isoformat() if w.get("target_date") else None,
             "predicted_ai_points": float(w["predicted_ai_points"]) if w.get("predicted_ai_points") is not None else None,
+            # role (pillar/cluster/comparison) + cadence week for a campaign piece, so the FE can render
+            # the pillar->cluster tree in publish order.
+            "role": gspec.get("role"), "publish_week": gspec.get("publish_week"),
             "why": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or rationale.get("why") or "",
         })
         # Content work orders get their concrete production spec (deterministic; no LLM).
@@ -768,16 +863,28 @@ def strategy_view(business_id: int) -> dict:
     # Attach the approach/why to each group and bucket into the three sections.
     sections = {k: {"key": k, "label": _SECTION_LABELS[k], "narrative": _SECTION_NARRATIVE[k], "groups": []}
                 for k in ("ai_visibility", "seo", "search")}
+    _role_rank = {"pillar": 0, "cluster": 1, "comparison": 2}
     for gkey in order:
         g = groups[gkey]
         appr = approach_idx.get(_norm_q(g.get("source_query")), {})
         # The approach ("how we close this") comes from the current gap model when its wording still
         # matches; otherwise fall back to the work order's own stored instruction, which is stable
         # across gap-model regenerations and was itself written from the gap at creation time.
-        primary = g["tasks"][0] if g["tasks"] else {}
-        g["approach"] = appr.get("approach") or primary.get("instruction", "")
-        g["why"] = appr.get("why") or primary.get("why", "")
-        g["title"] = g.get("source_query") or primary.get("title", "Task")
+        camp = g.get("campaign")
+        if camp:
+            # Order a campaign's pieces pillar-first, then clusters by cadence week -- so the tree
+            # reads top-down. The campaign's headline is its topic, not a single piece's title.
+            g["tasks"].sort(key=lambda t: (_role_rank.get((t.get("role") or "cluster"), 1),
+                                           t.get("publish_week") or 99))
+            primary = g["tasks"][0] if g["tasks"] else {}
+            g["title"] = camp.get("topic") or primary.get("title", "Content campaign")
+            g["approach"] = appr.get("approach") or primary.get("instruction", "")
+            g["why"] = appr.get("why") or primary.get("why", "")
+        else:
+            primary = g["tasks"][0] if g["tasks"] else {}
+            g["approach"] = appr.get("approach") or primary.get("instruction", "")
+            g["why"] = appr.get("why") or primary.get("why", "")
+            g["title"] = g.get("source_query") or primary.get("title", "Task")
         sections[g["section"]]["groups"].append(g)
     # Same degraded signal assemble_plan flags: if the gap model carries no gap-derived content, the
     # Strategy page is baseline boilerplate -- tell the client to re-run, don't present it as finished.
@@ -820,7 +927,20 @@ def _latest_gap(business_id: int) -> tuple[dict, dict]:
 def plan_cmd(business_id: int, start: Optional[str]) -> None:
     business, gap = _latest_gap(business_id)
     start_date = date.fromisoformat(start) if start else date.today()
-    plan = assemble_plan(business, gap, start_date)
+    # Content Strategist (Phase 1): turn the gap model + keyword/cluster signals + profile into a
+    # prioritized content PROGRAM (cluster campaigns) that drives the content work orders. Fail-safe:
+    # any failure / disabled / over-budget -> {} and assemble_plan falls back to the deterministic
+    # template, so planning never breaks on a strategist outage.
+    try:
+        from . import content_strategist as _cs
+    except ImportError:  # pragma: no cover -- loose-script fallback
+        import content_strategist as _cs  # type: ignore
+    try:
+        strategy = _cs.plan(business_id, gap, business=business) or {}
+    except Exception as e:  # noqa: BLE001 -- the strategist must never break planning
+        log.warning("content strategist failed (%s); using the deterministic template.", e)
+        strategy = {}
+    plan = assemble_plan(business, gap, start_date, strategy=strategy)
     # persist
     with db() as conn:
         conn.execute(
@@ -829,10 +949,23 @@ def plan_cmd(business_id: int, start: Optional[str]) -> None:
         )
         conn.execute("INSERT INTO strategy_plans (business_id, plan) VALUES (%s,%s)",
                      (business_id, json.dumps(plan)))
+        # Persist the ContentStrategy as a first-class object so the strategy view can render the
+        # campaign tree and the Phase-4 re-plan loop can diff against it. Inline CREATE mirrors
+        # strategy_plans -- no separate migration file needed.
+        if strategy.get("campaigns"):
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS content_strategies ("
+                "id BIGSERIAL PRIMARY KEY, business_id BIGINT, strategy JSONB, "
+                "created_at TIMESTAMPTZ DEFAULT now())")
+            conn.execute("INSERT INTO content_strategies (business_id, strategy) VALUES (%s,%s)",
+                         (business_id, json.dumps(strategy)))
         conn.commit()
     print(json.dumps(plan, indent=2))
-    log.info("Plan: %d work orders (%d auto / %d human)",
-             plan["counts"]["total"], plan["counts"]["auto"], plan["counts"]["human"])
+    log.info("Plan: %d work orders (%d auto / %d human)%s",
+             plan["counts"]["total"], plan["counts"]["auto"], plan["counts"]["human"],
+             (f"; strategist: {strategy['counts']['campaigns']} campaigns / "
+              f"{strategy['counts']['pieces']} pieces") if strategy.get("campaigns")
+             else " (deterministic template)")
 
 
 def tools_cmd() -> None:
