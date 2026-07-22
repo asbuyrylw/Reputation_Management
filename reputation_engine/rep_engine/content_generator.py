@@ -1742,24 +1742,34 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
 
 
 def generate(business_id: int, only_wo: Optional[int] = None,
-             content_type: Optional[str] = None) -> list[int]:
+             content_type: Optional[str] = None,
+             due_within_days: Optional[int] = None) -> list[int]:
     """Generate drafts for the auto content work orders of the latest plan.
-    Pulls work orders from the tracking table if present, else from the plan JSON."""
+    Pulls work orders from the tracking table if present, else from the plan JSON.
+
+    due_within_days (JIT, Phase 3): when set, generate ONLY content pieces whose cadence slot
+    (target_date) is within that many days and that aren't drafted yet -- so 'plan a year, generate
+    just-in-time' works (each piece drafts ~a week before it publishes, not all at once)."""
     with db() as conn:
         biz = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz:
             raise SystemExit(f"No business id {business_id}")
         wos = []
-        # prefer tracked work orders (they carry status + db id)
+        # prefer tracked work orders (they carry status + db id). target_date/status/has_draft are
+        # read so the JIT (due_within_days) mode can pick only near-due, not-yet-drafted pieces.
         try:
             rows = conn.execute(
-                "SELECT id, wo_code, title, capability, execution, instruction "
+                "SELECT id, wo_code, title, capability, execution, instruction, status, target_date, "
+                "COALESCE(superseded, false) AS superseded, "
+                "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id=work_orders.id) AS has_draft "
                 "FROM work_orders WHERE business_id=%s", (business_id,)
             ).fetchall()
             for r in rows:
                 wos.append({"_db_id": r["id"], "wo_code": r["wo_code"], "title": r["title"],
                             "capability": r["capability"], "execution": r["execution"],
-                            "instruction": r["instruction"]})
+                            "instruction": r["instruction"], "status": r.get("status"),
+                            "target_date": r.get("target_date"), "superseded": r.get("superseded"),
+                            "has_draft": r.get("has_draft")})
         except Exception as e:  # noqa: BLE001
             # Don't silently fall through to plan-JSON work orders (which lack _db_id, so drafts
             # generate WITHOUT work-order linkage and approve() can't advance the WO) with no trace.
@@ -1788,6 +1798,21 @@ def generate(business_id: int, only_wo: Optional[int] = None,
     for wo in wos:
         if only_wo and wo.get("_db_id") != only_wo:
             continue
+        # JIT filter (due_within_days): draft ONLY near-due, not-yet-drafted, still-open pieces --
+        # so the year's plan generates gradually into each drip slot, under the budget cap, instead
+        # of drafting all 50+ pieces up front.
+        if due_within_days is not None:
+            if wo.get("superseded") or wo.get("has_draft"):
+                continue
+            if (wo.get("status") or "pending") not in ("pending", "in_progress"):
+                continue
+            td = wo.get("target_date")
+            if not td:
+                continue
+            import datetime as _dt
+            _sd = td if isinstance(td, _dt.date) else _dt.date.fromisoformat(str(td)[:10])
+            if _sd > _dt.date.today() + _dt.timedelta(days=due_within_days):
+                continue
         # only attempt auto-executable content work orders
         if (wo.get("execution") or "auto") not in ("auto", "semi"):
             continue
@@ -1857,9 +1882,16 @@ def _publish_channels_for(asset_type: Optional[str], surface: Optional[str]) -> 
     return []
 
 
-def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None) -> None:
+def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None,
+            publish_now: bool = False) -> None:
     """Approve a draft and promote it into the assets table (the only path to
     'published' state). Human action only.
+
+    Cadence-aware publishing (Phase 3): if the linked work order has a FUTURE target_date (its
+    drip slot on the content calendar), the publish target is SCHEDULED for that date rather than
+    posted immediately -- so a year of approved content posts out gradually on its own. Pieces whose
+    slot is now/past publish immediately (prior behavior), and publish_now=True forces immediate
+    publishing regardless of the schedule. Purely a scheduling change; the drain does the posting.
 
     Records an immutable compliance sign-off (approver, verdict, flags, body hash) for the
     regulatory recordkeeping requirement. A draft that was never compliance-screened
@@ -1966,11 +1998,31 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None)
                 from .publishing import runner as _pub_runner
             except ImportError:  # pragma: no cover -- loose-script fallback
                 from publishing import runner as _pub_runner  # type: ignore
+            # Cadence-aware schedule: publish on the work order's target_date (its drip slot) when that
+            # is in the future; otherwise (no WO / past-due / publish_now) post immediately. This is
+            # what makes a year of approved content post out gradually instead of all at once.
+            scheduled_for = None
+            if not publish_now and d.get("work_order_id"):
+                import datetime as _dt
+                try:
+                    with db() as _c2:
+                        _wr = _c2.execute("SELECT target_date FROM work_orders WHERE id=%s",
+                                          (d["work_order_id"],)).fetchone()
+                    _td = _wr.get("target_date") if _wr else None
+                    if _td:
+                        _sd = _td if isinstance(_td, _dt.date) else _dt.date.fromisoformat(str(_td)[:10])
+                        if _sd > _dt.date.today():
+                            scheduled_for = _dt.datetime.combine(_sd, _dt.time(9, 0))
+                except Exception as _e:  # noqa: BLE001 -- date lookup must never block approve
+                    log.debug("approve: cadence date lookup skipped for wo %s: %s",
+                              d.get("work_order_id"), _e)
             res = _pub_runner.create_targets(
-                d["business_id"], asset["id"], channels, work_order_id=d["work_order_id"])
+                d["business_id"], asset["id"], channels, work_order_id=d["work_order_id"],
+                scheduled_for=scheduled_for)
             if res.get("created"):
-                log.info("approve: queued %d publish target(s) for asset %d (%s)",
-                         len(res["created"]), asset["id"], ", ".join(channels))
+                log.info("approve: %s %d publish target(s) for asset %d (%s)",
+                         ("scheduled" if scheduled_for else "queued"), len(res["created"]),
+                         asset["id"], ", ".join(channels))
     except Exception as e:  # noqa: BLE001 -- publishing is best-effort; approve already committed
         log.warning("approve: create_targets skipped for asset %d: %s", asset["id"], e)
 

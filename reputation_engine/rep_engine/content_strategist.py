@@ -71,8 +71,8 @@ _MAX_TOTAL_PIECES = int(os.getenv("STRATEGIST_MAX_PIECES", "150"))
 # Cadence (Phase 2): front-loaded cluster BURSTS then a governed DRIP -- the research-backed pattern
 # (dump the foundational network fast, then steady ~2/week so content posts out gradually over a
 # year). Every knob env-overridable. A new domain drips slower (spam-safety / indexation headroom).
-_BURST_WEEKS = int(os.getenv("STRATEGIST_BURST_WEEKS", "4"))            # the initial-dump window
-_BURST_PER_CAMPAIGN = int(os.getenv("STRATEGIST_BURST_PER_CAMPAIGN", "5"))  # pillar + first clusters
+_BURST_WEEKS = int(os.getenv("STRATEGIST_BURST_WEEKS", "6"))            # the initial-dump window
+_BURST_PER_CAMPAIGN = int(os.getenv("STRATEGIST_BURST_PER_CAMPAIGN", "4"))  # pillar + first clusters
 _DRIP_PER_WEEK = int(os.getenv("STRATEGIST_DRIP_PER_WEEK", "2"))        # steady-state pace after the burst
 _HORIZON_WEEKS = int(os.getenv("STRATEGIST_HORIZON_WEEKS", "52"))       # a full year of runway
 

@@ -179,6 +179,15 @@ def _run_generate_drafts(business_id: int, args: dict):
     return {"created": created or []}
 
 
+def _run_generate_due(business_id: int, args: dict):
+    """JIT content generation (Phase 3): draft ONLY the content pieces whose cadence slot is within
+    args.days (default 7) and that aren't drafted yet -- budget-capped inside generate(). This is what
+    makes 'plan a year, generate just-in-time' real: each piece drafts ~a week before its drip slot,
+    not all 50+ up front. Safe to run daily/weekly; idempotent (skips already-drafted pieces)."""
+    created = _imp("content_generator").generate(business_id, due_within_days=int(args.get("days", 7)))
+    return {"created": created or []}
+
+
 def _run_generate_content_batches(business_id: int, args: dict):
     """Gap-driven BATCH content: for each open content gap, produce MULTIPLE types (blog, article,
     white paper, social) at once and snapshot the gap's baseline Share-of-Voice for later impact
@@ -494,6 +503,7 @@ JOB_DISPATCH = {
     "plan": _run_plan,
     "sync_plan": _run_sync_plan,
     "generate_drafts": _run_generate_drafts,
+    "generate_due": _run_generate_due,               # JIT: draft only near-due cadence pieces
     "generate_content_batches": _run_generate_content_batches,
     "generate_clusters": _run_generate_clusters,
     "render_video": _run_render_video,
@@ -679,7 +689,7 @@ def enqueue(business_id: int, job_type: str, requested_by: Optional[int] = None,
 # observability signal only -- some 0-output runs (e.g. nothing new to do) are legitimately empty, so
 # we never flip status to failed here.
 _OUTPUT_PRODUCING_JOBS = frozenset({
-    "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "keyword_research",
+    "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "generate_due", "keyword_research",
     "production_briefs", "citation_analyze", "benchmark", "local_rank", "generate_content_batches",
     "ingest_source_material",
 })
