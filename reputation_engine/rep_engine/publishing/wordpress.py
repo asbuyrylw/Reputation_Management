@@ -49,6 +49,10 @@ class WordPressPublisher:
         if not site:
             return PublishResult(status="failed", error="site URL missing/non-https/blocked", retryable=False)
         content = payload.body_html or payload.body_markdown or payload.text or ""
+        # Structured data (Phase 5B): append the JSON-LD <script> so the published page carries
+        # schema.org markup (Article/FAQPage/VideoObject/LocalBusiness) per Google's SD guides.
+        if payload.schema_jsonld:
+            content = f"{content}\n\n{payload.schema_jsonld}"
         body: dict = {"title": payload.title or "(untitled)", "content": content}
         if payload.scheduled_at:
             # WP expects an ISO datetime *without* trailing 'Z' in date_gmt; strip if present.

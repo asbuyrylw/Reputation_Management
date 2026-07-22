@@ -279,10 +279,14 @@ def _load_payload(business_id: int, target: dict):
             network=target.get("network") or "_",
             idempotency_key=target.get("idempotency_key") or "", scheduled_at=scheduled_at)
     else:
+        # Structured data (Phase 5B): the JSON-LD <script> block computed at approve() is stored on
+        # the asset meta; carry it so the article adapter can inject it into the published page.
+        schema = meta.get("schema_jsonld") if isinstance(meta, dict) else None
         payload = PublishPayload(
             kind="article", title=asset.get("title"), body_markdown=body,
             network=target.get("network") or "_",
-            idempotency_key=target.get("idempotency_key") or "", scheduled_at=scheduled_at)
+            idempotency_key=target.get("idempotency_key") or "", scheduled_at=scheduled_at,
+            schema_jsonld=schema or None)
     return payload, dict(asset)
 
 

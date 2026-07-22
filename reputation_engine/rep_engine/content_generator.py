@@ -1958,12 +1958,34 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None,
         # published_at is set EXPLICITLY (not left to the column DEFAULT) so an approved owned asset
         # reliably carries a produced-on timestamp the score/activity queries count -- the dashboard
         # "published this period" rollup, the freshness sweep, and traffic attribution all read it.
+        # Structured data (Phase 5B): build the JSON-LD (Article/FAQPage/VideoObject/LocalBusiness)
+        # for this asset and store it on the asset meta so the publish path injects a
+        # <script type="application/ld+json"> into the page (Google structured-data guides).
+        # Deterministic + fail-safe: a schema error must never block an approval.
+        _meta = {"from_draft": draft_id}
+        try:
+            from . import content_schema as _cs
+            from . import business_profile as _bp2
+            import datetime as _dt2
+            _bz = dict(conn.execute("SELECT name, domain, geo FROM businesses WHERE id=%s",
+                                    (d["business_id"],)).fetchone() or {})
+            try:
+                _byline = (_bp2.for_business(d["business_id"]) or {}).get("byline_reviewer") or None
+            except Exception:  # noqa: BLE001
+                _byline = None
+            _script = _cs.to_script(_cs.build_jsonld(
+                d.get("asset_type") or "article", d.get("title") or "", d.get("body") or "", _bz,
+                byline=_byline, published_at=_dt2.date.today().isoformat(), geo=(_bz.get("geo") or "")))
+            if _script:
+                _meta["schema_jsonld"] = _script
+        except Exception as e:  # noqa: BLE001 -- schema is best-effort; never block approve
+            log.debug("approve: schema build skipped for draft %s: %s", draft_id, e)
         asset = conn.execute(
             """INSERT INTO assets (business_id, work_order_id, asset_type, title, surface, meta,
                                    summary, published_status, compliance_pass, body_hash, published_at)
                VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s, now()) RETURNING id""",
             (d["business_id"], d["work_order_id"], d["asset_type"], d["title"],
-             "own_site", json.dumps({"from_draft": draft_id}), summary, d.get("compliance_pass"), body_hash),
+             "own_site", json.dumps(_meta), summary, d.get("compliance_pass"), body_hash),
         ).fetchone()
         conn.execute(
             "UPDATE content_drafts SET status='approved', reviewer=%s, reviewed_at=now(), "

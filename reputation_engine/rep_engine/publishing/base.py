@@ -41,6 +41,7 @@ class PublishPayload:
     scheduled_at: Optional[str] = None   # ISO8601 UTC; None = publish now
     network: str = "_"
     idempotency_key: str = ""
+    schema_jsonld: Optional[str] = None  # a <script type="application/ld+json"> block to inject (Phase 5B)
 
 
 @dataclass(frozen=True)
