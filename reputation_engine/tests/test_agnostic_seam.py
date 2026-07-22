@@ -120,6 +120,18 @@ def test_gen_exemplars_gated():
     assert cg.GEN_SYSTEM == cg._gen_system()
 
 
+def test_gen_google_grounding_present_and_agnostic():
+    """Phase 5D: the generator prompt encodes Google's helpful-content + E-E-A-T + gen-AI-content
+    guidance for BOTH a generic and a finance tenant (agnostic grounding, not finance-specific)."""
+    from rep_engine import content_generator as cg
+    for sysp in (cg._gen_system(""), cg._gen_system(" LIC", regulated_financial=True)):
+        low = sysp.lower()
+        assert "e-e-a-t" in low
+        assert "helpful-content" in low
+        assert "scaled-content" in low or "gen-ai-content" in low
+        assert "anchor text" in low
+
+
 def test_byline_profile_driven():
     from rep_engine import content_generator as cg
     body = "# Title\n\nEnough body text to place a byline under the heading."

@@ -269,6 +269,19 @@ _GEN_SYSTEM_BASE = (
     "at a grade 6-8 level (grade 10-12 only for a white paper) -- short sentences (~15-20 words average), "
     "active voice, one idea per paragraph (<=150 words), scannable with descriptive headings, bullets, "
     "and tables. "
+    # --- Google helpful-content + E-E-A-T + gen-AI-content policy (rater guidelines + Search Essentials)
+    "GOOGLE HELPFUL-CONTENT + E-E-A-T (people-first, per Google's creating-helpful-content + "
+    "search-quality-rater guidelines): write for a PERSON who needs this, not for a search engine. "
+    "Demonstrate E-E-A-T — (Experience) specific, first-hand detail only someone who actually does this "
+    "would know; (Expertise) correct, sufficient depth; (Authoritativeness) name the business + its "
+    "credentials and cite authoritative sources; (Trust) transparent and honest, with no exaggerated or "
+    "unsupported claims. Satisfy the reader's intent so completely they need not search again — leave no "
+    "obvious question unanswered. This must be ORIGINAL, genuinely useful content grounded in THIS "
+    "business's real facts — never thin, templated, mass-produced, or written mainly to rank (Google's "
+    "scaled-content-abuse and gen-AI-content policies reward helpful original content and act against the "
+    "opposite; AI assistance is fine, low-value output is not). For internal links, use DESCRIPTIVE anchor "
+    "text naming the linked page's topic (never 'click here'/'read more'), and place each image directly "
+    "beside the text it illustrates. "
     "Output ONLY the asset content -- no preamble."
 )
 
