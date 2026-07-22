@@ -1704,6 +1704,40 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     if status == "needs_fix":
         status = "held"
 
+    # Phase 5C: auto-generate the images the writer marked (![alt](IMAGE: prompt)) and inline their
+    # real URLs, with descriptive filenames + alt text (image SEO). Dormant-safe (no provider key ->
+    # markers left as-is) and budget-capped. The generated {url, alt} list rides in quality_notes so
+    # approve() can emit ImageObject schema for them.
+    try:
+        import re as _re_img
+        from . import visual_content as _vc_img
+        if _vc_img.image_configured():
+            _imgs: list[dict] = []
+            _cap = int(os.getenv("CONTENT_MAX_IMAGES", "3"))
+
+            def _mk_img(m):
+                _alt, _p = m.group(1).strip(), m.group(2).strip()
+                if len(_imgs) >= _cap or llm.cost.over_budget(business_id):
+                    return m.group(0)  # leave the marker; a later run / manual gen can fill it
+                try:
+                    _r = _vc_img.generate_image(business_id, _p, kind="content_image",
+                                                work_order_id=wo.get("_db_id"), alt=_alt or None)
+                except Exception:  # noqa: BLE001
+                    return m.group(0)
+                _u = _r.get("url") if isinstance(_r, dict) else None
+                if not _u:
+                    return m.group(0)
+                _imgs.append({"url": _u, "alt": _alt})
+                return f"![{_alt}]({_u})"
+
+            _new = _re_img.sub(r"!\[([^\]]*)\]\(\s*IMAGE:\s*([^)]+)\)", _mk_img, body)
+            if _imgs:
+                body = _new
+                quality_notes["images"] = _imgs
+                content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
+    except Exception as e:  # noqa: BLE001 -- image generation must never break drafting
+        log.debug("inline image generation skipped: %s", e)
+
     _ensure_table()
     with db() as conn:
         row = conn.execute(
@@ -1973,9 +2007,11 @@ def approve(draft_id: int, reviewer: str, override_reason: Optional[str] = None,
                 _byline = (_bp2.for_business(d["business_id"]) or {}).get("byline_reviewer") or None
             except Exception:  # noqa: BLE001
                 _byline = None
+            _imgs = (d.get("quality_notes") or {}).get("images") if isinstance(d.get("quality_notes"), dict) else None
             _script = _cs.to_script(_cs.build_jsonld(
                 d.get("asset_type") or "article", d.get("title") or "", d.get("body") or "", _bz,
-                byline=_byline, published_at=_dt2.date.today().isoformat(), geo=(_bz.get("geo") or "")))
+                byline=_byline, published_at=_dt2.date.today().isoformat(), geo=(_bz.get("geo") or ""),
+                images=_imgs))
             if _script:
                 _meta["schema_jsonld"] = _script
         except Exception as e:  # noqa: BLE001 -- schema is best-effort; never block approve

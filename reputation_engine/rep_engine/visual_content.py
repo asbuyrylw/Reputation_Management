@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from typing import Optional
@@ -236,10 +237,20 @@ def _persist(business_id: int, *, kind: str, provider: Optional[str], model: Opt
     return int(row["id"])
 
 
+def _img_slug(s: str) -> str:
+    """A descriptive, SEO-friendly image filename stem from the alt text / prompt (Google image
+    guides: descriptive filenames, not image.png)."""
+    base = re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:60]
+    return base or "image"
+
+
 def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: str = "1024x1024",
-                   work_order_id: Optional[int] = None, draft_id: Optional[int] = None) -> dict:
+                   work_order_id: Optional[int] = None, draft_id: Optional[int] = None,
+                   alt: Optional[str] = None, filename: Optional[str] = None) -> dict:
     """Generate one AI image via the configured provider, apply the compliance policy, and persist a
-    human-gated visual_assets row. Keyless-safe: returns {skipped} if no provider key is set."""
+    human-gated visual_assets row. Keyless-safe: returns {skipped} if no provider key is set.
+    `alt`/`filename` add image-SEO metadata (descriptive filename + alt text) and are returned so the
+    caller can inline `![alt](url)` and emit ImageObject schema."""
     if not image_configured():
         return {"skipped": True, "reason": "no image provider key set (IMAGE_API_KEY / OPENAI_API_KEY)"}
     policy, note = _image_policy(business_id)
@@ -262,9 +273,10 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
         return {"ok": False, "error": str(e)}
     if not raw:
         return {"ok": False, "error": "provider returned no image"}
-    skey, purl, path, fbytes = _store_bytes(business_id, raw, "image.png", "image/png")
+    fname = (filename or _img_slug(alt or prompt)) + ".png"
+    skey, purl, path, fbytes = _store_bytes(business_id, raw, fname, "image/png")
     vid = _persist(business_id, kind=kind, provider=provider, model=model, prompt=full_prompt,
-                   file_path=path, url=None, compliance_note=note,
+                   file_path=path, url=None, compliance_note=note, meta=({"alt": alt} if alt else None),
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="image/png",
                    storage_key=skey, public_url=purl)
     try:  # itemized cost: one generated image (best-effort)
@@ -274,8 +286,8 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
                           detail={"content_type": kind, "api": provider})
     except Exception:  # noqa: BLE001
         pass
-    return {"ok": True, "visual_id": vid, "file_path": path, "provider": provider, "model": model,
-            "compliance_note": note}
+    return {"ok": True, "visual_id": vid, "file_path": path, "url": purl, "alt": alt or "",
+            "provider": provider, "model": model, "compliance_note": note}
 
 
 def _openai_image(prompt: str, model: str, size: str) -> Optional[bytes]:

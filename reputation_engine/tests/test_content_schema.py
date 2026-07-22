@@ -33,6 +33,12 @@ def test_blogposting_type():
     assert objs[0]["@type"] == "BlogPosting"
 
 
+def test_article_carries_generated_images():
+    objs = cs.build_jsonld("article", "T", "body", BIZ,
+                           images=[{"url": "https://acmelife.com/img/term-life.png", "alt": "chart"}])
+    assert objs[0]["image"] == ["https://acmelife.com/img/term-life.png"]
+
+
 def test_faqpage_when_qa_present():
     body = ("## What is term life insurance?\nIt is coverage for a set term of years that pays a "
             "benefit if you pass away during it.\n\n## How much does it cost?\nPremiums depend on age, "
