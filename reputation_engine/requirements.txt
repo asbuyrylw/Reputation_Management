@@ -35,3 +35,6 @@ playwright>=1.45       # Citation/directory-listing automation (rep_engine.citat
                        # pausing for a human confirm before any submit-like click. Only imported when a
                        # citation run is triggered; the app runs fine without the Chromium binary
                        # installed (citation_builder.configured() reports it, dormant otherwise).
+markdown>=3.5           # Markdown -> clean HTML for publishing (rep_engine.content_html); the
+                       # WordPress content field is HTML, so drafts are converted before publish.
+                       # Fail-safe: a dependency-free fallback handles it if the pkg is absent.

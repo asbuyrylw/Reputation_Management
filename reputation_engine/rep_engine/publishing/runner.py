@@ -282,8 +282,16 @@ def _load_payload(business_id: int, target: dict):
         # Structured data (Phase 5B): the JSON-LD <script> block computed at approve() is stored on
         # the asset meta; carry it so the article adapter can inject it into the published page.
         schema = meta.get("schema_jsonld") if isinstance(meta, dict) else None
+        # Channel formatting: the WordPress `content` field is HTML, so convert the Markdown draft to
+        # clean HTML (headings/lists/tables/bold/links/images) -- otherwise the raw Markdown renders as
+        # literal text on the blog. Fail-safe: to_html never raises; body_markdown stays as a fallback.
+        try:
+            from .. import content_html as _chtml
+        except ImportError:  # pragma: no cover
+            import content_html as _chtml  # type: ignore
+        body_html = _chtml.to_html(body) or None
         payload = PublishPayload(
-            kind="article", title=asset.get("title"), body_markdown=body,
+            kind="article", title=asset.get("title"), body_html=body_html, body_markdown=body,
             network=target.get("network") or "_",
             idempotency_key=target.get("idempotency_key") or "", scheduled_at=scheduled_at,
             schema_jsonld=schema or None)
