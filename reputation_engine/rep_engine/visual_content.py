@@ -253,6 +253,15 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
     caller can inline `![alt](url)` and emit ImageObject schema."""
     if not image_configured():
         return {"skipped": True, "reason": "no image provider key set (IMAGE_API_KEY / OPENAI_API_KEY)"}
+    # PRE-SPEND budget guard: refuse a paid image generation BEFORE calling the provider if it would
+    # breach the monthly cap. (quote_card renders locally and never reaches here.)
+    try:
+        from . import cost as _cost
+        _proj, _ = _cost.ext_estimate("image", 1)
+        if _cost.would_exceed(business_id, _proj):
+            return {"skipped": True, "reason": "monthly budget cap reached — image generation skipped"}
+    except ImportError:  # pragma: no cover
+        pass
     policy, note = _image_policy(business_id)
     # Small grounding budget for images: Imagen has a ~480-token prompt cap, and the user prompt +
     # compliance policy already consume some of it — an over-long brand block made the image request
@@ -534,6 +543,16 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
     provider, model = _video_provider(), _video_model()
     if provider not in ("veo", "gemini"):
         return {"skipped": True, "reason": f"unsupported VIDEO_PROVIDER '{provider}' (use 'veo')"}
+    # PRE-SPEND budget guard: project the Veo clip cost (seconds × per-sec rate) and refuse BEFORE the
+    # paid render if it would breach the monthly cap.
+    try:
+        from . import cost as _cost
+        _secs = float(os.getenv("VIDEO_SECONDS", "8") or 8)
+        _proj, _ = _cost.ext_estimate("video", _secs)
+        if _cost.would_exceed(business_id, _proj):
+            return {"skipped": True, "reason": "monthly budget cap reached — video generation skipped"}
+    except ImportError:  # pragma: no cover
+        pass
     policy, note = _image_policy(business_id)
     ground = _brand_grounding(business_id)
     full_prompt = ((ground + "\n\n") if ground else "") + (prompt or "").strip() + policy
@@ -650,3 +669,26 @@ def set_visual_status(visual_id: int, status: str, reviewer: str, business_id: i
             "WHERE id=%s AND business_id=%s RETURNING id", (status, reviewer, visual_id, business_id)).fetchone()
         conn.commit()
     return bool(row)
+
+
+def delete_visual(visual_id: int, business_id: int) -> bool:
+    """Permanently delete a visual asset (explicit owner action). Best-effort unlinks the on-disk
+    file so a single-machine deploy doesn't orphan it -- the DB blob / storage_key drop with the row.
+    Tenancy-scoped. Returns True if a row was removed, False if it didn't exist / isn't this business's."""
+    with db() as conn:
+        row = conn.execute(
+            "DELETE FROM visual_assets WHERE id=%s AND business_id=%s RETURNING file_path",
+            (visual_id, business_id)).fetchone()
+        conn.commit()
+    if not row:
+        return False
+    fp = row.get("file_path")
+    if fp:
+        try:
+            base = os.path.realpath(_OUTPUT_DIR)
+            path = os.path.realpath(fp if os.path.isabs(fp) else os.path.join(os.getcwd(), fp))
+            if (path == base or path.startswith(base + os.sep)) and os.path.isfile(path):
+                os.unlink(path)
+        except OSError as e:  # noqa: BLE001 - a stale file is cosmetic; the row is already gone
+            log.warning("delete_visual: could not unlink %s: %s", fp, e)
+    return True

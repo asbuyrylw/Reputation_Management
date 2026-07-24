@@ -123,21 +123,22 @@ def fetch_text(url: str, *, timeout: int = 20, deadline: Optional[float] = 45.0)
     return res.text if not res.failed else None
 
 
-def web_search(query: str, *, limit: int = 15) -> list:
+def web_search(query: str, *, limit: int = 15, business_id: Optional[int] = None) -> list:
     """Web search for discovery (industry/geo journalists, outlets, coverage). Uses
     Serper (google.serper.dev) when SERPER_API_KEY is set -- richer, structured
     results -- otherwise keyless Google News RSS. Returns [{title, url, outlet,
     snippet}]. Results are attacker-influenced -- the caller MUST fence() snippets
-    before any prompt. Both backends hit a FIXED host (SSRF-safe)."""
+    before any prompt. Both backends hit a FIXED host (SSRF-safe). business_id (when the
+    caller knows it) attributes the billed Serper call to the tenant in the cost ledger."""
     key = os.getenv("SERPER_API_KEY", "")
-    return _serper_news(query, key, limit) if key else _rss_news(query, limit)
+    return _serper_news(query, key, limit, business_id) if key else _rss_news(query, limit)
 
 
-def _serper_news(query: str, key: str, limit: int) -> list:
+def _serper_news(query: str, key: str, limit: int, business_id: Optional[int] = None) -> list:
     # Route through the shared TTL cache (collapses the duplicate paid Serper calls the
     # discovery/audit paths make for overlapping queries). `key` is unused now -- cached_post
     # reads SERPER_API_KEY itself and returns None when it's unset.
-    data = _sc.cached_post("news", {"q": query, "num": min(limit, 20)})
+    data = _sc.cached_post("news", {"q": query, "num": min(limit, 20)}, business_id=business_id)
     if not isinstance(data, dict):
         return []
     return [{"title": it.get("title", ""), "url": it.get("link", ""),

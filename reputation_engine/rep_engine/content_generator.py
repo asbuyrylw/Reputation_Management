@@ -1393,9 +1393,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 grounding["serp_target_words"] = b.get("avg_word_count")
     except Exception as e:  # noqa: BLE001 -- benchmark is best-effort, never blocks generation
         log.debug("serp benchmark skipped: %s", e)
-    # (NeuronWriter removed from the stack.) SERP coverage now comes from serp_benchmark above
-    # (grounding["serp_terms"/"serp_questions"/"serp_target_words"]), which _gen_prompt feeds the writer.
-    neuron = {}
+    # SERP coverage comes from serp_benchmark above (grounding["serp_terms"/"serp_questions"/
+    # "serp_target_words"]), which _gen_prompt feeds the writer and serp_grade() scores below.
     voice = _brand_voice(business_id)
     # If the owner cloned a brand writing style (from a URL), prepend it so the draft matches that
     # voice. Best-effort — never blocks generation.
@@ -1599,17 +1598,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         from . import content_quality as _cq
         _kw = list(coverage.get("covered", [])) + list(coverage.get("missing", []))
         _site = grounding if isinstance(grounding, dict) else None
-        # NeuronWriter SERP/NLP terms -> covered-vs-missing term-coverage grade (Rec 1 backend).
-        _nterms: list[str] = []
-        if isinstance(neuron, dict):
-            for _k in ("terms_h2", "terms_basic"):
-                _v = neuron.get(_k)
-                if isinstance(_v, str):
-                    _nterms += [t.strip() for t in _v.replace("\n", ",").split(",") if len(t.strip()) > 2]
-        _nterms = list(dict.fromkeys(_nterms))[:40]
+        # SERP term coverage is graded by serp_grade() from serp_benchmark below (was NeuronWriter's job).
         quality_notes.update(_cq.analyze_draft(
             body, target_query=_score_q or wo.get("target_query") or "", keywords=_kw,
-            site_summary=_site, with_fact_check=True, neuron_terms=_nterms or None,
+            site_summary=_site, with_fact_check=True,
             business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
             geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
             content_type=content_type, asset_type=asset_type, serp_benchmark=serp_bench,
@@ -1664,19 +1656,6 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         quality_notes["image_markers"] = _ie.extract_image_markers(body)
     except Exception as e:  # noqa: BLE001
         log.debug("image marker extraction skipped: %s", e)
-
-    # NeuronWriter draft content-score (the SERP-coverage gauge), stored alongside our own scores so
-    # the editor can show both. Free (/evaluate-content). Dormant-safe -- skipped without a key/query.
-    try:
-        nq = (neuron or {}).get("query")
-        if nq:
-            from . import neuronwriter as _nw
-            sc = _nw.score(nq, body, title=topic)
-            if sc.get("content_score") is not None:
-                quality_notes["neuron"] = {"content_score": sc["content_score"], "query": nq,
-                                           "target": neuron.get("content_score_target")}
-    except Exception as e:  # noqa: BLE001
-        log.debug("neuronwriter score skipped: %s", e)
 
     # Citation-readiness gate (the on-page lever that decides whether AI will quote the piece).
     # REVISE-UNTIL-CLEAN: rather than immediately flagging a low-scoring draft, take up to

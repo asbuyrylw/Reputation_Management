@@ -39,9 +39,12 @@ EXT_PRICING = {
     "search":       (_envf("COST_SERPER_PER_SEARCH", 0.001), "searches"),      # Serper ~ $1/1k
     "keyword_volume": (_envf("COST_DATAFORSEO_PER_REQ", 0.05), "requests"),    # DataForSEO fallback if no exact cost
     "image":        (_envf("COST_IMAGE_PER_GEN", 0.04), "images"),             # Imagen/GPT-image ~ $0.04
-    "video":        (_envf("COST_VIDEO_PER_SEC", 0.40), "seconds"),            # Veo ~ $0.40/sec
+    # 'video' is the ESTIMATE-ONLY fallback (Veo ~ $0.40/sec). HeyGen renders pass an EXACT cost_usd
+    # (actual rendered seconds × the HeyGen tier rate — see heygen_video._render_cost), so they NEVER
+    # fall through to this Veo rate. This unit rate is used only when a caller records seconds with no
+    # explicit cost (a Veo clip).
+    "video":        (_envf("COST_VIDEO_PER_SEC", 0.40), "seconds"),
     "audio":        (_envf("COST_AUDIO_PER_MIN", 0.10), "minutes"),            # NotebookLM audio (approx)
-    "katteb":       (_envf("COST_KATTEB_PER_CREDIT", 0.0), "credits"),         # 20k free/mo -> $0 marginal
     "analytics":    (0.0, "requests"),   # GA4 Data API — free
     "search_console": (0.0, "requests"), # GSC API — free
     "pagespeed":    (0.0, "requests"),   # PageSpeed Insights — free
@@ -216,6 +219,45 @@ def over_budget(business_id: int) -> bool:
     return False
 
 
+def remaining_budget(business_id: int) -> float:
+    """Dollars still available under this month's cap (cap - spend), never negative. Fails CLOSED to
+    0.0 (no headroom) on a DB error or a lost cost write this process, so a pre-spend projection guard
+    blocks rather than overspends a degraded ledger."""
+    if _unrecorded_writes.get(business_id, 0):
+        return 0.0
+    try:
+        return max(0.0, budget_for(business_id) - month_spend(business_id))
+    except Exception as e:  # noqa: BLE001
+        log.error("Business %d: remaining-budget check failed (%s) -- returning 0.", business_id, e)
+        return 0.0
+
+
+def would_exceed(business_id: int, projected_usd: float) -> bool:
+    """PRE-SPEND guard: True if charging `projected_usd` now would breach the monthly cap (or the
+    ledger is degraded). Lets an expensive op — a HeyGen/Veo render, an image batch — check its
+    PROJECTED cost BEFORE it spends, not just whether the tenant is already over. Fails CLOSED."""
+    try:
+        projected_usd = max(0.0, float(projected_usd or 0))
+    except (TypeError, ValueError):
+        projected_usd = 0.0
+    if projected_usd <= 0:
+        return over_budget(business_id)
+    if _unrecorded_writes.get(business_id, 0):
+        log.error("Business %d: unrecorded cost write(s) this process -- pre-spend guard fails closed.",
+                  business_id)
+        return True
+    try:
+        spent, cap = month_spend(business_id), budget_for(business_id)
+    except Exception as e:  # noqa: BLE001
+        log.error("Business %d: pre-spend budget check failed (%s) -- failing closed.", business_id, e)
+        return True
+    if (spent + projected_usd) >= cap:
+        log.warning("Business %d: projected spend $%.2f + $%.2f would breach cap $%.2f — blocked.",
+                    business_id, spent, projected_usd, cap)
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Reporting — itemized cost breakdowns for the admin cost dashboard
 # ---------------------------------------------------------------------------
@@ -225,7 +267,7 @@ CATEGORY_LABEL = {
     "llm_strategy": "Strategy & advisor (LLM)", "llm_content": "Content writing (LLM)",
     "llm": "Other LLM", "search": "Search (Serper)", "keyword_volume": "Keyword volume (DataForSEO)",
     "image": "Image generation", "video": "Video generation", "audio": "Podcast/audio",
-    "katteb": "Katteb", "analytics": "Google Analytics", "search_console": "Search Console",
+    "analytics": "Google Analytics", "search_console": "Search Console",
     "pagespeed": "PageSpeed",
 }
 

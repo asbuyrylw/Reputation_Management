@@ -1,9 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useContentOptimizationStatus, useApproveDraft, useRejectDraft } from "@/lib/hooks";
+import { useContentDrafts, useApproveDraft, useRejectDraft } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
 import { DraftEditorPanel, readabilityScore } from "@/components/DraftEditorPanel";
 import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
@@ -141,7 +140,6 @@ const selectClass =
 export default function DraftsPage() {
   const { businessId, canEdit } = useBusiness();
   const { data, isLoading } = useContentDrafts(businessId);
-  const { data: optStatus } = useContentOptimizationStatus(businessId);
   const approve = useApproveDraft(businessId);
   const reject = useRejectDraft(businessId);
   const [tab, setTab] = useState<Tab>("ready");
@@ -284,15 +282,6 @@ export default function DraftsPage() {
             ? "The engine tried to auto-fix these but couldn't get them over the quality, compliance, or citation-readiness bar — so they're held out of your review queue for an author to finish. Edit one to resolve it (which re-screens it), then it moves to “Ready to review.”"
             : "“Ready to review” passed our quality + compliance checks and just needs your sign-off — no issues to fix. Approving publishes it and advances its task."}
         </p>
-        {/* Subtle dormant-feature hint: only when content-optimization is wired in the app but
-            not yet configured for this business — drafts will then carry a SERP-coverage score. */}
-        {optStatus && !optStatus.configured && (
-          <p className="mt-2 text-[11px] text-ink-4">
-            Content optimization:{" "}
-            <Link href="/integrations" className="font-medium text-indigo hover:text-indigo-strong">connect NeuronWriter</Link>{" "}
-            to score each draft on SERP content coverage.
-          </p>
-        )}
       </Card>
 
       {/* Bulk action bar — publish (approvable only) or delete any selected rows. */}

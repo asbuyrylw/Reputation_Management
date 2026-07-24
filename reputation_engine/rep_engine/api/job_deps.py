@@ -39,7 +39,6 @@ SETUP_PIPELINE: list[str] = [
     "audit_socials",     # discover + audit the business's OWN social profiles (grounds social tasks)
     "gap_model",         # the gap analysis (needs the audit + uses social_presence)
     "keyword_research",  # SEO target keywords (LLM seed + Serper grounding) for content + plan
-    "neuron_enrich",     # NeuronWriter SERP analyses for the priority keywords -> grounds briefs
     "plan",              # strategy -> improvement tasks (needs the gap model)
     "sync_plan",         # materialize the plan into trackable work orders
     "citation_analyze",  # AI-citation share-of-voice / who AI quotes (needs the audit)
@@ -58,14 +57,13 @@ SETUP_PIPELINE: list[str] = [
 SETUP_PREREQS: dict[str, list[str]] = {
     "gap_model": ["audit", "audit_socials"],   # gap reflects the AI-answer audit AND the social audit
     "keyword_research": ["site_crawl", "gap_model"],
-    "neuron_enrich": ["keyword_research"],     # needs the target keywords to analyze
     "plan": ["gap_model"],
     "sync_plan": ["plan"],
     "citation_analyze": ["audit"],
-    "production_briefs": ["plan", "neuron_enrich"],   # briefs are SERP-grounded by the enrichment
+    "production_briefs": ["plan"],   # briefs are grounded by the plan + keyword research
     # the client report runs after everything that feeds it
     "report": ["audit", "site_crawl", "audit_socials", "gap_model", "keyword_research",
-               "neuron_enrich", "plan", "sync_plan", "citation_analyze", "benchmark", "local_rank",
+               "plan", "sync_plan", "citation_analyze", "benchmark", "local_rank",
                "ingest_gbp_reviews", "suggest_prompts", "mentions_scan", "discovery", "production_briefs"],
 }
 
@@ -80,7 +78,6 @@ TRIGGER_DOWNSTREAM: dict[str, list[str]] = {
     # (cheap: no AI-answer battery). This is the "audit socials and update gaps+plan" path.
     "audit_socials": ["gap_model"],
     "gap_model": ["plan", "keyword_research"],
-    "keyword_research": ["neuron_enrich"],   # new/changed keywords -> re-run the SERP enrichment
     "plan": ["sync_plan"],
     "sync_plan": ["production_briefs"],
 }

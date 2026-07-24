@@ -424,23 +424,24 @@ def _drop_offbrand_llm(candidates: list[dict], ctx: dict) -> set[str]:
 # ---------------------------------------------------------------------------
 # Serper grounding (real Google data)
 # ---------------------------------------------------------------------------
-def _serper(endpoint: str, body: dict) -> Optional[dict]:
+def _serper(endpoint: str, body: dict, business_id: Optional[int] = None) -> Optional[dict]:
     # Shared TTL cache (Phase E): keyword research reuses autocomplete/PAA/related queries that the
-    # audit + local-rank also issue -- cache collapses the duplicate paid calls.
+    # audit + local-rank also issue -- cache collapses the duplicate paid calls. business_id attributes
+    # the (real, non-cached) billed call to the tenant in the cost ledger.
     try:
         from . import serper as _sc
     except ImportError:  # pragma: no cover
         import serper as _sc  # type: ignore
-    return _sc.cached_post(endpoint, body)
+    return _sc.cached_post(endpoint, body, business_id=business_id)
 
 
-def _expand_with_serper(seed: str, location: str) -> list[dict]:
+def _expand_with_serper(seed: str, location: str, business_id: Optional[int] = None) -> list[dict]:
     """relatedSearches + peopleAlsoAsk + autocomplete for one seed -> classified candidates."""
     out: list[dict] = []
     body = {"q": seed, "gl": "us"}
     if location:
         body["location"] = location
-    data = _serper("search", body)
+    data = _serper("search", body, business_id)
     if data:
         for r in (data.get("relatedSearches") or [])[:10]:
             q = r.get("query") if isinstance(r, dict) else r
@@ -450,7 +451,7 @@ def _expand_with_serper(seed: str, location: str) -> list[dict]:
             q = r.get("question") if isinstance(r, dict) else r
             if q:
                 out.append({"keyword": q, "kind": "question", "source": "serper_paa", "intent": "informational"})
-    ac = _serper("autocomplete", {"q": seed, "gl": "us"})
+    ac = _serper("autocomplete", {"q": seed, "gl": "us"}, business_id)
     if ac:
         for r in (ac.get("suggestions") or [])[:8]:
             q = r.get("value") if isinstance(r, dict) else r
@@ -608,7 +609,7 @@ def research(business_id: int) -> dict:
     expand_for = [s for s in seeds if s.get("kind") in ("primary", "local")][:_MAX_SEEDS_TO_EXPAND]
     expanded_n = 0
     for s in expand_for:
-        for e in _expand_with_serper(s["keyword"], location):
+        for e in _expand_with_serper(s["keyword"], location, business_id):
             _add(e)
             expanded_n += 1
 

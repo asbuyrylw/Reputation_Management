@@ -47,7 +47,7 @@ def verify(business_id: int, quiet: bool = False) -> dict:
         if tools.over_budget(business_id):
             break
         try:
-            results = tools.web_search(f"{name} {platform}", limit=8)
+            results = tools.web_search(f"{name} {platform}", limit=8, business_id=business_id)
         except Exception:  # noqa: BLE001 -- a failed search must not abort the sweep
             results = []
         found_url = None

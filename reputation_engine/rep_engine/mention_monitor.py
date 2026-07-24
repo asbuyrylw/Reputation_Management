@@ -33,6 +33,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import contextvars
 import hashlib
 import json
 import logging
@@ -41,6 +42,12 @@ import re
 from typing import Callable, Optional
 
 from . import http as _http
+
+# The business currently being scanned, so the (registry-fixed, keyword-only) source adapters can
+# attribute + cache their Serper calls without changing the Callable[[str], list] adapter contract.
+# discover() sets it per business; a stray call outside discover() meters as unattributed (fail-safe).
+_CURRENT_BUSINESS: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar(
+    "mm_current_business", default=None)
 
 
 try:
@@ -248,19 +255,18 @@ def _serper_search(query: str, num: int = 15) -> list[dict]:
     """General Google web search via Serper (google.serper.dev/search). Returns the
     'organic' results, or [] when SERPER_API_KEY is unset or the call fails. This is what
     powers the broader web / social / review-site coverage beyond the free Reddit + news
-    feeds; set SERPER_API_KEY to turn it on."""
-    import os
-    key = os.getenv("SERPER_API_KEY", "")
-    if not key:
+    feeds; set SERPER_API_KEY to turn it on. Routed through the shared TTL cache so the many
+    site-scoped variants of one keyword collapse into one billed call, metered to the business
+    being scanned (previously a raw call: never cached, never metered)."""
+    try:
+        from . import serper as _sc
+    except ImportError:  # pragma: no cover
+        import serper as _sc  # type: ignore
+    data = _sc.cached_post("search", {"q": query, "num": num},
+                           business_id=_CURRENT_BUSINESS.get())
+    if not isinstance(data, dict):
         return []
-    res = _http.request_json(
-        "POST", "https://google.serper.dev/search",
-        headers={"X-API-KEY": key, "Content-Type": "application/json"},
-        json={"q": query, "num": num}, timeout=20, max_retries=2,
-    )
-    if res.failed or not isinstance(res.data, dict):
-        return []
-    return res.data.get("organic", []) or []
+    return data.get("organic", []) or []
 
 
 def _serper_items(results: list[dict], source: str) -> list[dict]:
@@ -471,6 +477,7 @@ def discover(business_id: int, sources: Optional[list[str]] = None, quiet: bool 
     """Pull mentions for all active keywords across the chosen sources. Dedup by
     (source, external_id). No cap on keywords or businesses."""
     _ensure()
+    _CURRENT_BUSINESS.set(business_id)  # so source adapters' Serper calls meter + cache to this tenant
     use = sources or list(SOURCES.keys())
     found = 0
     with db() as conn:

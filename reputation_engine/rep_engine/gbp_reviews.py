@@ -51,15 +51,15 @@ def _reg_financial(business_id: int) -> bool:
         return False
 
 
-def _serper(endpoint: str, body: dict) -> Optional[dict]:
+def _serper(endpoint: str, body: dict, business_id: Optional[int] = None) -> Optional[dict]:
     # Routed through the shared TTL cache (Phase E): GBP ingest + the social audit issue the same
     # places query, so this collapses duplicate paid calls. Falls back to a live call on any cache
-    # error inside cached_post.
+    # error inside cached_post. business_id attributes the billed call to the tenant in the ledger.
     try:
         from . import serper as _sc
     except ImportError:  # pragma: no cover
         import serper as _sc  # type: ignore
-    return _sc.cached_post(endpoint, body)
+    return _sc.cached_post(endpoint, body, business_id=business_id)
 
 
 def _sentiment(rating: Optional[float]) -> Optional[str]:
@@ -92,7 +92,7 @@ def ingest(business_id: int) -> dict:
     if not os.getenv("SERPER_API_KEY"):
         return {"skipped": True, "reason": "SERPER_API_KEY not set"}
     name, geo = b["name"], (b.get("geo") or "")
-    data = _serper("places", {"q": f"{name} {geo}".strip(), "gl": "us"})
+    data = _serper("places", {"q": f"{name} {geo}".strip(), "gl": "us"}, business_id)
     places = (data or {}).get("places") or []
     place = _best_place(places, name) if places else None
     if not place:
@@ -115,7 +115,8 @@ def ingest(business_id: int) -> dict:
     # 2. per-review rows (best-effort: Serper reviews endpoint; aggregate already stored if this fails)
     ingested = 0
     if cid:
-        rev = _serper("reviews", {"cid": str(cid)}) or _serper("reviews", {"placeId": str(cid)})
+        rev = (_serper("reviews", {"cid": str(cid)}, business_id)
+               or _serper("reviews", {"placeId": str(cid)}, business_id))
         items = (rev or {}).get("reviews") or []
         for r in items[:30]:
             rr = r.get("rating")

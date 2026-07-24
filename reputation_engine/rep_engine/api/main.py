@@ -32,7 +32,6 @@ from .routers import (
     heygen_webhook,
     insights,
     rich_media_router,
-    katteb_router,
     integrations,
     jobs_router,
     onboarding_router,
@@ -249,7 +248,6 @@ def create_app() -> FastAPI:
     app.include_router(businesses.router)
     app.include_router(audits.router)
     app.include_router(insights.router)
-    app.include_router(katteb_router.router)
     app.include_router(content.router)
     app.include_router(rankings.router)
     app.include_router(sustain.router)

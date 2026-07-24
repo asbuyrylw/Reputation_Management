@@ -144,7 +144,7 @@ def _node_search(state: DiscState) -> dict:
     raw = list(state.get("raw", []))
     seen = {r.get("url") for r in raw if r.get("url")}
     for q in (state.get("queries") or [])[:5]:
-        for r in tools.web_search(q, limit=10):
+        for r in tools.web_search(q, limit=10, business_id=state.get("business_id")):
             if r.get("url") and r["url"] not in seen:
                 seen.add(r["url"])
                 raw.append(r)
@@ -298,7 +298,7 @@ def enrich_contacts(business_id: int, limit: int = 10, quiet: bool = False) -> d
             break
         query = " ".join(x for x in [r["name"], r["outlet"], "contact email"] if x)
         try:
-            snippets = tools.web_search(query, limit=6)
+            snippets = tools.web_search(query, limit=6, business_id=business_id)
             res = tools.llm_json(
                 CONTACT_SYSTEM,
                 json.dumps({"target": {"name": r["name"], "outlet": r["outlet"]},

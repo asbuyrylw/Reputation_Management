@@ -50,7 +50,7 @@ def cost_dashboard(days: int = 30, business_id: int | None = None, _: dict = Dep
     }
 
 _BUSINESS_FIELDS = ("name", "domain", "services", "industry", "goal", "contested_terms", "geo",
-                    "regulatory_profile", "owned_domains", "neuronwriter_project")
+                    "regulatory_profile", "owned_domains")
 # JSONB business columns -- wrapped with psycopg Json so a dict/list adapts to jsonb.
 _BUSINESS_JSONB = ("regulatory_profile", "owned_domains")
 

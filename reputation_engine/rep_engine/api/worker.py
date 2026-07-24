@@ -74,8 +74,8 @@ def run_forever(poll_seconds: float = 3.0) -> None:  # pragma: no cover -- long-
                 last_reap = now
             # Claim + run via pump(): the SINGLE dep-aware path. It only runs a job whose
             # depends_on jobs are all 'complete', and cascade-fails a child whose prerequisite
-            # failed -- so a multi-step pipeline (gap_model -> plan -> sync_plan -> production_briefs,
-            # keyword_research -> neuron_enrich) stays correctly ordered in the durable worker too,
+            # failed -- so a multi-step pipeline (gap_model -> plan -> sync_plan -> production_briefs)
+            # stays correctly ordered in the durable worker too,
             # not just the inline dev path. (Was a naive FIFO _next_queued(), which ignored
             # ordering + let children run before/after a failed parent against stale inputs.)
             ran = jobs.pump()

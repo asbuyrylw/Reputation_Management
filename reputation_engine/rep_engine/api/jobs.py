@@ -148,12 +148,6 @@ def _run_gap_model(business_id: int, args: dict) -> None:
     _imp("ai_state_audit").build_gap_model(business_id)
 
 
-def _run_neuron_enrich(business_id: int, args: dict) -> None:
-    """Plan enrichment: run NeuronWriter SERP analyses for priority keywords (budget-guarded) and
-    feed the terms/questions into the content briefs. Dormant-safe (no key -> no-op)."""
-    _imp("neuron_enrich").enrich(business_id, max_keywords=int(args.get("max_keywords", 6)))
-
-
 def _run_audit_socials(business_id: int, args: dict) -> None:
     """Phase B: discover + audit the business's OWN social profiles (website-link harvest + search +
     GBP), per platform. Standalone-runnable; the job cascade re-grounds the gap model + plan from
@@ -451,46 +445,6 @@ def _run_generate_visual(business_id: int, args: dict):
     return res
 
 
-def _run_katteb_seo(business_id: int, args: dict):
-    """Run a Katteb SEO/competitor analysis on a draft (HEAVY, 1000 credits, human-triggered) and
-    merge the result into the draft's quality_notes.katteb. Dormant-safe: {skipped} without a key.
-    Takes 1-3 min (Katteb polls), which is why it's a job, not an inline request."""
-    kb = _imp("katteb")
-    if not kb.configured():
-        return {"skipped": True, "reason": "Katteb not configured"}
-    draft_id = args.get("draft_id")
-    if not draft_id:
-        return {"ok": False, "error": "draft_id required"}
-    from ..db import db  # local import: keep jobs.py import-light
-    import json as _json
-    with db() as conn:
-        row = conn.execute(
-            "SELECT body, target_query FROM content_drafts WHERE id=%s AND business_id=%s",
-            (draft_id, business_id)).fetchone()
-    if not row:
-        return {"ok": False, "error": "draft not found"}
-    res = kb.seo_analyze_wait(row["body"] or "", keyword=row.get("target_query") or None, kind="text")
-    if res.get("skipped") or not res.get("ok"):
-        return res
-    katteb_block = {
-        "seo_score": (res.get("article_data") or {}).get("seo_score"),
-        "competitor_scores": (res.get("competitor_data") or {}).get("scores"),
-        "structure": (res.get("competitor_data") or {}).get("structure"),
-        "competitors": (res.get("competitor_data") or {}).get("competitors") or [],
-        "keyword": res.get("keyword"),
-        "analyzed_at": res.get("analyzed_at"),
-        "credits_charged": res.get("credits_charged"),
-    }
-    with db() as conn:
-        conn.execute(
-            "UPDATE content_drafts SET quality_notes = "
-            "COALESCE(quality_notes, '{}'::jsonb) || jsonb_build_object('katteb', %s::jsonb) "
-            "WHERE id=%s AND business_id=%s",
-            (_json.dumps(katteb_block), draft_id, business_id))
-        conn.commit()
-    return {"ok": True, "draft_id": draft_id, "katteb": katteb_block}
-
-
 JOB_DISPATCH = {
     # core pipeline (each step individually runnable, plus the full monthly cycle)
     "audit": _run_audit,
@@ -528,7 +482,6 @@ JOB_DISPATCH = {
     "suggest_prompts": _run_suggest_prompts,
     "suggest_keywords": _run_suggest_keywords,
     "keyword_research": _run_keyword_research,
-    "neuron_enrich": _run_neuron_enrich,
     "ingest_gbp_reviews": _run_ingest_gbp_reviews,
     "production_briefs": _run_production_briefs,
     "normalize_signals": _run_normalize_signals,
@@ -540,8 +493,6 @@ JOB_DISPATCH = {
     "post_mention_replies": _run_post_mention_replies,
     # visual content (CI-4)
     "generate_visual": _run_generate_visual,
-    # Katteb SEO/competitor analysis (human-triggered, heavy)
-    "katteb_seo": _run_katteb_seo,
     # search analytics (Wave 1)
     "ingest_gsc": _run_ingest_gsc,
     "ingest_ga": _run_ingest_ga,
@@ -591,7 +542,7 @@ _JOB_RATE_LIMITS = {
     "gap_model": (10, 3600), "plan": (12, 3600), "production_briefs": (10, 3600),
     "generate_drafts": (20, 3600), "citation_analyze": (10, 3600), "mentions_scan": (12, 3600),
     "local_rank": (12, 3600), "suggest_prompts": (12, 3600), "suggest_keywords": (12, 3600),
-    "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600), "neuron_enrich": (4, 3600),
+    "keyword_research": (8, 3600), "ingest_gbp_reviews": (6, 3600),
     "refresh_failed": (6, 3600), "incident_scan": (10, 3600), "light_sweep": (4, 3600),
     # integrations drains: these cap how fast the SWEEP re-triggers, NOT how many posts happen
     # (per-post volume is enforced by integration_settings caps inside the runners).
@@ -606,8 +557,6 @@ _JOB_RATE_LIMITS = {
     "publish_youtube": (6, 3600),
     "poll_video_renders": (30, 3600),   # scheduled completion sweep for async Video Agent renders
     "generate_clusters": (4, 3600),
-    # Katteb heavy op = 1000 credits + Katteb's own 6/hour cap; keep the trigger rate under that.
-    "katteb_seo": (6, 3600),
     "ingest_gsc": (6, 3600),
     "ingest_ga": (6, 3600),
     "ingest_pagespeed": (6, 3600),

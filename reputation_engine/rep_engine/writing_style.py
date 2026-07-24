@@ -4,7 +4,7 @@ Reputation Crowding-Out Engine -- brand writing-style cloning (from a URL)
 Analyze the writing STYLE of an existing article (how it's written, not what it's about) into a
 reusable profile, and let the operator set an ACTIVE style. `active_profile(business_id)` is read
 by content_generator so every generated piece matches the brand's voice. Applies to ALL our own
-content -- our generator is the primary engine, so this is more useful than a Katteb-only style.
+content -- our generator is the primary engine, so the brand's own voice grounds every draft.
 
 Dormant-safe: analysis needs the orchestrator LLM (returns {skipped} without it) and a fetchable
 URL; storing/activating styles is pure DB and always works.

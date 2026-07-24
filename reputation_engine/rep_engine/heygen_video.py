@@ -105,6 +105,80 @@ def _download_binary(uri: str, *, timeout: int = 180) -> Optional[bytes]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Cost model — ACTUAL usage, not a flat guess (developers.heygen.com/docs/pricing)
+# ---------------------------------------------------------------------------
+# HeyGen bills PER SECOND of rendered video, at a rate that depends on the avatar TIER actually
+# requested. We record cost = (actual rendered seconds, from HeyGen's status response) × (the rate for
+# the endpoint/avatar we called). Env-overridable so a HeyGen plan/rate change needs no code deploy.
+# Rates as published 2026-07 (USD/sec):
+#   Avatar IV Studio / Digital Twin  $0.0667   (the v2 talking-avatar default)
+#   Avatar IV Photo (talking photo)  $0.05
+#   v3 Video Agent (prompt→produced) $0.0333
+def _envf(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+_RATE_AVATAR_STUDIO = _envf("HEYGEN_RATE_AVATAR_STUDIO", 0.0667)   # Avatar IV Studio / Digital Twin
+_RATE_AVATAR_PHOTO = _envf("HEYGEN_RATE_AVATAR_PHOTO", 0.05)       # Avatar IV Photo (talking photo)
+_RATE_VIDEO_AGENT = _envf("HEYGEN_RATE_VIDEO_AGENT", 0.0333)       # v3 Video Agent (produced)
+_CHARS_PER_SEC = _envf("HEYGEN_CHARS_PER_SEC", 14.0)               # ~speech rate, for pre-spend estimate
+
+
+def _rate_for(endpoint: str, avatar: str = "") -> tuple[float, str]:
+    """(usd_per_second, tier_label) for the HeyGen surface actually invoked. The v3 Video Agent bills
+    at its own rate; a talking-PHOTO avatar (id carries a 'photo' marker, or HEYGEN_AVATAR_TIER=photo)
+    bills at the cheaper Photo rate; everything else is the standard Studio/Digital-Twin talking avatar.
+    HEYGEN_AVATAR_TIER overrides the guess when a deployment knows its avatar's tier exactly."""
+    if endpoint == "v3_video_agent":
+        return _RATE_VIDEO_AGENT, "video_agent_v3"
+    tier = os.getenv("HEYGEN_AVATAR_TIER", "").strip().lower()
+    if tier == "photo" or (tier == "" and "photo" in (avatar or "").lower()):
+        return _RATE_AVATAR_PHOTO, "avatar_iv_photo"
+    return _RATE_AVATAR_STUDIO, "avatar_iv_studio"
+
+
+def estimate_seconds(script: str) -> float:
+    """PRE-SPEND duration estimate from the (capped) narration length, so a render can project its cost
+    for the budget guard BEFORE calling HeyGen. Actual cost is always reconciled to the real duration."""
+    n = narration_from_script(script or "")[:_MAX_CHARS]
+    return round(max(1.0, len(n) / max(1.0, _CHARS_PER_SEC)), 1)
+
+
+def estimate_cost(script: str, *, endpoint: str = "v2_avatar", avatar: str = "") -> float:
+    """Projected USD for a render (estimated seconds × tier rate) — used by the pre-spend budget guard."""
+    rate, _ = _rate_for(endpoint, avatar)
+    return round(rate * estimate_seconds(script), 6)
+
+
+def _render_cost(business_id: int, *, seconds: float, endpoint: str, avatar: str = "",
+                 model: str = "avatar", estimated: bool = False) -> None:
+    """Record the ACTUAL HeyGen render cost = rendered seconds × the tier rate, with the endpoint/avatar/
+    tier/rate itemized in `detail` so Admin→Costs shows exactly what HeyGen was asked for and what it
+    cost. `estimated=True` flags a duration we had to derive (HeyGen returned none) so the ledger is
+    honest about it. Passes an EXPLICIT cost_usd so it never falls through to the Veo estimate. Never
+    raises."""
+    try:
+        from . import cost as _cost
+    except ImportError:  # pragma: no cover
+        import cost as _cost  # type: ignore
+    try:
+        rate, tier = _rate_for(endpoint, avatar)
+        secs = max(0.0, float(seconds or 0))
+        usd = round(rate * secs, 6)
+        op = "render_agent" if endpoint == "v3_video_agent" else "render_explainer"
+        _cost.record_cost(business_id, None, "video", "heygen", op, cost_usd=usd, units=secs,
+                          unit_label="seconds", model=model,
+                          detail={"content_type": "video", "api": "heygen", "endpoint": endpoint,
+                                  "tier": tier, "usd_per_sec": rate, "avatar": (avatar or "")[:80],
+                                  "duration_estimated": estimated})
+    except Exception:  # noqa: BLE001 -- cost logging must never break a completed render
+        pass
+
+
 def render(business_id: int, script: str, *, title: str = "", work_order_id: Optional[int] = None,
            draft_id: Optional[int] = None, avatar_id: Optional[str] = None,
            voice_id: Optional[str] = None, aspect: str = "16:9") -> dict:
@@ -122,6 +196,16 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
         return {"ok": False, "error": "no narration text found in the script"}
     avatar = avatar_id or os.getenv("HEYGEN_AVATAR_ID") or _DEFAULT_AVATAR
     voice = voice_id or os.getenv("HEYGEN_VOICE_ID") or _DEFAULT_VOICE
+    # PRE-SPEND budget guard: project this render's cost (est. seconds × tier rate) and refuse BEFORE
+    # calling HeyGen if it would breach the monthly cap. A render is one of the most expensive ops, so
+    # it must not slip through after the fact.
+    try:
+        from . import cost as _cost
+        if _cost.would_exceed(business_id, estimate_cost(script, endpoint="v2_avatar", avatar=avatar)):
+            return {"skipped": True, "reason": "monthly budget cap reached — HeyGen render skipped "
+                                               "(raise the cap or wait for next month)"}
+    except ImportError:  # pragma: no cover
+        pass
     w, h = (720, 1280) if aspect == "9:16" else (1280, 720)
     voice_obj: dict = {"type": "text", "input_text": narration}
     if voice:
@@ -186,14 +270,14 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
         work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",
         storage_key=skey, public_url=purl,
         meta={"source": "heygen", "srt": srt, "duration": duration, "narration_chars": len(narration)})
-    try:  # itemized cost — HeyGen bills per second (~$0.05-0.067/s); estimate from duration/speech rate
-        from . import cost as _cost
-        secs = float(duration or 0) or (len(narration) / 14.0)   # ~14 chars/sec of speech
-        _cost.record_cost(business_id, None, "video", "heygen", "render_explainer",
-                          units=secs, unit_label="seconds", model="avatar",
-                          detail={"content_type": "video", "api": "heygen"})
-    except Exception:  # noqa: BLE001
-        pass
+    # itemized cost — ACTUAL rendered seconds (from HeyGen's status response) × the Avatar tier rate.
+    # Fall back to a speech-rate estimate only if HeyGen returned no duration (flagged in the ledger).
+    secs = float(duration or 0)
+    est = secs <= 0
+    if est:
+        secs = len(narration) / max(1.0, _CHARS_PER_SEC)
+    _render_cost(business_id, seconds=secs, endpoint="v2_avatar", avatar=avatar,
+                 model=os.getenv("HEYGEN_ENGINE", "avatar"), estimated=est)
     return {"ok": True, "visual_id": visual_id, "video_url": video_url, "srt": srt,
             "duration": duration, "file_path": path}
 
@@ -291,6 +375,14 @@ def start_agent_session(business_id: int, script: str, *, title: str = "", busin
     narration = narration_from_script(script)[:_MAX_CHARS]
     if not narration:
         return {"ok": False, "error": "no narration text found in the script"}
+    # PRE-SPEND guard: a produced Video Agent render bills per second at its own rate — project + refuse
+    # before creating the session if it would breach the monthly cap.
+    try:
+        from . import cost as _cost
+        if _cost.would_exceed(business_id, estimate_cost(script, endpoint="v3_video_agent")):
+            return {"skipped": True, "reason": "monthly budget cap reached — Video Agent render skipped"}
+    except ImportError:  # pragma: no cover
+        pass
     prompt = build_video_agent_prompt(narration, business_name=business_name or title, geo=geo, title=title)
     hdr = {"X-Api-Key": _key(), "Content-Type": "application/json"}
     body = {"prompt": prompt, "avatar_id": (avatar_id or os.getenv("HEYGEN_AVATAR_ID") or _DEFAULT_AVATAR),
@@ -362,13 +454,13 @@ def fetch_agent_video(business_id: int, session_id: str, *, video_id: Optional[s
         work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",
         storage_key=skey, public_url=purl,
         meta={"source": "heygen_agent", "srt": srt, "duration": duration, "session_id": session_id})
-    try:
-        from . import cost as _cost
-        _cost.record_cost(business_id, None, "video", "heygen", "render_agent",
-                          units=float(duration or 0) or 90.0, unit_label="seconds",
-                          model="video_agent_v3", detail={"content_type": "video", "api": "heygen_video_agent"})
-    except Exception:  # noqa: BLE001
-        pass
+    # ACTUAL rendered seconds (from the Video Agent's video record) × the Video Agent rate. Fall back
+    # to a nominal 90s only when the Agent returned no duration (flagged as estimated in the ledger).
+    secs = float(duration or 0)
+    est = secs <= 0
+    if est:
+        secs = 90.0
+    _render_cost(business_id, seconds=secs, endpoint="v3_video_agent", model="video_agent_v3", estimated=est)
     return {"ok": True, "visual_id": visual_id, "video_url": video_url, "srt": srt,
             "duration": duration, "file_path": path, "session_id": session_id}
 

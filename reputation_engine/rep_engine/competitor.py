@@ -130,6 +130,7 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
     _ensure()
     # imported lazily so this module loads without the full audit stack at import time
     from . import ai_state_audit as m
+    from . import cost as _cost
 
     # Setup (short DB hold): resolve the business + competitors and open the run row, then RELEASE
     # the connection so the many minutes of network calls don't pin a pooled connection.
@@ -161,7 +162,24 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
     fail_streak: dict = {}
     tripped: set = set()
 
+    # PRE-SPEND guard: a benchmark fires the whole prompt battery across every engine — many paid
+    # answer-engine calls. Refuse up-front if already over the monthly cap (and stop mid-run below), so
+    # a competitor comparison can't run away past the budget. Previously these calls weren't even
+    # metered, so they never counted toward — or were stopped by — the cap.
+    if _cost.over_budget(business_id):
+        if not quiet:
+            log.warning("Business %d over monthly budget; skipping competitor benchmark.", business_id)
+        with db() as conn:
+            conn.execute("UPDATE audit_runs SET status='complete' WHERE id=%s", (run_id,))
+            conn.commit()
+        return {"run_id": run_id, "rows": 0, "skipped": "over_budget"}
+
     for prompt, persona, location in battery:
+        if _cost.over_budget(business_id):
+            if not quiet:
+                log.warning("Business %d hit the budget cap mid-benchmark; stopping after %d rows.",
+                            business_id, recorded)
+            break
         active = [e for e in engines if e.name not in tripped]
         if not active:
             break  # every engine circuit-broken this run -> stop early (rest would all be skips)
@@ -179,6 +197,18 @@ def benchmark(business_id: int, quiet: bool = False) -> dict:
                 failed = bool(ans.get("failed"))
                 text = ans.get("text", "")
                 sources = ans.get("sources", [])
+                # Meter the paid answer-engine call ONCE per (engine, prompt) — mirrors the audit loop
+                # (ai_state_audit records "answer" spend the same way). The benchmark previously issued
+                # these live calls with NO cost recorded, so the ledger under-counted competitor runs.
+                if text and not failed:
+                    try:
+                        _u = ans.get("usage")  # real provider tokens when available
+                        _cost.record(business_id, run_id, eng.name, "answer",
+                                     getattr(eng, "model", eng.name),
+                                     _u["input"] if _u else _cost.approx_tokens(prompt),
+                                     _u["output"] if _u else _cost.approx_tokens(text))
+                    except Exception:  # noqa: BLE001 -- cost logging must never break the benchmark
+                        pass
                 mentions_subject = (not failed) and _mentions(text, sources, subj_name, subj_domain)
                 for comp in comps:
                     mc = (not failed) and _mentions(text, sources, comp["name"], comp.get("domain") or "")
