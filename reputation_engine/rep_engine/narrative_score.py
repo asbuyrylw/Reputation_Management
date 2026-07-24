@@ -28,15 +28,16 @@ from collections import defaultdict
 
 try:
     from .db import db
-    from .answer_flags import is_wrong_entity
+    from .answer_flags import is_wrong_entity, CONTESTED_GA as _CONTESTED_GA
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
-    from answer_flags import is_wrong_entity  # type: ignore
+    from answer_flags import is_wrong_entity, CONTESTED_GA as _CONTESTED_GA  # type: ignore
 
 log = logging.getLogger("narrative_score")
 
 _DESIRED_GA = 0.15      # goal_alignment above this = the desired narrative clearly leads
-_CONTESTED_GA = -0.15   # at/below this with a contested frame = the contested narrative dominates
+# _CONTESTED_GA (at/below this with a contested frame = the contested narrative dominates) is the
+# SHARED answer_flags.CONTESTED_GA, so this score and the challenge profile classify negativity alike.
 
 
 def _classify(a: dict) -> str:

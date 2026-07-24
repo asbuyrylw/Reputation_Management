@@ -635,6 +635,13 @@ def _skip() -> dict:
     return {"text": "", "sources": [], "failed": False, "skipped": True}
 
 
+def _proxy_meta(ans: dict) -> dict:
+    """{'proxy': True} when an answer is a PROXY approximation (e.g. Google-AIO fell back to organic
+    snippets, not a real AI Overview) so it's flagged distinctly in the answer's raw JSON; {} otherwise
+    (keeps non-proxy rows clean)."""
+    return {"proxy": True} if isinstance(ans, dict) and ans.get("proxy") else {}
+
+
 # --- grounding detection: did the engine answer from LIVE web retrieval vs model memory?
 # Each returns (grounded: bool, source_urls: list). Shapes verified against current provider
 # docs (2026): Anthropic web_search_20250305, Gemini google_search, OpenAI Responses web_search.
@@ -899,10 +906,18 @@ class GoogleAIOverviewEngine:
                             parts.append(item["snippet"])
                 text = " ".join(parts)
         organic = d.get("organic", []) or []
+        # A REAL AI Overview was present iff we recovered `text` from the aiOverview/answerBox above.
+        # Otherwise we fall back to the top organic SNIPPETS -- that is a PROXY (plain SERP results),
+        # NOT Google's AI Overview, and must be flagged so the gap model / analytics don't count an
+        # organic-snippet approximation as a genuine AI-answer-engine result (which would inflate this
+        # engine's apparent coverage).
+        proxy = not bool(text)
         if not text:
             text = " ".join((o.get("snippet") or "") for o in organic[:5])
         sources = [o.get("link") for o in organic[:8] if o.get("link")]
-        return _ok(text, sources, grounded=True)
+        out = _ok(text, sources, grounded=True)
+        out["proxy"] = proxy  # True = organic-snippet fallback, not a real Google AI Overview
+        return out
 
 
 class BingCopilotEngine:
@@ -1388,9 +1403,9 @@ def _audit_persist_answer(conn, run_id, business_id, eng, prompt, ans, score,
          # grounded reflects whether the ENGINE grounded in live retrieval (independent of
          # scoring); None on a failed call where there's no answer to ground.
          ans.get("grounded") if not failed else None,
-         json.dumps({"score": score, "error": ans.get("error")} if failed
-                    else ({"score": score, "scoring_failed": True} if scoring_failed
-                          else {"score": score}))),
+         json.dumps({"score": score, "error": ans.get("error"), **_proxy_meta(ans)} if failed
+                    else ({"score": score, "scoring_failed": True, **_proxy_meta(ans)} if scoring_failed
+                          else {"score": score, **_proxy_meta(ans)}))),
     )
 
 
@@ -1848,6 +1863,10 @@ _COVERAGE_DIMENSIONS = [
     "technical_seo", "schema_structured_data", "image_quality_alt", "content_depth_topical",
     "internal_linking", "backlinks_indexing", "local_gbp_nap", "reviews",
     "ai_answer_defense", "search_traffic_outcomes",
+    # Two-track diagnosis: the plan must also close an AWARENESS void (the engines don't recognize the
+    # business at all) and disambiguate a confused ENTITY (answers about a same-named other). Without
+    # these, the critic silently skips both fronts and the plan only ever attacks negatives.
+    "awareness_recognition", "entity_disambiguation",
 ]
 
 
@@ -2262,6 +2281,12 @@ def build_gap_model(business_id: int) -> dict:
             al = _lz.lenses(business_id) or {}
             audience_lenses = {"by_persona": (al.get("by_persona") or [])[:6],
                                "by_location": (al.get("by_location") or [])[:6]}
+            # Cross-engine DIVERGENCE: the prompts where the answer engines most disagree (one is fine,
+            # another drags us down / calls us contested). Feeding the worst few in lets the plan catch
+            # a single drifting engine and prescribe an engine-specific fix, instead of averaging the
+            # disagreement away. First-party, fail-safe.
+            dv = _lz.divergence(business_id) or {}
+            audience_lenses["engine_divergence"] = (dv.get("items") or [])[:6]
         except Exception as e:  # noqa: BLE001
             log.warning("gap model: audience lenses unavailable (%s)", e)
 
@@ -2332,57 +2357,65 @@ def build_gap_model(business_id: int) -> dict:
                                    has_local_presence=_has_local, regulated_financial=_reg_fin)
         except Exception:  # noqa: BLE001 -- profile read must never break the gap model
             _gap_sys = GAP_SYSTEM
-        model = orchestrator_json(_gap_sys, payload, tier=GAP_MODEL_TIER,
-                                  max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
-        # Ledger the synthesis spend (rec 10b) so the gap model's cost is visible in COGS and counts
-        # against the monthly cap, like audit answers do. Recorded even on a failed/empty synthesis:
-        # we still paid for the input tokens, and honest budgeting must not omit that. Estimated
-        # tokens (the orchestrator returns parsed JSON, not provider usage) -- cost.py is an estimate.
-        _gm_model, _ = _model_for(GAP_MODEL_TIER) if ORCHESTRATOR == "anthropic" else (None, None)
-        if _gm_model is None:
-            _, _gm_model = _model_for(GAP_MODEL_TIER)
-        cost.record(business_id, run["id"], ORCHESTRATOR, "gap_model", _gm_model,
-                    cost.approx_tokens(_gap_sys + payload),
-                    cost.approx_tokens(json.dumps(model) if isinstance(model, dict) else ""))
-        # A failed/empty synthesis must NOT overwrite the last good gap model.
-        # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
-        # completion, unparseable JSON, missing key). Persisting that empty model would
-        # poison every downstream consumer (strategy_generator, work orders, the client
-        # report) -- the exact "a failed call must not pollute outputs" invariant the
-        # answer-scoring path is hardened for. Treat an empty dict / missing summary as a
-        # synthesis FAILURE: don't INSERT (the prior gap_models row stays the latest good
-        # one) and raise so the runstate step is marked failed and is resumable.
-        if not isinstance(model, dict) or not model.get("summary"):
-            log.warning("Gap model synthesis returned empty/invalid output for business %d; "
-                        "keeping the previous gap model (nothing persisted).", business_id)
-            raise RuntimeError(
-                "Gap model synthesis failed (empty/invalid LLM output); previous model preserved."
-            )
-        _hb()  # GAP_SYSTEM pass complete
-        # Completeness-critic + refine pass (fail-safe): catch under-addressed/ungrounded dimensions
-        # so the persisted plan is the best one, not just the first plausible one. SKIP it when the
-        # first pass already marked every coverage dimension addressed -- the critic returns the
-        # draft unchanged in that case anyway (its own contract), and skipping avoids a full second
-        # ~12k-token/240s LLM pass, the dominant cost of this job. GAP_CRITIC_ENABLED still gates it
-        # inside _gap_critic_refine for the runs that do need it.
-        cov = model.get("coverage") if isinstance(model.get("coverage"), dict) else None
-        needs_critic = (not cov) or any(
-            isinstance(v, dict) and not v.get("addressed", False) for v in cov.values()
+    # RELEASE the read connection before the long LLM passes. db() is a fresh, autocommit=False
+    # connection, so the SELECTs above hold an IDLE-IN-TRANSACTION connection; keeping it open across
+    # the two ~4-8 min LLM calls below can trip Postgres' idle_in_transaction_session_timeout (losing
+    # the whole already-paid-for synthesis at the final INSERT) and needlessly pins a snapshot/locks.
+    # Everything the LLM passes need (run, payload, _gap_sys, the gap dicts) is a plain local that
+    # outlives the `with` block; the INSERT reopens a short-lived connection.
+    model = orchestrator_json(_gap_sys, payload, tier=GAP_MODEL_TIER,
+                              max_tokens=12000, timeout=GAP_MODEL_TIMEOUT, deadline=GAP_MODEL_DEADLINE)
+    # Ledger the synthesis spend (rec 10b) so the gap model's cost is visible in COGS and counts
+    # against the monthly cap, like audit answers do. Recorded even on a failed/empty synthesis:
+    # we still paid for the input tokens, and honest budgeting must not omit that. Estimated
+    # tokens (the orchestrator returns parsed JSON, not provider usage) -- cost.py is an estimate.
+    _gm_model, _ = _model_for(GAP_MODEL_TIER) if ORCHESTRATOR == "anthropic" else (None, None)
+    if _gm_model is None:
+        _, _gm_model = _model_for(GAP_MODEL_TIER)
+    cost.record(business_id, run["id"], ORCHESTRATOR, "gap_model", _gm_model,
+                cost.approx_tokens(_gap_sys + payload),
+                cost.approx_tokens(json.dumps(model) if isinstance(model, dict) else ""))
+    # A failed/empty synthesis must NOT overwrite the last good gap model.
+    # orchestrator_json returns {} on ANY LLM failure (retries exhausted, empty
+    # completion, unparseable JSON, missing key). Persisting that empty model would
+    # poison every downstream consumer (strategy_generator, work orders, the client
+    # report) -- the exact "a failed call must not pollute outputs" invariant the
+    # answer-scoring path is hardened for. Treat an empty dict / missing summary as a
+    # synthesis FAILURE: don't INSERT (the prior gap_models row stays the latest good
+    # one) and raise so the runstate step is marked failed and is resumable.
+    if not isinstance(model, dict) or not model.get("summary"):
+        log.warning("Gap model synthesis returned empty/invalid output for business %d; "
+                    "keeping the previous gap model (nothing persisted).", business_id)
+        raise RuntimeError(
+            "Gap model synthesis failed (empty/invalid LLM output); previous model preserved."
         )
-        if needs_critic:
-            model = _gap_critic_refine(model, {
-                "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,
-                "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
-                "social_presence": social_presence,
-                "external_signal_types": [s.get("signal_type") for s in external_signals],
-            }, business_id=business_id, run_id=run["id"])
-        else:
-            log.info("gap model: first pass addressed all coverage dimensions; skipping critic pass")
-        _hb()  # critic pass done (or skipped)
-        # Deterministic gap->content link: fill any NULL weak_query.addressed_by from the synthesized
-        # plan items so the worst-answer -> fixing-task link is stored, not left to the fuzzy fallback
-        # in content_batch._match_prompts. Applied to the FINAL (post-critic) model before persistence.
-        _link_weak_queries(model)
+    _hb()  # GAP_SYSTEM pass complete
+    # Completeness-critic + refine pass (fail-safe): catch under-addressed/ungrounded dimensions
+    # so the persisted plan is the best one, not just the first plausible one. SKIP it when the
+    # first pass already marked every coverage dimension addressed -- the critic returns the
+    # draft unchanged in that case anyway (its own contract), and skipping avoids a full second
+    # ~12k-token/240s LLM pass, the dominant cost of this job. GAP_CRITIC_ENABLED still gates it
+    # inside _gap_critic_refine for the runs that do need it.
+    cov = model.get("coverage") if isinstance(model.get("coverage"), dict) else None
+    needs_critic = (not cov) or any(
+        isinstance(v, dict) and not v.get("addressed", False) for v in cov.values()
+    )
+    if needs_critic:
+        model = _gap_critic_refine(model, {
+            "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,
+            "site_crawl_gaps": site_crawl_gaps, "search_performance": search_performance,
+            "social_presence": social_presence,
+            "external_signal_types": [s.get("signal_type") for s in external_signals],
+        }, business_id=business_id, run_id=run["id"])
+    else:
+        log.info("gap model: first pass addressed all coverage dimensions; skipping critic pass")
+    _hb()  # critic pass done (or skipped)
+    # Deterministic gap->content link: fill any NULL weak_query.addressed_by from the synthesized
+    # plan items so the worst-answer -> fixing-task link is stored, not left to the fuzzy fallback
+    # in content_batch._match_prompts. Applied to the FINAL (post-critic) model before persistence.
+    _link_weak_queries(model)
+    # Persist on a fresh short-lived connection (the read connection was released before the LLM).
+    with db() as conn:
         conn.execute(
             "INSERT INTO gap_models (business_id, run_id, model) VALUES (%s,%s,%s)",
             (business_id, run["id"], json.dumps(model)),

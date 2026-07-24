@@ -582,11 +582,21 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
             model = gm["model"] if isinstance(gm["model"], dict) else json.loads(gm["model"])
             existing = set(model.get("schema_gaps", []) or [])
             model["schema_gaps"] = sorted(existing | set(summary["schema_gaps"]))
+            # IDEMPOTENT merge: _remerge (run_full) and every re-crawl call this again, so append ONLY
+            # topics not already present -- otherwise the same "Expand thin page X" / "Add coverage of
+            # 'Y'" entries pile up in the gap model on every cycle (unbounded duplicate drift).
             moc = model.get("missing_owned_content", []) or []
+            _seen_topics = {(m.get("topic") or "").strip().lower() for m in moc if isinstance(m, dict)}
+
+            def _add_moc(entry: dict) -> None:
+                t = (entry.get("topic") or "").strip().lower()
+                if t and t not in _seen_topics:
+                    _seen_topics.add(t)
+                    moc.append(entry)
+
             for url in summary["thin_pages"][:5]:
-                moc.append({"topic": f"Expand thin page {url}", "asset_type": "article",
-                            "why": "Page below content threshold; weak for retrieval/extraction."})
-            model["missing_owned_content"] = moc
+                _add_moc({"topic": f"Expand thin page {url}", "asset_type": "article",
+                          "why": "Page below content threshold; weak for retrieval/extraction."})
             # semantic-depth findings: missing entities become content opportunities -- but
             # NEVER auto-propose a page targeting a CONTESTED term (e.g. "pyramid scheme",
             # "scam"). A naive keyword page reinforces the very negative association we are
@@ -596,9 +606,9 @@ def merge_into_gap_inputs(business_id: int, summary: dict) -> None:
                 tl = (term or "").lower()
                 if any(ct in tl or tl in ct for ct in contested):
                     continue
-                moc.append({"topic": f"Add/strengthen coverage of '{term}'", "asset_type": "article",
-                            "why": "Topic AI answers expect but the site under-covers "
-                                   "(semantic-depth gap; entity coverage drives AI citation)."})
+                _add_moc({"topic": f"Add/strengthen coverage of '{term}'", "asset_type": "article",
+                          "why": "Topic AI answers expect but the site under-covers "
+                                 "(semantic-depth gap; entity coverage drives AI citation)."})
             model["missing_owned_content"] = moc
             if summary.get("avg_semantic_readiness") is not None:
                 model["avg_semantic_readiness"] = summary["avg_semantic_readiness"]

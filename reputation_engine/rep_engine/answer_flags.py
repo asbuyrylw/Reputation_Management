@@ -17,6 +17,16 @@ Pure, no I/O. Accepts anything mapping-like: a plain dict, a psycopg dict-row, o
 from __future__ import annotations
 
 
+# Below this goal_alignment, a CONTESTED-term mention is treated as the contested/negative narrative
+# WINNING (not merely "a contested word appeared"). The single source of truth, shared by the
+# narrative score and the challenge profile: narrative_score used <=-0.15 while challenge used <0, so
+# a mildly-negative contested mention (-0.15 < ga < 0) was 'negative' to one scorer and 'neutral' to
+# the other -- feeding the gap model conflicting signals from the same run. -0.15 (the stricter,
+# calibrated value) also guards against the known goal_alignment over-penalty counting a mild-negative
+# as a full-negative. Change it here and BOTH scorers move together.
+CONTESTED_GA = -0.15
+
+
 def is_wrong_entity(row) -> bool:
     """True IFF this answer is flagged as describing a DIFFERENT same-named entity
     (`entity_confusion` is TRUE). A NULL or a missing column -- unknown, failed, or a legacy

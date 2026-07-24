@@ -39,7 +39,11 @@ def divergence(business_id: int) -> dict:
             return {"run_id": None, "items": []}
         rows = conn.execute(
             "SELECT prompt, engine, goal_alignment, mentions_contested FROM answers "
-            "WHERE run_id=%s AND NOT COALESCE(failed,false) AND goal_alignment IS NOT NULL",
+            "WHERE run_id=%s AND NOT COALESCE(failed,false) AND goal_alignment IS NOT NULL "
+            # Exclude wrong-entity answers (a different same-named business) -- they aren't about us,
+            # so they must not manufacture a false 'engine disagreement'. Same NULL-safe rule as
+            # answer_flags.is_wrong_entity (NULL/legacy -> kept).
+            "AND NOT COALESCE(entity_confusion, false)",
             (run,)).fetchall()
     by_prompt: dict = {}
     for r in rows:
@@ -76,6 +80,9 @@ def lenses(business_id: int) -> dict:
                 f"SELECT {col} k, AVG(goal_alignment) ga, "  # nosec B608
                 "AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested, COUNT(*) n "
                 f"FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false) "  # nosec B608
+                # Exclude wrong-entity answers so a same-named other business doesn't drag a persona/
+                # location average (same NULL-safe rule as answer_flags / narrative_score / challenge).
+                "AND NOT COALESCE(entity_confusion, false) "
                 f"AND {col} IS NOT NULL AND {col} <> '' GROUP BY {col} ORDER BY ga",  # nosec B608
                 (run,)).fetchall()
             return [{"lens": r["k"], "score": _score(r["ga"]) if r["ga"] is not None else None,

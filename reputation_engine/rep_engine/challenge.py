@@ -40,10 +40,10 @@ from typing import Optional
 
 try:
     from .db import db
-    from .answer_flags import is_wrong_entity
+    from .answer_flags import is_wrong_entity, CONTESTED_GA
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
-    from answer_flags import is_wrong_entity  # type: ignore
+    from answer_flags import is_wrong_entity, CONTESTED_GA  # type: ignore
 
 log = logging.getLogger("challenge")
 
@@ -204,7 +204,10 @@ def _compute(rows: list) -> dict:
             if (r["sentiment"] or "").lower() == "negative":
                 return True
             ga = r["goal_alignment"]
-            return bool(r["mentions_contested"]) and ga is not None and ga < 0
+            # Shared threshold with narrative_score (answer_flags.CONTESTED_GA): a contested mention
+            # counts as negative only once alignment is at/below -0.15, not merely <0 -- so the
+            # challenge profile and the narrative score agree on what "negative" means.
+            return bool(r["mentions_contested"]) and ga is not None and ga <= CONTESTED_GA
 
         negative_score = sum(1 for r in aware_rows if _is_negative(r)) / nk
         contested_rebutted_rate = (
