@@ -63,10 +63,10 @@ def _image_model() -> str:
     if m:
         return m
     # Gemini default = Imagen 4 (high-quality dedicated image model); OpenAI default = gpt-image-1.
-    # imagen-4.0-generate-001 was retired by Google (404 "no longer available to new users"), which
-    # took image generation down. imagen-3.0-generate-002 is the current GA model on the same predict
-    # endpoint. Override with IMAGE_MODEL when a newer Imagen GA id ships.
-    return "imagen-3.0-generate-002" if _image_provider() == "gemini" else "gpt-image-1"
+    # imagen-4.0-generate-001 is blocked for new API users (404) and imagen-3.0-generate-002 isn't on
+    # the v1beta endpoint -- imagen-4.0-fast-generate-001 is the available GA model on this endpoint
+    # (verified against the live ListModels + a real predict call). Override via IMAGE_MODEL.
+    return "imagen-4.0-fast-generate-001" if _image_provider() == "gemini" else "gpt-image-1"
 
 
 def _image_key() -> str:

@@ -1031,6 +1031,44 @@ def _scrub_negative_disambiguation(body: str) -> str:
     return "\n".join(out)
 
 
+def _neutralize_contested_headings(body: str, contested: str = "") -> str:
+    """Deterministic crowd-out enforcement: keep contested terms (scam / pyramid scheme / MLM) OUT of
+    HEADINGS -- the most extractable, schema-bound, AI-cited location on the page, where binding the
+    brand name to the negative token reinforces the very association we're crowding out. The rebuttal
+    stays in body PROSE (which may still name the term to answer the query). A prompt rule alone did
+    NOT hold in testing, so enforce it after generation. Idempotent; no-op when no heading names a term.
+    'Is X a pyramid scheme?' -> 'Is X a legitimate opportunity?'; 'Is X legitimate — or a scam?' -> 'Is X legitimate?'."""
+    if not body:
+        return body
+    extra = [re.escape(t.strip()) for t in re.split(r"[,\n;/]", contested or "")
+             if 2 < len(t.strip()) <= 24 and re.search(r"(?i)pyramid|scam|scheme|mlm|multi", t)]
+    noun = r"pyramid schemes?|pyramids?|scams?|mlms?|multi-?level(?:\s+marketing)?" + (("|" + "|".join(extra)) if extra else "")
+    head_has = re.compile(r"(?i)\b(?:%s)\b" % noun)
+    trail = re.compile(r"(?i)\s*[—–,\-]?\s*(?:or|and)\s+(?:an?\s+)?(?:%s)\b\??" % noun)
+    an_x = re.compile(r"(?i)\ban?\s+(?:%s)\b" % noun)
+    bare = re.compile(r"(?i)\b(?:%s)\b" % noun)
+    out, changed = [], False
+    for line in body.split("\n"):
+        m = re.match(r"^(\s{0,3}#{1,6}\s+)(.*)$", line)
+        if not m or not head_has.search(m.group(2)):
+            out.append(line)
+            continue
+        h = m.group(2)
+        was_q = h.rstrip().endswith("?")
+        h2 = trail.sub("", h)                            # drop a trailing "... or a scam?" clause
+        h2 = an_x.sub("a legitimate opportunity", h2)    # "a pyramid scheme" -> "a legitimate opportunity"
+        h2 = bare.sub("legitimacy", h2)                  # any remaining bare token -> "legitimacy"
+        h2 = re.sub(r"\s{2,}", " ", h2).strip(" —–-,")
+        if was_q and not h2.endswith("?"):
+            h2 = h2.rstrip(" .") + "?"
+        if h2 and h2 != h:
+            out.append(m.group(1) + h2)
+            changed = True
+        else:
+            out.append(line)
+    return "\n".join(out) if changed else body
+
+
 def _scrub_license_phrasing(body: str, profile: Optional[dict] = None) -> str:
     """Remove any 'license number' reference from content -- ONLY for a tenant whose profile SUPPRESSES
     specific credential numbers (a regulated-finance client). For a generic tenant (profile that does
@@ -1596,6 +1634,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     body = _strip_placeholders(body)
     body = _scrub_license_phrasing(body, _profile)
     body = _scrub_negative_disambiguation(body)   # no 'not to be confused with X' — positive identity only
+    # Crowd-out enforcement: keep scam/pyramid/MLM out of HEADINGS (schema-bound, most-extractable);
+    # the body prose still answers the question. A prompt rule alone did not hold in testing.
+    body = _neutralize_contested_headings(body, (biz.get("contested_terms") or "") if isinstance(biz, dict) else "")
     # De-generic pass: strip the safest formulaic AI-slop lead-ins deterministically ('In conclusion,',
     # 'It's important to note that', 'In today's fast-paced world,'). Buzzwords mid-sentence are left to
     # the prompt ban + revision loop (deleting them blindly would break grammar).
