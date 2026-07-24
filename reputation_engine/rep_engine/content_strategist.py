@@ -310,7 +310,7 @@ def _add_video_plan(campaigns: list[dict]) -> None:
         camp["pieces"] = pieces
 
 
-def _postprocess(model: dict, gap: dict) -> dict:
+def _postprocess(model: dict, gap: dict, *, new_domain: bool = False) -> dict:
     """Deterministic guards + enrichment over the raw LLM plan: clamp counts, rank campaigns by
     severity (SoV-gap x value), assign each campaign a stable id + cadence-weeked pieces, and cap
     total pieces. Returns the finished ContentStrategy the planner materializes."""
@@ -350,8 +350,9 @@ def _postprocess(model: dict, gap: dict) -> dict:
     if not out:
         return {}
     # Assign the real burst-then-drip cadence across ALL campaigns (mutates each piece's week ->
-    # target_date downstream), so a year of content posts out gradually instead of clumping.
-    _assign_cadence(out)
+    # target_date downstream), so a year of content posts out gradually instead of clumping. A new
+    # domain (little/no published inventory) drips slower for indexation safety.
+    _assign_cadence(out, new_domain=new_domain)
     # Plan per-campaign video options (pillar + top clusters) AFTER cadence, so videos inherit their
     # source's week and don't perturb the drip.
     _add_video_plan(out)
@@ -394,6 +395,7 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
         except Exception:  # noqa: BLE001
             profile = {}
     biz = business or {}
+    _existing = _existing_titles(business_id)
     payload = json.dumps({
         "business": {k: biz.get(k) for k in ("name", "domain", "services", "goal", "geo",
                                              "industry", "contested_terms")},
@@ -405,7 +407,7 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
         "priority_order": (gap.get("priority_order") or [])[:20],
         "audience_priorities": (gap.get("audience_priorities") or [])[:6],
         "signals": _signals(business_id),
-        "already_have": _existing_titles(business_id),
+        "already_have": _existing,
         "content_type_mix": (profile or {}).get("default_content_types"),
         "social_channels": (profile or {}).get("social_channels"),
         "has_local_presence": (profile or {}).get("has_local_presence", True),
@@ -431,7 +433,9 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
     if not isinstance(model, dict) or not model.get("campaigns"):
         log.warning("strategist: empty/invalid plan for business %s; falling back to template.", business_id)
         return {}
-    strategy = _postprocess(model, gap)
+    # new_domain drips slower (indexation-safety): a business with almost no published inventory is
+    # treated as new, so the cadence front-loads less aggressively. Proxy = few existing pieces.
+    strategy = _postprocess(model, gap, new_domain=(len(_existing) < 3))
     if strategy.get("campaigns"):
         log.info("strategist: business %s -> %d campaigns, %d pieces",
                  business_id, strategy["counts"]["campaigns"], strategy["counts"]["pieces"])

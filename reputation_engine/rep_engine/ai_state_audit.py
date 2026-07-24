@@ -1907,7 +1907,11 @@ def _search_perf_for_gap(business_id: int) -> dict:
             out["high_impression_low_ctr"] = [
                 {"query": q["query"], "impressions": q["impressions"], "ctr": q["ctr"],
                  "position": q["position"]}
-                for q in tq if (q.get("impressions") or 0) >= 50 and (q.get("ctr") or 1) < 0.02][:8]
+                # ctr == 0.0 (high impressions, ZERO clicks) is the HIGHEST-value title/meta
+                # opportunity; `q.get("ctr") or 1` treated 0.0 as 1 and dropped it. Use an explicit
+                # None check so a real 0.0 CTR qualifies.
+                for q in tq if (q.get("impressions") or 0) >= 50
+                and (q["ctr"] if q.get("ctr") is not None else 1) < 0.02][:8]
     except Exception as e:  # noqa: BLE001
         log.warning("gap model: GSC signals unavailable (%s)", e)
     try:
@@ -2077,10 +2081,18 @@ def _gap_answer_priority(a: dict) -> tuple:
     low-alignment answers are the evidence a gap model is built from; positive, on-message answers
     are kept only to fill the cap. Ties break by lowest goal_alignment (weakest answers first)."""
     sent = (a.get("sentiment") or "").lower()
-    ga = a.get("goal_alignment")
-    ga = float(ga) if isinstance(ga, (int, float)) else 0.5
-    aw = a.get("awareness")
-    aw = float(aw) if isinstance(aw, (int, float)) else 1.0
+    # goal_alignment/awareness come back as decimal.Decimal (NUMERIC via psycopg dict_row), which is
+    # NOT an int/float -- the old isinstance() check silently defaulted EVERY row to 0.5/1.0, making
+    # the low-alignment/low-awareness problem terms inert exactly on the large batteries the cap
+    # matters for. Cast defensively so real values drive prioritization.
+    try:
+        ga = float(a.get("goal_alignment"))
+    except (TypeError, ValueError):
+        ga = 0.5
+    try:
+        aw = float(a.get("awareness"))
+    except (TypeError, ValueError):
+        aw = 1.0
     problem = (
         (2 if sent == "negative" else 1 if sent in ("mixed", "neutral") else 0)
         + (1 if a.get("mentions_contested") else 0)

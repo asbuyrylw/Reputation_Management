@@ -1807,16 +1807,23 @@ def generate(business_id: int, only_wo: Optional[int] = None,
         try:
             rows = conn.execute(
                 "SELECT id, wo_code, title, capability, execution, instruction, status, target_date, "
+                "gap_specifics, "
                 "COALESCE(superseded, false) AS superseded, "
                 "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id=work_orders.id) AS has_draft "
                 "FROM work_orders WHERE business_id=%s", (business_id,)
             ).fetchall()
             for r in rows:
+                # gap_specifics carries the piece's gap linkage (source_query = the weak AI query it
+                # fixes) + the strategist's content_type + campaign role. Without it the plan/JIT path
+                # degraded target_query, keyword scoping, grounding, and the per-type spec to the TITLE.
+                gs = r.get("gap_specifics") if isinstance(r.get("gap_specifics"), dict) else {}
                 wos.append({"_db_id": r["id"], "wo_code": r["wo_code"], "title": r["title"],
                             "capability": r["capability"], "execution": r["execution"],
                             "instruction": r["instruction"], "status": r.get("status"),
                             "target_date": r.get("target_date"), "superseded": r.get("superseded"),
-                            "has_draft": r.get("has_draft")})
+                            "has_draft": r.get("has_draft"), "gap_specifics": gs,
+                            "target_query": gs.get("source_query"),
+                            "content_type": gs.get("content_type")})
         except Exception as e:  # noqa: BLE001
             # Don't silently fall through to plan-JSON work orders (which lack _db_id, so drafts
             # generate WITHOUT work-order linkage and approve() can't advance the WO) with no trace.

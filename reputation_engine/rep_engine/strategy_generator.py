@@ -223,6 +223,15 @@ _CAPABILITY_TO_LEVER = {
     "content_writing": "third_party_articles",
     "local_content_creation": "third_party_articles",
     "video_creation": "videos",
+    # rich-media CONTENT the strategist produces the most of -- these had no lever, so predict_impact
+    # scored them 0 and they sorted LAST (and disagreed with gain_for/predict_plan/roadmap, which DO
+    # credit them). Map each to its acceleration lever so ROI is real + consistent across surfaces.
+    "explainer_video": "videos",
+    "podcast_creation": "videos",
+    "deep_content": "third_party_articles",
+    "slide_deck": "third_party_articles",
+    "infographic": "third_party_articles",
+    "research_brief": "third_party_articles",
     "press_outreach": "earned_press",
     "media_list_building": "earned_press",
     "link_building": "earned_links",
@@ -231,14 +240,18 @@ _CAPABILITY_TO_LEVER = {
     "gbp_optimization": "reviews",
     # structural / tracking tasks have no direct per-unit score lever
     "schema_markup": None,
+    "technical_seo": None,
     "ai_visibility_tracking": None,
 }
 # Qualitative SEO impact (point prediction for local rank isn't reliable yet, so we keep it honest).
 _CAPABILITY_SEO = {
     "local_content_creation": "High", "gbp_optimization": "High", "link_building": "High",
     "schema_markup": "Medium", "content_writing": "Medium", "review_generation": "Medium",
-    "press_outreach": "Medium", "video_creation": "Medium",
-    "social_publishing": "Low", "media_list_building": "Low", "ai_visibility_tracking": "—",
+    "press_outreach": "Medium", "video_creation": "Medium", "explainer_video": "Medium",
+    "deep_content": "Medium", "research_brief": "Medium",
+    "podcast_creation": "Low", "slide_deck": "Low", "infographic": "Low",
+    "social_publishing": "Low", "media_list_building": "Low", "technical_seo": "Medium",
+    "ai_visibility_tracking": "—",
 }
 
 # Effort weight per capability (1 = quick, 3 = heavy lift) for ROI ranking (item 5D). ROI =
@@ -246,7 +259,8 @@ _CAPABILITY_SEO = {
 _EFFORT = {
     "schema_markup": 1, "ai_visibility_tracking": 1, "social_publishing": 1, "gbp_optimization": 1,
     "review_generation": 2, "content_writing": 2, "local_content_creation": 2, "media_list_building": 2,
-    "video_creation": 3, "press_outreach": 3, "link_building": 3,
+    "deep_content": 2, "slide_deck": 2, "infographic": 2, "research_brief": 2, "technical_seo": 2,
+    "video_creation": 3, "explainer_video": 3, "podcast_creation": 3, "press_outreach": 3, "link_building": 3,
 }
 # AEO/GEO content checklist appended to every content-creation task so the writer (human or LLM)
 # produces content engines actually CITE, not just SEO filler.
@@ -347,8 +361,9 @@ def _phase_for_week(week: int) -> str:
 def _strat_tokens(s: str) -> set[str]:
     """Significant word tokens for coverage matching between a flat gap item and the strategist's
     campaign pieces (so we only absorb a gap item a campaign really addresses -- never DROP one it
-    missed)."""
-    return {t for t in _re_tech.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 3}
+    missed). len>2 (not >3) so 3-letter domain terms -- tax, ira, etf, roi, seo, gbp, cpa, llc -- are
+    NOT dropped (matches content_strategist._tokens; the old >3 under-counted acronym-heavy verticals)."""
+    return {t for t in _re_tech.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 2}
 
 
 def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None) -> list[WorkOrder]:
