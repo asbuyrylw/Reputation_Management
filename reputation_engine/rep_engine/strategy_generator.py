@@ -452,6 +452,9 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             cmeta = {"campaign_id": camp.get("id"), "campaign_topic": camp.get("topic"),
                      "campaign_intent": camp.get("intent"), "campaign_rank": camp.get("priority_rank", 0),
                      "funnel_stage": camp.get("funnel_stage")}
+            # The campaign's real gap origin (missing owned content / competitor analysis / topical
+            # authority / keyword intent) for the "From:" traceability, instead of a generic label.
+            _camp_gs = f"content strategy: {camp.get('gap_source')}" if camp.get("gap_source") else "content strategy"
             for pc in (camp.get("pieces") or []):
                 title = pc.get("title") or camp.get("topic") or "Content piece"
                 role = pc.get("role") or "cluster"
@@ -461,14 +464,33 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                     f"answering: {pc.get('target_query') or title}. Draft via engine-native LLM; "
                     f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}",
                     int(pc.get("week") or 3),
-                    gap_source="content strategy", why=pc.get("why") or camp.get("why") or "",
+                    gap_source=_camp_gs, why=pc.get("why") or camp.get("why") or "",
                     source_query=pc.get("target_query") or title,
+                    # ordinal (stable per campaign) drives a churn-proof task key across re-plans.
                     campaign={**cmeta, "role": role, "publish_week": pc.get("week"),
-                              "content_type": pc.get("content_type")},
+                              "content_type": pc.get("content_type"), "ordinal": pc.get("ordinal")},
                     # Per-campaign video plans are opt-in: 'manual' so they surface as options but
                     # aren't auto-drafted in a batch -- the owner generates the script (+ captions +
                     # VideoObject schema) and renders the MP4 on click.
                     execution=("manual" if pc.get("on_click") else None))
+            # Materialize the atomization (repurposing) plan into opt-in work orders (infographic +
+            # email/newsletter) so "create once, distribute many" is real work, not a stored-then-
+            # ignored spec. Social atoms are created automatically when a long-form piece is approved
+            # (atomize_draft), so they need no separate WO. Opt-in (manual) -> generate on click.
+            _atom = camp.get("atomization") if isinstance(camp.get("atomization"), dict) else {}
+            _bw = int((camp.get("pieces") or [{}])[0].get("week") or 4) + 1
+            if _atom.get("infographic"):
+                add(f"Infographic: {camp.get('topic')}", "infographic",
+                    f"A shareable infographic summarizing the '{camp.get('topic')}' campaign's key "
+                    f"stats/steps for social + the blog.{_AEO_CHECKLIST}", _bw,
+                    gap_source=_camp_gs, why=camp.get("why") or "",
+                    campaign={**cmeta, "role": "infographic", "ordinal": 0}, execution="manual")
+            if _atom.get("email"):
+                add(f"Email / newsletter: {camp.get('topic')}", "deep_content",
+                    f"A newsletter/email built from the '{camp.get('topic')}' pillar to nurture the "
+                    f"list.{_AEO_CHECKLIST}", _bw,
+                    gap_source=_camp_gs, why=camp.get("why") or "",
+                    campaign={**cmeta, "role": "email", "ordinal": 0}, execution="manual")
 
     # --- Phase 1: owned content for each missing topic + schema ---
     for i, item in enumerate(gap.get("missing_owned_content", []) or []):

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from typing import Optional
@@ -184,14 +185,19 @@ def _signals(business_id: int) -> dict:
         clusters = (_ta.clusters(business_id) or {}).get("clusters") or []
     except Exception as e:  # noqa: BLE001
         log.warning("strategist: clusters unavailable (%s)", e)
-    # Trim to the highest-leverage slices so the payload stays small (planning is cheap).
+    # Trim to the highest-leverage slices so the payload stays small (planning is cheap). Include the
+    # real DEMAND (search volume) + difficulty per intent/cluster so the strategist prioritizes by
+    # opportunity, not just bucket size (was dropped entirely before).
     return {
         "keyword_intents": [{"intent": g.get("intent"), "keywords": g.get("keywords"),
-                             "examples": g.get("examples"), "needs_content": g.get("needs_content")}
+                             "examples": g.get("examples"), "needs_content": g.get("needs_content"),
+                             "total_search_volume": g.get("total_search_volume"),
+                             "avg_difficulty": g.get("avg_difficulty")}
                             for g in by_intent[:8]],
         "topic_clusters": [{"topic": c.get("topic"), "spokes": (c.get("spokes") or [])[:8],
                             "needs_content": c.get("needs_content"),
-                            "keyword_count": c.get("keyword_count")}
+                            "keyword_count": c.get("keyword_count"),
+                            "total_search_volume": c.get("total_search_volume")}
                            for c in clusters[:12]],
     }
 
@@ -199,10 +205,11 @@ def _signals(business_id: int) -> dict:
 # ----------------------------------------------------------------------------
 # Deterministic post-processing: severity ranking + cadence -- never left to the LLM.
 # ----------------------------------------------------------------------------
-def _campaign_severity(camp: dict, gap: dict) -> float:
-    """Rank a campaign by SoV-gap x business-value, computed in CODE (not trusted to the LLM):
-    how many weak AI answers it covers (the crux of the visibility gap) x how much its intent
-    converts, plus a bonus for the LLM's own priority hint. Higher = attack first."""
+def _campaign_severity(camp: dict, gap: dict, demand_by_intent: Optional[dict] = None) -> float:
+    """Rank a campaign by SoV-gap x DEMAND x business-value, computed in CODE (not trusted to the
+    LLM): how many weak AI answers it covers (the crux of the visibility gap) x how much its intent
+    converts x the real search demand for that intent, plus a bonus for the LLM's own priority hint.
+    Higher = attack first."""
     tqs: set[str] = set()
     for q in (camp.get("target_queries") or []):
         tqs |= _tokens(q)
@@ -221,7 +228,10 @@ def _campaign_severity(camp: dict, gap: dict) -> float:
     except (TypeError, ValueError):
         llm_pri = 99
     pri_bonus = max(0, 6 - llm_pri)  # LLM priority 1 -> +5, 6+ -> 0
-    return covers * 2.0 + intent_w + pri_bonus * 0.5
+    # real search demand for this campaign's intent (log-scaled, capped +3) so high-volume gaps lead
+    demand = (demand_by_intent or {}).get((camp.get("intent") or "").lower(), 0) or 0
+    demand_bonus = min(3.0, math.log10(demand + 1)) if demand > 0 else 0.0
+    return covers * 2.0 + intent_w + pri_bonus * 0.5 + demand_bonus
 
 
 def _flatten_pieces(camp: dict, rank: int) -> list[dict]:
@@ -310,7 +320,8 @@ def _add_video_plan(campaigns: list[dict]) -> None:
         camp["pieces"] = pieces
 
 
-def _postprocess(model: dict, gap: dict, *, new_domain: bool = False) -> dict:
+def _postprocess(model: dict, gap: dict, *, new_domain: bool = False,
+                 demand_by_intent: Optional[dict] = None) -> dict:
     """Deterministic guards + enrichment over the raw LLM plan: clamp counts, rank campaigns by
     severity (SoV-gap x value), assign each campaign a stable id + cadence-weeked pieces, and cap
     total pieces. Returns the finished ContentStrategy the planner materializes."""
@@ -320,7 +331,7 @@ def _postprocess(model: dict, gap: dict, *, new_domain: bool = False) -> dict:
     campaigns = [c for c in campaigns if isinstance(c, dict) and (c.get("pillar") or c.get("topic"))][:_MAX_CAMPAIGNS]
     # rank by computed severity (desc), stable on ties
     for c in campaigns:
-        c["_severity"] = _campaign_severity(c, gap)
+        c["_severity"] = _campaign_severity(c, gap, demand_by_intent)
     campaigns.sort(key=lambda c: -c["_severity"])
     out: list[dict] = []
     total = 0
@@ -356,6 +367,11 @@ def _postprocess(model: dict, gap: dict, *, new_domain: bool = False) -> dict:
     # Plan per-campaign video options (pillar + top clusters) AFTER cadence, so videos inherit their
     # source's week and don't perturb the drip.
     _add_video_plan(out)
+    # Stable per-piece ordinal within its campaign -> a churn-proof work-order key across monthly
+    # re-plans (the LLM rewords target queries/titles every run; keying the board on those churns it).
+    for camp in out:
+        for i, pc in enumerate(camp.get("pieces") or []):
+            pc["ordinal"] = i
     total_pieces = sum(len(c["pieces"]) for c in out)
     video_count = sum(1 for c in out for p in c["pieces"] if p.get("role") == "video")
     return {"summary": model.get("summary", ""), "campaigns": out,
@@ -396,6 +412,7 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
             profile = {}
     biz = business or {}
     _existing = _existing_titles(business_id)
+    _sig = _signals(business_id)
     payload = json.dumps({
         "business": {k: biz.get(k) for k in ("name", "domain", "services", "goal", "geo",
                                              "industry", "contested_terms")},
@@ -406,7 +423,7 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
         "local_seo_gaps": (gap.get("local_seo_gaps") or [])[:10],
         "priority_order": (gap.get("priority_order") or [])[:20],
         "audience_priorities": (gap.get("audience_priorities") or [])[:6],
-        "signals": _signals(business_id),
+        "signals": _sig,
         "already_have": _existing,
         "content_type_mix": (profile or {}).get("default_content_types"),
         "social_channels": (profile or {}).get("social_channels"),
@@ -435,7 +452,10 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
         return {}
     # new_domain drips slower (indexation-safety): a business with almost no published inventory is
     # treated as new, so the cadence front-loads less aggressively. Proxy = few existing pieces.
-    strategy = _postprocess(model, gap, new_domain=(len(_existing) < 3))
+    # demand_by_intent feeds real search volume into campaign severity so high-demand gaps lead.
+    _demand = {(g.get("intent") or "").lower(): int(g.get("total_search_volume") or 0)
+               for g in _sig.get("keyword_intents", [])}
+    strategy = _postprocess(model, gap, new_domain=(len(_existing) < 3), demand_by_intent=_demand)
     if strategy.get("campaigns"):
         log.info("strategist: business %s -> %d campaigns, %d pieces",
                  business_id, strategy["counts"]["campaigns"], strategy["counts"]["pieces"])

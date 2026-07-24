@@ -63,17 +63,25 @@ def _norm_title(t: str | None) -> str:
 
 
 def _task_key(capability: str | None, title: str | None,
-              gap_source: str | None = None, source_query: str | None = None) -> str:
+              gap_source: str | None = None, source_query: str | None = None,
+              campaign: dict | None = None) -> str:
     """Stable identity for a task. Computed the same way for a plan item and for an existing row,
     so the merge recognizes 'the same task' across regenerations.
 
-    Prefer a GAP-ANCHORED identity when the task carries a gap linkage: (capability + gap_source +
-    source_query) is stable across LLM plan regenerations, whereas the free-text TITLE gets reworded
-    every revision -- which used to archive the live work order and spawn a duplicate (the root of
-    the superseded-row churn). Fall back to (capability + normalized title) for items with no gap
-    linkage, preserving the prior behavior. Because task_key is stored at creation, a gap-anchored
-    key also survives a human renaming the displayed title."""
+    CAMPAIGN pieces (from the Content Strategist) key on the STABLE campaign identity -- campaign
+    topic + role + ordinal -- NOT the LLM's reworded target_query/title. The strategist rewrites every
+    target_query on each monthly re-plan, so a gap/title key churned the whole content board (old
+    pending pieces retired, near-duplicates created). The topic+role+ordinal survives rewording.
+
+    Otherwise prefer a GAP-ANCHORED identity (capability + gap_source + source_query), stable across
+    LLM regenerations; fall back to (capability + normalized title) for items with no gap linkage."""
     cap = (capability or "").lower()
+    if campaign and campaign.get("campaign_id"):
+        topic = _norm_title(campaign.get("campaign_topic"))
+        role = (campaign.get("role") or "cluster").lower()
+        ordv = campaign.get("ordinal")
+        ordv = ordv if ordv is not None else _norm_title(title)
+        return f"{cap}|campaign|{topic}|{role}|{ordv}"
     gs = (gap_source or "").strip().lower()
     sq = (source_query or "").strip().lower()
     if gs and sq:
@@ -115,9 +123,9 @@ def sync_plan(business_id: int) -> dict:
         # rows whose task_key was minted under the old title-based scheme migrate cleanly. The row
         # already SELECTs gap_source + gap_specifics, so gap linkage is available fail-safe.
         def _existing_key(e) -> str:
-            src_q = (e.get("gap_specifics") or {}).get("source_query") if isinstance(
-                e.get("gap_specifics"), dict) else None
-            return _task_key(e["capability"], e["title"], e.get("gap_source"), src_q)
+            gsp = e.get("gap_specifics") if isinstance(e.get("gap_specifics"), dict) else {}
+            return _task_key(e["capability"], e["title"], e.get("gap_source"),
+                             gsp.get("source_query"), campaign=gsp)
 
         # index existing by stable key
         by_key: dict = {}
@@ -133,6 +141,7 @@ def sync_plan(business_id: int) -> dict:
                 w.get("capability"), w.get("title"),
                 (w.get("rationale") or {}).get("gap_source"),
                 (w.get("gap_specifics") or {}).get("source_query"),
+                campaign=(w.get("gap_specifics") or {}),
             )
             plan_keys.add(key)
             match = by_key.get(key)

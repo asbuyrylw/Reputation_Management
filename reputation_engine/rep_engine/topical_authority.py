@@ -32,7 +32,8 @@ def _tokens(s: str) -> set[str]:
 def _load_keywords(business_id: int) -> list[dict]:
     with db() as conn:
         rows = conn.execute(
-            "SELECT keyword, kind, intent, priority, search_volume FROM target_keywords "
+            "SELECT keyword, kind, intent, priority, search_volume, keyword_difficulty "
+            "FROM target_keywords "
             "WHERE business_id=%s ORDER BY priority DESC NULLS LAST, keyword", (business_id,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -111,19 +112,26 @@ def by_intent(business_id: int) -> dict:
     "Data Cube"-lite). Keywords already carry an intent from keyword research."""
     kws = _load_keywords(business_id)
     published = _published(business_id)
-    groups: dict[str, list[str]] = {}
+    groups: dict[str, list[dict]] = {}
     for k in kws:
         it = (k.get("intent") or "unknown").lower()
-        groups.setdefault(it, []).append(k["keyword"])
+        groups.setdefault(it, []).append(k)
     out = []
-    for it, kwl in groups.items():
+    for it, kl in groups.items():
         toks: set[str] = set()
-        for kw in kwl:
-            toks |= _tokens(kw)
+        for k in kl:
+            toks |= _tokens(k["keyword"])
         covered = sum(1 for p in published if len(p & toks) >= 2)
-        out.append({"intent": it, "keywords": len(kwl), "examples": kwl[:5],
-                    "owned_pieces": covered, "needs_content": covered == 0})
-    out.sort(key=lambda x: -x["keywords"])
+        # real DEMAND per intent (total monthly search volume) + avg difficulty, so the strategist can
+        # prioritize by opportunity (volume x winnability), not just intent bucket size.
+        vol = sum(int(k.get("search_volume") or 0) for k in kl)
+        diffs = [int(k["keyword_difficulty"]) for k in kl if k.get("keyword_difficulty") is not None]
+        out.append({"intent": it, "keywords": len(kl), "examples": [k["keyword"] for k in kl][:5],
+                    "owned_pieces": covered, "needs_content": covered == 0,
+                    "total_search_volume": vol or None,
+                    "avg_difficulty": round(sum(diffs) / len(diffs)) if diffs else None})
+    # rank by real demand first, then bucket size (was bucket size only)
+    out.sort(key=lambda x: (-(x.get("total_search_volume") or 0), -x["keywords"]))
     return {"by_intent": out, "summary": {"intents": len(out),
                                           "uncovered": sum(1 for g in out if g["needs_content"])}}
 
