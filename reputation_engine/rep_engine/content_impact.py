@@ -168,3 +168,28 @@ def measure_all(business_id: int) -> dict:
             log.warning("impact measure failed for batch %d: %s", b["id"], e)
             errors.append({"batch_id": b["id"], "error": str(e)[:200]})
     return {"measured": measured, "pending": pending, "errors": errors, "batches": len(batches)}
+
+
+def recent_signals(business_id: int, limit: int = 10) -> list[dict]:
+    """Compact measured-lift signals for the RE-PLANNER (closes the loop): per recent batch, the gap
+    it targeted, the % of that gap closed, the alignment delta, and the keep/adjust/pivot
+    recommendation. Lets the strategist double-down on what moved the score and pivot away from what
+    regressed/stalled -- instead of re-planning blind to results. Fail-safe -> []."""
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT ci.gap_pct_closed, ci.alignment_delta, ci.notes AS recommendation, "
+                "cb.gap_source "
+                "FROM content_impact ci JOIN content_batches cb ON cb.id = ci.batch_id "
+                "WHERE ci.business_id=%s ORDER BY ci.id DESC LIMIT %s", (business_id, limit)).fetchall()
+    except Exception:  # noqa: BLE001 -- table not migrated yet / no data -> no feedback signal
+        return []
+    out = []
+    for r in rows:
+        out.append({
+            "gap": r.get("gap_source"),
+            "gap_pct_closed": float(r["gap_pct_closed"]) if r.get("gap_pct_closed") is not None else None,
+            "alignment_delta": float(r["alignment_delta"]) if r.get("alignment_delta") is not None else None,
+            "recommendation": r.get("recommendation"),
+        })
+    return out

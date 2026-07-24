@@ -720,6 +720,9 @@ def assemble_plan(business: dict, gap: dict, start: date, strategy: Optional[dic
         "counts": {"total": len(wos), "auto": len(auto), "human": len(human),
                    "gap_derived": len(gap_derived)},
         "degraded": degraded,
+        # Whether the Content Strategist actually ran (vs a silent fallback to the deterministic
+        # template) -- so a strategist outage isn't invisible on a plan that otherwise looks complete.
+        "strategist_used": bool(strategy and strategy.get("campaigns")),
         "work_orders": [w.__dict__ for w in wos],
     }
 
@@ -945,6 +948,9 @@ def strategy_view(business_id: int) -> dict:
         "summary": gap.get("summary", ""),
         "sections": [sections[k] for k in ("ai_visibility", "seo", "search")],
         "counts": {k: len(sections[k]["groups"]) for k in sections},
+        # True when the Content Strategist produced campaigns (vs the deterministic template) -- lets
+        # the console show whether the rich program ran or silently fell back.
+        "strategist_used": any(g.get("campaign") for k in sections for g in sections[k]["groups"]),
         "degraded": degraded,
         "degraded_reason": (
             "This plan was built from an empty or failed gap analysis, so it shows only standard "

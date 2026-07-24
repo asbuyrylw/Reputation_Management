@@ -135,7 +135,12 @@ _SYSTEM_BASE = (
     "(a 40-60 word direct answer up top), FAQ/Q&A blocks, one quotable statistic per section, "
     "explicit entity naming (business + location + service), and a schema type per intent (FAQPage / "
     "Article / Product). (6) 3-8 campaigns is typical; go deep on the few highest-leverage gaps "
-    "rather than one shallow campaign per gap. JSON only."
+    "rather than one shallow campaign per gap. "
+    "(7) If 'content_performance' is provided (measured lift from content produced before), DOUBLE "
+    "DOWN on gaps/topics that moved the score up, PIVOT or strengthen (more authoritative citations + "
+    "clearer entity disambiguation) topics that regressed or barely moved, and DEPRIORITIZE gaps "
+    "already largely closed. (8) Prioritize by real DEMAND: keyword_intents/topic_clusters carry "
+    "total_search_volume + avg_difficulty -- lead with high-volume, winnable topics. JSON only."
 )
 
 
@@ -185,10 +190,19 @@ def _signals(business_id: int) -> dict:
         clusters = (_ta.clusters(business_id) or {}).get("clusters") or []
     except Exception as e:  # noqa: BLE001
         log.warning("strategist: clusters unavailable (%s)", e)
+    # Measured lift from prior content (closes the loop): the strategist doubles-down on gaps that
+    # moved the score and pivots away from those that regressed/stalled, instead of re-planning blind.
+    content_perf: list = []
+    try:
+        from . import content_impact as _ci
+        content_perf = _ci.recent_signals(business_id, limit=10)
+    except Exception as e:  # noqa: BLE001
+        log.warning("strategist: content-impact signals unavailable (%s)", e)
     # Trim to the highest-leverage slices so the payload stays small (planning is cheap). Include the
     # real DEMAND (search volume) + difficulty per intent/cluster so the strategist prioritizes by
     # opportunity, not just bucket size (was dropped entirely before).
     return {
+        "content_performance": content_perf,
         "keyword_intents": [{"intent": g.get("intent"), "keywords": g.get("keywords"),
                              "examples": g.get("examples"), "needs_content": g.get("needs_content"),
                              "total_search_volume": g.get("total_search_volume"),

@@ -692,6 +692,10 @@ _OUTPUT_PRODUCING_JOBS = frozenset({
     "audit", "gap_model", "plan", "sync_plan", "generate_drafts", "generate_due", "keyword_research",
     "production_briefs", "citation_analyze", "benchmark", "local_rank", "generate_content_batches",
     "ingest_source_material",
+    # multi-piece / paid jobs that can legitimately produce 0 -> flag the empty run instead of a clean
+    # green, so a broken provider key (e.g. DataForSEO 40104) or a no-op cluster run is visible.
+    "generate_clusters", "enrich_keyword_volume", "dataforseo_intel", "dataforseo_reviews",
+    "measure_content_impact",
 })
 
 # Keys a handler's return dict commonly uses to report how many items it produced. First hit wins.

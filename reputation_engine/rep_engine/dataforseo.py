@@ -132,7 +132,12 @@ def latest_reviews(business_id: int) -> list[dict]:
 
 
 def configured() -> bool:
-    return volume_configured() and (os.getenv("KEYWORD_VOLUME_PROVIDER", "").strip().lower() == "dataforseo")
+    """DataForSEO reputation-intel (competitor keyword gaps, brand mentions, cross-platform reviews)
+    is available whenever valid CREDENTIALS exist. It is NOT gated on the keyword-VOLUME-provider
+    selection -- that selection only routes which provider fills search_volume; gating the intel jobs
+    on it silently turned the whole feature off for an owner who had creds but picked another (or no)
+    volume provider."""
+    return volume_configured()
 
 
 def _guard_ok() -> bool:

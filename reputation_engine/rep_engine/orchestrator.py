@@ -43,6 +43,7 @@ from . import timeline_estimator as m7
 from . import acceleration_advisor as m8
 from . import feedback_loop as m9
 from . import citation_analytics as m10
+from . import content_impact as m_ci
 from . import runstate as m_rs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -183,6 +184,10 @@ def run_cycle(args) -> None:
     rs = m_rs.RunState.start(bid, kind="cycle", resume=getattr(args, "resume", False))
     rs.step("audit", lambda: m1.audit(bid), "CYCLE audit")
     _maybe_batch_score(rs, bid)
+    # MEASURE content impact off the fresh audit BEFORE re-planning, so the strategist re-plans with
+    # each batch's measured lift (keep / adjust / pivot) in hand -- closing the loop. run_cycle calls
+    # audit() directly (bypassing _run_audit, which auto-measures), so measure explicitly here.
+    rs.step("measure_impact", lambda: m_ci.measure_all(bid), "CYCLE measure content impact")
     rs.step("gap_model", lambda: m1.build_gap_model(bid), "CYCLE gap model")
     # RE-PLAN off the fresh gap model (the closed loop, Phase 4). The Content Strategist re-runs and,
     # because it dedupes against what's now PUBLISHED and reads the post-content gap model, it drops

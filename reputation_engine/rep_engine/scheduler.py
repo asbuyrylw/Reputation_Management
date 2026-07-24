@@ -36,6 +36,19 @@ DEFAULT_CADENCES = {
     "mentions_scan": 24,   # daily mention sweep
     "incident_scan": 24,   # daily incident triage
     "citation_analyze": 168,  # weekly
+    # DATA-FRESHNESS jobs -- were never auto-scheduled, so the "dynamic" ranking/keyword/behaviour
+    # data went stale or stayed empty and the JIT content drip never fired. All are dormant-safe
+    # (no-op without their provider key/connection), so scheduling them only spends where a provider
+    # is configured. This is what makes local trend, keyword volume, GSC/GA, and the plan-a-year drip
+    # actually happen on their own.
+    "local_rank": 168,             # weekly local-rank tracking (Serper)
+    "keyword_research": 720,       # monthly keyword refresh
+    "enrich_keyword_volume": 720,  # monthly DataForSEO volume/difficulty (dormant without creds)
+    "ingest_gsc": 168,             # weekly Search Console pull (dormant without a GSC connection)
+    "ingest_ga": 168,              # weekly Analytics pull (dormant without a GA connection)
+    "ingest_pagespeed": 720,       # monthly Core Web Vitals (dormant without PAGESPEED_API_KEY)
+    "dataforseo_intel": 720,       # monthly competitor keyword gaps + reviews (dormant without creds)
+    "generate_due": 168,           # weekly JIT content drip (budget-capped; makes plan-a-year real)
 }
 
 
