@@ -519,13 +519,33 @@ def _keyword_coverage(body: str, grounding: dict) -> dict:
     `important_missing` (primary/local) is what we force one revision pass to fix."""
     kws = grounding.get("keywords") or []
     text = (body or "").lower()
+
+    def _phrase_present(kw_low: str, words: list[str]) -> bool:
+        # Verbatim phrase, OR (for a multi-word phrase) all significant words appearing WITHIN A ~110-
+        # char window -- not merely scattered anywhere in the document. The old "all words appear
+        # anywhere" rule reported phrases as covered that keyword_density (stricter) marked missing,
+        # so keyword_coverage systematically overstated (e.g. 0.92 vs a true ~0.35).
+        if kw_low in text:
+            return True
+        if not words:
+            return False
+        if len(words) <= 1:
+            return words[0] in text
+        pos = [[m.start() for m in re.finditer(re.escape(w), text)] for w in words]
+        if any(not p for p in pos):
+            return False
+        for p0 in pos[0]:
+            if all(any(abs(pp - p0) <= 110 for pp in plist) for plist in pos[1:]):
+                return True
+        return False
+
     covered, missing, important_missing = [], [], []
     for k in kws:
         kw = (k.get("keyword") or "").strip()
         if not kw:
             continue
         words = [w for w in re.findall(r"[a-z0-9]+", kw.lower()) if len(w) > 2]
-        present = kw.lower() in text or (bool(words) and all(w in text for w in words))
+        present = _phrase_present(kw.lower(), words)
         if present:
             covered.append(kw)
         else:
@@ -1429,6 +1449,37 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         if _facts:
             _cm_parts.append("SOURCE MATERIAL — the client's own facts most relevant to THIS topic; "
                              "ground the content in these and do not contradict them:\n" + _facts)
+        # Pull the VERIFIED NAP straight from the FULL corpus so pieces use it verbatim instead of
+        # leaving a blank / [INSERT] placeholder for contact info (a recurring defect: the contact
+        # facts sit in the source material but the writer left them empty).
+        try:
+            _corpus_all = _sm.corpus(business_id, max_tokens=6000) or ""
+            _phone = re.search(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", _corpus_all)
+            _email = re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", _corpus_all)
+            _addr = re.search(r"\d{3,6}\s+[A-Z][A-Za-z0-9.\s]+?(?:Rd|Road|St|Street|Ave|Avenue|Blvd|Dr|Drive|Way|Ln|Lane|Ct|Pkwy|Hwy)\b[A-Za-z0-9.,#\s]{0,45}?\b\d{5}\b", _corpus_all)
+            _nap = " | ".join(x for x in [
+                ("Address: " + re.sub(r"\s+", " ", _addr.group(0)).strip()) if _addr else "",
+                ("Phone: " + _phone.group(0).strip()) if _phone else "",
+                ("Email: " + _email.group(0).strip()) if _email else ""] if x)
+            if _nap:
+                _cm_parts.append("VERIFIED CONTACT DETAILS (use these EXACT values wherever the piece "
+                                 "needs contact/address/phone/email — NEVER write a blank, ____, TBD, "
+                                 "or [INSERT] placeholder for them):\n" + _nap)
+        except Exception:  # noqa: BLE001 -- NAP extraction is best-effort; the corpus is already fed
+            pass
+        _cm_parts.append(
+            "GLOBAL WRITING RULES (obey exactly):\n"
+            "1. If a fact you need (a phone/address/email, a statistic, an attributed testimonial or "
+            "review quote) is present in the SOURCE MATERIAL above, USE it verbatim — quote testimonials "
+            "WITH attribution rather than saying reviews are unavailable, and never leave a blank, ____, "
+            "TBD, or [INSERT: ...] placeholder or tell the reader to 'go search' for something the "
+            "source material already provides.\n"
+            "2. When rebutting a contested/negative framing (e.g. scam / pyramid / MLM), rebut it with "
+            "positive, verifiable legitimacy evidence — but keep the contested words OUT of the title, "
+            "the H2/H3 headings, the FAQ questions, and any schema. Those are the most extractable, "
+            "quotable, AI-cited locations, and binding the brand name to the negative term there "
+            "REINFORCES the association you are trying to crowd out. Address the concern in ordinary "
+            "body prose, framed around what is true.")
         if _cm_parts:
             grounding["client_material"] = "\n\n".join(_cm_parts)
     except ImportError:  # pragma: no cover -- loose-script fallback
@@ -1744,6 +1795,17 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
     except Exception as e:  # noqa: BLE001 -- image generation must never break drafting
         log.debug("inline image generation skipped: %s", e)
+
+    # Compliance gate on the HEADLINE score: a draft that failed the compliance screen must not present
+    # a high quality_score -- that's the number the owner triages on, and a 0.85 next to
+    # compliance_pass=False (as the blog showed) is misleading. Cap the composite so a compliance
+    # failure is unmistakable in the score itself, and record why in quality_notes.
+    if comp_pass is False:
+        _capped = min(round(score, 2), 0.5)
+        if _capped < round(score, 2):
+            quality_notes["score_capped"] = {"from": round(score, 2), "to": _capped,
+                                              "reason": "compliance_pass=false"}
+        score = _capped
 
     _ensure_table()
     with db() as conn:

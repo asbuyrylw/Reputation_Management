@@ -568,18 +568,44 @@ def _persist(
                 log.debug("rich_media: caption/schema build skipped: %s", e2)
         except Exception as e:  # noqa: BLE001 -- grading must never block persistence
             log.debug("rich_media: video grading skipped: %s", e)
+    elif body and asset_type not in ("podcast", "report_audio"):
+        # TEXT-like rich media (deep_article, research_brief, slide_deck, infographic) was shipping
+        # UNSCORED -- geo_score + quality_notes both null, so no GEO/AEO/citation grade on half the
+        # content library. Grade it with the same GEO scorer as an article. Best-effort.
+        try:
+            from . import content_quality as _cq
+            _q = f"{business_name} {geo}".strip()
+            _geo = _cq.geo_score(body, target_query=_q, content_type=asset_type, asset_type=asset_type,
+                                 business_name=business_name, geo=geo)
+            quality_notes = {"geo": _geo}
+            geo_grade = _geo.get("score")
+        except Exception as e:  # noqa: BLE001 -- grading must never block persistence
+            log.debug("rich_media: text grading skipped: %s", e)
+    # Truncation guard (silent-failure fix): an LLM hitting its token cap leaves the body ending
+    # mid-sentence while the job still reports 'complete' (the research brief + slide deck both did).
+    # Detect it, flag it in quality_notes, and route the draft to needs_fix so a truncated piece is
+    # never presented as ready-to-review.
+    _status = "pending_review"
+    if body and len(body.split()) >= 120:
+        _tail = body.rstrip()
+        if _tail and _tail[-1] not in ".!?\"”')]:*_`>":
+            quality_notes = dict(quality_notes or {})
+            quality_notes["truncated"] = {"ends_with": _tail[-80:],
+                                          "reason": "body ends mid-sentence (likely token-cap truncation)"}
+            _status = "needs_fix"
+            log.warning("rich_media: %s draft appears TRUNCATED (ends mid-sentence) -> needs_fix", asset_type)
     with db() as conn:
         row = conn.execute(
             """INSERT INTO rich_media_drafts
                (business_id, asset_type, title, body, audio_url, transcript,
                 duration_secs, sources_used, compliance_pass, compliance_flags, generator,
                 notebook_url, geo_score, quality_notes, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending_review') RETURNING id""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, asset_type, title,
              body, audio_url, transcript, duration_secs,
              json.dumps(sources_used or []),
              compliance_pass, json.dumps(compliance_flags or []), generator, notebook_url,
-             geo_grade, json.dumps(quality_notes) if quality_notes else None),
+             geo_grade, json.dumps(quality_notes) if quality_notes else None, _status),
         ).fetchone()
         conn.commit()
     log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s, grade=%s)", row["id"],

@@ -36,13 +36,30 @@ such only own same so too very just also how what why when where who which whom 
 new get make like time people best top guide how-to vs versus review reviews using use used""".split())
 
 
+# Bot-wall / captcha / loading-page fingerprints. A page that trips these isn't a real competitor
+# document -- its boilerplate ("please wait", "verifying you are human", "enable javascript") was
+# polluting the extracted term set (the audit surfaced 'please wait', 'wait verification', 'reddit
+# please' as "competitor terms") and collapsing the word-count target.
+_BLOCKED_RE = re.compile(
+    r"(verif(?:y|ying) you are human|are you a robot|enable javascript|please wait|just a moment|"
+    r"captcha|access denied|attention required|checking your browser|cf-browser-verification|"
+    r"unusual traffic|before you continue|sign in to confirm|press and hold)", re.I)
+# Single tokens that only ever appear in bot-walls / chrome / loading UI -- excluded from term mining.
+_GARBAGE_WORDS = {
+    "please", "wait", "verification", "verify", "verifying", "human", "robot", "javascript",
+    "enable", "moment", "captcha", "browser", "cloudflare", "redirecting", "loading",
+    "denied", "unusual", "traffic", "cookies", "consent", "subscribe", "newsletter",
+}
+
+
 def _significant_terms(texts: list[str], min_docs: int = 2, top: int = 40) -> list[str]:
     """Unigrams + bigrams that recur ACROSS competitor pages (a light NLP-term proxy)."""
     doc_uni: list[set] = []
     doc_bi: list[set] = []
     freq: Counter = Counter()
     for t in texts:
-        toks = [w.lower() for w in _WORD.findall(t or "") if w.lower() not in _STOP and len(w) > 2]
+        toks = [w.lower() for w in _WORD.findall(t or "")
+                if w.lower() not in _STOP and w.lower() not in _GARBAGE_WORDS and len(w) > 2]
         uni = set(toks)
         bi = set(f"{a} {b}" for a, b in zip(toks, toks[1:]) if a not in _STOP and b not in _STOP)
         doc_uni.append(uni)
@@ -85,7 +102,13 @@ def _fetch_text(url: str, timeout: int = 12) -> Optional[str]:
             return None
         html = _TAG.sub(" ", r.text)
         text = _STRIP.sub(" ", html)
-        return re.sub(r"\s+", " ", text).strip()[:60000]
+        text = re.sub(r"\s+", " ", text).strip()[:60000]
+        # Reject bot-wall / captcha / loading pages and near-empty pages -- they aren't competitor
+        # documents, and their boilerplate corrupts the extracted term set + the word-count target.
+        if _BLOCKED_RE.search(text[:2500]) or len(text.split()) < 120:
+            log.debug("serp fetch %s: bot-wall/empty page rejected", url)
+            return None
+        return text
     except Exception as e:  # noqa: BLE001
         log.debug("serp fetch %s failed: %s", url, e)
         return None

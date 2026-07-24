@@ -419,6 +419,14 @@ _ATTRIB = re.compile(
     r'|[A-Z][A-Za-z.&\'\-]{2,}(?:\s+[A-Z][A-Za-z.&\'\-]{2,})?\s+'
     r'(?:reports?|states?|notes?|found|finds?|estimates?|writes?|explains?|warns?|advises?|reported that)'
     r')\b')
+# An ATTRIBUTED quotation: a quoted passage that sits next to an attribution -- 'Name said, "..."' or
+# '"..." -- Name'. A bare quoted phrase (a search term like "Team Unstoppable Cincinnati" or a label
+# like "scam") is NOT a citable quotation and must NOT score as one (it inflated the GEO quotation
+# signal even when the page had zero real attributed quotes).
+_ATTRIB_QUOTE = re.compile(
+    r'[A-Z][\w.&\'\-]+(?:\s+[A-Z][\w.&\'\-]+){0,3}\s*,?\s*'
+    r'(?:said|says|noted|adds?|added|explains?|explained|stated?|states?|reported)[^"“\n]{0,30}["“][^"”\n]{12,}["”]'
+    r'|["“][^"”\n]{12,}["”][\s,]*[—–-]\s*[A-Z][\w.&\'\-]+')
 
 # Per-content-type weight profiles (each sums to 100). Keys must exist in _geo_signal_score() below.
 _GEO_PROFILES: dict[str, dict[str, int]] = {
@@ -463,9 +471,11 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     # stat density: ~1 quotable stat per 200 words
     stats = len(_STAT.findall(body))
     stat_density = min(1.0, stats / max(1, wc / 200))
-    # quotation: attributed, directly-quoted statements -- the #1 measured AI-citation lever.
-    # Count quoted passages AND source attributions; reward ~1 per 400 words (2+ on long-form).
-    quotes = len(_QUOTE_STR.findall(body)) + len(_ATTRIB.findall(body))
+    # quotation: ATTRIBUTED statements only -- the #1 measured AI-citation lever. Count source
+    # attributions ("according to X", "X reports") + quoted passages that carry an attribution
+    # ('Name said, "..."' / '"..." -- Name'). A bare quoted phrase (search term / label) does NOT
+    # count -- that over-credited pages with zero real quotes. Reward ~1 per 400 words.
+    quotes = len(_ATTRIB.findall(body)) + len(_ATTRIB_QUOTE.findall(body))
     quotation = min(1.0, quotes / max(1.0, wc / 400.0))
     # fluency/readability: shorter sentences + lower reading grade get cited MORE (Princeton GEO
     # "fluency optimization", +29%; NN/g: concise copy tested +58% usability). Dense grade-16 prose
@@ -479,11 +489,16 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     _g_ok = 1.0 if _grade <= 9 else 0.65 if _grade <= 11 else 0.35 if _grade <= 13 else 0.0
     _s_ok = 1.0 if _avg_sent <= 20 else 0.6 if _avg_sent <= 24 else 0.2
     fluency = round(_g_ok * 0.6 + _s_ok * 0.4, 3)
-    # citation density: external links per ~300 words, authoritative sources bonus
+    # citation density: inline citations of SOURCES FOR CLAIMS, per ~300 words (+ authoritative-source
+    # bonus). Do NOT credit vague "consult/see/search/visit X for figures" pointers -- telling the
+    # reader to go look something up is not a citation of a claim the page makes; those inflated the
+    # score without adding a liftable sourced fact.
     ext = _EXT_LINK.findall(body)
     auth = len(_AUTH.findall(body))
-    cit = min(1.0, len(ext) / max(1, wc / 300))
-    citation_density = min(1.0, cit + (0.25 if auth else 0))
+    vague = len(re.findall(r'(?i)\b(?:consult|see|search(?:\s+for)?|visit|refer to|check|look up|find (?:it|them|more|current))\b[^.\n]{0,45}\]\(https?://', body))
+    real_cit = max(0, len(ext) - vague)
+    cit = min(1.0, real_cit / max(1, wc / 300))
+    citation_density = min(1.0, cit + (0.25 if (auth and real_cit) else 0))
     # schema-ready shape (question headings -> FAQ; else structured Article)
     schema = 1.0 if qh >= 1 else 0.6
     # entity clarity: named ENOUGH for an AI to attribute the facts, but NOT keyword-stuffed. Repeating
@@ -589,7 +604,10 @@ def geo_score(body: str, target_query: str = "", content_type: str = "", asset_t
 # entity-clear, and Q&A-structured. Weighted blend over 5 dimensions + a runtime read + a compliance note.
 # ============================================================================================
 _TS = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
-_ONSCREEN = re.compile(r"\[\s*(?:on[-\s]?screen|visual|b-?roll|text\s*(?:card|overlay)|graphic|footage|cut to|scene)", re.I)
+# On-screen / visual directions -- accept BOTH bracket [ and paren ( wrappers (scripts write
+# "*(On-screen: ...)*" as often as "[on-screen ...]"); matching only '[' missed every parenthesized
+# cue and zeroed the production score on scripts that were fully cued.
+_ONSCREEN = re.compile(r"[\[(]\s*(?:on[-\s]?screen|visual|b-?roll|text\s*(?:card|overlay)|graphic|footage|cut to|scene|lower[-\s]?third)", re.I)
 _NARR = re.compile(r"\b(?:narrator|v\.?o\.?|voice[-\s]?over|on[-\s]?camera|host|speaker|talent)\b", re.I)
 # ideal runtime band (seconds) per rich video type
 _VIDEO_LEN = {"explainer_video": (60, 180), "video_script": (45, 180), "explainer": (60, 180),
@@ -694,7 +712,10 @@ def video_score(body: str, target_query: str = "", business_name: str = "", geo:
     runtime = _runtime_secs(body)
     onscreen = len(_ONSCREEN.findall(body))
     narr = len(_NARR.findall(body))
-    seg_ts = sum(1 for h in headings if _TS.search(h))
+    # Count [m:ss] timecodes ANYWHERE in the body, not just inside markdown headings -- scripts put
+    # segment timecodes at paragraph starts ("[0:08] ...") far more often than in "## 0:08" headings,
+    # so the heading-only count wrongly reported an un-segmented script.
+    seg_ts = len(_TS.findall(body))
     segments = seg_ts or len(re.findall(r"^\s*#{2,4}\s", body, re.M))
     qh = sum(1 for h in headings if h.strip().endswith("?"))
     has_faq = qh >= 1 or bool(re.search(r"\b(q ?& ?a|faq|frequently asked|common questions|questions? (?:people ask|answered))\b", low))
@@ -760,7 +781,10 @@ def video_score(body: str, target_query: str = "", business_name: str = "", geo:
         ("Opening hook", hook, 16, "Open with a hook in the first 5-10 seconds."),
         ("Segmented with timestamps", seg_ts >= 3 or segments >= 3, 18, "Break the script into 3+ timed segments."),
         ("On-screen text / visual direction", onscreen >= 3, 18, "Add on-screen text + visual/B-roll direction per segment."),
-        ("Narration / dialogue present", narr >= 1, 14, "Write the actual narration/dialogue, not just directions."),
+        # Narration is present either via explicit speaker labels OR a substantial body of spoken prose
+        # (a verbatim explainer script is ALL narration and carries no "Narrator:" label -- requiring the
+        # label zeroed the check on real, fully-written narration).
+        ("Narration / dialogue present", narr >= 1 or len(_words(spoken)) >= 40, 14, "Write the actual narration/dialogue, not just directions."),
         ("Call to action", bool(re.search(r"\b(cta|call to action|visit|contact|learn more|subscribe)\b", low)), 14,
          "Add an explicit CTA."),
         ("Branded end card / outro", end_card, 10, "Add a branded end card / outro."),
@@ -818,6 +842,14 @@ def serp_grade(body: str, benchmark: Optional[dict], keywords: Optional[list[str
     if not benchmark or benchmark.get("skipped"):
         return {"skipped": True, "reason": (benchmark or {}).get("reason", "no SERP benchmark")}
     terms = benchmark.get("terms") or []
+    _target0 = benchmark.get("avg_word_count")
+    # Degraded-benchmark guard: too few real terms, or an implausibly tiny word-count target, means the
+    # SERP scrape was blocked/captcha'd or returned near-empty pages. Scoring against that produces a
+    # misleading number (the audit saw serp=27 driven by captcha boilerplate + target_words=5), so
+    # surface it as unavailable rather than a false quality signal.
+    if len(terms) < 5 or (_target0 is not None and _target0 < 150):
+        return {"skipped": True, "reason": "SERP benchmark too sparse/blocked to score reliably",
+                "terms_total": len(terms), "target_words": _target0}
     low = (body or "").lower()
     covered = [t for t in terms if str(t).lower() in low]
     missing = [t for t in terms if str(t).lower() not in low]
