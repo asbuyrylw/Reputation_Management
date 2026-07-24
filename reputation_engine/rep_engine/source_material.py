@@ -191,6 +191,36 @@ def grounding_block(business_id: int, max_tokens: int = 4500) -> str:
     return "\n\n".join(out).strip()
 
 
+import re as _re
+
+# Imperative sentences in uploaded material that are RULES to obey, not facts to reference:
+# "always mention X", "never say Y", "must include Z", "include this disclaimer", "avoid W".
+_RULE_RE = _re.compile(
+    r"\b((?:always|never|do not|don't|must not|must|avoid|ensure|be sure to|make sure|"
+    r"only use|use only|include|do include|don't include|require[sd]?|no |not )\b.{4,200}?)"
+    r"(?:[.!\n]|$)", _re.I)
+
+
+def instruction_rules(business_id: int, limit: int = 20) -> str:
+    """Lift MUST-FOLLOW imperatives out of the uploaded source material (e.g. 'always mention X',
+    'never say Y', 'include this disclaimer') so the writer OBEYS them as rules, not merely treats
+    them as facts to not contradict. Best-effort bulleted list; '' when none / dormant. Built on the
+    fail-loud corpus() read, so a real read error still surfaces to the caller."""
+    c = corpus(business_id, max_tokens=8000)
+    if not c:
+        return ""
+    rules, seen = [], set()
+    for m in _RULE_RE.finditer(c):
+        r = " ".join(m.group(1).split()).strip().rstrip(",;:")
+        k = r.lower()
+        if len(r) >= 8 and k not in seen:
+            seen.add(k)
+            rules.append(r)
+        if len(rules) >= limit:
+            break
+    return "\n".join("- " + r for r in rules) if rules else ""
+
+
 def visual_grounding(business_id: int, max_tokens: int = 400) -> str:
     """A COMPACT grounding block for IMAGE/VIDEO prompts (Gemini/Imagen/Veo), which need SHORT
     prompts — image models like Imagen have a hard prompt cap (~480 tokens), so the whole block must

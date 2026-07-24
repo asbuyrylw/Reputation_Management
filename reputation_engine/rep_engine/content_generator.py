@@ -620,6 +620,9 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
          "override everything; ground your facts in this material and do not contradict it):\n"
          + grounding["client_material"] + "\n") if grounding.get("client_material") else "",
         "WHAT AI CURRENTLY GETS WRONG / THE GAP THIS CONTENT MUST CLOSE:",
+        # The SPECIFIC weak AI answer this piece exists to fix leads; the full gap model is background.
+        (f"THIS PIECE MUST CLOSE (the specific weak AI answer): \"{wo.get('target_query')}\"")
+        if wo.get("target_query") else "",
         grounding.get("gap_focus") or "(general trust & visibility)",
         "",
         # Authoritative sources to cite inline + real statistics to quote -- the biggest AI-citation lever.
@@ -629,12 +632,16 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         f"Instruction: {instr}" if instr else "",
         kw_line + f"Target question this should answer when someone asks AI: "
         f"{wo.get('target_query','(general trust/visibility)')}",
-        # SERP+NLP coverage terms from the content-optimization layer (NeuronWriter), so the draft
-        # covers what the top-ranking pages cover. Present only when the integration is configured.
-        ("SERP COVERAGE TERMS (cover these naturally, like the top-ranking pages do; headings first): "
-         + (grounding.get("neuron", {}).get("terms_h2") or grounding.get("neuron", {}).get("terms_basic") or ""))
-        if isinstance(grounding.get("neuron"), dict) and (grounding["neuron"].get("terms_h2")
-                                                          or grounding["neuron"].get("terms_basic")) else "",
+        # SERP coverage terms + questions + target length from the pages ACTUALLY ranking for this
+        # query (serp_benchmark), so the draft covers what the top-ranking pages cover.
+        ("SERP COVERAGE TERMS (cover these naturally, like the top-ranking pages do): "
+         + ", ".join(str(t) for t in (grounding.get("serp_terms") or [])[:30]))
+        if grounding.get("serp_terms") else "",
+        ("QUESTIONS THE TOP PAGES ANSWER (answer these in the piece): "
+         + " | ".join(str(q) for q in (grounding.get("serp_questions") or [])[:8]))
+        if grounding.get("serp_questions") else "",
+        (f"TARGET LENGTH (roughly match the ranking pages): ~{grounding.get('serp_target_words')} words")
+        if grounding.get("serp_target_words") else "",
         "",
         ("FOLLOW THIS OUTLINE (it maps the keywords + gap to sections):\n" + outline) if outline else "",
         ("MATCH THIS BRAND VOICE (a sample of their approved writing — tone/cadence only, do not "
@@ -1386,23 +1393,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 grounding["serp_target_words"] = b.get("avg_word_count")
     except Exception as e:  # noqa: BLE001 -- benchmark is best-effort, never blocks generation
         log.debug("serp benchmark skipped: %s", e)
-    # Content-optimization layer (NeuronWriter): pull the SERP+NLP term/entity recommendations for
-    # the target keyword and ground the writer in them so the draft covers what the ranking pages
-    # cover. Dormant-safe -- a no-op with no NEURONWRITER_API_KEY. The analysis takes ~60s; this is
-    # a background job so that's fine. The returned query id lets us score the draft below.
+    # (NeuronWriter removed from the stack.) SERP coverage now comes from serp_benchmark above
+    # (grounding["serp_terms"/"serp_questions"/"serp_target_words"]), which _gen_prompt feeds the writer.
     neuron = {}
-    try:
-        from . import neuron_enrich as _ne
-        target_kw = wo.get("target_query") or wo.get("title") or ""
-        if target_kw:
-            # Shared, budget-aware cache: reuses the enrichment analysis for this keyword if one
-            # exists (no extra credit), else runs one within the monthly budget. Dormant-safe.
-            brief = _ne.brief_for(business_id, target_kw)
-            if not brief.get("skipped"):
-                neuron = brief
-                grounding["neuron"] = brief
-    except Exception as e:  # noqa: BLE001 -- optimization is best-effort, never blocks generation
-        log.debug("neuronwriter brief skipped: %s", e)
     voice = _brand_voice(business_id)
     # If the owner cloned a brand writing style (from a URL), prepend it so the draft matches that
     # voice. Best-effort — never blocks generation.
@@ -1413,17 +1406,39 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             voice = (f"BRAND WRITING STYLE — match this voice exactly: {_style}\n\n" + (voice or "")).strip()
     except Exception as e:  # noqa: BLE001
         log.debug("writing-style voice unavailable: %s", e)
-    # Brand guardrails (e.g. "always Team Unstoppable, never Primerica") + the owner's uploaded source
-    # material. These are AUTHORITATIVE (absolute rules + real client facts), so they go into the
-    # grounding as facts — NOT into `voice`, which _gen_prompt frames as "tone/cadence only, do not
-    # copy facts" (that framing actively told the model NOT to use the client's uploaded facts).
+    # Brand rules + the owner's uploaded source material -> AUTHORITATIVE (absolute rules + real
+    # client facts), injected as grounding (NOT `voice`, which is tone-only). Three fidelity fixes:
+    #  - TOPIC-SCOPED grounding (grounding_retrieval.facts_block) so the piece gets the facts relevant
+    #    to ITS topic, not just the newest 4.5k tokens of the corpus (falls back to the recency corpus
+    #    only when the topic matches nothing);
+    #  - imperative RULES inside uploaded docs ("always/never/include ...") are lifted out + obeyed;
+    #  - FAIL-LOUD: a real grounding read error must NOT silently ship off-brand/ungrounded content, so
+    #    we re-raise (the job fails + retries) instead of swallowing it.
     try:
         from . import source_material as _sm
-        _brand = _sm.grounding_block(business_id)
-        if _brand:
-            grounding["client_material"] = _brand
-    except Exception as e:  # noqa: BLE001
-        log.debug("brand/source grounding unavailable: %s", e)
+        from . import grounding_retrieval as _gr
+        _rules = _sm.guardrails(business_id)
+        _doc_rules = _sm.instruction_rules(business_id)
+        _topic_facts = _gr.facts_block(business_id, _scope_q)
+        _facts = _topic_facts or _sm.corpus(business_id, max_tokens=3500)
+        _cm_parts = []
+        if _rules:
+            _cm_parts.append("BRAND RULES — these are ABSOLUTE and override anything else:\n" + _rules)
+        if _doc_rules:
+            _cm_parts.append("MUST-FOLLOW RULES FROM THE CLIENT'S UPLOADED MATERIAL (ABSOLUTE — obey "
+                             "these exactly):\n" + _doc_rules)
+        if _facts:
+            _cm_parts.append("SOURCE MATERIAL — the client's own facts most relevant to THIS topic; "
+                             "ground the content in these and do not contradict them:\n" + _facts)
+        if _cm_parts:
+            grounding["client_material"] = "\n\n".join(_cm_parts)
+    except ImportError:  # pragma: no cover -- loose-script fallback
+        pass
+    except Exception as e:  # noqa: BLE001 -- a REAL read error must fail loud, not ship ungrounded
+        log.warning("brand/source grounding read FAILED for business %s -- failing generation so it "
+                    "retries with grounding rather than shipping off-brand/ungrounded content: %s",
+                    business_id, e)
+        raise
     reg = _reg_profile(business_id)          # firm-type-aware compliance (RIA vs BD vs non-financial)
     # Business-agnostic StrategyProfile: load it ONCE and derive everything vertical-specific -- the
     # license ban (spliced into GEN_SYSTEM / the compliance-fix editor), the post-processing scrub gate,
