@@ -8,7 +8,7 @@
 
 import { useMemo, useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useVisuals, useRichMediaDrafts, useRichMediaDraft, useApproveRichMedia, useRejectRichMedia, useRenderRichMediaVideo, usePublishVisualYouTube } from "@/lib/hooks";
+import { useVisuals, useRichMediaDrafts, useRichMediaDraft, useApproveRichMedia, useRejectRichMedia, useRenderRichMediaVideo, usePublishVisualYouTube, useDeleteVisual, useDeleteRichMedia } from "@/lib/hooks";
 import { apiBase } from "@/lib/api";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { CreateContentButton } from "@/components/CreateContentButton";
@@ -82,7 +82,7 @@ function MediaCard({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   );
 }
 
-function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId: number | null; onClose: () => void }) {
+function MediaModal({ item, businessId, canEdit, onClose }: { item: MediaItem; businessId: number | null; canEdit: boolean; onClose: () => void }) {
   // Rich-media details carry the full body AND (for podcasts) the transcript — fetch for every rich
   // item, including podcasts, so the transcript section actually renders.
   const needsBody = item.source === "rich";
@@ -91,6 +91,16 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
   const reject = useRejectRichMedia(businessId);
   const renderVideo = useRenderRichMediaVideo(businessId);
   const publishYT = usePublishVisualYouTube(businessId);
+  const delVisual = useDeleteVisual(businessId);
+  const delRich = useDeleteRichMedia(businessId);
+  const del = item.source === "visual" ? delVisual : delRich;
+  function handleDelete() {
+    const warn = item.status === "approved"
+      ? "Delete this asset permanently? It's approved and may be embedded in a published piece — that reference would break. This can't be undone."
+      : "Delete this asset permanently? This can't be undone.";
+    if (!window.confirm(warn)) return;
+    del.mutate(item.id, { onSuccess: onClose });
+  }
   const isVideoScript = item.source === "rich" && (item.assetType === "explainer_video" || item.assetType === "video_script");
   const d: RichMediaDraft | undefined = detail.data;
   const m = KIND_META[item.kind];
@@ -178,13 +188,23 @@ function MediaModal({ item, businessId, onClose }: { item: MediaItem; businessId
               className="rounded-[10px] bg-emerald-600 px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">{approve.isPending ? "Approving…" : "Approve"}</button>
           </div>
         )}
+        {canEdit && (
+          <div className="flex items-center justify-between gap-2 border-t border-line p-3">
+            <span className="text-[11.5px] leading-snug text-ink-4">
+              Remove this asset permanently{item.status === "approved" ? " (it may be referenced in a published piece)" : ""}.
+            </span>
+            <button onClick={handleDelete} disabled={del.isPending}
+              className="shrink-0 rounded-[10px] border border-rose-200 bg-white px-3.5 py-1.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60">
+              {del.isPending ? "Deleting…" : "Delete"}</button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 export default function MediaPage() {
-  const { businessId, businesses, loading } = useBusiness();
+  const { businessId, businesses, canEdit, loading } = useBusiness();
   const visuals = useVisuals(businessId);
   const rich = useRichMediaDrafts(businessId);
   const [filter, setFilter] = useState("all");
@@ -254,7 +274,7 @@ export default function MediaPage() {
         </div>
       )}
 
-      {open && <MediaModal item={open} businessId={businessId} onClose={() => setOpen(null)} />}
+      {open && <MediaModal item={open} businessId={businessId} canEdit={canEdit} onClose={() => setOpen(null)} />}
     </div>
   );
 }

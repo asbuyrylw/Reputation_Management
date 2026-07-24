@@ -109,16 +109,43 @@ def send(business_id: int, recipients: list[dict]) -> dict:
     return {"sent": sent, "failed": failed, "ghl_fanout": ghl}
 
 
+def _format_location_address(loc: dict) -> str:
+    """Compose a single-line address string from a structured locations row."""
+    street = (loc.get("address") or "").strip()
+    region = " ".join(p for p in [(loc.get("state") or "").strip(), (loc.get("postal") or "").strip()] if p)
+    tail = ", ".join(p for p in [(loc.get("city") or "").strip(), region] if p)
+    return ", ".join(p for p in [street, tail] if p)
+
+
 def nap(business_id: int) -> dict:
     """Canonical Name/Address/Phone block for citation consistency (NAP). Flags missing fields the
-    owner should fill in, since NAP mismatches across directories suppress local rank."""
+    owner should fill in, since NAP mismatches across directories suppress local rank. Address/phone
+    fall back to the business's PRIMARY structured location when the businesses.{address,phone} columns
+    are empty -- that's where the owner actually enters them -- so the NAP isn't shown as 'Missing'
+    when the data already exists on the location record."""
     sql = ("SELECT name, geo, domain, phone, address FROM businesses WHERE id=%s" if _has_cols()
            else "SELECT name, geo, domain FROM businesses WHERE id=%s")
     with db() as conn:
         b = conn.execute(sql, (business_id,)).fetchone()
-    b = dict(b) if b else {}
-    missing = [f for f in ("name", "phone", "address") if not b.get(f)]
-    return {"name": b.get("name"), "address": b.get("address"), "phone": b.get("phone"),
+        b = dict(b) if b else {}
+        address = (b.get("address") or "").strip()
+        phone = (b.get("phone") or "").strip()
+        if not address or not phone:
+            try:
+                loc = conn.execute(
+                    "SELECT address, city, state, postal, phone FROM locations "
+                    "WHERE business_id=%s ORDER BY is_primary DESC, id LIMIT 1", (business_id,)).fetchone()
+            except Exception:  # noqa: BLE001 -- locations table may not exist on older schemas
+                loc = None
+            if loc:
+                loc = dict(loc)
+                if not phone:
+                    phone = (loc.get("phone") or "").strip()
+                if not address:
+                    address = _format_location_address(loc)
+    name = (b.get("name") or "").strip()
+    missing = [k for k, v in (("name", name), ("phone", phone), ("address", address)) if not v]
+    return {"name": b.get("name"), "address": address or None, "phone": phone or None,
             "website": b.get("domain"), "areas_served": b.get("geo"),
             "missing_fields": missing,
             "consistency_note": ("Keep this exact NAP identical across Google, your website, and every "

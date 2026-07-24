@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from .. import jobs as _jobs
-from ..deps import authorize_business, get_conn, get_current_user, require_business_editor
+from ..deps import (authorize_business, get_conn, get_current_user, require_business_editor,
+                    require_super_admin)
 
 try:
     from ... import billing as _billing
@@ -209,6 +210,24 @@ class CustomContentBody(BaseModel):
     gap_key: Optional[str] = None        # optional: tie to a gap (lineage + keyword scoping)
     gap_label: Optional[str] = None      # the gap's human topic (steers keyword scoping)
     aspect_ratio: Optional[str] = None   # image/video (16:9, 9:16, 1:1)
+
+
+class EnhancePromptBody(BaseModel):
+    content_type: str
+    description: str
+
+
+@router.post("/custom-content/enhance-prompt")
+def enhance_content_prompt(body: EnhancePromptBody, business_id: int = Depends(require_business_editor)):
+    """AI prompt enhancement for the 'Describe what you want' box: turn a short description into an
+    optimized production brief for the chosen content type (article -> layout/keywords/word-count/
+    images/AEO-SEO targets; video -> a HeyGen-grounded script brief), anchored to the brand's identity
+    + source material. Runs through the budget-gated verified orchestrator. Returns the enhanced text
+    for the operator to review/edit; it does NOT generate anything."""
+    res = _ca.enhance_prompt(business_id, body.description, body.content_type)
+    if not res.get("ok"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, res.get("error") or "enhancement failed")
+    return res
 
 
 @router.get("/content-types")
@@ -687,7 +706,21 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
         out.append({"gap_key": g["gap_key"], "topic": g["topic"], "gap_source": g["gap_source"],
                     "target_prompts": g["target_prompts"], "batch_id": b["id"] if b else None,
                     "batch_status": b["status"] if b else None, "pieces_drafted": drafted,
-                    "pieces_published": published, "impact": impact})
+                    "pieces_published": published, "impact": impact,
+                    "content_addressable": True})
+    # Expand to the WHOLE gap analysis: the categories a content piece doesn't close (weak queries,
+    # thin corroboration, schema, technical, per-platform surface actions) are surfaced too, flagged
+    # content_addressable=False with a `where` note, so the completion view reflects every gap — not
+    # only the content-fillable slice. Advisory-only: never breaks the meter.
+    try:
+        for ng in _cb.noncontent_gaps(business_id):
+            out.append({"gap_key": ng["gap_key"], "topic": ng["topic"], "gap_source": ng["gap_source"],
+                        "target_prompts": [], "batch_id": None, "batch_status": None,
+                        "pieces_drafted": 0, "pieces_published": 0, "impact": None,
+                        "content_addressable": False, "category": ng.get("category"),
+                        "where": ng.get("where"), "why": ng.get("why")})
+    except Exception:  # noqa: BLE001 -- the advisory rows must never break the completion meter
+        pass
     return _floats_deep(out)
 
 
@@ -757,34 +790,6 @@ def actions_taken(business_id: int = Depends(authorize_business), conn=Depends(g
         "WHERE business_id=%s ORDER BY completed_on DESC, id DESC", (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-@router.get("/neuron-enrichment")
-def neuron_enrichment(business_id: int = Depends(authorize_business)):
-    """The NeuronWriter SERP enrichment per keyword (must-cover terms, PAA/questions, competitor
-    scores) that grounds the content plan + briefs. Empty until the enrichment job has run."""
-    try:
-        from ... import neuron_enrich as _ne
-    except ImportError:  # pragma: no cover
-        import neuron_enrich as _ne  # type: ignore
-    try:
-        return _ne.latest(business_id)
-    except Exception:  # noqa: BLE001 -- a degraded cache row must not 500 the console; show empty
-        import logging
-        logging.getLogger("api.content").exception("neuron-enrichment read failed (business %s)", business_id)
-        return []
-
-
-@router.get("/content-optimization-status")
-def content_optimization_status(business_id: int = Depends(authorize_business)):
-    """Whether the NeuronWriter content-optimization layer is configured + live. The editor uses
-    this to show the SERP content-score gauge; the per-draft score lives in draft.quality_notes.neuron."""
-    try:
-        from ... import neuronwriter as _nw
-    except ImportError:  # pragma: no cover
-        import neuronwriter as _nw  # type: ignore
-    return {"configured": _nw.configured(), "live": _nw.verify() if _nw.configured() else False,
-            "provider": "neuronwriter"}
 
 
 @router.get("/social-audit")
@@ -1193,6 +1198,39 @@ def compliance_ledger(business_id: int = Depends(authorize_business), conn=Depen
         (business_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.delete("/compliance-ledger/{signoff_id}")
+def delete_compliance_signoff(
+    signoff_id: int,
+    business_id: int,
+    reason: str,
+    user: dict = Depends(require_super_admin),
+    conn=Depends(get_conn),
+):
+    """PERMANENTLY delete a compliance sign-off record. This table is the immutable FINRA 2210 / SEC
+    principal-review audit trail, so deletion is restricted to the platform super-admin and requires a
+    reason, which is logged along with the destroyed record's identity. NOTE: deleting a sign-off does
+    NOT un-approve the already-published asset — the ledger and the live content can diverge. Use only
+    to remove test or clearly-erroneous rows."""
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "A reason is required to delete a compliance record.")
+    row = conn.execute(
+        "DELETE FROM compliance_signoffs WHERE id=%s AND business_id=%s "
+        "RETURNING id, approver, draft_id, asset_id, body_hash",
+        (signoff_id, business_id)).fetchone()
+    conn.commit()
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "compliance sign-off record not found")
+    import logging as _lg
+    _lg.getLogger("api.content").warning(
+        "COMPLIANCE SIGN-OFF DELETED id=%s business=%s draft=%s asset=%s original_approver=%s "
+        "body_hash=%s by super-admin=%s reason=%r",
+        row["id"], business_id, row.get("draft_id"), row.get("asset_id"), row.get("approver"),
+        row.get("body_hash"), user.get("email"), reason)
+    return {"deleted": signoff_id, "reason": reason}
 
 
 @router.post("/content-drafts/{draft_id}/reject")

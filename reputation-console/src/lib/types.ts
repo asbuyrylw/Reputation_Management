@@ -221,6 +221,15 @@ export interface StrategySpec {
   coverage?: DraftCoverageAdvisory | null;   // warn-only grounding advisory for this piece's topic
 }
 // Plan-level roll-up of per-piece grounding coverage (warn-only). status: gap>thin>ok, or unknown.
+export interface UngroundedPiece {
+  wo_id?: number;
+  title: string | null;
+  content_type: string | null;
+  topic: string | null;
+  primary_keyword?: string | null;
+  keywords?: string[];
+  needed: string;   // human "what to provide" — the specific source material to add for this piece
+}
 export interface PlanCoverage {
   status: "ok" | "thin" | "gap" | "unknown";
   total_topics: number;
@@ -229,6 +238,9 @@ export interface PlanCoverage {
   ungrounded: number;
   unknown: number;
   ungrounded_topics: string[];
+  // Per-piece "what to provide" (preferred over ungrounded_topics): tells the owner the specific
+  // source material to add, not just the piece name. Synthesis pieces are excluded (false positives).
+  ungrounded_pieces?: UngroundedPiece[];
   reason: string | null;
 }
 export interface StrategyGroup {
@@ -468,6 +480,14 @@ export interface GapCompletion {
   pieces_drafted: number;
   pieces_published: number;
   impact: { gap_pct_closed: number | null; alignment_delta: number | null; sov_delta: number | null } | null;
+  // Whole-gap-analysis expansion: content_addressable=false rows are gaps a content piece doesn't
+  // close (weak queries, thin corroboration, schema, technical, per-platform surface actions). They
+  // carry `where` (where they're tracked) + `category`, and no batch/pieces. undefined ⇒ treat as true
+  // (older payloads only returned content-addressable gaps).
+  content_addressable?: boolean;
+  category?: string | null;
+  where?: string | null;
+  why?: string | null;
 }
 
 // NeuronWriter SERP content-optimization score for a draft — how well its term coverage

@@ -102,6 +102,51 @@ function GapMeter({ gaps }: { gaps: GapCompletion[] }) {
   );
 }
 
+// The rest of the gap analysis — gaps a content PIECE doesn't close (weak AI answers, thin
+// corroboration, schema, technical, per-platform actions). Surfaced so "gap completion" reflects the
+// WHOLE analysis (answering "are all my gaps showing?"), each with WHERE it's actually worked.
+const CATEGORY_LABEL: Record<string, string> = {
+  weak_queries: "Weak AI answers",
+  thin_corroboration: "Thin third-party corroboration",
+  schema_gaps: "Schema / structured data",
+  site_technical_gaps: "Technical SEO",
+  surface_actions: "Per-platform presence",
+};
+function OtherGaps({ gaps }: { gaps: GapCompletion[] }) {
+  const groups = new Map<string, GapCompletion[]>();
+  for (const g of gaps) {
+    const k = g.category || g.gap_source || "other";
+    (groups.get(k) ?? groups.set(k, []).get(k)!).push(g);
+  }
+  return (
+    <div>
+      <SecHead title="Also in your gap analysis" note="gaps a content piece doesn't close — tracked on other surfaces" />
+      <Card>
+        <div className="space-y-3.5">
+          {Array.from(groups.entries()).map(([cat, items]) => (
+            <div key={cat}>
+              <div className="flex items-center justify-between">
+                <span className="text-[12.5px] font-semibold text-ink-2">{CATEGORY_LABEL[cat] ?? cat.replace(/_/g, " ")}</span>
+                <span className="font-mono text-[11px] text-ink-4">{items.length}</span>
+              </div>
+              {items[0]?.where && <div className="text-[11.5px] text-ink-4">{items[0].where}</div>}
+              <ul className="mt-1 space-y-0.5">
+                {items.slice(0, 6).map((g) => (
+                  <li key={g.gap_key} className="flex items-start gap-1.5 text-[12px] text-ink-3">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-line-2" aria-hidden />
+                    <span className="min-w-0 truncate">{g.topic}</span>
+                  </li>
+                ))}
+                {items.length > 6 && <li className="pl-2.5 text-[11px] text-ink-4">+{items.length - 6} more</li>}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // Chronological ROI log — every measurement, newest first (wires the /content-impact ledger).
 function ImpactLedger({ rows }: { rows: ContentImpactRow[] }) {
   if (!rows.length) return null;
@@ -140,12 +185,24 @@ export default function BatchesPage() {
       />
       <JobProgressBanner businessId={businessId} className="mb-4" />
 
-      {gaps && gaps.length > 0 && (
-        <div className="mb-6">
-          <SecHead title="Gap completion" note="how far content has moved each open gap" />
-          <Card><GapMeter gaps={gaps} /></Card>
-        </div>
-      )}
+      {gaps && gaps.length > 0 && (() => {
+        // Split the whole gap analysis: content-addressable gaps drive the completion meter; the rest
+        // (schema, technical, weak queries, corroboration, per-platform) are shown as "tracked
+        // elsewhere" so the view reflects EVERY gap, not just the content-fillable slice.
+        const contentGaps = gaps.filter((g) => g.content_addressable !== false);
+        const otherGaps = gaps.filter((g) => g.content_addressable === false);
+        return (
+          <div className="mb-6 space-y-4">
+            {contentGaps.length > 0 && (
+              <div>
+                <SecHead title="Gap completion" note="how far content has moved each gap a content piece can close" />
+                <Card><GapMeter gaps={contentGaps} /></Card>
+              </div>
+            )}
+            {otherGaps.length > 0 && <OtherGaps gaps={otherGaps} />}
+          </div>
+        );
+      })()}
 
       <SecHead title="Batches" note="multi-type content per gap, with measured impact" />
       {isLoading ? (

@@ -799,6 +799,38 @@ def set_status(business_id: int, draft_id: int, status: str, reviewer: Optional[
     return bool(r)
 
 
+def delete_draft(business_id: int, draft_id: int) -> bool:
+    """Permanently delete a rich-media draft (explicit owner action). If the draft has a rendered
+    video (quality_notes.rendered_video.visual_id), the linked visual_asset is deleted too so a
+    delete doesn't orphan the rendered MP4. Tenancy-scoped. Returns True if a row was removed."""
+    _ensure_table()
+    with db() as conn:
+        r = conn.execute("SELECT quality_notes FROM rich_media_drafts WHERE id=%s AND business_id=%s",
+                         (draft_id, business_id)).fetchone()
+        if not r:
+            return False
+        qn = r.get("quality_notes")
+        if isinstance(qn, str):
+            try:
+                qn = json.loads(qn)
+            except (ValueError, TypeError):
+                qn = {}
+        vid = (qn.get("rendered_video") or {}).get("visual_id") if isinstance(qn, dict) else None
+        conn.execute("DELETE FROM rich_media_drafts WHERE id=%s AND business_id=%s",
+                     (draft_id, business_id))
+        conn.commit()
+    if vid:
+        try:
+            from . import visual_content as _vc
+        except ImportError:  # pragma: no cover
+            import visual_content as _vc  # type: ignore
+        try:
+            _vc.delete_visual(int(vid), business_id)
+        except Exception as e:  # noqa: BLE001 - the draft is gone; a dangling visual is non-fatal
+            log.warning("delete_draft: could not remove linked visual %s: %s", vid, e)
+    return True
+
+
 def _record_rendered_video(business_id: int, draft_id: int, d: dict, res: dict, provider: str) -> None:
     """Store the rendered-video reference on the draft (so the review UI links the draft to its video)."""
     with db() as conn:

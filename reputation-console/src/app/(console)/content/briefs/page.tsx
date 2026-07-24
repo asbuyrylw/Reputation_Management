@@ -10,7 +10,12 @@ import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
 import { RunJobButton } from "@/components/RunJobButton";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { CreateContentModal } from "@/components/CreateContentModal";
 import type { WorkOrder, ContentDraft, Asset, TopicalAuthority, KeywordIntent, ProductionBrief } from "@/lib/types";
+
+// A seed for the Create-content modal, opened prefilled from a "needs content" topic/intent so the
+// keyword-by-intent + topic-authority ideas can be turned into a real, grounded piece in one click.
+type CreateSeed = { type: string; description: string; gapLabel?: string };
 
 // Today as a YYYY-MM-DD string in the local timezone (default for "produced on").
 function todayISO(): string {
@@ -64,7 +69,7 @@ function MarkProducedControl({ brief, businessId }: { brief: ProductionBrief; bu
 
 // "Topic authority" — the pillar/spoke clusters to own, with a needs-content badge + what to
 // write next. Helps the owner see which topics they cover vs. still need a piece for.
-function TopicAuthoritySection({ data }: { data: TopicalAuthority | undefined }) {
+function TopicAuthoritySection({ data, canEdit, onCreate }: { data: TopicalAuthority | undefined; canEdit: boolean; onCreate: (v: CreateSeed) => void }) {
   if (!data || data.clusters.length === 0) return null;
   const clusters = [...data.clusters].sort((a, b) => a.priority - b.priority).slice(0, 8);
   return (
@@ -79,7 +84,19 @@ function TopicAuthoritySection({ data }: { data: TopicalAuthority | undefined })
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-ink">{c.topic}</span>
               {c.needs_content ? (
-                <Chip tone="info">Needs content</Chip>
+                canEdit ? (
+                  <button
+                    onClick={() => onCreate({
+                      type: "article",
+                      description: `Write a pillar article to build topic authority on "${c.topic}". Cover the core topic and its supporting questions${c.spokes.length ? `: ${c.spokes.slice(0, 6).join("; ")}` : ""}. Make it the definitive, on-brand owned resource for this topic.`,
+                      gapLabel: c.topic,
+                    })}
+                    className="rounded-full border border-indigo/40 bg-indigo-050 px-2 py-0.5 text-[11px] font-semibold text-indigo-strong transition hover:bg-indigo-050/70">
+                    + Create content
+                  </button>
+                ) : (
+                  <Chip tone="info">Needs content</Chip>
+                )
               ) : (
                 <Chip tone="good">{c.owned_pieces} covered</Chip>
               )}
@@ -120,20 +137,22 @@ function TopicAuthoritySection({ data }: { data: TopicalAuthority | undefined })
 
 // "Keywords by intent" — a small breakdown of how many target keywords sit in each search
 // intent, and whether you've published anything for that intent yet.
-function KeywordIntentSection({ data }: { data: KeywordIntent | undefined }) {
+function KeywordIntentSection({ data, canEdit, onCreate }: { data: KeywordIntent | undefined; canEdit: boolean; onCreate: (v: CreateSeed) => void }) {
   if (!data || data.by_intent.length === 0) return null;
   return (
     <section>
       <SecHead
         title="Keywords by intent"
-        note={`What people are trying to do when they search these terms — ${data.summary.uncovered > 0 ? `${data.summary.uncovered} intent${data.summary.uncovered === 1 ? "" : "s"} have no content yet.` : "all intents have content."}`}
+        note={`What people are trying to do when they search these terms — ${data.summary.uncovered > 0 ? `${data.summary.uncovered} intent${data.summary.uncovered === 1 ? "" : "s"} have no content yet. Create a piece and the strategist writes it, grounded in your facts.` : "all intents have content."}`}
       />
       <Card>
         <ul className="divide-y divide-line">
-          {data.by_intent.map((b) => (
+          {data.by_intent.map((b) => {
+            const intentLabel = b.intent.replace(/_/g, " ");
+            return (
             <li key={b.intent} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
               <div className="min-w-0">
-                <span className="font-medium capitalize text-ink-2">{b.intent.replace(/_/g, " ")}</span>
+                <span className="font-medium capitalize text-ink-2">{intentLabel}</span>
                 {b.examples.length > 0 && (
                   <span className="ml-2 text-xs text-ink-4">e.g. {b.examples.slice(0, 3).join(", ")}</span>
                 )}
@@ -141,13 +160,26 @@ function KeywordIntentSection({ data }: { data: KeywordIntent | undefined }) {
               <div className="flex shrink-0 items-center gap-2">
                 <span className="text-xs text-ink-3">{b.keywords} keyword{b.keywords === 1 ? "" : "s"}</span>
                 {b.needs_content ? (
-                  <Chip tone="info">Needs content</Chip>
+                  canEdit ? (
+                    <button
+                      onClick={() => onCreate({
+                        type: "article",
+                        description: `Write an article for the "${intentLabel}" search intent. Directly answer what people are looking for when they search things like: ${b.examples.slice(0, 3).join("; ")}. Give accurate, on-brand information that satisfies that intent and reflects your real facts.`,
+                        gapLabel: `${intentLabel} intent`,
+                      })}
+                      className="rounded-full border border-indigo/40 bg-indigo-050 px-2 py-0.5 text-[11px] font-semibold text-indigo-strong transition hover:bg-indigo-050/70">
+                      + Create content
+                    </button>
+                  ) : (
+                    <Chip tone="info">Needs content</Chip>
+                  )
                 ) : (
                   <Chip tone="good">{b.owned_pieces} covered</Chip>
                 )}
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       </Card>
     </section>
@@ -447,6 +479,7 @@ export default function BriefsPage() {
   const genAll = useGenerateContentBatch(businessId);
   const [confirmAll, setConfirmAll] = useState(false);
   const [areaFilter, setAreaFilter] = useState<string>("all");
+  const [seed, setSeed] = useState<CreateSeed | null>(null);   // prefilled Create-content modal
 
   if (lb || lw || !workOrders) return <Spinner />;
 
@@ -602,8 +635,8 @@ export default function BriefsPage() {
               <summary className="cursor-pointer text-sm font-semibold text-ink-2">Explore more topic ideas</summary>
               <p className="mt-1 text-xs text-ink-4">Broader topics and keywords you could own beyond the specific pieces above — turn any into a task from your gaps.</p>
               <div className="mt-3 space-y-6">
-                <TopicAuthoritySection data={topical} />
-                <KeywordIntentSection data={keywordIntent} />
+                <TopicAuthoritySection data={topical} canEdit={canEdit} onCreate={setSeed} />
+                <KeywordIntentSection data={keywordIntent} canEdit={canEdit} onCreate={setSeed} />
               </div>
             </details>
           ) : null}
@@ -614,6 +647,16 @@ export default function BriefsPage() {
             </div>
           )}
         </div>
+      )}
+
+      {seed && (
+        <CreateContentModal
+          businessId={businessId}
+          initialType={seed.type}
+          initialDescription={seed.description}
+          initialGapLabel={seed.gapLabel}
+          onClose={() => setSeed(null)}
+        />
       )}
     </div>
   );

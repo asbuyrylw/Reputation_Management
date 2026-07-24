@@ -224,6 +224,59 @@ def gaps_for_business(business_id: int) -> list[dict]:
     return out
 
 
+def noncontent_gaps(business_id: int) -> list[dict]:
+    """Enumerate the gap categories a content PIECE does not close -- weak_queries, thin_corroboration,
+    schema_gaps, site_technical_gaps, surface_actions. These are real gaps from the SAME gap model, but
+    they're worked on other surfaces (Website fixes, Outreach, per-platform tasks), so each carries a
+    `where` note + content_addressable=False. Surfacing them lets the completion view reflect the WHOLE
+    gap analysis instead of only the content-fillable slice. Uniform shape:
+    {gap_key, topic, gap_source, why, category, where, content_addressable}. Fail-safe (never raises)."""
+    try:
+        with db() as conn:
+            gm = _latest_gap_model(conn, business_id)
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[dict] = []
+
+    def add(category: str, key_prefix: str, topic, why, where: str) -> None:
+        topic = (topic or "").strip()
+        if not topic:
+            return
+        out.append({"gap_key": _tu.gid(key_prefix, topic), "topic": topic, "gap_source": category,
+                    "why": (why or "").strip(), "category": category, "where": where,
+                    "content_addressable": False})
+
+    for w in gm.get("weak_queries") or []:
+        add("weak_queries", "weak", (w.get("prompt") or w.get("query")),
+            (w.get("problem") or w.get("fix")),
+            "Tracked as the target answers your content pieces must move.")
+    for t in gm.get("thin_corroboration") or []:
+        add("thin_corroboration", "corrob", t.get("claim"),
+            (t.get("where_to_get_it") or t.get("why")),
+            "Tracked in Outreach — third-party corroboration (press, media, partners).")
+    for sg in gm.get("schema_gaps") or []:
+        label = sg if isinstance(sg, str) else (sg.get("type") or sg.get("issue") or "")
+        add("schema_gaps", "schema", label, "",
+            "Tracked in Website fixes — schema / structured data.")
+    for g in gm.get("site_technical_gaps") or []:
+        if isinstance(g, dict):
+            add("site_technical_gaps", "tech", g.get("issue"), (g.get("recommendation") or g.get("why")),
+                "Tracked in Website fixes — technical SEO.")
+        else:
+            add("site_technical_gaps", "tech", g, "", "Tracked in Website fixes — technical SEO.")
+    surfaces = gm.get("surface_actions") or {}
+    if isinstance(surfaces, dict):
+        for surface, actions in surfaces.items():
+            acts = [str(a) for a in (actions or []) if a]
+            if not acts:
+                continue
+            label = str(surface).replace("_", " ").title()
+            why = f"{len(acts)} recommended action(s): " + "; ".join(acts[:3]) + ("…" if len(acts) > 3 else "")
+            add("surface_actions", "surface", f"{label} presence", why,
+                "Tracked as per-platform tasks in your plan.")
+    return out
+
+
 def _types_for_gap(gap: dict, default_types: Optional[list[str]] = None) -> list[str]:
     at = (gap.get("asset_type") or "").lower()
     topic = (gap.get("topic") or "").lower()

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useBusiness } from "@/lib/business";
-import { useAssets, usePatchAsset, useAssetPlacements, useAddPlacement, useUpdatePlacement, useComplianceLedger, useOurContentImpact, useGscSummary } from "@/lib/hooks";
+import { useAuth } from "@/lib/auth";
+import { useAssets, usePatchAsset, useAssetPlacements, useAddPlacement, useUpdatePlacement, useComplianceLedger, useDeleteComplianceSignoff, useOurContentImpact, useGscSummary } from "@/lib/hooks";
 import { Card, PageHeader, Spinner, Chip, Input, Button } from "@/components/ui";
 import { EmptyState } from "@/components/primitives";
 import { SecHead } from "@/components/DashboardV2";
@@ -187,13 +188,25 @@ function AssetRow({ a, businessId, canEdit }: { a: Asset; businessId: number | n
 
 function ComplianceLedger({ businessId }: { businessId: number | null }) {
   const { data } = useComplianceLedger(businessId);
+  const { user } = useAuth();
+  const isSuperAdmin = !!user?.is_super_admin;
+  const del = useDeleteComplianceSignoff(businessId);
   if (!data || data.length === 0) return null;
+  function remove(signoffId: number, title: string) {
+    const reason = window.prompt(
+      `Permanently delete the compliance sign-off for "${title}"?\n\nThis is a FINRA/SEC audit record — deleting it does NOT un-approve the published piece, and it can't be undone. Enter a reason to proceed:`);
+    if (!reason || !reason.trim()) return;   // cancelled or empty reason
+    del.mutate({ signoffId, reason: reason.trim() });
+  }
   return (
     <details className="mt-6">
       <summary className="cursor-pointer text-sm font-semibold text-ink-2">Compliance sign-off record ({data.length})</summary>
+      {isSuperAdmin && (
+        <p className="mt-2 text-[12px] text-ink-4">This is the immutable FINRA/SEC audit trail. As super-admin you can delete an erroneous or test record (with a logged reason); deleting it does not un-approve the published piece.</p>
+      )}
       <TableContainer className="mt-2">
         <thead>
-          <tr><Th>When</Th><Th>Title</Th><Th>Approver</Th><Th>Verdict</Th><Th>Override reason</Th></tr>
+          <tr><Th>When</Th><Th>Title</Th><Th>Approver</Th><Th>Verdict</Th><Th>Override reason</Th>{isSuperAdmin && <Th> </Th>}</tr>
         </thead>
         <tbody>
           {data.map((s) => (
@@ -203,6 +216,13 @@ function ComplianceLedger({ businessId }: { businessId: number | null }) {
               <Td>{s.approver || "—"}</Td>
               <Td>{s.compliance_pass === true ? <Chip tone="good">passed</Chip> : s.compliance_pass === false ? <Chip tone="bad">flagged</Chip> : <Chip tone="info">unscreened</Chip>}</Td>
               <Td className="text-ink-3">{s.override_reason || "—"}</Td>
+              {isSuperAdmin && (
+                <Td>
+                  <button onClick={() => remove(s.id, s.title || `draft ${s.draft_id}`)} disabled={del.isPending}
+                    className="rounded-md border border-rose-200 bg-white px-2 py-0.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60">
+                    Delete</button>
+                </Td>
+              )}
             </tr>
           ))}
         </tbody>

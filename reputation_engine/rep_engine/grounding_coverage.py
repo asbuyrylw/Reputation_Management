@@ -124,6 +124,29 @@ def plan_coverage(signals: list) -> dict:
             "ungrounded_topics": ungrounded_topics, "reason": reason}
 
 
+def needed_material(content_type, topic, keywords=None, gap_hint=None) -> str:
+    """Human 'what to provide' string for a genuinely-ungrounded content piece: tells the owner the
+    SPECIFIC source material to add so the piece is written from their real facts, instead of just
+    naming the piece. Pure + import-light; deterministic (no LLM). Keyed loosely on content_type."""
+    ct = (content_type or "").lower()
+    topic = (topic or "").strip() or "this topic"
+    kw = ", ".join([k for k in (keywords or []) if k][:4])
+    if "local" in ct:
+        base = (f"a page or document about '{topic}' — your services, exact service area, "
+                "address/hours, and local proof (results, reviews, community involvement)")
+    elif "video" in ct:
+        base = f"the key talking points and real facts for '{topic}' the script should say"
+    elif ("faq" in ct) or ("landing" in ct):
+        base = f"the real questions customers ask about '{topic}' and your answers"
+    else:   # article / blog / white paper / generic written content
+        base = f"a page or document covering '{topic}' with the facts, examples and specifics to cite"
+    if kw:
+        base += f" (keywords: {kw})"
+    if gap_hint:
+        base += f". Hint: {gap_hint}"
+    return base
+
+
 def _draft_topic(row: dict) -> str:
     """Reconstruct the EXACT topic a stored draft grounded on (== scope_query at generation time):
     the draft's own target_query, else the work order's gap_specifics.source_query, else the title."""

@@ -164,9 +164,22 @@ export default function StrategyPage() {
             <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800">
               {strat.coverage?.reason || "Some planned pieces have no source material for their topic, so they'll be written without your verified facts."}
             </p>
-            {/* Name the SPECIFIC pieces that need source material (backend already sends the list) so
-                the owner knows exactly what to add, not just a count. */}
-            {(strat.coverage?.ungrounded_topics?.length ?? 0) > 0 && (
+            {/* Tell the owner WHAT to provide per piece — the specific source material to add — not
+                just the piece name (backend sends ungrounded_pieces each with a `needed` string).
+                Falls back to the old topic list for older payloads. */}
+            {(strat.coverage?.ungrounded_pieces?.length ?? 0) > 0 ? (
+              <ul className="mt-2 space-y-1.5">
+                {strat.coverage!.ungrounded_pieces!.map((p, i) => (
+                  <li key={p.wo_id ?? i} className="flex items-start gap-1.5 text-[12.5px] text-amber-900">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+                    <span>
+                      <span className="font-semibold capitalize">{(p.content_type || "piece").replace(/_/g, " ")}</span>
+                      <span> — provide {p.needed}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (strat.coverage?.ungrounded_topics?.length ?? 0) > 0 ? (
               <ul className="mt-2 space-y-1">
                 {strat.coverage!.ungrounded_topics.map((t) => (
                   <li key={t} className="flex items-start gap-1.5 text-[12.5px] text-amber-900">
@@ -175,8 +188,8 @@ export default function StrategyPage() {
                   </li>
                 ))}
               </ul>
-            )}
-            <Link href="/content/source" className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-amber-900 hover:underline">Add source material for these →</Link>
+            ) : null}
+            <Link href="/content/source" className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-amber-900 hover:underline">Add source material →</Link>
           </div>
         </div>
       )}

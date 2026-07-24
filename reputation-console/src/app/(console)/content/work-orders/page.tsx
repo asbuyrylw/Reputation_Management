@@ -11,6 +11,7 @@ import { useAuth } from "@/lib/auth";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { Badge, Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
+import { DirectoryCitationsSection } from "@/components/DirectoryCitationsSection";
 import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, RoadmapItem } from "@/lib/types";
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
@@ -825,7 +826,20 @@ export default function WorkOrdersPage() {
   // The "why" is a COLUMN (no click-to-expand-to-read); a row click opens the full detail DRAWER
   // (WorkOrderCard) for actions/subtasks/notes. Status stays inline-editable in its own cell.
   const woColumns: DataGridColumn<WorkOrder>[] = [
-    { key: "title", label: "Task", width: 300, minWidth: 160, hideable: false, wrap: true,
+    // Inline complete: check to mark the task done (back-dated to today), uncheck to reopen. Reuses
+    // the same status mutation as the Status cell; stopPropagation so it doesn't open the drawer.
+    { key: "done", label: "", width: 44, minWidth: 40, align: "center", hideable: false,
+      render: (w) => (
+        <input type="checkbox" aria-label={`Mark "${w.title || "task"}" complete`}
+          checked={["done", "verified"].includes(w.status)}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => setStatus.mutate(e.target.checked
+            ? { woId: w.id, status: "done", completed_on: todayISO() }
+            : { woId: w.id, status: "pending" })}
+          disabled={!canEdit}
+          className="h-4 w-4 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-50" />
+      ) },
+    { key: "title", label: "Task", width: 260, minWidth: 160, hideable: false, wrap: true,
       sortValue: (w) => (w.title ?? "").toLowerCase(),
       render: (w) => (
         <span className="font-medium text-slate-800">
@@ -833,7 +847,12 @@ export default function WorkOrdersPage() {
           {w.title || "Untitled task"}
         </span>
       ) },
-    { key: "why", label: "Why it matters", width: 320, wrap: true,
+    // "What to do" — the specific action for THIS task. Same title tasks (e.g. "Improve Google Business
+    // presence") each carry a different instruction; showing it distinguishes them without a click.
+    { key: "instruction", label: "What to do", width: 340, wrap: true,
+      sortValue: (w) => (w.instruction ?? "").toLowerCase(),
+      render: (w) => <span className="text-xs text-slate-600">{w.instruction || "—"}</span> },
+    { key: "why", label: "Why it matters", width: 300, wrap: true,
       render: (w) => <span className="text-xs text-slate-600">{w.why_helps_ai_rep || w.why_helps_seo || (w.rationale?.why ?? "") || "—"}</span> },
     { key: "area", label: "Area", width: 120, sortValue: (w) => w.area ?? "",
       render: (w) => <span className="text-xs text-slate-500">{w.area ? (AREA_LABEL[areaKey(w.area)] ?? w.area) : "—"}</span> },
@@ -1172,6 +1191,11 @@ export default function WorkOrdersPage() {
           </div>
         );
       })()}
+
+      {/* Get listed (directories) — the NAP + trusted-directory submission block, surfaced here as an
+          outreach action and linked to the Outreach hub where submissions are tracked. Deep mode only
+          so Fast stays focused on today's tasks. */}
+      {mode === "deep" && <DirectoryCitationsSection businessId={businessId} outreachLink className="mt-6" />}
 
       {/* Work completed + which task types correlate with score gains (below the board) */}
       <WorkCompletedSection businessId={businessId} />

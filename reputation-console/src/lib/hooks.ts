@@ -41,7 +41,6 @@ import type {
   ContentBatch,
   ContentImpactRow,
   GapCompletion,
-  ContentOptimizationStatus,
   Dashboard,
   DiscoveryTarget,
   ExternalSignal,
@@ -279,16 +278,6 @@ export function useGenerateContentBatch(businessId: number | null) {
   });
 }
 
-// Is NeuronWriter content-optimization wired up for this business? `configured` means a key
-// is set; `live` means it's currently reachable. When not configured the SERP-score gauge stays
-// dormant (renders nothing), so the drafts UI can decide whether to surface a connect hint.
-export function useContentOptimizationStatus(businessId: number | null) {
-  return useApiQuery<ContentOptimizationStatus>(
-    ["content-optimization-status", businessId],
-    businessId ? `/businesses/${businessId}/content-optimization-status` : null,
-  );
-}
-
 export function useProductionBriefs(businessId: number | null) {
   return useApiQuery<ProductionBrief[]>(["production-briefs", businessId], businessId ? `/businesses/${businessId}/production-briefs` : null);
 }
@@ -396,6 +385,20 @@ export function useComplianceLedger(businessId: number | null) {
   return useApiQuery<ComplianceSignoff[]>(["compliance-ledger", businessId], base(businessId, "/compliance-ledger"));
 }
 
+// SUPER-ADMIN only: permanently delete a compliance sign-off record. This is a FINRA/SEC audit row,
+// so the server restricts it to the platform super-admin and requires a reason (query param, logged
+// with the destroyed record's identity). Deleting a sign-off does NOT un-approve the published asset.
+export function useDeleteComplianceSignoff(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ signoffId, reason }: { signoffId: number; reason: string }) =>
+      apiFetch<{ deleted: number }>(
+        `/businesses/${businessId}/compliance-ledger/${signoffId}?reason=${encodeURIComponent(reason)}`,
+        { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["compliance-ledger", businessId] }),
+  });
+}
+
 export function useEditDraft(businessId: number | null) {
   const qc = useQueryClient();
   return useMutation({
@@ -446,22 +449,6 @@ export function useDeleteWritingStyle(businessId: number | null) {
       apiFetch(`/businesses/${businessId}/writing-styles/${style_id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["writing-styles", businessId] }),
   });
-}
-
-// ---- Katteb content-scoring layer ----
-export function useKattebCredits(businessId: number | null) {
-  return useApiQuery<{ configured: boolean; ok?: boolean; credits_available?: number; credits_total?: number; plan_tier?: string }>(
-    ["katteb-credits", businessId], base(businessId, "/katteb/credits"));
-}
-
-// Kick off a Katteb SEO + competitor analysis for a draft (~1000 credits, runs as a job). Poll the
-// drafts list afterward; quality_notes.katteb appears when it finishes. Invalidates jobs (banner).
-export function useAnalyzeSeo(businessId: number | null) {
-  return useApiMutation<{ draftId: number }>(
-    ({ draftId }) => `/businesses/${businessId}/drafts/${draftId}/analyze-seo`,
-    () => ({}),
-    [["jobs", businessId], ["content-drafts", businessId], ["katteb-credits", businessId]],
-  );
 }
 
 // Humanize-with-AI: rewrite the draft to read more human via the budget-gated verified
@@ -1995,6 +1982,19 @@ export function useCreateContent(businessId: number | null) {
   });
 }
 
+// AI prompt enhancement for the "Describe what you want" box: turns a short description into an
+// optimized production brief for the chosen content type (article → layout/keywords/word-count/
+// images/AEO-SEO targets; video → a HeyGen-grounded script brief), grounded in the brand's identity +
+// source material. Returns the enhanced text; the caller decides whether to use it. Runs through the
+// budget-gated verified orchestrator (same path as AI Edit/Humanize), never a raw provider.
+export function useEnhancePrompt(businessId: number | null) {
+  return useMutation({
+    mutationFn: ({ content_type, description }: { content_type: string; description: string }) =>
+      apiFetch<{ ok: boolean; enhanced_prompt: string }>(
+        `/businesses/${businessId}/custom-content/enhance-prompt`, { method: "POST", body: { content_type, description } }),
+  });
+}
+
 // Stored reputation signals (DataForSEO): brand mentions + cross-platform reviews, between audits.
 export function useReputationSignals(businessId: number | null) {
   return useApiQuery<ReputationSignals>(["reputation-signals", businessId], base(businessId, "/reputation-signals"));
@@ -2065,6 +2065,28 @@ export function usePublishVisualYouTube(businessId: number | null) {
   return useMutation({
     mutationFn: (visualId: number) => apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/visuals/${visualId}/publish-youtube`, { method: "POST", body: { privacy: "unlisted" } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+  });
+}
+
+// Permanently delete a generated visual (owner action; best-effort unlinks the file server-side).
+export function useDeleteVisual(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (visualId: number) => apiFetch<{ deleted: boolean }>(`/businesses/${businessId}/visuals/${visualId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["visuals", businessId] }),
+  });
+}
+
+// Permanently delete a rich-media draft (owner action). Cascades a linked rendered video so the
+// delete doesn't orphan the MP4; invalidates both media grids.
+export function useDeleteRichMedia(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: number) => apiFetch<{ deleted: boolean }>(`/businesses/${businessId}/rich-media-drafts/${draftId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["rich-media", businessId] });
+      qc.invalidateQueries({ queryKey: ["visuals", businessId] });
+    },
   });
 }
 

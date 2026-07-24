@@ -16,6 +16,7 @@ that would let this route to Gemini while keeping those guarantees.)
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -141,3 +142,114 @@ def ai_edit(business_id: int, body: str, instruction: str) -> dict:
     if not out:
         return {"ok": False, "error": "The edit is unavailable right now — try again."}
     return {"ok": True, "rewritten_text": out}
+
+
+# ---------------------------------------------------------------------------
+# Prompt enhancement: turn the operator's short "describe what you want" into an
+# optimized production brief for the chosen content type, grounded in the brand's
+# identity + source material. Runs through the SAME verified orchestrator (budget-
+# gated, cost-recorded) as the assist functions above. Returns a brief the operator
+# reviews/edits before generating -- it never generates anything itself.
+# ---------------------------------------------------------------------------
+# Content types that are produced as SPOKEN video (HeyGen). These get the faithful,
+# verbatim-safe video-script brief; everything else gets the web-article brief.
+_VIDEO_TYPES = {"video", "explainer_video", "video_script", "short_video", "reel", "shorts"}
+
+_ENHANCE_ARTICLE_BASE = (
+    "You are a senior content strategist writing a PRODUCTION BRIEF for ONE web article. The operator "
+    "gave a short description of what they want. Rewrite it into a single, information-dense brief the "
+    "content generator can execute -- written as instructions, NOT as the article itself. Cover, "
+    "compactly: the working title and angle; the target search intent and 4-8 primary/secondary "
+    "keywords to work in; the section outline (the H2/H3 headings a reader and an AI answer engine both "
+    "need); an appropriate target word count for the topic; how many images/visuals and roughly where "
+    "they go; and the AEO/GEO/SEO targets to hit (a direct-answer opening, cited statistics, quotable "
+    "expert lines, and schema-friendly structure). Keep it a tight brief, not an essay. Do NOT write "
+    "the article. Do NOT invent facts, statistics, credentials, dates, or names -- describe what to "
+    "include and mark [INSERT: what's needed] where the writer must supply a real fact. Output ONLY "
+    "the brief as markdown."
+)
+
+_ENHANCE_VIDEO_BASE = (
+    "You are a video producer writing a PRODUCTION BRIEF for a short, brand-safe explainer VIDEO that "
+    "will be produced by an AI avatar tool (HeyGen). The operator gave a short description. Rewrite it "
+    "into a brief the script generator can execute: the video's single goal and the question/search it "
+    "answers; the on-screen title; a suggested spoken structure (hook -> 2-4 key points -> call to "
+    "action) with an approximate runtime and word budget for a ~60-120 second clip; the tone and "
+    "framing; and the on-screen text/callouts. Ground every claim in the brand's own facts and source "
+    "material provided below. This brief becomes a script that a compliance-reviewed avatar will speak "
+    "VERBATIM, so keep it faithful and free of unverifiable claims: do NOT invent statistics, "
+    "credentials, disclaimers, or names -- mark [INSERT: what's needed] where a real fact is required. "
+    "Output ONLY the brief as markdown."
+)
+
+_ENHANCE_MAX_TOKENS = 1500
+
+
+def _grounding_context(business_id: int) -> str:
+    """Compact brand grounding for prompt enhancement: business identity + brand writing guardrails +
+    the titles of the owner's source material, so the enhanced brief is anchored to real facts. Fail-
+    safe -- returns whatever is available and never raises."""
+    parts: list[str] = []
+    try:
+        from .db import db
+    except ImportError:  # pragma: no cover
+        from db import db  # type: ignore
+    try:
+        with db() as conn:
+            b = conn.execute("SELECT name, geo, services, goal FROM businesses WHERE id=%s",
+                             (business_id,)).fetchone()
+        if b:
+            ident = {k: b.get(k) for k in ("name", "geo", "services", "goal") if b.get(k)}
+            if ident:
+                parts.append("BUSINESS: " + "; ".join(f"{k}: {v}" for k, v in ident.items()))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from . import source_material as _sm
+    except ImportError:  # pragma: no cover
+        try:
+            import source_material as _sm  # type: ignore
+        except Exception:  # noqa: BLE001
+            _sm = None  # type: ignore
+    if _sm is not None:
+        try:
+            g = _sm.guardrails(business_id)
+            if g:
+                parts.append("BRAND WRITING RULES: " + (g if isinstance(g, str) else json.dumps(g, default=str))[:800])
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            docs = _sm.list_documents(business_id) or []
+            titles = [d.get("title") for d in docs if isinstance(d, dict) and d.get("title")][:12]
+            if titles:
+                parts.append("SOURCE MATERIAL ON FILE (titles): " + "; ".join(titles))
+        except Exception:  # noqa: BLE001
+            pass
+    return "\n".join(parts)
+
+
+def enhance_prompt(business_id: int, description: str, content_type: str) -> dict:
+    """Rewrite the operator's free-text 'describe what you want' into an optimized production brief
+    for the selected content type, grounded in the brand's identity + source material. A VIDEO type
+    targets the HeyGen script brief (faithful, verbatim-safe); everything else targets a web-article
+    brief (layout, keywords, word count, images, AEO/SEO targets). Returns {ok, enhanced_prompt}.
+    Never raises on a model miss."""
+    description = (description or "").strip()
+    if not description:
+        return {"ok": False, "error": "Describe what you want first, then enhance it."}
+    is_video = (content_type or "").strip().lower() in _VIDEO_TYPES
+    profile = _tenant_profile(business_id)
+    system = (_ENHANCE_VIDEO_BASE if is_video else _ENHANCE_ARTICLE_BASE) + _policy(_bp.license_policy_for(profile))
+    grounding = _grounding_context(business_id)
+    user = (f"CONTENT TYPE: {content_type}\n\nWHAT THE OPERATOR WANTS:\n{description}"
+            + (f"\n\n---\nBRAND GROUNDING (anchor the brief to these real facts):\n{grounding}"
+               if grounding else ""))
+    try:
+        out = _at.llm_text(system, user, business_id=business_id, tier="mid",
+                           max_tokens=_ENHANCE_MAX_TOKENS, operation="enhance_prompt")
+    except _at.BudgetExceededError:
+        return {"ok": False, "error": "Over the monthly budget — raise the cap to use AI assist."}
+    out = (out or "").strip()
+    if not out:
+        return {"ok": False, "error": "Enhancement is unavailable right now — try again."}
+    return {"ok": True, "enhanced_prompt": out}

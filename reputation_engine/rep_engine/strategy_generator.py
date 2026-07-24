@@ -98,7 +98,6 @@ TOOL_REGISTRY: list[Tool] = [
     Tool("texta", "Texta.ai", "content_writing", Exec.SEMI, "AppSumo; long-form gen."),
     Tool("shopia", "Shopia.ai", "content_writing", Exec.SEMI, "AppSumo; content + scheduling."),
     Tool("blogify", "Blogify", "content_writing", Exec.MANUAL, "AppSumo; blog gen/repurpose."),
-    Tool("katteb", "Katteb", "fact_checking", Exec.MANUAL, "AppSumo; fact-checked content -- useful for trust-sensitive claims."),
     Tool("konvey", "Konvey", "content_optimization", Exec.MANUAL, "AppSumo; conversion copy."),
     # --- video creation / repurpose ---
     Tool("steve_ai", "Steve.ai", "video_creation", Exec.MANUAL, "AppSumo; script->video explainers."),
@@ -818,6 +817,17 @@ def _gap_approach_index(gap: dict) -> dict:
 # set the Content section shows -- so the plan's "content to produce" and the content page always match.
 _SPEC_CAPS = CONTENT_CAPABILITIES
 
+# Rich-media SYNTHESIS pieces (deep-content bundle, podcast, slide deck, research brief, infographic,
+# explainer-video script) are written FROM the audit + gap model + competitor data + site crawl -- NOT
+# from a per-topic source document -- and they carry a generic placeholder topic ("deep content
+# bundle", "slide deck", ...) that can never match the corpus. Flagging them "no source material for
+# their topic" is therefore a permanent false positive, so they are EXCLUDED from the plan-level
+# grounding advisory. (What actually grounds them is business-level fact, surfaced as the "what to
+# provide" hint on the REAL content pieces -- not a per-topic doc these synthesis pieces need.)
+_SYNTHESIS_CAPS = frozenset({
+    "deep_content", "podcast_creation", "slide_deck", "infographic", "research_brief", "explainer_video",
+})
+
 
 def strategy_view(business_id: int) -> dict:
     """Assemble the detailed strategy the console renders: three sections, each with the gaps it
@@ -829,6 +839,7 @@ def strategy_view(business_id: int) -> dict:
         import content_generator as _cg  # type: ignore
         import grounding_coverage as _gc  # type: ignore
     cov_sigs: list = []   # per-content-piece coverage signals (from piece_brief) -> plan rollup
+    ungrounded_pieces: list = []   # enriched "what to provide" entries for genuinely-ungrounded pieces
     with db() as conn:
         gm = conn.execute(
             "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
@@ -892,8 +903,24 @@ def strategy_view(business_id: int) -> dict:
                 pub = _PLATFORM_PUBLISH.get((w.get("platform") or "").lower()) \
                     or _PUBLISH_TO.get(b.get("content_type") or b.get("asset_type") or "", "Your website")
                 cov = b.get("coverage")
-                if isinstance(cov, dict):
+                # Synthesis pieces carry a generic placeholder topic that can never match the corpus,
+                # so their grounding signal is a false positive: don't roll it up into the plan warning
+                # and don't show a per-piece "ungrounded" chip for them.
+                is_synth = (w.get("capability") or "") in _SYNTHESIS_CAPS
+                if isinstance(cov, dict) and not is_synth:
                     cov_sigs.append(cov)
+                    if cov.get("status") == "ungrounded":
+                        hint = approach_idx.get(_norm_q(specs_q), {})
+                        kws = b.get("keywords") or []
+                        ungrounded_pieces.append({
+                            "wo_id": w["id"], "title": w.get("title"),
+                            "content_type": b.get("content_type") or b.get("asset_type"),
+                            "topic": cov.get("topic"), "primary_keyword": b.get("primary_keyword"),
+                            "keywords": kws[:4],
+                            "needed": _gc.needed_material(
+                                b.get("content_type") or b.get("asset_type"), cov.get("topic"),
+                                kws, hint.get("why") or hint.get("approach")),
+                        })
                 g["specs"].append({
                     "wo_id": w["id"], "title": w.get("title"),
                     "content_type": b.get("content_type") or b.get("asset_type"),
@@ -902,7 +929,7 @@ def strategy_view(business_id: int) -> dict:
                     "readability_target": b.get("readability_target"),
                     "structure": b.get("structure"), "publish_to": pub,
                     "objective": w.get("why_helps_ai_rep") or w.get("why_helps_seo") or "",
-                    "coverage": cov,   # warn-only grounding advisory for this piece's topic
+                    "coverage": (None if is_synth else cov),   # warn-only; suppressed for synthesis pieces
                 })
             except Exception as e:  # noqa: BLE001 -- a spec failure must never break the whole view
                 log.debug("piece_brief failed for wo %s: %s", w.get("id"), e)
@@ -941,6 +968,10 @@ def strategy_view(business_id: int) -> dict:
     # Wrapped: any failure -> coverage=None so GET /strategy always returns.
     try:
         coverage = _gc.plan_coverage(cov_sigs)
+        if isinstance(coverage, dict):
+            # Per-piece "what to provide" (not just topic names) so the owner knows exactly what
+            # source material to add. Only genuinely-ungrounded real content pieces are listed.
+            coverage["ungrounded_pieces"] = ungrounded_pieces
     except Exception as e:  # noqa: BLE001
         log.debug("plan_coverage rollup skipped: %s", e)
         coverage = None

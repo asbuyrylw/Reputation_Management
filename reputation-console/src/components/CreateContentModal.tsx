@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useContentTypes, useCreateContent, useGapCompletion } from "@/lib/hooks";
+import { useContentTypes, useCreateContent, useGapCompletion, useEnhancePrompt } from "@/lib/hooks";
 import type { ContentTypeOption, GapCompletion } from "@/lib/types";
 
 const FAMILY_ORDER: { key: string; label: string; hint: string }[] = [
@@ -27,17 +27,35 @@ const PLACEHOLDER: Record<string, string> = {
   white_paper: "e.g. A guide to building an emergency fund on a variable income, for working families.",
 };
 
-export function CreateContentModal({ businessId, onClose }: { businessId: number | null; onClose: () => void }) {
+export function CreateContentModal({ businessId, onClose, initialType, initialDescription, initialGapLabel }: {
+  businessId: number | null; onClose: () => void;
+  initialType?: string; initialDescription?: string; initialGapLabel?: string;
+}) {
   const catalogue = useContentTypes(businessId);
   const gaps = useGapCompletion(businessId);
   const create = useCreateContent(businessId);
+  const enhance = useEnhancePrompt(businessId);
 
-  const [type, setType] = useState<string>("");
-  const [description, setDescription] = useState("");
+  const [type, setType] = useState<string>(initialType ?? "");
+  const [description, setDescription] = useState(initialDescription ?? "");
   const [gapKey, setGapKey] = useState("");
   const [aspect, setAspect] = useState("16:9");
   const [done, setDone] = useState<null | { where: string }>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [enhancing, setEnhancing] = useState(false);
+
+  async function enhancePrompt() {
+    if (!type || !description.trim()) return;
+    setErr(null); setEnhancing(true);
+    try {
+      const r = await enhance.mutateAsync({ content_type: type, description: description.trim() });
+      if (r.ok && r.enhanced_prompt) setDescription(r.enhanced_prompt);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't enhance the prompt — please try again.");
+    } finally {
+      setEnhancing(false);
+    }
+  }
 
   const types = catalogue.data?.types ?? [];
   const selected = useMemo(() => types.find((t) => t.content_type === type), [types, type]);
@@ -57,7 +75,7 @@ export function CreateContentModal({ businessId, onClose }: { businessId: number
         content_type: type,
         description: description.trim(),
         gap_key: gapKey || undefined,
-        gap_label: gap?.topic || undefined,
+        gap_label: gap?.topic || initialGapLabel || undefined,
         aspect_ratio: isVisualMedia ? aspect : undefined,
       });
       setDone({ where: r.family === "visual" ? "Media" : selected?.family === "text" ? "Drafts" : "Media" });
@@ -131,10 +149,20 @@ export function CreateContentModal({ businessId, onClose }: { businessId: number
 
             {/* 2. describe */}
             <div>
-              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">2 · Describe what you want</label>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-400">2 · Describe what you want</label>
+                <button type="button" onClick={enhancePrompt} disabled={!type || !description.trim() || enhancing}
+                  title={type ? "Let AI expand this into an optimized brief for this format (keywords, structure, length, targets — or a HeyGen-ready brief for video)" : "Pick a format first"}
+                  className="rounded-full border border-indigo/40 bg-indigo-050 px-2.5 py-1 text-[11.5px] font-semibold text-indigo-strong transition hover:bg-indigo-050/70 disabled:opacity-40">
+                  {enhancing ? "Enhancing…" : "✨ Enhance"}
+                </button>
+              </div>
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
-                placeholder={PLACEHOLDER[type] || "Describe the piece — the topic, angle, audience, and anything it must include."}
+                placeholder={PLACEHOLDER[type] || "Describe the piece — the topic, angle, audience, and anything it must include. Then hit ✨ Enhance to turn it into an optimized brief."}
                 className="w-full rounded-[10px] border border-line bg-paper p-3 text-[13.5px] leading-relaxed text-ink outline-none focus:border-indigo" />
+              <p className="mt-1 text-[11.5px] text-slate-400">
+                ✨ Enhance rewrites your description into an optimized brief for this format{type ? "" : " (pick a format first)"} — grounded in your brand rules &amp; source material.
+              </p>
             </div>
 
             {/* 3. options */}
@@ -144,7 +172,7 @@ export function CreateContentModal({ businessId, onClose }: { businessId: number
                 <select value={gapKey} onChange={(e) => setGapKey(e.target.value)}
                   className="w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] text-ink outline-none focus:border-indigo">
                   <option value="">Not tied to a specific gap</option>
-                  {(gaps.data ?? []).map((g: GapCompletion) => (
+                  {(gaps.data ?? []).filter((g: GapCompletion) => g.content_addressable !== false).map((g: GapCompletion) => (
                     <option key={g.gap_key} value={g.gap_key}>{g.topic}</option>
                   ))}
                 </select>

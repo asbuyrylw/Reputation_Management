@@ -102,6 +102,16 @@ def reject_visual(visual_id: int, business_id: int = Depends(require_business_ed
     return {"ok": True, "visual_id": visual_id, "status": "rejected"}
 
 
+@router.delete("/visuals/{visual_id}")
+def delete_visual_asset(visual_id: int, business_id: int = Depends(require_business_editor),
+                        user: dict = Depends(get_current_user)):
+    """Permanently delete a visual asset (owner action). Best-effort unlinks the on-disk file.
+    404 if the visual doesn't exist / isn't this business's."""
+    if not _vc.delete_visual(visual_id, business_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "visual not found")
+    return {"ok": True, "visual_id": visual_id, "deleted": True}
+
+
 class YouTubePublishRequest(BaseModel):
     privacy: str = "unlisted"   # unlisted (default, safe) | private | public
 

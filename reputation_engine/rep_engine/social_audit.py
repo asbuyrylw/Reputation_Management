@@ -235,11 +235,26 @@ def _gbp_signal(name: str, geo: str) -> dict | None:
     count = place.get("ratingCount") or place.get("reviewsCount") or place.get("reviews")
     if isinstance(count, list):
         count = len(count)
+    # Build a canonical, clickable Google listing URL from whatever Serper returns.
+    # Prefer a direct link; else a ?cid= Maps URL (cid is the decimal customer id);
+    # else the place_id query form. Leave None if the payload carries none of them.
+    cid = place.get("cid")
+    place_id = place.get("placeId")
+    link = place.get("link")
+    if link:
+        maps_url = link
+    elif cid:
+        maps_url = f"https://www.google.com/maps?cid={cid}"
+    elif place_id:
+        maps_url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+    else:
+        maps_url = None
     return {
         "exists": True, "title": place.get("title"), "rating": place.get("rating"),
         "reviews": count, "category": place.get("category") or place.get("type"),
         "address": place.get("address"), "phone": place.get("phoneNumber"),
-        "website": place.get("website"), "cid": place.get("cid") or place.get("placeId"),
+        "website": place.get("website"), "cid": cid or place_id,
+        "link": link, "url": maps_url,
     }
 
 
@@ -275,7 +290,7 @@ def discover(business_id: int) -> dict:
                                         else ("inferred" if url else "unknown")), "signals": {}}
 
     gbp = _gbp_signal(name, geo)
-    out["gbp"] = ({"exists": True, "url": None, "source": "serper", "confidence": "verified",
+    out["gbp"] = ({"exists": True, "url": gbp.get("url"), "source": "serper", "confidence": "verified",
                    "signals": gbp} if gbp
                   else {"exists": False, "url": None, "source": "none", "confidence": "unknown",
                         "signals": {}})

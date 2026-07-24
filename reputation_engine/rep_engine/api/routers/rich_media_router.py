@@ -67,6 +67,16 @@ def reject_rich_media(draft_id: int, body: StatusUpdate = StatusUpdate(),
     return {"id": draft_id, "status": "rejected"}
 
 
+@router.delete("/rich-media-drafts/{draft_id}")
+def delete_rich_media(draft_id: int, business_id: int = Depends(require_business_editor),
+                      user: dict = Depends(get_current_user)):
+    """Permanently delete a rich-media draft (owner action). Cascades to a linked rendered video so
+    the delete doesn't orphan the MP4. 404 if the draft doesn't exist / isn't this business's."""
+    if not _rmg.delete_draft(business_id, draft_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
+    return {"id": draft_id, "deleted": True}
+
+
 class RenderVideoRequest(BaseModel):
     provider: Optional[str] = None   # 'heygen' (default, verbatim) | 'veo' (generative clip/B-roll)
 
