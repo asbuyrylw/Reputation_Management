@@ -136,6 +136,10 @@ def _ensure_table() -> None:
         # (AEO/GEO, information, production, video SEO, length), same shape idea as content_drafts.
         conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS geo_score NUMERIC")
         conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS quality_notes JSONB")
+        # Link the rich-media draft to the work order that produced it, so a rendered video/asset is
+        # attributed to its WO (and, through it, its campaign/gap) for the impact loop -- and so the
+        # render paths can pass a real work_order_id to visual_content instead of None.
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS work_order_id BIGINT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_rmedia_biz "
             "ON rich_media_drafts(business_id, status)"
@@ -287,6 +291,19 @@ def _compliance_check(text: str, *, regulated_financial: bool = False) -> tuple[
     violation -- skip it (this was falsely failing scripts that CONTAIN the required disclosure)."""
     if not text:
         return None, ["no content to screen"]
+    # Delegate to the SINGLE hardened deterministic screen in content_generator so rich-media grades
+    # identically to text drafts -- same question-context ('Is X the best?') + finance-product-language
+    # ('guaranteed death benefit') false-positive guards. Lazy import avoids a load-time cycle; the
+    # local _UNIVERSAL/_FINANCIAL patterns remain as a fallback if the import ever fails.
+    try:
+        from . import content_generator as _cg
+    except ImportError:  # pragma: no cover -- loose-script fallback
+        import content_generator as _cg  # type: ignore
+    try:
+        flags = _cg._deterministic_compliance(text, regulated_financial=regulated_financial)
+        return (False if flags else True), flags
+    except Exception as e:  # noqa: BLE001 -- never let a screen error crash generation
+        log.debug("rich_media: delegated compliance screen failed (%s) -- using local patterns", e)
     flags: list[str] = []
     patterns = _UNIVERSAL_PATTERNS + (_FINANCIAL_PATTERNS if regulated_financial else [])
     for pat, msg in patterns:
@@ -420,6 +437,23 @@ _LLM_PROMPTS = {
     ),
 }
 
+# Per-type output budget. The old flat 3000-token cap TRUNCATED the long-form types mid-sentence: a
+# deep_article is 1.5-2.5k words (~2.5-3.3k tokens of prose, more with markdown) and a research_brief /
+# blog_series (3 outlines) run longer still, so 3000 clipped them and the truncation guard then routed
+# every one to needs_fix. Size the cap to the type's real target length (words * ~1.4 + markdown slack).
+_MAX_TOKENS: dict[str, int] = {
+    "deep_article":    6_000,   # 1.5-2.5k words markdown
+    "research_brief":  6_000,   # long briefing doc
+    "blog_series":     5_000,   # three full outlines
+    "slide_deck":      4_500,   # 10-12 slides
+    "podcast":         4_000,   # 600-900 words two-host dialogue
+    "report_audio":    3_500,   # 500-700 words narration
+    "newsletter":      3_500,   # 400-600 words + subject lines/sections
+    "infographic":     3_000,
+    "explainer_video": 2_800,   # ~250-300 words script (short by design)
+}
+_DEFAULT_MAX_TOKENS = 3_000
+
 
 def _generate_note_asset(
     asset_type: str, biz: dict, sources: list[dict], business_id: int
@@ -485,7 +519,7 @@ def _fallback_llm(
             system, user,
             business_id=business_id,
             tier="mid",
-            max_tokens=3_000,
+            max_tokens=_MAX_TOKENS.get(asset_type, _DEFAULT_MAX_TOKENS),
             operation=f"rich_media_{asset_type}",
         )
     except _tools.BudgetExceededError:
@@ -522,6 +556,7 @@ def _persist(
     notebook_url: Optional[str] = None,
     business_name: str = "",
     geo: str = "",
+    work_order_id: Optional[int] = None,
 ) -> int:
     # Publish-ready: rich-media scripts/briefs go through the SAME placeholder strip + license-number
     # scrub as text drafts, so a video/slide/infographic never ships with an [INSERT: ...] or a
@@ -535,6 +570,22 @@ def _persist(
             _profile = _bp.for_business(business_id)
             body = _cg._scrub_license_phrasing(_cg._strip_placeholders(body), _profile)
             body = _cqs.scrub_slop(body)   # de-generic: strip formulaic AI-slop lead-ins
+            # Crowd-out enforcement, SAME as text drafts: keep scam/pyramid/MLM out of the headings +
+            # lead + title. deep_article/research_brief previously bypassed this entirely, so a
+            # long-form piece could bind the brand to the contested token in its most-cited locations.
+            _contested = ""
+            try:
+                with db() as _c2:
+                    _r = _c2.execute("SELECT contested_terms FROM businesses WHERE id=%s",
+                                     (business_id,)).fetchone()
+                _contested = (_r.get("contested_terms") or "") if _r else ""
+            except Exception:  # noqa: BLE001 -- column may be absent; neutralize is a no-op on clean text
+                _contested = ""
+            body = _cg.neutralize_contested(body, _contested)
+            title = _cg._neutralize_contested_title(title, _contested)
+            # Title uniqueness (same as text drafts): a deep_article/research_brief title that collides
+            # with an existing one gets the next ' (v2)'/'(v3)' so the media list never shows dupes.
+            title = _cg._dedupe_title(business_id, title, table="rich_media_drafts")
         except Exception as e:  # noqa: BLE001 -- cleanup must never block persistence
             log.debug("rich_media: body cleanup skipped: %s", e)
     # Grade video scripts (AEO/GEO citability first, then info/production/SEO/length) so a video is
@@ -599,13 +650,13 @@ def _persist(
             """INSERT INTO rich_media_drafts
                (business_id, asset_type, title, body, audio_url, transcript,
                 duration_secs, sources_used, compliance_pass, compliance_flags, generator,
-                notebook_url, geo_score, quality_notes, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                notebook_url, geo_score, quality_notes, status, work_order_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, asset_type, title,
              body, audio_url, transcript, duration_secs,
              json.dumps(sources_used or []),
              compliance_pass, json.dumps(compliance_flags or []), generator, notebook_url,
-             geo_grade, json.dumps(quality_notes) if quality_notes else None, _status),
+             geo_grade, json.dumps(quality_notes) if quality_notes else None, _status, work_order_id),
         ).fetchone()
         conn.commit()
     log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s, grade=%s)", row["id"],
@@ -621,6 +672,7 @@ def generate(
     business_id: int,
     asset_types: Optional[list[str]] = None,
     topic: Optional[str] = None,
+    work_order_id: Optional[int] = None,
 ) -> list[int]:
     """Generate rich media drafts for a business.
 
@@ -704,6 +756,7 @@ def generate(
                     compliance_flags=comp_flags,
                     generator=result.get("generator") or "llm",
                     notebook_url=result.get("notebook_url"),
+                    work_order_id=work_order_id,
                 )
                 created.append(draft_id)
 
@@ -722,6 +775,7 @@ def generate(
                     generator="llm",
                     business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
                     geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
+                    work_order_id=work_order_id,
                 )
                 created.append(draft_id)
 
@@ -740,6 +794,7 @@ def generate(
                     generator="llm",
                     business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
                     geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
+                    work_order_id=work_order_id,
                 )
                 created.append(draft_id)
 
@@ -864,7 +919,8 @@ def update_draft(business_id: int, draft_id: int, *, body: Optional[str] = None,
     with db() as conn:
         cur = conn.execute("SELECT asset_type, body, transcript FROM rich_media_drafts "
                            "WHERE id=%s AND business_id=%s", (draft_id, business_id)).fetchone()
-        b = conn.execute("SELECT name, geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
+        b = conn.execute("SELECT name, geo, contested_terms FROM businesses WHERE id=%s",
+                         (business_id,)).fetchone()
     if not cur:
         return None
     asset_type = cur["asset_type"]
@@ -876,6 +932,9 @@ def update_draft(business_id: int, draft_id: int, *, body: Optional[str] = None,
             from . import content_generator as _cg
             _profile = _bp.for_business(business_id)
             new_body = _cg._scrub_license_phrasing(_cg._strip_placeholders(new_body), _profile)
+            # Same crowd-out pass as generation (headings + lead) so an edit can't reintroduce
+            # contested framing into the extractable locations.
+            new_body = _cg.neutralize_contested(new_body, (b.get("contested_terms") if b else "") or "")
         except Exception as e:  # noqa: BLE001 -- cleanup must never block the edit
             log.debug("rich_media: edit cleanup skipped: %s", e)
     bn = (b["name"] if b else "") or ""
@@ -962,7 +1021,7 @@ def _render_veo(business_id: int, draft_id: int, d: dict, script: str) -> dict:
     prompt = ("A short, professional explainer clip for a trustworthy professional team: a warm, "
               "credible presenter in a bright modern office, clean corporate look, no on-screen text. "
               f"Spoken narration (say verbatim): \"{narration}\"")
-    res = _vc.generate_video(business_id, prompt, draft_id=None, work_order_id=d.get("work_order_id"))
+    res = _vc.generate_video(business_id, prompt, draft_id=draft_id, work_order_id=d.get("work_order_id"))
     if res.get("ok"):
         _record_rendered_video(business_id, draft_id, d, {"visual_id": res.get("visual_id"),
                                "video_url": None, "duration": None}, "veo")
@@ -971,16 +1030,20 @@ def _render_veo(business_id: int, draft_id: int, d: dict, script: str) -> dict:
 
 
 def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[str] = None,
-                           provider: Optional[str] = None) -> dict:
+                           provider: Optional[str] = None, *, avatar_id: Optional[str] = None,
+                           voice_id: Optional[str] = None, aspect: Optional[str] = None,
+                           background: Optional[str] = None) -> dict:
     """Render a REAL MP4 for an explainer_video/video_script draft. Two selectable renderers:
       - HEYGEN (default) — an avatar speaks the already-vetted script VERBATIM (deterministic +
         brand-safe; no generated/hallucinated speech). Best for the full narrated explainer.
       - VEO 3.1 — Google's generative video + native audio (via the Gemini key). Best for a short
         cinematic clip / B-roll; its narration is GENERATED (not verbatim), so it carries the usual
         generative-content compliance caveat for regulated finance.
-    Provider comes from the `provider` arg, else VIDEO_RENDER_PROVIDER, else 'heygen'. Stores the video
-    as a `video` visual_asset (plays in the Media gallery + uploadable to YouTube) and records it on the
-    draft. Explicit owner action (cost per render). Dormant-safe. Never raises."""
+    Provider comes from the `provider` arg, else VIDEO_RENDER_PROVIDER, else 'heygen'. `avatar_id` /
+    `voice_id` / `aspect` override the defaults so an owner 'send back with changes' can re-render the
+    same (edited) script with a different presenter / voice / orientation. Stores the video as a `video`
+    visual_asset (plays in the Media gallery + uploadable to YouTube) and records it on the draft.
+    Explicit owner action (cost per render). Dormant-safe. Never raises."""
     d = api_get(business_id, draft_id)
     if not d:
         return {"ok": False, "error": "draft not found"}
@@ -1034,7 +1097,9 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
         log.info("started HeyGen Video Agent for draft %s (session %s)", draft_id, started["session_id"])
         return {"ok": True, "pending": True, "session_id": started["session_id"],
                 "message": "Produced video started (~20-45 min) — it will appear in Media when ready."}
-    res = _hg.render(business_id, script, title=title, work_order_id=d.get("work_order_id"))
+    res = _hg.render(business_id, script, title=title, work_order_id=d.get("work_order_id"),
+                     draft_id=draft_id, avatar_id=avatar_id, voice_id=voice_id,
+                     aspect=(aspect or "16:9"), background=background)
     if res.get("ok"):
         _record_rendered_video(business_id, draft_id, d, res, "heygen")
         log.info("rendered HeyGen video for rich-media draft %s (visual %s)", draft_id, res.get("visual_id"))

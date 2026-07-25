@@ -8,7 +8,7 @@ import type { Tone } from "@/lib/uiTokens";
 const STATUS_WORDS: Record<string, string> = {
   pending_review: "Waiting for you",
   needs_fix: "Needs a fix",
-  held: "Held — needs an author",
+  held: "Held — needs editing",
   approved: "Approved",
   rejected: "Rejected",
   published: "Published",

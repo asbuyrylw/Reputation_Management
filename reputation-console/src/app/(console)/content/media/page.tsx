@@ -6,7 +6,7 @@
 // (/visuals, binaries) and rich_media_drafts (/rich-media-drafts, text + podcast audio) — so nothing
 // the engine generates stays invisible. Fully wired; every item is fetched from the API.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useVisuals, useRichMediaDrafts, useRichMediaDraft, useApproveRichMedia, useRejectRichMedia, useRenderRichMediaVideo, useEditRichMedia, usePublishVisualYouTube, useDeleteVisual, useDeleteRichMedia } from "@/lib/hooks";
 import { apiBase } from "@/lib/api";
@@ -23,6 +23,7 @@ type MediaItem = {
   fileUrl?: string; audioUrl?: string | null; durationSecs?: number | null;
   notebookUrl?: string | null; generator?: string | null;
   fixReasons?: string[]; isEditableDraft?: boolean;
+  draftId?: number | null;   // for a rendered video: the rich-media script draft it came from (re-render)
   createdAt?: string | null;
 };
 
@@ -84,10 +85,15 @@ function MediaCard({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
 }
 
 function MediaModal({ item, businessId, canEdit, onClose }: { item: MediaItem; businessId: number | null; canEdit: boolean; onClose: () => void }) {
+  // The rich-media script draft this media item maps to: for a `rich` item it's the item itself; for a
+  // rendered `video` (a visual asset) it's the draft the render came from — so "send back with changes"
+  // works from the video player too.
+  const scriptDraftId = item.source === "rich" ? item.id : (item.kind === "video" ? (item.draftId ?? null) : null);
   // Rich-media details carry the full body AND (for podcasts) the transcript — fetch for every rich
-  // item, including podcasts, so the transcript section actually renders.
+  // item, including podcasts, so the transcript section actually renders; also for a rendered video so
+  // the re-render panel can prefill its script.
   const needsBody = item.source === "rich";
-  const detail = useRichMediaDraft(businessId, needsBody ? item.id : null);
+  const detail = useRichMediaDraft(businessId, needsBody ? item.id : scriptDraftId);
   const approve = useApproveRichMedia(businessId);
   const reject = useRejectRichMedia(businessId);
   const renderVideo = useRenderRichMediaVideo(businessId);
@@ -98,6 +104,33 @@ function MediaModal({ item, businessId, canEdit, onClose }: { item: MediaItem; b
   const editRich = useEditRichMedia(businessId);
   const [editing, setEditing] = useState(false);
   const [draftBody, setDraftBody] = useState("");
+  // "Send back with changes" (re-render) panel state.
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [cScript, setCScript] = useState("");
+  const [cAvatar, setCAvatar] = useState("");
+  const [cVoice, setCVoice] = useState("");
+  const [cBg, setCBg] = useState("");
+  const [cAspect, setCAspect] = useState<"16:9" | "9:16">("16:9");
+  useEffect(() => {
+    // prefill the editable script from the draft body/transcript when the panel opens / detail loads
+    if (changesOpen && !cScript) setCScript(detail.data?.body || detail.data?.transcript || "");
+  }, [changesOpen, detail.data?.body, detail.data?.transcript, cScript]);
+  function submitChanges() {
+    if (scriptDraftId == null) return;
+    renderVideo.mutate({
+      draftId: scriptDraftId,
+      script: cScript.trim() || undefined,
+      avatar_id: cAvatar.trim() || undefined,
+      voice_id: cVoice.trim() || undefined,
+      background: cBg.trim() || undefined,
+      aspect: cAspect,
+    });
+  }
+  const videoRef = useRef<HTMLVideoElement>(null);
+  function skip(sec: number) {
+    const v = videoRef.current;
+    if (v) v.currentTime = Math.max(0, Math.min(v.duration || Number.MAX_SAFE_INTEGER, v.currentTime + sec));
+  }
   // The full detail carries the freshest fix_reasons (recomputed on the last edit); fall back to the
   // list row's reasons before the detail loads.
   const fixReasons = (detail.data?.fix_reasons && detail.data.fix_reasons.length ? detail.data.fix_reasons : item.fixReasons) ?? [];
@@ -141,7 +174,16 @@ function MediaModal({ item, businessId, canEdit, onClose }: { item: MediaItem; b
             </div>
           )}
           {item.kind === "video" && item.fileUrl && (
-            <video src={item.fileUrl} controls className="max-h-[68vh] w-full rounded-[12px] bg-black" />
+            <div className="space-y-2">
+              <video ref={videoRef} src={item.fileUrl} controls playsInline className="max-h-[68vh] w-full rounded-[12px] bg-black" />
+              <div className="flex items-center justify-center gap-2">
+                <button onClick={() => skip(-10)} className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-paper" title="Back 10 seconds">⏪ 10s</button>
+                <button onClick={() => skip(-1)} className="rounded-[10px] border border-line bg-white px-2.5 py-1.5 text-[12.5px] font-semibold text-ink hover:bg-paper" title="Back 1 second">◀ 1s</button>
+                <button onClick={() => { const v = videoRef.current; if (v) v.paused ? v.play() : v.pause(); }} className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-paper" title="Play/Pause">⏯</button>
+                <button onClick={() => skip(1)} className="rounded-[10px] border border-line bg-white px-2.5 py-1.5 text-[12.5px] font-semibold text-ink hover:bg-paper" title="Forward 1 second">1s ▶</button>
+                <button onClick={() => skip(10)} className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-paper" title="Forward 10 seconds">10s ⏩</button>
+              </div>
+            </div>
           )}
           {item.kind === "image" && item.fileUrl && (
             <img src={item.fileUrl} alt={item.title} className="max-h-[68vh] w-full rounded-[12px] object-contain" />
@@ -187,6 +229,60 @@ function MediaModal({ item, businessId, canEdit, onClose }: { item: MediaItem; b
                   {canFix && <button onClick={() => setEditing(true)} className="rounded-[10px] border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-paper">✎ Edit</button>}
                 </div>
               ) : <p className="py-6 text-center text-[13.5px] text-ink-3">No content body to display.</p>
+          )}
+
+          {/* Send back with changes: edit the script and/or pick a different presenter, voice,
+              background, or orientation, then re-render. Works from the video player (a rendered
+              video links back to its script draft) and from the script draft itself. */}
+          {canEdit && scriptDraftId != null && (isVideoScript || item.kind === "video") && (
+            <div className="mt-4 rounded-[12px] border border-line bg-paper/50 p-3">
+              <button onClick={() => setChangesOpen((o) => !o)} className="flex w-full items-center justify-between text-left">
+                <span className="text-[13px] font-semibold text-ink">✎ Send back with changes &amp; re-render</span>
+                <span className="text-ink-4">{changesOpen ? "▲" : "▼"}</span>
+              </button>
+              {changesOpen && (
+                <div className="mt-3 space-y-3">
+                  <p className="text-[11.5px] leading-snug text-ink-4">Edit the narration and/or pick a different presenter, voice, background, or orientation, then re-render. The avatar speaks the edited script <b>verbatim</b>.</p>
+                  <div>
+                    <label className="mb-1 block font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Narration script</label>
+                    <textarea value={cScript} onChange={(e) => setCScript(e.target.value)} spellCheck
+                      className="h-40 w-full resize-y rounded-[10px] border border-line bg-white p-2.5 font-mono text-[12.5px] leading-relaxed text-ink-2 focus:border-ink-4 focus:outline-none"
+                      placeholder="Leave unchanged to keep the current script" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="mb-1 block font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Orientation</label>
+                      <select value={cAspect} onChange={(e) => setCAspect(e.target.value as "16:9" | "9:16")}
+                        className="w-full rounded-[10px] border border-line bg-white px-2.5 py-1.5 text-[13px] text-ink focus:border-ink-4 focus:outline-none">
+                        <option value="16:9">Landscape (16:9)</option>
+                        <option value="9:16">Portrait / Reels (9:16)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Background</label>
+                      <input value={cBg} onChange={(e) => setCBg(e.target.value)} placeholder="#0b1020 or image URL"
+                        className="w-full rounded-[10px] border border-line bg-white px-2.5 py-1.5 text-[13px] text-ink focus:border-ink-4 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Avatar ID <span className="normal-case text-ink-4/70">(optional)</span></label>
+                      <input value={cAvatar} onChange={(e) => setCAvatar(e.target.value)} placeholder="default presenter"
+                        className="w-full rounded-[10px] border border-line bg-white px-2.5 py-1.5 text-[13px] text-ink focus:border-ink-4 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block font-mono text-[11px] uppercase tracking-[0.06em] text-ink-4">Voice ID <span className="normal-case text-ink-4/70">(optional)</span></label>
+                      <input value={cVoice} onChange={(e) => setCVoice(e.target.value)} placeholder="default voice"
+                        className="w-full rounded-[10px] border border-line bg-white px-2.5 py-1.5 text-[13px] text-ink focus:border-ink-4 focus:outline-none" />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <button onClick={submitChanges} disabled={renderVideo.isPending || renderVideo.isSuccess}
+                      className="rounded-[10px] bg-indigo px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-60">
+                      {renderVideo.isPending ? "Starting…" : renderVideo.isSuccess ? "Re-rendering…" : "Save changes & re-render"}</button>
+                  </div>
+                  <p className="text-[11px] leading-snug text-ink-4">Avatar &amp; voice IDs are HeyGen identifiers — leave blank to keep the current professional presenter. Re-rendering costs one render.</p>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -253,7 +349,8 @@ export default function MediaPage() {
       const k = visualKind(v.kind);
       if (!k) continue;
       out.push({ key: `v${v.id}`, source: "visual", id: v.id, kind: k, title: v.prompt?.slice(0, 80) || titleCase(v.kind),
-        assetType: v.kind, status: v.status, fileUrl: businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : undefined, createdAt: v.created_at });
+        assetType: v.kind, status: v.status, draftId: v.draft_id,
+        fileUrl: businessId != null ? `${apiBase()}/businesses/${businessId}/visuals/${v.id}/file` : undefined, createdAt: v.created_at });
     }
     for (const r of rich.data?.drafts ?? []) {
       const k = richKind(r.asset_type);

@@ -38,3 +38,4 @@ playwright>=1.45       # Citation/directory-listing automation (rep_engine.citat
 markdown>=3.5           # Markdown -> clean HTML for publishing (rep_engine.content_html); the
                        # WordPress content field is HTML, so drafts are converted before publish.
                        # Fail-safe: a dependency-free fallback handles it if the pkg is absent.
+num2words>=0.5.13   # spell numbers for TTS narration (British 'and' style: '102' -> 'one hundred and two')

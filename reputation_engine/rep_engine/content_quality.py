@@ -47,6 +47,40 @@ def _terms(q: str) -> list[str]:
     return [t for t in re.findall(r"[a-z0-9]+", (q or "").lower()) if len(t) > 2]
 
 
+def normalized_text(body: str) -> str:
+    """Punctuation-stripped, whitespace-collapsed, lowercased token stream. Used as the SHARED text
+    surface for keyword presence so keyword_coverage (content_generator) and keyword_density
+    (below) grade against the exact same normalization -- otherwise the two scorecards contradict
+    (coverage said 'life insurance' covered while density, matching a different surface, said missing)."""
+    return " ".join(re.findall(r"[A-Za-z0-9']+", body or "")).lower()
+
+
+def phrase_present(text_low: str, phrase_low: str, window: int = 110) -> bool:
+    """Single source of truth for 'does this keyword phrase appear'. Called by BOTH keyword_coverage
+    and keyword_density's missing-band so they never disagree on covered-vs-missing. A phrase counts
+    as present if it appears VERBATIM, or (multi-word) all of its significant words (>2 chars) fall
+    within a ~`window`-char span -- not merely scattered anywhere in the document. Expects text_low /
+    phrase_low already lowercased; pass both through normalized_text()/.lower() at the call site."""
+    text_low = re.sub(r"\s+", " ", text_low or "").strip()
+    phrase_low = re.sub(r"\s+", " ", phrase_low or "").strip()
+    if not phrase_low:
+        return False
+    if phrase_low in text_low:
+        return True
+    words = [w for w in re.findall(r"[a-z0-9]+", phrase_low) if len(w) > 2]
+    if not words:
+        return False
+    if len(words) <= 1:
+        return words[0] in text_low
+    pos = [[m.start() for m in re.finditer(re.escape(w), text_low)] for w in words]
+    if any(not p for p in pos):
+        return False
+    for p0 in pos[0]:
+        if all(any(abs(pp - p0) <= window for pp in plist) for plist in pos[1:]):
+            return True
+    return False
+
+
 def _first_answer_para(body: str) -> str:
     """The first PROSE paragraph -- what 'answer-first' actually measures. Skips a leading H1/heading,
     a 'Last updated' freshness line, a hero image, and a short emphasis/quote meta line, so the check
@@ -172,7 +206,10 @@ def fact_check(body: str, site_summary: Optional[dict] = None, business_id: int 
     except ImportError:  # pragma: no cover
         import ai_state_audit as llm  # type: ignore
     import json as _json
-    payload = _json.dumps({"draft": body[:6000], "known_facts": site_summary or {}}, default=str)
+    # Fact-check the WHOLE draft, not just the first ~1k words: a deep article / white paper is
+    # 3-5k words, so the old 6000-char cap left the back half's numbers/credentials/affiliations
+    # unverified. 24000 chars (~4k words) covers the long-form types while still bounding a runaway doc.
+    payload = _json.dumps({"draft": body[:24000], "known_facts": site_summary or {}}, default=str)
     res = llm.orchestrator_json(_FACTCHECK_SYSTEM, payload, tier="cheap",
                                 bill={"business_id": business_id, "operation": "fact_check"})
     if not res or not isinstance(res, dict):
@@ -233,15 +270,25 @@ def structure_score(body: str) -> dict:
 def keyword_density_check(body: str, keywords: Optional[list[str]] = None) -> dict:
     words = _words(body)
     wc = len(words) or 1
-    low = " ".join(words).lower()
+    low = normalized_text(body)   # SAME surface keyword_coverage grades against
     out, issues = [], []
     for k in (keywords or [])[:20]:
         kl = (k or "").lower().strip()
         if not kl:
             continue
-        occ = low.count(kl)
+        occ = low.count(kl)   # verbatim occurrences drive the density %
         density = round(100 * occ * len(kl.split()) / wc, 2)
-        band = "missing" if occ == 0 else "low" if density < 0.3 else "high" if density > 2.0 else "ok"
+        # "missing" is the SHARED presence verdict (verbatim OR windowed), so density never marks a
+        # keyword missing that keyword_coverage counts as covered. A phrase present only via the
+        # windowed match (0 verbatim hits) is "low", not "missing" -- present but worth reinforcing.
+        if not phrase_present(low, kl):
+            band = "missing"
+        elif density > 2.0:
+            band = "high"
+        elif density < 0.3:
+            band = "low"
+        else:
+            band = "ok"
         out.append({"keyword": k, "count": occ, "density_pct": density, "band": band})
         if band == "missing":
             issues.append({"label": f"Missing keyword: “{k}”", "fix": f"Weave “{k}” in naturally."})
@@ -620,8 +667,18 @@ def _runtime_secs(body: str) -> int:
 
 def _spoken_only(body: str) -> str:
     """Just the narration -- strip [stage directions], ## headings, and speaker labels -- because that
-    is the TRANSCRIPT an AI answer engine actually reads and can cite."""
-    t = re.sub(r"\[[^\]]*\]", " ", body or "")          # [ON SCREEN: ...] stage directions
+    is the TRANSCRIPT an AI answer engine actually reads and can cite (and what a HeyGen avatar speaks)."""
+    t = body or ""
+    # Markdown links -> the anchor TEXT only, so the narration says the SOURCE NAME, not the URL. Before
+    # this, stripping [..] first left the raw '(https://www.limra.com)' behind and the avatar spelled it
+    # out letter-by-letter. '[LIMRA's 2024 Barometer](https://www.limra.com)' -> "LIMRA's 2024 Barometer".
+    t = re.sub(r"\[([^\]]+)\]\((?:https?://|www\.|/)[^)]*\)", r"\1", t)
+    # Any remaining BARE url -> its plain domain, spoken naturally, dropping the http(s):// and www.
+    # ('https://www.limra.com/x' -> 'limra.com'; 'https://insurance.ohio.gov' -> 'insurance.ohio.gov').
+    # Handles sub-domains; requires a real TLD so 'e.g.' / plain numbers are never touched.
+    t = re.sub(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+(?:com|org|net|gov|edu|io|co|ai|us|biz))\b(?:/[^\s)]*)?",
+               r"\1", t, flags=re.I)
+    t = re.sub(r"\[[^\]]*\]", " ", t)                   # [ON SCREEN: ...] stage directions (links already gone)
     t = re.sub(r"\((?:on[-\s]?screen|visual|b-?roll|text|graphic|footage)[^)]*\)", " ", t, flags=re.I)  # (On-screen: ...) cues
     t = re.sub(r"^\s*#{1,6}.*$", " ", t, flags=re.M)     # segment headings
     t = re.sub(r"^\s*\|.*$", " ", t, flags=re.M)         # tables (production briefs)

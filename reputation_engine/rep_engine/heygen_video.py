@@ -39,7 +39,7 @@ _POLL_SECONDS = int(os.getenv("HEYGEN_POLL_SECONDS", "10"))
 _MAX_CHARS = int(os.getenv("HEYGEN_MAX_SCRIPT_CHARS", "1500"))  # ~2 min of narration (retention cliff)
 # Defaults, so only HEYGEN_API_KEY is required to go live; override via HEYGEN_AVATAR_ID /
 # HEYGEN_VOICE_ID for a different presenter/voice.
-_DEFAULT_AVATAR = "Abigail_standing_office_front"        # professional office-setting presenter
+_DEFAULT_AVATAR = "Amelia_standing_business_training_front"   # young professional presenter (business setting); override via HEYGEN_AVATAR_ID
 # AMERICAN female voice (Nancy). The prior default (97dd67…, "Monika Sogam") was British/non-US
 # accented — wrong for a Cincinnati business. Other US options: Jenny 6458ca9a09ba411b9487dfe105dd05dc,
 # Abigail 21f4b9659e204a7481f6966c0f247a4c, Guy(male) — set HEYGEN_VOICE_ID to swap.
@@ -71,15 +71,53 @@ def _key() -> str:
     return os.getenv("HEYGEN_API_KEY", "")
 
 
+def _speak_numbers(text: str) -> str:
+    """Spell CONTENT numbers as words so the avatar reads them naturally with 'and' -- '102 million' ->
+    'one hundred and two million', '72%' -> 'seventy-two percent', '$500,000' -> 'five hundred thousand
+    dollars', '$1.2 million' -> 'one point two million dollars'. Leaves addresses / phone numbers / years
+    / small inline counts as digits (TTS handles those fine). Uses num2words (British 'and' style); a
+    plain passthrough if it isn't installed, so this never breaks narration."""
+    try:
+        from num2words import num2words as _n2w
+    except Exception:  # pragma: no cover -- dependency absent -> leave numbers as digits
+        return text
+
+    def _w(s: str):
+        s = s.replace(",", "")
+        try:
+            return _n2w(float(s) if "." in s else int(s), lang="en")
+        except Exception:  # noqa: BLE001
+            return None
+
+    NUM = r"(\d{1,3}(?:,\d{3})*(?:\.\d+)?)"
+    MAG = r"(million|billion|thousand|trillion)"
+    # 1) "$1.2 million" -> "one point two million dollars"
+    text = re.sub(rf"\$\s?{NUM}\s+{MAG}\b",
+                  lambda m: (f"{_w(m.group(1))} {m.group(2)} dollars") if _w(m.group(1)) else m.group(0),
+                  text, flags=re.I)
+    # 2) "72%" / "72 percent" -> "seventy-two percent"  (no word-boundary after '%', which isn't a word char)
+    text = re.sub(rf"\b{NUM}\s*%|\b{NUM}\s+percent\b",
+                  lambda m: (f"{_w(m.group(1) or m.group(2))} percent") if _w(m.group(1) or m.group(2)) else m.group(0), text)
+    # 3) "102 million" -> "one hundred and two million"
+    text = re.sub(rf"\b{NUM}\s+{MAG}\b",
+                  lambda m: (f"{_w(m.group(1))} {m.group(2)}") if _w(m.group(1)) else m.group(0),
+                  text, flags=re.I)
+    # 4) "$500,000" -> "five hundred thousand dollars" (magnitude-suffixed already handled in 1)
+    text = re.sub(rf"\${NUM}\b",
+                  lambda m: (f"{_w(m.group(1))} dollars") if _w(m.group(1)) else m.group(0), text)
+    return text
+
+
 def narration_from_script(script: str) -> str:
     """The SPOKEN words only — exactly what the avatar should say. Strips [stage directions],
-    (On-screen: ...) cues, ## headings, speaker labels (via content_quality._spoken_only) and the
-    [m:ss] timestamps, then collapses whitespace."""
+    (On-screen: ...) cues, ## headings, speaker labels + markdown-link URLs (via content_quality.
+    _spoken_only) and the [m:ss] timestamps, spells content numbers for natural TTS, then collapses ws."""
     spoken = _cq._spoken_only(script or "")
     spoken = re.sub(r"\[?\d{1,2}:[0-5]\d\]?", " ", spoken)                    # timestamps
     # Strip only the leading list/heading MARKER, keep the line's text -- a video_script's talking
     # points are often bullets ('- helps you save'), and wiping the whole line emptied the narration.
     spoken = re.sub(r"^\s*(?:[-*>|]+|#{1,6})\s+", " ", spoken, flags=re.M)
+    spoken = _speak_numbers(spoken)                                          # '102 million' -> words + 'and'
     return re.sub(r"\s+", " ", spoken).strip()
 
 
@@ -181,7 +219,8 @@ def _render_cost(business_id: int, *, seconds: float, endpoint: str, avatar: str
 
 def render(business_id: int, script: str, *, title: str = "", work_order_id: Optional[int] = None,
            draft_id: Optional[int] = None, avatar_id: Optional[str] = None,
-           voice_id: Optional[str] = None, aspect: str = "16:9") -> dict:
+           voice_id: Optional[str] = None, aspect: str = "16:9",
+           background: Optional[str] = None) -> dict:
     """Render a script's narration into a talking-head MP4 + SRT via HeyGen and store it as a `video`
     visual_asset (so the Media UI's player + the YouTube publisher can use it). Returns
     {ok, visual_id, video_url, srt, duration, file_path} or {skipped}/{ok:False, error}. Never raises."""
@@ -210,11 +249,16 @@ def render(business_id: int, script: str, *, title: str = "", work_order_id: Opt
     voice_obj: dict = {"type": "text", "input_text": narration}
     if voice:
         voice_obj["voice_id"] = voice
+    # Background: a per-render override (owner 'send back with changes') wins, else the env default.
+    # A value starting with 'http' is treated as an image background; anything else as a color hex.
+    bg = (background or "").strip() or os.getenv("HEYGEN_BG_COLOR", "#0b1020")
+    bg_obj = ({"type": "image", "url": bg} if bg.lower().startswith("http")
+              else {"type": "color", "value": bg})
     body = {
         "video_inputs": [{
             "character": {"type": "avatar", "avatar_id": avatar, "avatar_style": "normal"},
             "voice": voice_obj,
-            "background": {"type": "color", "value": os.getenv("HEYGEN_BG_COLOR", "#0b1020")},
+            "background": bg_obj,
         }],
         "dimension": {"width": w, "height": h},
         "caption": True,

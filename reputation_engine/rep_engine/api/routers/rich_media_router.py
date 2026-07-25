@@ -122,6 +122,13 @@ def delete_rich_media(draft_id: int, business_id: int = Depends(require_business
 
 class RenderVideoRequest(BaseModel):
     provider: Optional[str] = None   # 'heygen' (default, verbatim) | 'veo' (generative clip/B-roll)
+    # 'Send back with changes': an owner can edit the script and pick a different presenter/voice/
+    # orientation/background, then re-render. All optional -> a bare call re-renders as-is.
+    script: Optional[str] = None      # edited narration script; saved to the draft before rendering
+    avatar_id: Optional[str] = None   # HeyGen avatar (presenter); None -> the configured default
+    voice_id: Optional[str] = None    # HeyGen voice; None -> the configured default
+    aspect: Optional[str] = None      # '16:9' (landscape) | '9:16' (portrait / reels)
+    background: Optional[str] = None  # a hex color ('#0b1020') or an image URL
 
 
 @router.post("/rich-media-drafts/{draft_id}/render-video", status_code=202)
@@ -132,8 +139,10 @@ def render_rich_media_video(draft_id: int, background: BackgroundTasks,
     """Render a REAL MP4 for an explainer_video / video_script draft. Renderer = body.provider
     ('heygen' default — the avatar speaks the vetted script VERBATIM, brand-safe; or 'veo' — Google's
     generative video, best for a short cinematic clip/B-roll, narration is generated not verbatim).
-    Explicit action (cost per render). Enqueued off the request path. 409 if the draft isn't a video
-    script; the job returns {skipped} until the chosen renderer's keys are configured."""
+    'Send back with changes': an edited `script` is saved to the draft (re-graded) first, and
+    avatar_id/voice_id/aspect/background override the presenter/voice/orientation/background for this
+    render. Explicit action (cost per render). Enqueued off the request path. 409 if the draft isn't a
+    video script; the job returns {skipped} until the chosen renderer's keys are configured."""
     d = _rmg.api_get(business_id, draft_id)
     if not d:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
@@ -143,8 +152,19 @@ def render_rich_media_video(draft_id: int, background: BackgroundTasks,
     if not _jobs.rate_ok(business_id, "render_video"):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             "You're rendering videos too often — give it a little while.")
+    # Save an edited script to the draft BEFORE rendering, so the rendered video matches the reviewed
+    # text (and the draft is re-graded/compliance-checked by update_draft). Best-effort: a save failure
+    # shouldn't block the render of the existing body.
+    if body.script and body.script.strip():
+        try:
+            _rmg.update_draft(business_id, draft_id, body=body.script,
+                              reviewer=(user or {}).get("email") or (user or {}).get("full_name"))
+        except Exception:  # noqa: BLE001
+            pass
     job_id, active = _jobs.enqueue(business_id, "render_video",
-                                   args={"draft_id": draft_id, "provider": body.provider},
+                                   args={"draft_id": draft_id, "provider": body.provider,
+                                         "avatar_id": body.avatar_id, "voice_id": body.voice_id,
+                                         "aspect": body.aspect, "background": body.background},
                                    requested_by=(user or {}).get("id"))
     if job_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"a video render is already running (#{active})")

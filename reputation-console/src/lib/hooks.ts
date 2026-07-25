@@ -2068,8 +2068,20 @@ export function useRenderRichMediaVideo(businessId: number | null) {
   return useMutation({
     // provider: undefined -> server default (HeyGen verbatim); "heygen_agent" -> v3 Video Agent
     // (produced: B-roll + motion graphics, non-verbatim); "veo" -> Google generative clip/B-roll.
-    mutationFn: ({ draftId, provider }: { draftId: number; provider?: "heygen" | "heygen_agent" | "veo" }) =>
-      apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/render-video`, { method: "POST", body: provider ? { provider } : {} }),
+    // "Send back with changes": script/avatar_id/voice_id/aspect/background re-render with edits.
+    mutationFn: ({ draftId, provider, script, avatar_id, voice_id, aspect, background }: {
+      draftId: number; provider?: "heygen" | "heygen_agent" | "veo";
+      script?: string; avatar_id?: string; voice_id?: string; aspect?: "16:9" | "9:16"; background?: string;
+    }) => {
+      const body: Record<string, unknown> = {};
+      if (provider) body.provider = provider;
+      if (script) body.script = script;
+      if (avatar_id) body.avatar_id = avatar_id;
+      if (voice_id) body.voice_id = voice_id;
+      if (aspect) body.aspect = aspect;
+      if (background) body.background = background;
+      return apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/rich-media-drafts/${draftId}/render-video`, { method: "POST", body });
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["rich-media", businessId] }); qc.invalidateQueries({ queryKey: ["visuals", businessId] }); },
   });
 }

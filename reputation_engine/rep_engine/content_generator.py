@@ -189,6 +189,48 @@ def _duplicate_body(business_id: int, content_hash: str) -> bool:
         return False
 
 
+_VER_SUFFIX_RE = re.compile(r"\s*\(v(\d+)\)\s*$", re.I)
+
+
+def _dedupe_title(business_id: int, title: str, *, table: str = "content_drafts",
+                  content_hash: Optional[str] = None) -> str:
+    """Guarantee a stored draft TITLE is distinct per business so the drafts/media lists never show
+    two pieces with the identical title. If a same-(base)-title draft already exists, append the next
+    free ' (v2)'/'(v3)'/… A byte-identical piece (same content_hash, content_drafts only) keeps the
+    base title -- that's a true re-run the _duplicate_body guard already routes to needs_fix, not a new
+    version. Never raises: on any error the original title is returned unchanged."""
+    base = _VER_SUFFIX_RE.sub("", (title or "").strip()).strip()
+    if not base:
+        return title
+    # Escape LIKE metachars in the base, then append the version wildcard (its own % must stay live).
+    like = base.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + " (v%)"
+    try:
+        cols = "title, content_hash" if table == "content_drafts" else "title"
+        with db() as conn:
+            rows = conn.execute(
+                f"SELECT {cols} FROM {table} WHERE business_id=%s AND coalesce(status,'') <> 'rejected' "
+                f"AND (title = %s OR title ILIKE %s)",
+                (business_id, base, like)).fetchall()
+    except Exception as e:  # noqa: BLE001 -- de-dup must never block generation
+        log.debug("_dedupe_title lookup skipped: %s", e)
+        return title
+    if not rows:
+        return base
+    if content_hash:
+        for r in rows:
+            if r.get("content_hash") == content_hash:
+                return base   # exact same piece -> keep title (dup guard handles the status)
+    used = {1}   # the bare base title (no suffix) counts as v1
+    for r in rows:
+        mm = _VER_SUFFIX_RE.search(r.get("title") or "")
+        if mm:
+            used.add(int(mm.group(1)))
+    n = 2
+    while n in used:
+        n += 1
+    return f"{base} (v{n})"
+
+
 # ----------------------------------------------------------------------------
 # Generation
 # ----------------------------------------------------------------------------
@@ -515,37 +557,21 @@ def _outline(biz: dict, wo: dict, asset_type: str, grounding: dict) -> str:
 
 def _keyword_coverage(body: str, grounding: dict) -> dict:
     """Deterministic SEO self-check: which target keywords does the draft actually contain?
-    A keyword counts as covered if it appears verbatim OR all of its significant words appear.
+    A keyword counts as covered if it appears verbatim OR all of its significant words appear within a
+    ~110-char window (content_quality.phrase_present is the shared source of truth so this and the
+    keyword_density scorecard never disagree on covered-vs-missing).
     `important_missing` (primary/local) is what we force one revision pass to fix."""
     kws = grounding.get("keywords") or []
-    text = (body or "").lower()
-
-    def _phrase_present(kw_low: str, words: list[str]) -> bool:
-        # Verbatim phrase, OR (for a multi-word phrase) all significant words appearing WITHIN A ~110-
-        # char window -- not merely scattered anywhere in the document. The old "all words appear
-        # anywhere" rule reported phrases as covered that keyword_density (stricter) marked missing,
-        # so keyword_coverage systematically overstated (e.g. 0.92 vs a true ~0.35).
-        if kw_low in text:
-            return True
-        if not words:
-            return False
-        if len(words) <= 1:
-            return words[0] in text
-        pos = [[m.start() for m in re.finditer(re.escape(w), text)] for w in words]
-        if any(not p for p in pos):
-            return False
-        for p0 in pos[0]:
-            if all(any(abs(pp - p0) <= 110 for pp in plist) for plist in pos[1:]):
-                return True
-        return False
+    # Same normalized surface keyword_density grades against (punctuation-stripped, ws-collapsed).
+    from . import content_quality as _cqk
+    text = _cqk.normalized_text(body)
 
     covered, missing, important_missing = [], [], []
     for k in kws:
         kw = (k.get("keyword") or "").strip()
         if not kw:
             continue
-        words = [w for w in re.findall(r"[a-z0-9]+", kw.lower()) if len(w) > 2]
-        present = _phrase_present(kw.lower(), words)
+        present = _cqk.phrase_present(text, kw.lower())
         if present:
             covered.append(kw)
         else:
@@ -848,25 +874,68 @@ _FINANCIAL_PATTERNS = [(re.compile(p, re.I), msg) for p, msg in _FINANCIAL_RULES
 _NEGATION_RE = re.compile(r"\b(no|not|never|without|none|don'?t|do not|cannot|can'?t|are ?n'?t|is ?n'?t|"
                           r"n'?t|makes? no|make no|zero)\b", re.I)
 
+# Legitimate regulated-finance product/feature language that CONTAINS "guarantee" but is NOT a
+# prohibited performance promise. Annuity/insurance contractual guarantees are real, disclosed product
+# features -- a "guaranteed death benefit", "guaranteed lifetime income" (an annuity payout, not a
+# market return), "guaranteed universal life", "guaranteed issue" -- so flagging them held every
+# legitimate life/annuity draft this tenant writes. "Guaranteed returns/profits/gains/growth" is NOT
+# allowlisted: that is the actual FINRA/SEC prohibition and still fires.
+_FINANCIAL_ALLOW = re.compile(
+    r"\bguarantee[ds]?\s+(?:(?:lifetime|monthly|annual|retirement|minimum|level|fixed|future)\s+){0,2}"
+    r"(?:income|death\s+benefit|benefit|universal\s+life|whole\s+life|issue|acceptance|renewable|"
+    r"premium|premiums|cash\s+value|interest|payout|payments?)\b"
+    r"|\b(?:income|death\s+benefit|premium|cash\s+value)\s+guarantee[ds]?\b", re.I)
+
+
+def _is_question_context(text: str, start: int) -> bool:
+    """A superlative inside a QUESTION -- an FAQ question heading ('## Is X the best option?') or an
+    inline '...the best?' -- echoes how a user searches; it is not a marketing CLAIM, so don't flag it.
+    A superlative in a statement ('We are the best in Cincinnati.') still fires."""
+    ls = text.rfind("\n", 0, start) + 1
+    nl = text.find("\n", start)
+    le = len(text) if nl < 0 else nl
+    line = text[ls:le]
+    if re.match(r"\s{0,3}#{1,6}\s", line) and "?" in line:
+        return True   # FAQ question heading
+    m = re.search(r"[.!?]", text[start:le])   # end of the clause the match sits in, within its line
+    return bool(m) and m.group(0) == "?"
+
 
 def _deterministic_compliance(body: str, *, regulated_financial: bool = False) -> list[str]:
     """Non-LLM, non-prompt-injectable hard-rule screen. The UNIVERSAL rules (unverifiable '#1'/'best'
     superlatives) run for every tenant; the FINANCIAL rules (guaranteed returns, risk-free, specific
     performance promises) run ONLY for a regulated-finance tenant, so a generic tenant's 'risk-free
     trial' isn't falsely failed. Fail-safe default (regulated_financial=False) = universal-only.
-    Returns the list of triggered-rule descriptions (empty == nothing tripped). A match immediately
-    preceded by a NEGATION ('no guarantees of income', 'we do not guarantee returns', 'no guaranteed
-    returns') is a compliant DISCLAIMER, not a violation -- skip it (this was falsely failing the exact
-    disclosure language compliance requires)."""
+    Returns the list of triggered-rule descriptions (empty == nothing tripped).
+
+    False-positive guards (each was holding legitimate drafts):
+      * NEGATION -- a match preceded by 'no/not/never/without' ('we do not guarantee returns') is a
+        compliant DISCLAIMER, not a violation.
+      * QUESTION -- a '#1'/'best' superlative inside an FAQ question heading or an inline question is a
+        user's phrasing, not a claim.
+      * FINANCE PRODUCT LANGUAGE -- 'guaranteed death benefit / lifetime income / universal life' are
+        real, disclosed annuity/insurance features, not performance promises."""
     text = body or ""
-    patterns = _UNIVERSAL_PATTERNS + (_FINANCIAL_PATTERNS if regulated_financial else [])
+
+    def _negated(pos: int) -> bool:
+        return bool(_NEGATION_RE.search(text[max(0, pos - 28):pos]))
+
     flags: list[str] = []
-    for pat, msg in patterns:
+    for pat, msg in _UNIVERSAL_PATTERNS:
         for m in pat.finditer(text):
-            if _NEGATION_RE.search(text[max(0, m.start() - 28):m.start()]):
-                continue   # negated -> disclaimer, not a violation
+            if _negated(m.start()) or _is_question_context(text, m.start()):
+                continue
             flags.append(msg)
             break
+    if regulated_financial:
+        for pat, msg in _FINANCIAL_PATTERNS:
+            for m in pat.finditer(text):
+                if _negated(m.start()):
+                    continue
+                if _FINANCIAL_ALLOW.search(text[m.start():min(len(text), m.start() + 60)]):
+                    continue   # legitimate contractual product guarantee, not a performance promise
+                flags.append(msg)
+                break
     return list(dict.fromkeys(flags))
 
 
@@ -1031,6 +1100,44 @@ def _scrub_negative_disambiguation(body: str) -> str:
     return "\n".join(out)
 
 
+def _contested_patterns(contested: str = ""):
+    """Compile the contested-term (scam/pyramid/MLM + tenant extras) regex set used by every crowd-out
+    neutralizer, so headings, the lead, and the title all scrub against the SAME term list."""
+    extra = [re.escape(t.strip()) for t in re.split(r"[,\n;/]", contested or "")
+             if 2 < len(t.strip()) <= 24 and re.search(r"(?i)pyramid|scam|scheme|mlm|multi", t)]
+    noun = r"pyramid schemes?|pyramids?|scams?|mlms?|multi-?level(?:\s+marketing)?" + (("|" + "|".join(extra)) if extra else "")
+    return {
+        "has": re.compile(r"(?i)\b(?:%s)\b" % noun),
+        "trail": re.compile(r"(?i)\s*[—–,\-]?\s*(?:or|and)\s+(?:an?\s+)?(?:%s)\b\??" % noun),
+        "an_x": re.compile(r"(?i)\ban?\s+(?:%s)\b" % noun),
+        "bare": re.compile(r"(?i)\b(?:%s)\b" % noun),
+    }
+
+
+def _neutralize_contested_clause(text: str, pats: dict, *, was_q: bool = False) -> str:
+    """Positive-reframe one contested clause (heading, lead sentence, or title): drop a trailing
+    '... or a scam?' tail, 'a pyramid scheme' -> 'a legitimate opportunity', any bare token -> 'legitimacy'."""
+    t = pats["trail"].sub("", text)
+    t = pats["an_x"].sub("a legitimate opportunity", t)
+    t = pats["bare"].sub("legitimacy", t)
+    t = re.sub(r"\s{2,}", " ", t).strip(" —–-,")
+    if was_q and not t.endswith("?"):
+        t = t.rstrip(" .") + "?"
+    return t
+
+
+def _neutralize_contested_title(title: str, contested: str = "") -> str:
+    """Scrub contested terms from a stored draft TITLE (the H1 + schema headline + the drafts card),
+    so the brand name is never bound to the negative token in the most-cited label. No-op when clean."""
+    if not title:
+        return title
+    pats = _contested_patterns(contested)
+    if not pats["has"].search(title):
+        return title
+    t2 = _neutralize_contested_clause(title, pats, was_q=title.rstrip().endswith("?"))
+    return t2 or title
+
+
 def _neutralize_contested_headings(body: str, contested: str = "") -> str:
     """Deterministic crowd-out enforcement: keep contested terms (scam / pyramid scheme / MLM) OUT of
     HEADINGS -- the most extractable, schema-bound, AI-cited location on the page, where binding the
@@ -1040,33 +1147,51 @@ def _neutralize_contested_headings(body: str, contested: str = "") -> str:
     'Is X a pyramid scheme?' -> 'Is X a legitimate opportunity?'; 'Is X legitimate — or a scam?' -> 'Is X legitimate?'."""
     if not body:
         return body
-    extra = [re.escape(t.strip()) for t in re.split(r"[,\n;/]", contested or "")
-             if 2 < len(t.strip()) <= 24 and re.search(r"(?i)pyramid|scam|scheme|mlm|multi", t)]
-    noun = r"pyramid schemes?|pyramids?|scams?|mlms?|multi-?level(?:\s+marketing)?" + (("|" + "|".join(extra)) if extra else "")
-    head_has = re.compile(r"(?i)\b(?:%s)\b" % noun)
-    trail = re.compile(r"(?i)\s*[—–,\-]?\s*(?:or|and)\s+(?:an?\s+)?(?:%s)\b\??" % noun)
-    an_x = re.compile(r"(?i)\ban?\s+(?:%s)\b" % noun)
-    bare = re.compile(r"(?i)\b(?:%s)\b" % noun)
+    pats = _contested_patterns(contested)
     out, changed = [], False
     for line in body.split("\n"):
         m = re.match(r"^(\s{0,3}#{1,6}\s+)(.*)$", line)
-        if not m or not head_has.search(m.group(2)):
+        if not m or not pats["has"].search(m.group(2)):
             out.append(line)
             continue
         h = m.group(2)
-        was_q = h.rstrip().endswith("?")
-        h2 = trail.sub("", h)                            # drop a trailing "... or a scam?" clause
-        h2 = an_x.sub("a legitimate opportunity", h2)    # "a pyramid scheme" -> "a legitimate opportunity"
-        h2 = bare.sub("legitimacy", h2)                  # any remaining bare token -> "legitimacy"
-        h2 = re.sub(r"\s{2,}", " ", h2).strip(" —–-,")
-        if was_q and not h2.endswith("?"):
-            h2 = h2.rstrip(" .") + "?"
+        h2 = _neutralize_contested_clause(h, pats, was_q=h.rstrip().endswith("?"))
         if h2 and h2 != h:
             out.append(m.group(1) + h2)
             changed = True
         else:
             out.append(line)
     return "\n".join(out) if changed else body
+
+
+def _neutralize_contested_lead(body: str, contested: str = "") -> str:
+    """Keep contested framing out of the LEAD paragraph -- the first prose block, which is exactly what
+    an AI answer engine lifts as the answer and what schema uses as the description. The brand's
+    positive identity must lead; the nuanced rebuttal that names the term stays in LATER prose. Skips a
+    leading H1/heading, hero image, and freshness line to find the real opening answer. Idempotent."""
+    if not body:
+        return body
+    pats = _contested_patterns(contested)
+    blocks = re.split(r"(\n\s*\n)", body)   # keep the separators so we can rejoin verbatim
+    for i, blk in enumerate(blocks):
+        s = blk.strip()
+        if not s or s.startswith("#") or s.startswith("!["):
+            continue
+        if re.match(r"^[*_\s]*last\s+(updated|reviewed)\b", s, re.I):
+            continue
+        # first real prose block -> this is the lead
+        if pats["has"].search(s):
+            neutral = _neutralize_contested_clause(s, pats, was_q=s.rstrip().endswith("?"))
+            if neutral and neutral != s:
+                blocks[i] = blk.replace(s, neutral, 1)
+        break   # only the lead; later prose may still name the term to answer the query
+    return "".join(blocks)
+
+
+def neutralize_contested(body: str, contested: str = "") -> str:
+    """Combined crowd-out pass (headings + lead). The single entry point other generators (rich media)
+    call so every content type enforces the same 'no contested framing in the extractable locations' rule."""
+    return _neutralize_contested_lead(_neutralize_contested_headings(body, contested), contested)
 
 
 def fix_reasons(draft: dict) -> list[str]:
@@ -1253,17 +1378,21 @@ def _add_cluster_links(body: str, cluster: dict | None) -> str:
 _BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed by )", re.I | re.M)
 
 
-def _ensure_byline(body: str, business_name: str, reviewer: str = "editorial team") -> str:
+def _ensure_byline(body: str, business_name: str, reviewer: str = "editorial team",
+                   author: str = "") -> str:
     """E-E-A-T authorship signal. For YMYL content Google's rater guidelines rate a page with no clear
     author background 'Lowest', and named authorship is a top measured citation signal (+30.6%
     correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 -- truthful
-    given the human review-before-publish workflow, and NEVER a specific person or license number. The
-    reviewer NOUN is profile-driven (`byline_reviewer`): 'editorial team' by default, 'licensed
-    professionals' for finance, 'a licensed attorney'/'a licensed clinician' for legal/medical, etc.
+    given the human review-before-publish workflow, and NEVER a license number. The AUTHOR defaults to
+    the business/org name ('By Team Unstoppable'); a tenant can set a profile `byline_author` to a real
+    NAMED, credentialed person ('Jane Doe, CFP®'), which AI answer engines + Google's raters weight with
+    higher regard for YMYL finance. The reviewer NOUN is profile-driven (`byline_reviewer`): 'editorial
+    team' by default, 'licensed professionals' for finance, etc.
     Best-effort; skipped if a byline already exists or the business name is unknown."""
     if not body or not (business_name or "").strip() or _BYLINE_RE.search(body):
         return body
     name = business_name.strip()
+    author = (author or "").strip() or name   # named person > org for E-E-A-T; org is the safe default
     reviewer = (reviewer or "editorial team").strip()
     # byline_reviewer may be a bare noun ('editorial team', 'licensed professionals') -> possessive,
     # or article-prefixed ('a licensed attorney', 'a licensed clinician') -> drop the possessive so the
@@ -1272,7 +1401,7 @@ def _ensure_byline(body: str, business_name: str, reviewer: str = "editorial tea
         review_part = f"Reviewed by {reviewer}"
     else:
         review_part = f"Reviewed by {name}’s {reviewer}"
-    line = f"*By {name} · {review_part}*"
+    line = f"*By {author} · {review_part}*"
     lines = body.split("\n")
     for i, ln in enumerate(lines):
         if ln.lstrip().startswith("# "):
@@ -1457,7 +1586,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         if "rich_media_generator.generate(" in _instr or _instr.startswith("rich_media_generator"):
             _instr = ""
         rm_topic = _instr or None
-        ids = _rmg.generate(business_id, rm_types, topic=rm_topic)
+        ids = _rmg.generate(business_id, rm_types, topic=rm_topic, work_order_id=wo.get("_db_id"))
         log.info("WO %s (cap=%s) -> rich_media_generator(%s): created %s",
                  wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
         return ids[0] if ids else None
@@ -1680,6 +1809,13 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
                 comp_pass = recheck.get("pass")
                 comp_flags = list(recheck.get("flags", []))
+    # Consistency: highlighted_sections must never disagree with the compliance verdict. If the draft
+    # is STILL a compliance fail (auto-fix didn't run, didn't change anything, or didn't clear it),
+    # surface the tripped rules as highlights so the reviewer sees WHAT failed -- previously a
+    # comp_pass=False draft could carry an empty highlighted_sections, so the card said "failed" with
+    # nothing flagged.
+    if comp_pass is False and not highlighted and comp_flags:
+        highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
 
     # Publish-ready guarantee: strip any residual [INSERT] the writer/compliance-fix still left, so the
     # stored draft is publishable as-is (the prompt asks for this, but the full tier occasionally
@@ -1688,9 +1824,11 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     body = _strip_placeholders(body)
     body = _scrub_license_phrasing(body, _profile)
     body = _scrub_negative_disambiguation(body)   # no 'not to be confused with X' — positive identity only
-    # Crowd-out enforcement: keep scam/pyramid/MLM out of HEADINGS (schema-bound, most-extractable);
-    # the body prose still answers the question. A prompt rule alone did not hold in testing.
-    body = _neutralize_contested_headings(body, (biz.get("contested_terms") or "") if isinstance(biz, dict) else "")
+    # Crowd-out enforcement: keep scam/pyramid/MLM out of the HEADINGS *and the LEAD paragraph* (both
+    # schema-bound + the most-extractable answer locations); the later body prose still answers the
+    # question. A prompt rule alone did not hold in testing.
+    _contested = (biz.get("contested_terms") or "") if isinstance(biz, dict) else ""
+    body = neutralize_contested(body, _contested)
     # De-generic pass: strip the safest formulaic AI-slop lead-ins deterministically ('In conclusion,',
     # 'It's important to note that', 'In today's fast-paced world,'). Buzzwords mid-sentence are left to
     # the prompt ban + revision loop (deleting them blindly would break grammar).
@@ -1705,7 +1843,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         # E-E-A-T authorship (YMYL requirement): add a general, compliance-safe byline/reviewer line.
         # The reviewer noun is profile-driven ('editorial team' generic, 'licensed professionals' finance).
         body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "",
-                              reviewer=(_profile.get("byline_reviewer") if _profile else "") or "editorial team")
+                              reviewer=(_profile.get("byline_reviewer") if _profile else "") or "editorial team",
+                              author=(_profile.get("byline_author") if _profile else "") or "")
         # Plain-language backstop: the Opus tier writes grade ~15 despite the prompt + fluency signal,
         # so force a readability rewrite when the grade is too high (preserves facts/citations/quotes).
         body = _ensure_readability(body, asset_type, _score_q, content_type,
@@ -1740,23 +1879,29 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # quality_notes carries the rubric eval + the SEO keyword-coverage scorecard (CI-3 UI reads it)
     # + the Wave-2 draft-quality scorers (on-page SEO, citation-readiness, fact-check).
     quality_notes = {**(evaluation or {}), "keyword_coverage": coverage}
+    _run_analysis = None   # set to the re-callable scorer below; None if scoring is unavailable
     try:
         from . import content_quality as _cq
         _kw = list(coverage.get("covered", [])) + list(coverage.get("missing", []))
         _site = grounding if isinstance(grounding, dict) else None
         # SERP term coverage is graded by serp_grade() from serp_benchmark below (was NeuronWriter's job).
-        quality_notes.update(_cq.analyze_draft(
-            body, target_query=_score_q or wo.get("target_query") or "", keywords=_kw,
-            site_summary=_site, with_fact_check=True,
-            business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
-            geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
-            content_type=content_type, asset_type=asset_type, serp_benchmark=serp_bench,
-            business_id=business_id))
+        # Wrapped as a closure so the FINAL body can be re-scored after the citation-revise loop /
+        # inline-image step mutate it -- otherwise the persisted geo/aeo/serp/etc. describe a stale draft.
+        def _run_analysis(_b: str, __cq=_cq) -> dict:
+            return __cq.analyze_draft(
+                _b, target_query=_score_q or wo.get("target_query") or "", keywords=_kw,
+                site_summary=_site, with_fact_check=True,
+                business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
+                geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
+                content_type=content_type, asset_type=asset_type, serp_benchmark=serp_bench,
+                business_id=business_id)
+        quality_notes.update(_run_analysis(body))
     except Exception as e:  # noqa: BLE001 -- quality scoring must never break generation
         # WARNING not debug: if this path fails, citation_ready is absent and the HOLD gate below is
         # silently skipped, so an un-vetted draft is presented as a normal pending_review.
         log.warning("draft quality analysis failed (%s) -- citation-readiness gate will be skipped "
                     "for this draft; flagging it for manual review.", e)
+    _scored_body = body   # the body the scores above describe; re-scored below if revisions change it
     # Denormalize the GEO grade for cheap querying/sorting (the batch/impact views read it).
     geo_val = None
     try:
@@ -1825,7 +1970,9 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                 break
             try:
                 from . import content_quality as _cq2
-                new_cr = _cq2.citation_ready(fixed, wo.get("target_query") or "")
+                # Use the same scoring query as analyze_draft above -- scoring the revision against a
+                # different query than the original grade makes the before/after numbers incomparable.
+                new_cr = _cq2.citation_ready(fixed, _score_q or wo.get("target_query") or "")
             except Exception:  # noqa: BLE001
                 new_cr = None
             new_score = new_cr.get("score") if isinstance(new_cr, dict) else None
@@ -1844,16 +1991,33 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             tips = "; ".join(t.get("fix", "") for t in ((cr or {}).get("tips") or [])[:3] if isinstance(t, dict))
             comp_flags = list(comp_flags) + [
                 f"citation-readiness {cr_score:.0f}/100 below {CITATION_READY_MIN:.0f} after "
-                f"{cr_rev} auto-revision(s) -- needs an author"
+                f"{cr_rev} auto-revision(s) -- needs a human editorial pass before publishing"
                 + (f" -- {tips}" if tips else "")]
         elif cr_score is None:
             # Grading didn't produce a citation-readiness score (grader/orchestrator hiccup). Don't
             # present the draft as fully vetted -- flag it so the reviewer knows the gate was skipped.
             comp_flags = list(comp_flags) + ["citation-readiness check unavailable — please review this draft manually"]
 
-    # A draft that couldn't clear quality/compliance is HELD (needs an author), not shown as a
-    # ready-to-review draft with issues. "needs_fix" is folded into "held" so the review queue only
-    # ever contains clean drafts.
+    # The citation-revise loop above may have rewritten `body`. The geo/aeo/serp/on-page scores that
+    # analyze_draft computed on the PRE-revision draft are now stale -- re-score the FINAL body so the
+    # persisted scorecard (and the denormalized geo_score column the batch/impact views read) actually
+    # describes what we store. Only when the text really changed (skips the no-op + the extra
+    # fact-check cost for unrevised drafts). keyword_coverage is set from `coverage`, not by
+    # analyze_draft, so update() leaves it intact.
+    if _run_analysis is not None and body != _scored_body:
+        try:
+            quality_notes.update(_run_analysis(body))
+            _scored_body = body
+            _g2 = quality_notes.get("geo")
+            if isinstance(_g2, dict) and isinstance(_g2.get("score"), (int, float)):
+                geo_val = float(_g2["score"])
+        except Exception as e:  # noqa: BLE001 -- re-scoring must never break generation
+            log.warning("final-body re-score failed (%s) -- persisted scores may describe the "
+                        "pre-revision draft", e)
+
+    # A draft that couldn't clear quality/compliance is HELD (needs a human editorial pass), not shown
+    # as a ready-to-review draft with issues. "needs_fix" is folded into "held" so the review queue
+    # only ever contains clean drafts.
     if status == "needs_fix":
         status = "held"
 
@@ -1901,6 +2065,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             quality_notes["score_capped"] = {"from": round(score, 2), "to": _capped,
                                               "reason": "compliance_pass=false"}
         score = _capped
+
+    # Keep contested framing out of the stored TITLE too: it's the H1 + schema headline + the drafts
+    # card label -- the single most-cited label. Body headings + lead were already neutralized above.
+    topic = _neutralize_contested_title(topic, _contested)
+    # Title uniqueness: never surface two drafts with the identical title. A genuinely new piece that
+    # collides gets the next ' (v2)'/'(v3)'; a byte-identical re-run keeps the base title (already
+    # flagged needs_fix by the duplicate-body guard above).
+    topic = _dedupe_title(business_id, topic, content_hash=content_hash)
 
     _ensure_table()
     with db() as conn:
@@ -2036,10 +2208,20 @@ def generate(business_id: int, only_wo: Optional[int] = None,
             budget_stopped = True
             break
         eligible += 1
+        # Close the content_impact loop for the mainline path too: attach this gap-linked draft to a
+        # content_batches baseline (find-or-create per gap) so the next audit can measure the SoV/
+        # alignment lift. Best-effort -> None means unmeasured (exactly today's behavior), never a block.
+        _bid = None
+        try:
+            from . import content_batch as _cb
+            _bid = _cb.ensure_impact_batch(business_id, wo)
+        except Exception as e:  # noqa: BLE001
+            log.debug("impact-batch wiring skipped for WO %s: %s", wo.get("_db_id"), e)
         # The explicit content_type (from Create Content) applies to the single targeted WO so its
         # asset_type/rich-type is resolved deterministically instead of guessed from the title.
         did = generate_for_wo(business_id, wo, biz,
-                              content_type=(content_type if only_wo and wo.get("_db_id") == only_wo else None))
+                              content_type=(content_type if only_wo and wo.get("_db_id") == only_wo else None),
+                              batch_id=_bid)
         if did:
             created.append(did)
     log.info("Generated %d draft(s) for business %d (%d eligible content WO(s))",

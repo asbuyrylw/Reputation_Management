@@ -308,6 +308,46 @@ def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
         return {**_cluster_metrics(conn, business_id, run["id"], target_prompts), "run_id": run["id"]}
 
 
+def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
+    """Find-or-create a content_batches baseline for the gap a work order targets, so a draft made by
+    the MAINLINE generate() path (not just the content_batch fan-out) is measured for AI-visibility lift
+    after the next audit -- closing the content_impact loop for ALL generated content, not only batches.
+    Reuses an open (not-yet-measured) batch for the same gap so many WOs on one gap share a single
+    baseline; creates one with a fresh baseline otherwise. Returns the batch id, or None when the WO
+    carries no gap linkage or on any error (the draft still generates, just unmeasured -- today's
+    behavior). The baseline is captured against the LATEST audit so a later audit can show the delta."""
+    try:
+        gs = wo.get("gap_specifics") if isinstance(wo.get("gap_specifics"), dict) else {}
+        src_q = (wo.get("target_query") or gs.get("source_query") or "").strip()
+        topic = (wo.get("title") or src_q or "").strip()
+        if not (src_q or topic):
+            return None
+        gap_key = gs.get("gap_key") or _tu.gid("moc", topic or src_q)
+        with db() as conn:
+            row = conn.execute(
+                "SELECT id FROM content_batches WHERE business_id=%s AND gap_key=%s "
+                "AND status <> 'measured' ORDER BY id DESC LIMIT 1", (business_id, gap_key)).fetchone()
+            if row:
+                return row["id"]
+        prompts = resolve_prompts(business_id, [src_q] if src_q else [])
+        baseline = capture_baseline(business_id, prompts)
+        with db() as conn:
+            b = conn.execute(
+                "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
+                "target_prompts, content_types, baseline, status, created_by) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating',%s) RETURNING id",
+                (business_id, gap_key, gs.get("gap_source") or "content",
+                 f"Fill gap: {topic or src_q}", topic or src_q,
+                 json.dumps(prompts), json.dumps([]), json.dumps(baseline), None)).fetchone()
+            conn.commit()
+        log.info("content_impact: opened baseline batch %s for gap %s (business %d)",
+                 b["id"], gap_key, business_id)
+        return b["id"]
+    except Exception as e:  # noqa: BLE001 -- measurement wiring must never break generation
+        log.debug("ensure_impact_batch skipped: %s", e)
+        return None
+
+
 def _cluster_metrics(conn, business_id: int, run_id: int, prompts: list[str]) -> dict:
     """Aggregate AI-visibility metrics for a run over a set of prompts (empty = whole run)."""
     if prompts:

@@ -210,10 +210,21 @@ def _run_generate_clusters(business_id: int, args: dict):
 
 def _run_render_video(business_id: int, args: dict):
     """Render a real MP4 for an explainer_video/video_script rich-media draft via HeyGen (avatar speaks
-    the vetted script verbatim). Stores it as a video visual_asset + links it to the draft."""
+    the vetted script verbatim). Stores it as a video visual_asset + links it to the draft. avatar_id/
+    voice_id/aspect let a 'send back with changes' re-render pick a different presenter/voice/orientation."""
     rm = _imp("rich_media_generator")
-    return rm.render_video_for_draft(business_id, args.get("draft_id"), reviewer=args.get("requested_by"),
-                                     provider=args.get("provider"))
+    res = rm.render_video_for_draft(business_id, args.get("draft_id"), reviewer=args.get("requested_by"),
+                                    provider=args.get("provider"), avatar_id=args.get("avatar_id"),
+                                    voice_id=args.get("voice_id"), aspect=args.get("aspect"),
+                                    background=args.get("background"))
+    # A skipped/failed render must FAIL the job. render_video_for_draft returns {ok:False}/{skipped}
+    # (no MP4 produced) which run_job would otherwise record as a green 'complete' -> the owner thinks a
+    # video exists when none was made. The async Video Agent path returns {ok:True, pending:True} (still
+    # rendering) -- that IS success, so don't raise on it.
+    if isinstance(res, dict) and (res.get("skipped") or res.get("ok") is False):
+        reason = res.get("reason") or res.get("error") or "render produced no video"
+        raise RuntimeError(f"video render failed: {reason}")
+    return res
 
 
 def _run_publish_youtube(business_id: int, args: dict):

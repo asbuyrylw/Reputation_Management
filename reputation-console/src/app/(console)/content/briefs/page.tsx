@@ -255,7 +255,7 @@ function stageOf(draft: ContentDraft | undefined, asset: Asset | undefined): { l
   if (asset && (asset.published_status === "live" || asset.published_url)) return { label: "Published", cls: "bg-emerald-100 text-emerald-700" };
   if (asset || draft?.status === "approved") return { label: "Approved — ready to publish", cls: "bg-sky-100 text-sky-700" };
   if (draft?.status === "pending_review") return { label: "Draft in review", cls: "bg-amber-100 text-amber-700" };
-  if (draft?.status === "held" || draft?.status === "needs_fix") return { label: "Held — needs an author", cls: "bg-rose-100 text-rose-700" };
+  if (draft?.status === "held" || draft?.status === "needs_fix") return { label: "Held — needs editing", cls: "bg-rose-100 text-rose-700" };
   if (draft?.status === "rejected") return { label: "Draft rejected", cls: "bg-line text-ink-3" };
   return { label: "Not started", cls: "bg-line text-ink-4" };
 }

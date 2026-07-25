@@ -626,7 +626,11 @@ def list_visuals(business_id: int, status: Optional[str] = None,
         params.append(draft_id)
     with db() as conn:
         rows = conn.execute(
-            "SELECT id, work_order_id, draft_id, kind, provider, model, prompt, file_path, url, "
+            # Coalesce url<-public_url: generated images store their durable link in public_url (the
+            # object-store URL) and leave url NULL, so returning bare `url` surfaced null and the image
+            # never rendered. Prefer url, fall back to public_url; expose public_url explicitly too.
+            "SELECT id, work_order_id, draft_id, kind, provider, model, prompt, file_path, "
+            "COALESCE(url, public_url) AS url, public_url, "
             "width, height, status, compliance_note, reviewer, reviewed_at, meta, created_at "
             f"FROM visual_assets WHERE {where} ORDER BY id DESC", tuple(params)).fetchall()
     return [dict(r) for r in rows]

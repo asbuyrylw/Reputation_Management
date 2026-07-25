@@ -143,7 +143,7 @@ export default function DraftsPage() {
   const { data, isLoading } = useContentDrafts(businessId);
   const approve = useApproveDraft(businessId);
   const reject = useRejectDraft(businessId);
-  const [tab, setTab] = useState<Tab>("ready");
+  const [tab, setTab] = useState<Tab>("all");
   const [sort, setSort] = useState<Sort>("impact");
   const [groupFlaws, setGroupFlaws] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -242,9 +242,9 @@ export default function DraftsPage() {
       <Card className="mb-4">
         <TabNav
           tabs={[
-            { key: "ready", label: "Ready to review", count: ready.length },
-            { key: "fixes", label: "Held — need an author", count: fixes.length },
             { key: "all", label: "All", count: data.length },
+            { key: "ready", label: "Ready to review", count: ready.length },
+            { key: "fixes", label: "Held — need a fix", count: fixes.length },
           ]}
           active={tab}
           onSelect={(k) => { setTab(k as Tab); clearSelected(); }}
