@@ -586,6 +586,16 @@ def _persist(
             # Title uniqueness (same as text drafts): a deep_article/research_brief title that collides
             # with an existing one gets the next ' (v2)'/'(v3)' so the media list never shows dupes.
             title = _cg._dedupe_title(business_id, title, table="rich_media_drafts")
+            # E-E-A-T byline on the one true published-ARTICLE rich type (deep_article), authored the
+            # same way as content drafts: a random named author from the roster. Decks/briefs/scripts
+            # are not articles, so they get no prose byline. No-op if business_name is unknown.
+            if asset_type == "deep_article":
+                _p = _profile if isinstance(_profile, dict) else {}
+                body = _cg._ensure_byline(
+                    body, business_name or "",
+                    reviewer=_p.get("byline_reviewer") or "editorial team",
+                    author=_p.get("byline_author") or "",
+                    authors=_p.get("byline_authors"))
         except Exception as e:  # noqa: BLE001 -- cleanup must never block persistence
             log.debug("rich_media: body cleanup skipped: %s", e)
     # Grade video scripts (AEO/GEO citability first, then info/production/SEO/length) so a video is

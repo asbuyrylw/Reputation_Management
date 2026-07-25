@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 from datetime import datetime, timezone
 from typing import Optional
@@ -1379,20 +1380,24 @@ _BYLINE_RE = re.compile(r"^\s*[*_]{0,2}\s*(?:by |written by |author\b|reviewed b
 
 
 def _ensure_byline(body: str, business_name: str, reviewer: str = "editorial team",
-                   author: str = "") -> str:
+                   author: str = "", authors: Optional[list] = None) -> str:
     """E-E-A-T authorship signal. For YMYL content Google's rater guidelines rate a page with no clear
     author background 'Lowest', and named authorship is a top measured citation signal (+30.6%
     correlation, Semrush). Add a general, compliance-safe byline/reviewer line under the H1 -- truthful
-    given the human review-before-publish workflow, and NEVER a license number. The AUTHOR defaults to
-    the business/org name ('By Team Unstoppable'); a tenant can set a profile `byline_author` to a real
-    NAMED, credentialed person ('Jane Doe, CFP®'), which AI answer engines + Google's raters weight with
-    higher regard for YMYL finance. The reviewer NOUN is profile-driven (`byline_reviewer`): 'editorial
-    team' by default, 'licensed professionals' for finance, etc.
+    given the human review-before-publish workflow, and NEVER a license number.
+
+    AUTHOR precedence: an explicit single `byline_author` (a fixed named person) wins; else, when a
+    `byline_authors` ROSTER is set, one name is picked at RANDOM so authorship rotates across the real
+    team (a named person reads with higher E-E-A-T regard than the bare org, and rotation spreads it);
+    else the business/org name ('By Team Unstoppable'). The reviewer NOUN is profile-driven
+    (`byline_reviewer`): 'editorial team' by default, 'licensed professionals' for finance, etc.
     Best-effort; skipped if a byline already exists or the business name is unknown."""
     if not body or not (business_name or "").strip() or _BYLINE_RE.search(body):
         return body
     name = business_name.strip()
-    author = (author or "").strip() or name   # named person > org for E-E-A-T; org is the safe default
+    roster = [a.strip() for a in (authors or []) if isinstance(a, str) and a.strip()]
+    # explicit single author > random pick from the roster > org name
+    author = (author or "").strip() or (random.choice(roster) if roster else name)
     reviewer = (reviewer or "editorial team").strip()
     # byline_reviewer may be a bare noun ('editorial team', 'licensed professionals') -> possessive,
     # or article-prefixed ('a licensed attorney', 'a licensed clinician') -> drop the possessive so the
@@ -1844,7 +1849,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         # The reviewer noun is profile-driven ('editorial team' generic, 'licensed professionals' finance).
         body = _ensure_byline(body, (biz.get("name") if isinstance(biz, dict) else "") or "",
                               reviewer=(_profile.get("byline_reviewer") if _profile else "") or "editorial team",
-                              author=(_profile.get("byline_author") if _profile else "") or "")
+                              author=(_profile.get("byline_author") if _profile else "") or "",
+                              authors=(_profile.get("byline_authors") if _profile else None))
         # Plain-language backstop: the Opus tier writes grade ~15 despite the prompt + fluency signal,
         # so force a readability rewrite when the grade is too high (preserves facts/citations/quotes).
         body = _ensure_readability(body, asset_type, _score_q, content_type,
