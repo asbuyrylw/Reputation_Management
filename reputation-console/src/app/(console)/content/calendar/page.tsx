@@ -15,7 +15,7 @@ import type { WorkOrder } from "@/lib/types";
 // so the calendar shows the same content the Strategy plan + Content section do.
 const CONTENT_CAPS = new Set([
   "content_writing", "video_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "infographic", "research_brief", "local_content_creation",
+  "podcast_creation", "slide_deck", "research_brief", "local_content_creation",
 ]);
 const isContent = (w: WorkOrder) => CONTENT_CAPS.has(w.capability ?? "");
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

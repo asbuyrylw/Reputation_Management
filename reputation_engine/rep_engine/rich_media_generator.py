@@ -390,7 +390,6 @@ def _generate_audio(
 _NOTE_TYPE_MAP = {
     "explainer_video": "study_guide",
     "slide_deck": "study_guide",
-    "infographic": "faq",
     "research_brief": "briefing_doc",
 }
 
@@ -466,7 +465,6 @@ _MAX_TOKENS: dict[str, int] = {
     "podcast":         4_000,   # 600-900 words two-host dialogue
     "report_audio":    3_500,   # 500-700 words narration
     "newsletter":      3_500,   # 400-600 words + subject lines/sections
-    "infographic":     3_000,
     "explainer_video": 2_800,   # ~250-300 words script (short by design)
 }
 _DEFAULT_MAX_TOKENS = 3_000
@@ -786,6 +784,16 @@ def generate(
                     work_order_id=work_order_id,
                 )
                 created.append(draft_id)
+                # If this is a REAL NotebookLM audio overview AND the browser automation is live,
+                # schedule the self-clearing sweep to download + ingest the finished file into Media
+                # (NotebookLM has no download API). Dormant-safe: no-op until the session is configured.
+                if result.get("generator") == "notebooklm":
+                    try:
+                        from . import notebooklm_browser as _nbb2, scheduler as _sch2
+                        if _nbb2.configured():
+                            _sch2.upsert_schedule(business_id, "notebooklm_render", 1)
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("rich_media: could not schedule notebooklm_render sweep: %s", e)
 
             elif method == "notebooklm_note":
                 body = _generate_note_asset(asset_type, biz, sources, business_id)
@@ -1161,13 +1169,15 @@ def ingest_notebook_audio(business_id: int, draft_id: int, audio_bytes: bytes,
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"store failed: {e}"}
     audio_url = purl   # object-store public URL (requires object storage configured, which prod has)
+    # Merge rendered_audio SERVER-SIDE (jsonb ||) so a concurrent grade/edit write to quality_notes
+    # isn't clobbered by writing back the stale in-memory object read before the (slow) upload above.
+    _delta = json.dumps({"rendered_audio": {"visual_id": vid, "url": audio_url,
+                                            "artifact_id": source_artifact_id, "provider": "notebooklm"}})
     with db() as conn:
-        qn = dict(qn or {})
-        qn["rendered_audio"] = {"visual_id": vid, "url": audio_url, "artifact_id": source_artifact_id,
-                                "provider": "notebooklm"}
         conn.execute("UPDATE rich_media_drafts SET audio_url=COALESCE(%s, audio_url), generator='notebooklm', "
-                     "quality_notes=%s, updated_at=now() WHERE id=%s AND business_id=%s",
-                     (audio_url, json.dumps(qn), draft_id, business_id))
+                     "quality_notes=COALESCE(quality_notes,'{}'::jsonb) || %s::jsonb, updated_at=now() "
+                     "WHERE id=%s AND business_id=%s",
+                     (audio_url, _delta, draft_id, business_id))
         conn.commit()
     if not audio_url:
         log.warning("ingest_notebook_audio: stored audio visual %s but no public_url (object storage not "
@@ -1176,25 +1186,15 @@ def ingest_notebook_audio(business_id: int, draft_id: int, audio_bytes: bytes,
             "error": None if audio_url else "object storage not configured (no public URL for playback)"}
 
 
-def notebooklm_download_audio(business_id: int, draft_id: int) -> dict:
-    """Fetch the just-created NotebookLM audio for a podcast draft's PERSISTENT notebook (via the browser
-    automation) and ingest it so it plays in Media. Dormant-safe: returns {skipped} until the browser
-    session + NOTEBOOKLM_BROWSER_READY are configured. Never raises."""
+def _download_one_audio(business_id: int, draft_id: int, _nle, _nbb) -> dict:
+    """Fetch + ingest the audio for ONE podcast/report_audio draft. May raise; callers wrap it."""
     d = api_get(business_id, draft_id)
     if not d:
         return {"ok": False, "error": "draft not found"}
     if d.get("asset_type") not in ("podcast", "report_audio"):
         return {"ok": False, "error": f"draft is a {d.get('asset_type')}, not an audio type"}
     style = "briefing" if d.get("asset_type") == "report_audio" else "podcast"
-    try:
-        from . import notebooklm_enterprise as _nle, notebooklm_browser as _nbb
-    except ImportError:  # pragma: no cover
-        import notebooklm_enterprise as _nle  # type: ignore
-        import notebooklm_browser as _nbb  # type: ignore
-    try:
-        nb, _url, _seen = _nle._load_notebook(business_id, style)
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"could not load persistent notebook: {e}"}
+    nb, _url, _seen = _nle._load_notebook(business_id, style)
     if not nb:
         return {"ok": False, "error": "no persistent notebook for this business yet (generate a podcast first)"}
     res = _nbb.fetch_latest_audio(nb)
@@ -1204,6 +1204,63 @@ def notebooklm_download_audio(business_id: int, draft_id: int) -> dict:
                                  res.get("mime") or "audio/mpeg",
                                  source_artifact_id=res.get("source_artifact_id"),
                                  filename=res.get("filename") or "podcast.mp3")
+
+
+def notebooklm_download_audio(business_id: int, draft_id: Optional[int] = None) -> dict:
+    """Fetch the just-created NotebookLM audio and ingest it so it plays in Media in-app. draft_id set ->
+    that one draft (fail-loud for the job); draft_id None -> SWEEP every pending audio draft (podcast/
+    report_audio, generator='notebooklm', no rendered_audio yet) and self-clear the hourly sweep once the
+    queue is empty (mirrors poll_video_renders). Dormant-safe: returns {skipped} until the browser session
+    is configured. NEVER raises."""
+    try:
+        from . import notebooklm_enterprise as _nle, notebooklm_browser as _nbb
+    except ImportError:  # pragma: no cover
+        import notebooklm_enterprise as _nle  # type: ignore
+        import notebooklm_browser as _nbb  # type: ignore
+    if not _nbb.configured():
+        return {"skipped": True, "reason": "notebooklm browser automation not configured"}
+    _ensure_table()
+    if draft_id:
+        try:
+            return _download_one_audio(business_id, draft_id, _nle, _nbb)
+        except Exception as e:  # noqa: BLE001 -- honor the never-raises contract
+            return {"ok": False, "error": f"audio download failed: {e}"}
+    # sweep mode
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM rich_media_drafts WHERE business_id=%s "
+                "AND asset_type IN ('podcast','report_audio') AND generator='notebooklm' "
+                "AND (quality_notes->'rendered_audio') IS NULL AND coalesce(status,'') <> 'rejected' "
+                "ORDER BY id DESC LIMIT 10", (business_id,)).fetchall()
+        targets = [r["id"] for r in rows]
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"sweep query failed: {e}"}
+    done = failed = 0
+    for did in targets:
+        try:
+            r = _download_one_audio(business_id, did, _nle, _nbb)
+        except Exception as e:  # noqa: BLE001
+            r = {"ok": False, "error": str(e)[:200]}
+        if r.get("ok"):
+            done += 1
+        elif not r.get("skipped"):
+            failed += 1
+    try:   # self-clear the hourly sweep once nothing is pending
+        with db() as conn:
+            still = conn.execute(
+                "SELECT count(*) AS n FROM rich_media_drafts WHERE business_id=%s "
+                "AND asset_type IN ('podcast','report_audio') AND generator='notebooklm' "
+                "AND (quality_notes->'rendered_audio') IS NULL AND coalesce(status,'') <> 'rejected'",
+                (business_id,)).fetchone()["n"]
+        if still == 0:
+            from . import scheduler as _sch
+            for s in _sch.list_schedules(business_id):
+                if s.get("job_type") == "notebooklm_render":
+                    _sch.delete_schedule(business_id, s["id"])
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "downloaded": done, "failed": failed, "checked": len(targets)}
 
 
 def poll_pending_agent_renders(business_id: int) -> dict:

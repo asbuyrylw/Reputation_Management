@@ -83,7 +83,7 @@ GENERATABLE = {
     "deep_content":     "deep_article",
     "podcast_creation": "podcast",
     "slide_deck":       "slide_deck",
-    "infographic":      "infographic",
+    # "infographic" removed (owner decision) -- not a generatable type any more.
     "explainer_video":  "explainer_video",
     "research_brief":   "research_brief",
 }
@@ -94,7 +94,6 @@ GENERATABLE = {
 _RICH_MEDIA_CAP_MAP: dict[str, list[str]] = {
     "podcast_creation": ["podcast"],
     "slide_deck":       ["slide_deck"],
-    "infographic":      ["infographic"],
     "explainer_video":  ["explainer_video"],
     "research_brief":   ["research_brief"],
     "deep_content":     ["deep_article", "blog_series", "newsletter"],
@@ -107,7 +106,7 @@ TITLE_HINTS = [
     ("faq", "faq"), ("bio", "bio"),
     ("article", "article"), ("post", "gbp_post"), ("review", "review_request"),
     ("podcast", "podcast"), ("slide", "slide_deck"),
-    ("infographic", "infographic"), ("explainer", "explainer_video"),
+    ("explainer", "explainer_video"),
 ]
 
 # When the user EXPLICITLY picks a content_type in "Create Content", map it straight to the

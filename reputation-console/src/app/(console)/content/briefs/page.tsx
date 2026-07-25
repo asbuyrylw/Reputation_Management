@@ -226,13 +226,13 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
 // alt-text) is deliberately NOT here — it lives on the website-fixes board, not in the content section.
 const CONTENT_CAPS = new Set([
   "content_writing", "video_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "infographic", "research_brief", "local_content_creation",
+  "podcast_creation", "slide_deck", "research_brief", "local_content_creation",
 ]);
 // The pieces that generate on click (content_writing + all rich-media route through generate_for_wo →
 // rich_media_generator). local_content_creation is a multi-piece PROGRAM, handled separately below.
 const DRAFTABLE = new Set([
   "content_writing", "video_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "infographic", "research_brief",
+  "podcast_creation", "slide_deck", "research_brief",
 ]);
 
 const CAP_LABEL: Record<string, string> = {
@@ -242,7 +242,6 @@ const CAP_LABEL: Record<string, string> = {
   deep_content: "Blog series + long-form",
   podcast_creation: "Podcast",
   slide_deck: "Slide deck",
-  infographic: "Infographic",
   research_brief: "Research brief",
   local_content_creation: "Local / geo page",
   review_generation: "Reviews",

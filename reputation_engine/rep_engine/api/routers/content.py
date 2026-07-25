@@ -190,15 +190,15 @@ _CONTENT_TYPE_CAP = {
     "article": "content_writing", "blog": "content_writing", "white_paper": "content_writing",
     "faq": "content_writing", "landing_page": "content_writing", "local_page": "local_content_creation",
     "deep_article": "deep_content", "newsletter": "deep_content", "blog_series": "deep_content",
-    "podcast": "podcast_creation", "slide_deck": "slide_deck", "infographic": "infographic",
+    "podcast": "podcast_creation", "slide_deck": "slide_deck",
     "explainer_video": "explainer_video", "research_brief": "research_brief",
-}
+}  # "infographic" removed (owner decision) -- POST /custom-content rejects it as an unknown type.
 _CONTENT_TYPE_VISUAL = {"image", "quote_card", "video"}
 _TYPE_LABELS = {
     "article": "Article", "blog": "Blog post", "white_paper": "White paper", "faq": "FAQ",
     "landing_page": "Landing page", "local_page": "Local page", "deep_article": "Long-form article",
     "newsletter": "Newsletter", "blog_series": "Blog series", "podcast": "Podcast",
-    "slide_deck": "Slide deck", "infographic": "Infographic", "explainer_video": "Explainer video",
+    "slide_deck": "Slide deck", "explainer_video": "Explainer video",
     "research_brief": "Research brief", "image": "Image", "quote_card": "Quote card", "video": "Video",
 }
 
@@ -249,7 +249,7 @@ def content_types(business_id: int = Depends(authorize_business)):
         if ct in _CONTENT_TYPE_VISUAL:
             return "visual"
         cap = _CONTENT_TYPE_CAP.get(ct)
-        return "rich_media" if cap in ("podcast_creation", "slide_deck", "infographic",
+        return "rich_media" if cap in ("podcast_creation", "slide_deck",
                                        "explainer_video", "research_brief", "deep_content") else "text"
     # What the in-house LLM path actually PRODUCES for each rich type (honest, since the real
     # NotebookLM renderer is dormant): a text script/brief, not a finished audio/slide/graphic file.
@@ -257,7 +257,6 @@ def content_types(business_id: int = Depends(authorize_business)):
         "podcast": "a two-host podcast SCRIPT (text). Rendered audio needs a NotebookLM/AutoContent provider.",
         "explainer_video": "a video SCRIPT (text). A rendered video needs the Video type (Veo) or a NotebookLM provider.",
         "slide_deck": "a slide-deck BRIEF (text outline). Rendered slides need a NotebookLM/AutoContent provider.",
-        "infographic": "an infographic BRIEF for a designer (text). A rendered graphic needs a NotebookLM/AutoContent provider.",
         "research_brief": "a research briefing document (text).",
         "deep_article": "a long-form article (text).",
         "newsletter": "a newsletter brief (text).",

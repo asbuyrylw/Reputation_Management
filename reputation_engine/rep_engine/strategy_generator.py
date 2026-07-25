@@ -71,7 +71,7 @@ CAPABILITIES = [
     # Rich-media capabilities (NotebookLM API + in-house LLM fallback path)
     "podcast_creation",    # Audio Overview: two-host AI podcast from audit data
     "slide_deck",          # Executive slide-deck brief from study-guide synthesis
-    "infographic",         # Infographic content brief from FAQ synthesis
+    # "infographic" removed (owner decision) -- not a producible capability any more.
     "explainer_video",     # Explainer-video script from multi-source synthesis
     "research_brief",      # Deep research brief for PR / content teams
     "deep_content",        # Long-form articles, blog series, newsletters
@@ -137,8 +137,7 @@ TOOL_REGISTRY: list[Tool] = [
          "sources. Requires NOTEBOOKLM_API_KEY or GEMINI_API_KEY. Output: MP3 + transcript, pending_review."),
     Tool("notebooklm_api_slides", "NotebookLM API", "slide_deck", Exec.SEMI,
          "Google NotebookLM API; study-guide synthesis across audit sources -> 10-12 slide deck brief."),
-    Tool("notebooklm_api_infographic", "NotebookLM API", "infographic", Exec.SEMI,
-         "Google NotebookLM API; FAQ synthesis -> infographic content brief for a designer."),
+    # infographic tool removed (owner decision) -- infographics are no longer produced.
     Tool("notebooklm_api_video", "NotebookLM API", "explainer_video", Exec.SEMI,
          "Google NotebookLM API; study-guide synthesis -> explainer-video script. Pair with a video production brief."),
     Tool("notebooklm_api_brief", "NotebookLM API", "research_brief", Exec.SEMI,
@@ -229,7 +228,6 @@ _CAPABILITY_TO_LEVER = {
     "podcast_creation": "videos",
     "deep_content": "third_party_articles",
     "slide_deck": "third_party_articles",
-    "infographic": "third_party_articles",
     "research_brief": "third_party_articles",
     "press_outreach": "earned_press",
     "media_list_building": "earned_press",
@@ -248,7 +246,7 @@ _CAPABILITY_SEO = {
     "schema_markup": "Medium", "content_writing": "Medium", "review_generation": "Medium",
     "press_outreach": "Medium", "video_creation": "Medium", "explainer_video": "Medium",
     "deep_content": "Medium", "research_brief": "Medium",
-    "podcast_creation": "Low", "slide_deck": "Low", "infographic": "Low",
+    "podcast_creation": "Low", "slide_deck": "Low",
     "social_publishing": "Low", "media_list_building": "Low", "technical_seo": "Medium",
     "ai_visibility_tracking": "—",
 }
@@ -258,7 +256,7 @@ _CAPABILITY_SEO = {
 _EFFORT = {
     "schema_markup": 1, "ai_visibility_tracking": 1, "social_publishing": 1, "gbp_optimization": 1,
     "review_generation": 2, "content_writing": 2, "local_content_creation": 2, "media_list_building": 2,
-    "deep_content": 2, "slide_deck": 2, "infographic": 2, "research_brief": 2, "technical_seo": 2,
+    "deep_content": 2, "slide_deck": 2, "research_brief": 2, "technical_seo": 2,
     "video_creation": 3, "explainer_video": 3, "podcast_creation": 3, "press_outreach": 3, "link_building": 3,
 }
 # AEO/GEO content checklist appended to every content-creation task so the writer (human or LLM)
@@ -812,7 +810,7 @@ def _gap_approach_index(gap: dict) -> dict:
 # set the Content section shows -- so the plan's "content to produce" and the content page always match.
 _SPEC_CAPS = CONTENT_CAPABILITIES
 
-# Rich-media SYNTHESIS pieces (deep-content bundle, podcast, slide deck, research brief, infographic,
+# Rich-media SYNTHESIS pieces (deep-content bundle, podcast, slide deck, research brief,
 # explainer-video script) are written FROM the audit + gap model + competitor data + site crawl -- NOT
 # from a per-topic source document -- and they carry a generic placeholder topic ("deep content
 # bundle", "slide deck", ...) that can never match the corpus. Flagging them "no source material for

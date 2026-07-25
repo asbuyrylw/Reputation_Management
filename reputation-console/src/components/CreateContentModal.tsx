@@ -12,7 +12,7 @@ import type { ContentTypeOption, GapCompletion } from "@/lib/types";
 
 const FAMILY_ORDER: { key: string; label: string; hint: string }[] = [
   { key: "text", label: "Written content", hint: "Blog, article, FAQ, white paper, newsletter…" },
-  { key: "rich_media", label: "Audio & rich media", hint: "Podcast, explainer, slide deck, infographic…" },
+  { key: "rich_media", label: "Audio & rich media", hint: "Podcast, explainer, slide deck, research brief…" },
   { key: "visual", label: "Images & video", hint: "AI image, quote card, generated video clip" },
 ];
 
@@ -20,7 +20,6 @@ const PLACEHOLDER: Record<string, string> = {
   podcast: "e.g. A 5-minute episode on how term life insurance protects a young Cincinnati family, in plain language.",
   video: "e.g. A 8-second clip: warm scene of a family reviewing finances at their kitchen table, calm and reassuring.",
   explainer_video: "e.g. Explain the debt snowball method step by step for someone new to budgeting.",
-  infographic: "e.g. 6 signs it's time to review your life insurance, as an infographic.",
   quote_card: "e.g. \"Protecting your family's future starts with one conversation.\" — a shareable quote card.",
   image: "e.g. A friendly, professional hero image of a financial coaching session (no real faces).",
   faq: "e.g. Answer the top 8 questions people ask before their first financial review.",

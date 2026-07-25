@@ -218,7 +218,8 @@ def _start_audio(tok: str, nb: str) -> str:
                            json={}, timeout=90, max_retries=1, guard_redirects=True)
     status = "AUDIO_OVERVIEW_STATUS_IN_PROGRESS"
     if not a.failed and isinstance(a.data, dict):
-        status = (a.data.get("audioOverview") or {}).get("status") or status
+        _ao = a.data.get("audioOverview")   # may come back as a non-dict (enum string / list) -> guard
+        status = (_ao.get("status") if isinstance(_ao, dict) else None) or status
     elif a.failed:
         log.warning("notebooklm_enterprise: audioOverview start failed: %s", a.error)
     return status
@@ -271,44 +272,51 @@ def synthesise_audio(sources: list[dict], title: str, *, style: str = "podcast",
     if not tok:
         log.warning("notebooklm_enterprise: no user access token (check the OAuth refresh token)")
         return None
-    persist = business_id is not None and _persist_enabled()
-    nb: Optional[str] = None
-    url: Optional[str] = None
-    seen: set = set()
-    if persist:
-        try:
-            nb, url, seen = _load_notebook(business_id, style)
-        except Exception as e:  # noqa: BLE001 -- registry failure -> fall back to a fresh notebook
-            log.warning("notebooklm_enterprise: notebook registry load failed (%s) -- using a fresh notebook", e)
-            nb, url, seen = None, None, set()
-        if nb and not _notebook_exists(tok, nb):
-            log.info("notebooklm_enterprise: stored notebook %s is gone (deleted in Studio?) -- recreating", nb)
-            nb, url, seen = None, None, set()
-    if not nb:
-        nb, url = _create_notebook(tok, title)
+    # Fail-closed: the module + docstring promise None on ANY error so the caller falls back to the
+    # in-house LLM script. Wrap the whole notebook-op body (a non-dict API response, a DB blip, etc.)
+    # so nothing raises into rich_media_generator._generate_audio, which would silently DROP the podcast.
+    try:
+        persist = business_id is not None and _persist_enabled()
+        nb: Optional[str] = None
+        url: Optional[str] = None
+        seen: set = set()
+        if persist:
+            try:
+                nb, url, seen = _load_notebook(business_id, style)
+            except Exception as e:  # noqa: BLE001 -- registry failure -> fall back to a fresh notebook
+                log.warning("notebooklm_enterprise: notebook registry load failed (%s) -- using a fresh notebook", e)
+                nb, url, seen = None, None, set()
+            if nb and not _notebook_exists(tok, nb):
+                log.info("notebooklm_enterprise: stored notebook %s is gone (deleted in Studio?) -- recreating", nb)
+                nb, url, seen = None, None, set()
         if not nb:
-            return None
-        seen = set()
-    added, new_hashes, gone = _add_sources(tok, nb, sources, seen)
-    if gone:
-        # the notebook vanished between the existence check and the source add -> recreate + add all
-        nb, url = _create_notebook(tok, title)
-        if not nb:
-            return None
-        seen = set()
-        added, new_hashes, _ = _add_sources(tok, nb, sources, seen)
-    if persist:
-        try:
-            _save_notebook(business_id, style, nb, url or _notebook_url(nb), seen | set(new_hashes))
-        except Exception as e:  # noqa: BLE001
-            log.warning("notebooklm_enterprise: notebook registry save failed: %s", e)
-    status = _start_audio(tok, nb)
-    url = url or _notebook_url(nb)
-    total = len(seen | set(new_hashes))
-    body = (f"🎙️ Your podcast is generating in NotebookLM under your Gemini Enterprise account "
-            f"({total} source{'s' if total != 1 else ''} in the Team notebook).\n\n"
-            f"▶ Open it in NotebookLM to listen and download the audio:\n{url}\n\n"
-            f"Note: Google's NotebookLM API doesn't allow downloading the audio automatically, so "
-            f"the finished episode is retrieved from the NotebookLM Studio page above.")
-    return {"generator": "notebooklm", "notebook_id": nb, "notebook_url": url, "status": status,
-            "audio_url": None, "transcript": body, "body": body, "audio_pending": True}
+            nb, url = _create_notebook(tok, title)
+            if not nb:
+                return None
+            seen = set()
+        added, new_hashes, gone = _add_sources(tok, nb, sources, seen)
+        if gone:
+            # the notebook vanished between the existence check and the source add -> recreate + add all
+            nb, url = _create_notebook(tok, title)
+            if not nb:
+                return None
+            seen = set()
+            added, new_hashes, _ = _add_sources(tok, nb, sources, seen)
+        if persist:
+            try:
+                _save_notebook(business_id, style, nb, url or _notebook_url(nb), seen | set(new_hashes))
+            except Exception as e:  # noqa: BLE001
+                log.warning("notebooklm_enterprise: notebook registry save failed: %s", e)
+        status = _start_audio(tok, nb)
+        url = url or _notebook_url(nb)
+        total = len(seen | set(new_hashes))
+        body = (f"🎙️ Your podcast is generating in NotebookLM under your Gemini Enterprise account "
+                f"({total} source{'s' if total != 1 else ''} in the Team notebook).\n\n"
+                f"▶ Open it in NotebookLM to listen and download the audio:\n{url}\n\n"
+                f"Note: Google's NotebookLM API doesn't allow downloading the audio automatically, so "
+                f"the finished episode is retrieved from the NotebookLM Studio page above.")
+        return {"generator": "notebooklm", "notebook_id": nb, "notebook_url": url, "status": status,
+                "audio_url": None, "transcript": body, "body": body, "audio_pending": True}
+    except Exception as e:  # noqa: BLE001 -- fail-closed: any error -> None so the caller uses the LLM script
+        log.warning("notebooklm_enterprise: synthesise_audio failed (%s) -- falling back to the LLM script", e)
+        return None
