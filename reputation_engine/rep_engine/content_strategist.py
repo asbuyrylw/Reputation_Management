@@ -123,7 +123,7 @@ _SYSTEM_BASE = (
     "clusters (array of 6-12 {title, content_type (one of 'blog'|'faq'|'article'), "
     "intent, target_query (the specific question/keyword this piece answers), why}), "
     "comparison_page ({title} or null), "
-    "atomization ({social_posts (int 4-12), video_script (bool), infographic (bool), email (bool)})"
+    "atomization ({social_posts (int 4-12), video_script (bool), email (bool)})"
     "})}.\n"
     "RULES: (1) Ground EVERY campaign in a real gap-model signal -- do not invent topics the gap "
     "model / keywords don't support. (2) Do NOT propose a page whose title IS a contested accusation "

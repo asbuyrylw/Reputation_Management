@@ -55,7 +55,7 @@ function titleCase(s: string) { return s.replace(/_/g, " ").replace(/\b\w/g, (c)
 
 const FILTERS: { key: string; label: string }[] = [
   { key: "all", label: "All" }, { key: "video", label: "Video" }, { key: "image", label: "Image" },
-  { key: "podcast", label: "Podcast" }, { key: "deck", label: "Decks" }, { key: "infographic", label: "Infographics" }, { key: "text", label: "Content" },
+  { key: "podcast", label: "Podcast" }, { key: "deck", label: "Decks" }, { key: "text", label: "Content" },
 ];
 
 function MediaCard({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {

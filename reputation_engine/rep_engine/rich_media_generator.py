@@ -70,7 +70,9 @@ RICH_TYPES: dict[str, tuple[str, str]] = {
     "report_audio":     ("notebooklm_audio", "Audio version of the monthly report"),
     "explainer_video":  ("notebooklm_note",  "Explainer video script from all sources"),
     "slide_deck":       ("notebooklm_note",  "Executive slide-deck brief (10-12 slides)"),
-    "infographic":      ("notebooklm_note",  "Infographic content brief from FAQ synthesis"),
+    # "infographic" removed (owner decision): the platform doesn't render an infographic image and
+    # NotebookLM can't produce one, so it is no longer a generatable rich-media type. A stray request
+    # for it is skipped as unknown by generate().
     "research_brief":   ("notebooklm_note",  "Deep research brief for PR / content teams"),
     "deep_article":     ("llm_structured",   "Long-form thought-leadership article"),
     "blog_series":      ("llm_structured",   "Three related blog post outlines"),
@@ -272,6 +274,21 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
             )
             sources.append({"title": "Competitive Landscape", "text": fenced_comp})
 
+        # The platform's OWN generated content (approved/published articles) — trusted, first-party. So
+        # a podcast/rich-media piece can reference and stay consistent with what the engine has already
+        # authored for this business (the owner asked that generated content feed the Team notebook).
+        try:
+            own = conn.execute(
+                "SELECT title, body FROM content_drafts WHERE business_id=%s "
+                "AND status IN ('approved','published') AND body IS NOT NULL "
+                "ORDER BY id DESC LIMIT 8", (business_id,)).fetchall()
+            if own:
+                own_text = "\n\n---\n\n".join(
+                    f"# {(d.get('title') or 'Untitled')}\n{(d.get('body') or '')[:2500]}" for d in own)
+                sources.append({"title": "Our Published Content (first-party)", "text": own_text[:16_000]})
+        except Exception as e:  # noqa: BLE001 -- own-content source is best-effort
+            log.debug("rich_media: own-content source unavailable: %s", e)
+
     return sources
 
 
@@ -355,7 +372,7 @@ def _generate_audio(
             from . import notebooklm_enterprise as _nle
         except ImportError:  # pragma: no cover
             import notebooklm_enterprise as _nle  # type: ignore
-        result = _nle.synthesise_audio(sources, title, style=style, focus=title)
+        result = _nle.synthesise_audio(sources, title, style=style, focus=title, business_id=business_id)
         # Only use the Enterprise result if it produced something usable (a rendered audio URL or a
         # transcript). If retrieval isn't ready, fall through to the LLM script so nothing empty is
         # stored as a "podcast".

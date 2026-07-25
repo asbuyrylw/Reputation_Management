@@ -284,14 +284,14 @@ _SEO_POINTS = {"High": 15.0, "Medium": 8.0, "Low": 3.0, "—": 0.0}
 # deliberately NOT content -- it belongs on the website-fixes board, never in the content section.
 CONTENT_CAPABILITIES = frozenset({
     "content_writing", "video_creation", "explainer_video", "deep_content",
-    "podcast_creation", "slide_deck", "infographic", "research_brief", "local_content_creation",
-})
+    "podcast_creation", "slide_deck", "research_brief", "local_content_creation",
+})  # NOTE: "infographic" removed by owner decision -- not a producible content type any more.
 
 _CAPABILITY_AREA = {
     # producible content -> the Content "To Produce" section
     "content_writing": "content", "video_creation": "content", "explainer_video": "content",
     "deep_content": "content", "podcast_creation": "content", "slide_deck": "content",
-    "infographic": "content", "research_brief": "content",
+    "research_brief": "content",
     "local_content_creation": "local",          # a local page-1 PROGRAM (its own area)
     # website / technical -- NOT content (website-fixes board)
     "schema_markup": "website", "technical_seo": "website", "link_building": "website",
@@ -472,18 +472,15 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                     # aren't auto-drafted in a batch -- the owner generates the script (+ captions +
                     # VideoObject schema) and renders the MP4 on click.
                     execution=("manual" if pc.get("on_click") else None))
-            # Materialize the atomization (repurposing) plan into opt-in work orders (infographic +
-            # email/newsletter) so "create once, distribute many" is real work, not a stored-then-
-            # ignored spec. Social atoms are created automatically when a long-form piece is approved
-            # (atomize_draft), so they need no separate WO. Opt-in (manual) -> generate on click.
+            # Materialize the atomization (repurposing) plan into opt-in work orders (email/newsletter)
+            # so "create once, distribute many" is real work, not a stored-then-ignored spec. Social
+            # atoms are created automatically when a long-form piece is approved (atomize_draft), so they
+            # need no separate WO. Opt-in (manual) -> generate on click.
+            # NOTE: infographics are intentionally NOT materialized -- the owner removed infographics
+            # from the content strategy (NotebookLM can't render an infographic image and the platform
+            # doesn't produce one), so any `atomization.infographic` the planner emits is ignored.
             _atom = camp.get("atomization") if isinstance(camp.get("atomization"), dict) else {}
             _bw = int((camp.get("pieces") or [{}])[0].get("week") or 4) + 1
-            if _atom.get("infographic"):
-                add(f"Infographic: {camp.get('topic')}", "infographic",
-                    f"A shareable infographic summarizing the '{camp.get('topic')}' campaign's key "
-                    f"stats/steps for social + the blog.{_AEO_CHECKLIST}", _bw,
-                    gap_source=_camp_gs, why=camp.get("why") or "",
-                    campaign={**cmeta, "role": "infographic", "ordinal": 0}, execution="manual")
             if _atom.get("email"):
                 add(f"Email / newsletter: {camp.get('topic')}", "deep_content",
                     f"A newsletter/email built from the '{camp.get('topic')}' pillar to nurture the "
@@ -563,10 +560,8 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         "rich_media_generator.generate(['research_brief']): NotebookLM briefing-doc synthesis across "
         "audit + competitor sources -> deep research brief for PR teams/journalists. LLM fallback.", 8,
         gap_source="rich-media amplification", source_query="research brief")
-    add("Generate infographic content brief", "infographic",
-        "rich_media_generator.generate(['infographic']): NotebookLM FAQ synthesis -> structured "
-        "infographic brief for a graphic designer. Falls back to LLM if no key.", 9,
-        gap_source="rich-media amplification", source_query="infographic brief")
+    # Infographics were removed from the content strategy (owner decision): NotebookLM cannot render an
+    # infographic image and the platform doesn't produce one, so no infographic WO is emitted.
     add("Generate explainer video script", "explainer_video",
         "rich_media_generator.generate(['explainer_video']): NotebookLM study-guide synthesis -> "
         "explainer video script skeleton (2-4 min). Pair with the video production brief. LLM fallback.", 9,
@@ -825,7 +820,7 @@ _SPEC_CAPS = CONTENT_CAPABILITIES
 # grounding advisory. (What actually grounds them is business-level fact, surfaced as the "what to
 # provide" hint on the REAL content pieces -- not a per-topic doc these synthesis pieces need.)
 _SYNTHESIS_CAPS = frozenset({
-    "deep_content", "podcast_creation", "slide_deck", "infographic", "research_brief", "explainer_video",
+    "deep_content", "podcast_creation", "slide_deck", "research_brief", "explainer_video",
 })
 
 
