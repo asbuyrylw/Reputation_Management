@@ -227,6 +227,19 @@ def _run_render_video(business_id: int, args: dict):
     return res
 
 
+def _run_notebooklm_render(business_id: int, args: dict):
+    """Fetch the just-created NotebookLM audio for a podcast draft's PERSISTENT notebook via the browser
+    automation and ingest it so it plays in Media in-app. Dormant until the browser session +
+    NOTEBOOKLM_BROWSER_READY are configured. A skipped/failed fetch FAILS the job (no false 'complete'
+    with no audio)."""
+    rm = _imp("rich_media_generator")
+    res = rm.notebooklm_download_audio(business_id, args.get("draft_id"))
+    if isinstance(res, dict) and (res.get("skipped") or res.get("ok") is False):
+        reason = res.get("reason") or res.get("error") or "no audio downloaded"
+        raise RuntimeError(f"notebooklm audio download failed: {reason}")
+    return res
+
+
 def _run_publish_youtube(business_id: int, args: dict):
     """Publish a rendered `video` visual_asset to the owner's YouTube channel (+ SRT captions)."""
     yp = _imp("youtube_publish")
@@ -472,6 +485,7 @@ JOB_DISPATCH = {
     "generate_content_batches": _run_generate_content_batches,
     "generate_clusters": _run_generate_clusters,
     "render_video": _run_render_video,
+    "notebooklm_render": _run_notebooklm_render,   # browser-download NotebookLM audio -> Media
     "publish_youtube": _run_publish_youtube,
     "poll_video_renders": _run_poll_video_renders,   # multi-type content per gap
     "measure_content_impact": _run_measure_content_impact,       # did the content move the gap?
@@ -565,6 +579,7 @@ _JOB_RATE_LIMITS = {
     "generate_visual": (30, 3600),
     # video render (HeyGen/Veo, cost per render) + YouTube publish + cluster content (multi-piece LLM).
     "render_video": (6, 3600),
+    "notebooklm_render": (6, 3600),   # browser-automation audio download (dedicated host)
     "publish_youtube": (6, 3600),
     "poll_video_renders": (30, 3600),   # scheduled completion sweep for async Video Agent renders
     "generate_clusters": (4, 3600),

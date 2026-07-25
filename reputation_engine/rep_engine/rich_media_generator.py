@@ -1133,6 +1133,79 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
     return res
 
 
+def ingest_notebook_audio(business_id: int, draft_id: int, audio_bytes: bytes,
+                          mime: str = "audio/mpeg", *, source_artifact_id: Optional[str] = None,
+                          filename: str = "podcast.mp3") -> dict:
+    """Store a NotebookLM audio file (fetched by the browser automation) durably and attach it to the
+    podcast draft so the Media modal plays it IN-APP instead of behind an "open & download" link.
+    Idempotent on source_artifact_id. Returns {ok, visual_id, audio_url} or {ok:False, error}."""
+    if not audio_bytes:
+        return {"ok": False, "error": "no audio bytes"}
+    _ensure_table()
+    with db() as conn:
+        r = conn.execute("SELECT quality_notes, audio_url FROM rich_media_drafts WHERE id=%s AND business_id=%s",
+                         (draft_id, business_id)).fetchone()
+    if not r:
+        return {"ok": False, "error": "draft not found"}
+    qn = r.get("quality_notes") if isinstance(r.get("quality_notes"), dict) else {}
+    ra = (qn or {}).get("rendered_audio") or {}
+    if source_artifact_id and ra.get("artifact_id") == source_artifact_id and r.get("audio_url"):
+        return {"ok": True, "visual_id": ra.get("visual_id"), "audio_url": r.get("audio_url"), "idempotent": True}
+    try:
+        from . import visual_content as _vc
+        skey, purl, path, fbytes = _vc._store_bytes(business_id, audio_bytes, filename, mime)
+        vid = _vc._persist(business_id, kind="audio", provider="notebooklm", model=None,
+                           prompt="NotebookLM audio overview", file_path=path, url=None,
+                           compliance_note=None, draft_id=draft_id, file_bytes=fbytes, mime=mime,
+                           storage_key=skey, public_url=purl)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"store failed: {e}"}
+    audio_url = purl   # object-store public URL (requires object storage configured, which prod has)
+    with db() as conn:
+        qn = dict(qn or {})
+        qn["rendered_audio"] = {"visual_id": vid, "url": audio_url, "artifact_id": source_artifact_id,
+                                "provider": "notebooklm"}
+        conn.execute("UPDATE rich_media_drafts SET audio_url=COALESCE(%s, audio_url), generator='notebooklm', "
+                     "quality_notes=%s, updated_at=now() WHERE id=%s AND business_id=%s",
+                     (audio_url, json.dumps(qn), draft_id, business_id))
+        conn.commit()
+    if not audio_url:
+        log.warning("ingest_notebook_audio: stored audio visual %s but no public_url (object storage not "
+                    "configured) -- draft has the file but the in-app player URL is empty", vid)
+    return {"ok": bool(audio_url), "visual_id": vid, "audio_url": audio_url,
+            "error": None if audio_url else "object storage not configured (no public URL for playback)"}
+
+
+def notebooklm_download_audio(business_id: int, draft_id: int) -> dict:
+    """Fetch the just-created NotebookLM audio for a podcast draft's PERSISTENT notebook (via the browser
+    automation) and ingest it so it plays in Media. Dormant-safe: returns {skipped} until the browser
+    session + NOTEBOOKLM_BROWSER_READY are configured. Never raises."""
+    d = api_get(business_id, draft_id)
+    if not d:
+        return {"ok": False, "error": "draft not found"}
+    if d.get("asset_type") not in ("podcast", "report_audio"):
+        return {"ok": False, "error": f"draft is a {d.get('asset_type')}, not an audio type"}
+    style = "briefing" if d.get("asset_type") == "report_audio" else "podcast"
+    try:
+        from . import notebooklm_enterprise as _nle, notebooklm_browser as _nbb
+    except ImportError:  # pragma: no cover
+        import notebooklm_enterprise as _nle  # type: ignore
+        import notebooklm_browser as _nbb  # type: ignore
+    try:
+        nb, _url, _seen = _nle._load_notebook(business_id, style)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"could not load persistent notebook: {e}"}
+    if not nb:
+        return {"ok": False, "error": "no persistent notebook for this business yet (generate a podcast first)"}
+    res = _nbb.fetch_latest_audio(nb)
+    if res.get("skipped") or not res.get("ok"):
+        return res
+    return ingest_notebook_audio(business_id, draft_id, res.get("file_bytes") or b"",
+                                 res.get("mime") or "audio/mpeg",
+                                 source_artifact_id=res.get("source_artifact_id"),
+                                 filename=res.get("filename") or "podcast.mp3")
+
+
 def poll_pending_agent_renders(business_id: int) -> dict:
     """Completion sweep for async v3 Video Agent renders: for each draft flagged `rendering`, check the
     session and — when ready — download + store the MP4/SRT as a video visual_asset and mark the draft

@@ -190,7 +190,8 @@ def _save_png(business_id: int, raw: bytes, ext: str = "png") -> str:
 
 
 _MIME_BY_EXT = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp",
-                "mp4": "video/mp4", "webm": "video/webm"}
+                "mp4": "video/mp4", "webm": "video/webm",
+                "mp3": "audio/mpeg", "wav": "audio/wav", "m4a": "audio/mp4", "ogg": "audio/ogg"}
 
 
 def _store_bytes(business_id: int, raw: bytes, filename: str,

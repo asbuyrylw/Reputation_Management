@@ -26,7 +26,8 @@ router = APIRouter(prefix="/businesses/{business_id}", tags=["visuals"])
 
 _KINDS = {"image", "quote_card", "meme", "video_brief", "video"}
 _IMG_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
-             ".mp4": "video/mp4", ".webm": "video/webm"}
+             ".mp4": "video/mp4", ".webm": "video/webm",
+             ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".ogg": "audio/ogg"}
 
 
 class VisualRequest(BaseModel):
