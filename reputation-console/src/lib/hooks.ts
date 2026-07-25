@@ -2046,6 +2046,21 @@ export function useRejectRichMedia(businessId: number | null) {
   });
 }
 
+// Edit a rich-media draft's body/transcript. The server re-grades (geo_score + truncation +
+// compliance) and updates status, so fixing a held/needs_fix brief or script moves it toward
+// production — the same edit→fix→approve flow content drafts have.
+export function useEditRichMedia(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ draftId, body, transcript }: { draftId: number; body?: string; transcript?: string }) =>
+      apiFetch<RichMediaDraft>(`/businesses/${businessId}/rich-media-drafts/${draftId}`, { method: "PATCH", body: { body, transcript } }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ["rich-media", businessId] });
+      qc.invalidateQueries({ queryKey: ["rich-media-draft", businessId, v.draftId] });
+    },
+  });
+}
+
 // Render a REAL MP4 for an explainer-video/video-script draft via HeyGen (dormant until the owner
 // sets HEYGEN_API_KEY + HEYGEN_AVATAR_ID — the job returns {skipped} otherwise).
 export function useRenderRichMediaVideo(businessId: number | null) {

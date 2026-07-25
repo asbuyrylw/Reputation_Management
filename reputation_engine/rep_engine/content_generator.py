@@ -1069,6 +1069,53 @@ def _neutralize_contested_headings(body: str, contested: str = "") -> str:
     return "\n".join(out) if changed else body
 
 
+def fix_reasons(draft: dict) -> list[str]:
+    """Human-readable 'what needs fixed' for a draft (content OR rich-media), so the UI can show
+    EXACTLY why a piece is held / needs_fix instead of just a status chip. Pulls from the compliance
+    flags, the truncation flag, citation-readiness tips, the quality_notes.fixes list, and unresolved
+    placeholders. Deduped, capped, never raises. Empty list = nothing blocking."""
+    out: list[str] = []
+    try:
+        qn = draft.get("quality_notes")
+        if isinstance(qn, str):
+            qn = json.loads(qn or "{}")
+        qn = qn if isinstance(qn, dict) else {}
+        cf = draft.get("compliance_flags")
+        if isinstance(cf, str):
+            cf = json.loads(cf or "[]")
+        for f in (cf or []):
+            msg = f.get("issue") if isinstance(f, dict) else str(f)
+            if msg:
+                out.append("Compliance: " + str(msg))
+        if draft.get("compliance_pass") is False and not (cf or []):
+            out.append("Compliance: failed the screen — review claims/superlatives/disclosures.")
+        if isinstance(qn.get("truncated"), dict):
+            out.append("Truncated: the text ends mid-sentence — extend it to a proper close before producing.")
+        cr = qn.get("citation_ready")
+        if isinstance(cr, dict):
+            for t in (cr.get("tips") or [])[:3]:
+                fx = t.get("fix") if isinstance(t, dict) else str(t)
+                if fx:
+                    out.append("Citation-readiness: " + str(fx))
+        for fx in (qn.get("fixes") or [])[:5]:
+            if fx:
+                out.append(str(fx))
+        ph = draft.get("placeholders_pending")
+        if isinstance(ph, str):
+            ph = json.loads(ph or "[]")
+        if ph:
+            out.append("Unfilled placeholders (%d) — complete the bracketed/blank fields." % len(ph))
+    except Exception:  # noqa: BLE001 -- a display helper must never raise
+        pass
+    seen, dd = set(), []
+    for x in out:
+        x = (x or "").strip()
+        if x and x.lower() not in seen:
+            seen.add(x.lower())
+            dd.append(x)
+    return dd[:8]
+
+
 def _scrub_license_phrasing(body: str, profile: Optional[dict] = None) -> str:
     """Remove any 'license number' reference from content -- ONLY for a tenant whose profile SUPPRESSES
     specific credential numbers (a regulated-finance client). For a generic tenant (profile that does
@@ -1517,7 +1564,14 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
             "the H2/H3 headings, the FAQ questions, and any schema. Those are the most extractable, "
             "quotable, AI-cited locations, and binding the brand name to the negative term there "
             "REINFORCES the association you are trying to crowd out. Address the concern in ordinary "
-            "body prose, framed around what is true.")
+            "body prose, framed around what is true.\n"
+            "3. GEOGRAPHY — office city vs market: the physical OFFICE may sit in a specific city/suburb "
+            "while the MARKET is a larger metro area. Use the office's exact city (from the VERIFIED "
+            "CONTACT DETAILS / source material) for the physical address/NAP, and frame the market as "
+            "'serving the <metro> area' / 'Greater <metro>'. Do NOT present the office city and the "
+            "market as conflicting, and do NOT say the business is 'based in <metro>' when the address "
+            "city differs — a suburb within a larger metro is normal and correct (e.g. an office in a "
+            "suburb that serves the greater metro). Keep the office city consistent across the whole piece.")
         if _cm_parts:
             grounding["client_material"] = "\n\n".join(_cm_parts)
     except ImportError:  # pragma: no cover -- loose-script fallback

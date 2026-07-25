@@ -552,10 +552,17 @@ def content_drafts(business_id: int = Depends(authorize_business), conn=Depends(
         "WHERE d.business_id=%s ORDER BY d.id DESC",
         (business_id,),
     ).fetchall()
+    try:
+        from ... import content_generator as _cg
+    except ImportError:  # pragma: no cover
+        import content_generator as _cg  # type: ignore
     out = []
     for r in rows:
         d = _to_float(dict(r), "quality_score")
         d = _to_float(d, "geo_score")
+        # 'what needs fixed' -- surface the concrete reasons a draft is held/needs_fix so the reviewer
+        # sees them inline instead of just a status chip.
+        d["fix_reasons"] = _cg.fix_reasons(d)
         out.append(d)
     return out
 

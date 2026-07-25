@@ -790,7 +790,7 @@ def api_list(business_id: int, asset_type: Optional[str] = None, status: Optiona
     Returns lightweight rows (no full body) + flags for what viewer to use. Dormant-safe."""
     _ensure_table()
     q = ("SELECT id, asset_type, title, audio_url, duration_secs, status, compliance_pass, "
-         "compliance_flags, created_at, updated_at, generator, notebook_url, "
+         "compliance_flags, geo_score, quality_notes, created_at, updated_at, generator, notebook_url, "
          "(body IS NOT NULL AND length(body) > 0) AS has_body, "
          "(transcript IS NOT NULL AND length(transcript) > 0) AS has_transcript "
          "FROM rich_media_drafts WHERE business_id=%s")
@@ -823,6 +823,81 @@ def set_status(business_id: int, draft_id: int, status: str, reviewer: Optional[
             "WHERE id=%s AND business_id=%s RETURNING id", (status, reviewer, draft_id, business_id)).fetchone()
         conn.commit()
     return bool(r)
+
+
+def _grade_body(asset_type: str, body: Optional[str], business_name: str = "", geo: str = "") -> tuple:
+    """Grade a (possibly edited) rich-media body -> (geo_grade, quality_notes, status). Mirrors the
+    grading in _persist so an EDIT re-scores exactly like generation does: video scripts get
+    video_score; other text-like types get geo_score; audio (podcast/report_audio) is unscored; a body
+    that ends mid-sentence is flagged truncated -> needs_fix."""
+    quality_notes, geo_grade, status = None, None, "pending_review"
+    try:
+        from . import content_quality as _cq
+        if body and asset_type in ("explainer_video", "video_script"):
+            vg = _cq.video_score(body, target_query=f"{business_name} {geo}".strip(),
+                                 business_name=business_name, geo=geo, asset_type=asset_type)
+            quality_notes, geo_grade = vg, vg.get("score")
+        elif body and asset_type not in ("podcast", "report_audio"):
+            _geo = _cq.geo_score(body, target_query=f"{business_name} {geo}".strip(),
+                                 content_type=asset_type, asset_type=asset_type,
+                                 business_name=business_name, geo=geo)
+            quality_notes = {"geo": _geo}
+            geo_grade = _geo.get("score")
+    except Exception as e:  # noqa: BLE001 -- grading must never block an edit
+        log.debug("rich_media: re-grade skipped: %s", e)
+    if body and len(body.split()) >= 120:
+        _tail = body.rstrip()
+        if _tail and _tail[-1] not in ".!?\"”')]:*_`>":
+            quality_notes = dict(quality_notes or {})
+            quality_notes["truncated"] = {"ends_with": _tail[-80:],
+                                          "reason": "body ends mid-sentence (likely token-cap truncation)"}
+            status = "needs_fix"
+    return geo_grade, quality_notes, status
+
+
+def update_draft(business_id: int, draft_id: int, *, body: Optional[str] = None,
+                 transcript: Optional[str] = None, reviewer: Optional[str] = None) -> Optional[dict]:
+    """Edit a rich-media draft's body/transcript and RE-GRADE it (geo_score + truncation + compliance),
+    so a human fix updates the scores + status the same way generation does. Returns the updated draft
+    (full row) or None if not found. Body is placeholder-stripped + license-scrubbed like a new draft."""
+    _ensure_table()
+    with db() as conn:
+        cur = conn.execute("SELECT asset_type, body, transcript FROM rich_media_drafts "
+                           "WHERE id=%s AND business_id=%s", (draft_id, business_id)).fetchone()
+        b = conn.execute("SELECT name, geo FROM businesses WHERE id=%s", (business_id,)).fetchone()
+    if not cur:
+        return None
+    asset_type = cur["asset_type"]
+    new_body = body if body is not None else cur["body"]
+    new_transcript = transcript if transcript is not None else cur["transcript"]
+    _profile = {}
+    if new_body:
+        try:
+            from . import content_generator as _cg
+            _profile = _bp.for_business(business_id)
+            new_body = _cg._scrub_license_phrasing(_cg._strip_placeholders(new_body), _profile)
+        except Exception as e:  # noqa: BLE001 -- cleanup must never block the edit
+            log.debug("rich_media: edit cleanup skipped: %s", e)
+    bn = (b["name"] if b else "") or ""
+    geo = (b.get("geo") if b else "") or ""
+    geo_grade, quality_notes, status = _grade_body(asset_type, new_body, bn, geo)
+    comp_pass, comp_flags = None, []
+    try:
+        comp_pass, comp_flags = _compliance_check(
+            new_body or "", regulated_financial=bool((_profile or {}).get("regulated_financial")))
+    except Exception as e:  # noqa: BLE001
+        log.debug("rich_media: edit compliance skipped: %s", e)
+    if comp_pass is False and status == "pending_review":
+        status = "needs_fix"   # a compliance failure holds the edited draft out of the ready queue too
+    with db() as conn:
+        r = conn.execute(
+            "UPDATE rich_media_drafts SET body=%s, transcript=%s, geo_score=%s, quality_notes=%s, "
+            "compliance_pass=%s, compliance_flags=%s, status=%s, reviewer=%s, updated_at=now() "
+            "WHERE id=%s AND business_id=%s RETURNING id",
+            (new_body, new_transcript, geo_grade, json.dumps(quality_notes) if quality_notes else None,
+             comp_pass, json.dumps(comp_flags or []), status, reviewer, draft_id, business_id)).fetchone()
+        conn.commit()
+    return api_get(business_id, draft_id) if r else None
 
 
 def delete_draft(business_id: int, draft_id: int) -> bool:

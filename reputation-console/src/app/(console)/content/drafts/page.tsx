@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useBusiness } from "@/lib/business";
 import { useContentDrafts, useApproveDraft, useRejectDraft } from "@/lib/hooks";
 import { DraftReviewCard } from "@/components/DraftReviewCard";
+import { RichMediaDraftsSection } from "@/components/RichMediaDraftsSection";
 import { DraftEditorPanel, readabilityScore } from "@/components/DraftEditorPanel";
 import { DataGrid, type DataGridColumn } from "@/components/DataGrid";
 import { StatusBadge } from "@/components/content/StatusBadge";
@@ -347,6 +348,10 @@ export default function DraftsPage() {
           emptyText={tab === "ready" ? "Nothing waiting on you — generate a draft from a content task." : "No drafts here."}
         />
       )}
+
+      {/* Briefs & scripts (rich-media drafts) that still need editing/fixing/producing — surfaced in
+          the Drafts flow (they're editable text, not finished media). Produced artifacts stay in Media. */}
+      <RichMediaDraftsSection businessId={businessId} canEdit={canEdit} />
 
       {/* right-side slide-over editor */}
       {liveOpen && (

@@ -26,24 +26,67 @@ except ImportError:  # pragma: no cover
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["rich-media"])
 
+try:
+    from ... import content_generator as _cg
+except ImportError:  # pragma: no cover
+    import content_generator as _cg  # type: ignore
+
+# Text-like rich-media that is really an editable DRAFT (belongs in the Drafts flow), vs. produced
+# media (rendered video/podcast audio) that belongs in Media. The FE uses `is_editable_draft` to route
+# a piece to the right section and show the editor.
+_EDITABLE_ASSET_TYPES = {"deep_article", "research_brief", "slide_deck", "infographic",
+                         "explainer_video", "video_script", "blog_series", "newsletter", "report"}
+
+
+def _annotate(d: dict) -> dict:
+    """Attach fix_reasons ('what needs fixed') + is_editable_draft so the console can surface exactly
+    why a piece is held and let the owner edit/fix it in the Drafts flow."""
+    if not isinstance(d, dict):
+        return d
+    d["fix_reasons"] = _cg.fix_reasons(d)
+    d["is_editable_draft"] = (d.get("asset_type") in _EDITABLE_ASSET_TYPES)
+    return d
+
 
 @router.get("/rich-media-drafts")
 def list_rich_media(asset_type: Optional[str] = None, status_filter: Optional[str] = None,
                     limit: int = 100, business_id: int = Depends(authorize_business)):
-    """The rich-media gallery feed: podcast / slide_deck / infographic / explainer_video /
-    research_brief / deep_article / blog_series / newsletter drafts, newest first. Lightweight rows
-    (flags for which viewer to use) + `configured` so the UI can show a 'connect for audio' hint."""
+    """The rich-media feed: podcast / slide_deck / infographic / explainer_video / research_brief /
+    deep_article / … drafts, newest first. Each row carries `fix_reasons` (what needs fixed) and
+    `is_editable_draft` (text-like drafts belong in the Drafts flow; rendered media belongs in Media)."""
     return {"configured": _rmg.configured(),
-            "drafts": _rmg.api_list(business_id, asset_type=asset_type, status=status_filter, limit=limit)}
+            "drafts": [_annotate(r) for r in
+                       _rmg.api_list(business_id, asset_type=asset_type, status=status_filter, limit=limit)]}
 
 
 @router.get("/rich-media-drafts/{draft_id}")
 def get_rich_media(draft_id: int, business_id: int = Depends(authorize_business)):
-    """Full draft incl. body (markdown) + transcript + audio_url, for the viewer modal."""
+    """Full draft incl. body (markdown) + transcript + audio_url + fix_reasons, for the editor/viewer."""
     d = _rmg.api_get(business_id, draft_id)
     if not d:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
-    return d
+    return _annotate(d)
+
+
+class RichMediaEdit(BaseModel):
+    body: Optional[str] = None
+    transcript: Optional[str] = None
+
+
+@router.patch("/rich-media-drafts/{draft_id}")
+def edit_rich_media(draft_id: int, payload: RichMediaEdit,
+                    business_id: int = Depends(require_business_editor),
+                    user: dict = Depends(get_current_user)):
+    """Edit a rich-media draft's body/transcript and RE-GRADE it (geo_score + truncation + compliance
+    + status), so an owner can fix a held/needs_fix brief or script and move it toward production —
+    the same edit→fix→approve flow content drafts have. 404 if not found."""
+    if payload.body is None and payload.transcript is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "provide body and/or transcript")
+    d = _rmg.update_draft(business_id, draft_id, body=payload.body, transcript=payload.transcript,
+                          reviewer=(user or {}).get("email"))
+    if not d:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Rich-media draft not found")
+    return _annotate(d)
 
 
 class StatusUpdate(BaseModel):

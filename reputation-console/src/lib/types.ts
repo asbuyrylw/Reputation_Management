@@ -351,6 +351,7 @@ export interface ContentDraft {
   content_type?: string | null;   // blog | article | white_paper | landing_page | local_page | social_post
   geo_score?: number | null;
   batch_id?: number | null;
+  fix_reasons?: string[];          // human-readable 'what needs fixed' (compliance / truncation / citation / placeholders)
   // Phase 1 — the gap this draft traces back to (joined from its work order)
   gap_source?: string | null;
   why_helps_ai_rep?: string | null;
@@ -1963,6 +1964,10 @@ export interface RichMediaDraft {
   has_body?: boolean;
   has_transcript?: boolean;
   body?: string | null; // only on the detail fetch
+  geo_score?: number | null;
+  quality_notes?: unknown;
+  fix_reasons?: string[];        // 'what needs fixed' for held/needs_fix pieces
+  is_editable_draft?: boolean;   // text-like draft (belongs in Drafts flow) vs produced media
   created_at: string | null;
   updated_at: string | null;
 }
