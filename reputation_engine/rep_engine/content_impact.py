@@ -54,9 +54,52 @@ def _clamp01(x) -> Optional[float]:
     return round(max(0.0, min(1.0, float(x))), 4)
 
 
+def _ensure_rank_cols(conn) -> None:
+    """Dormant-safe: add the SERP/GSC rank columns to content_impact so a batch's measurement records
+    keyword-RANKING movement alongside AI share-of-voice (the north star's 'actually move rankings'
+    half). No-op once they exist."""
+    for col in ("baseline_rank NUMERIC", "measured_rank NUMERIC", "rank_delta NUMERIC"):
+        try:
+            conn.execute(f"ALTER TABLE content_impact ADD COLUMN IF NOT EXISTS {col}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _rank_signal(conn, business_id: int, prompts: list, topic: str):
+    """Average organic RANK (1 = best) for this batch's target queries, from gsc_query_stats -- the
+    real keyword-position outcome. PROVIDER-AGNOSTIC: reads whatever source (GSC / DataForSEO / Serper)
+    has populated gsc_query_stats. Returns None when there is no rank data yet (DORMANT until the owner
+    connects Search Console / a SERP source), so this never fabricates a number."""
+    terms = [p for p in (prompts or []) if p][:12] or ([topic] if topic else [])
+    if not terms:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT query, position FROM gsc_query_stats WHERE business_id=%s AND position IS NOT NULL",
+            (business_id,)).fetchall()
+    except Exception:  # noqa: BLE001 -- table dormant / no GSC data -> no rank signal
+        return None
+    if not rows:
+        return None
+    import re as _re
+
+    def _toks(s):
+        return {t for t in _re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 2}
+
+    tgt: set = set()
+    for t in terms:
+        tgt |= _toks(t)
+    if not tgt:
+        return None
+    positions = [float(r["position"]) for r in rows
+                 if r["position"] is not None and (_toks(r["query"]) & tgt)]
+    return round(sum(positions) / len(positions), 1) if positions else None
+
+
 def measure_batch(business_id: int, batch_id: int) -> dict:
     """Measure one batch against the latest full audit newer than its baseline. Returns the impact
-    record, or {pending: reason} when there's nothing new to measure against yet."""
+    record, or {pending: reason} when there's nothing new to measure against yet. Records BOTH the
+    AI-visibility lift (SoV/alignment) AND, when a rank source is connected, the keyword-RANK movement."""
     with db() as conn:
         b = conn.execute("SELECT * FROM content_batches WHERE id=%s AND business_id=%s",
                          (batch_id, business_id)).fetchone()
@@ -79,6 +122,8 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
         if dup:
             return {"already_measured": True, "batch_id": batch_id, "run_after": run["id"], "impact_id": dup["id"]}
         measured = _cb._cluster_metrics(conn, business_id, run["id"], prompts)
+        # Keyword-RANK movement (dormant until a GSC/SERP source is connected) alongside AI SoV.
+        meas_rank = _rank_signal(conn, business_id, prompts, b["target_topic"])
         biz = dict(conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone())
         # per-type published state (was the piece actually live to have any effect?)
         rows = conn.execute(
@@ -133,13 +178,20 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
     else:
         rec = "Moving in the right direction — keep producing for this gap and re-measure next audit."
 
+    # Keyword-RANK delta: baseline rank (captured at batch creation, if a source was connected then) vs
+    # now. Positive rank_delta = moved UP toward #1 (rank is 1=best, so base - measured). None-safe/dormant.
+    base_rank = baseline.get("rank")
+    rank_delta = (base_rank - meas_rank) if (isinstance(base_rank, (int, float)) and isinstance(meas_rank, (int, float))) else None
     with db() as conn:
+        _ensure_rank_cols(conn)
         rowid = conn.execute(
             "INSERT INTO content_impact (business_id, batch_id, run_before, run_after, baseline_sov, "
             "measured_sov, sov_delta, baseline_alignment, measured_alignment, alignment_delta, "
-            "gap_pct_closed, per_type, notes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "gap_pct_closed, per_type, notes, baseline_rank, measured_rank, rank_delta) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (business_id, batch_id, base_run, run["id"], base_sov, meas_sov, sov_delta,
-             base_al, meas_al, al_delta, gap_pct, json.dumps(per_type), rec)).fetchone()
+             base_al, meas_al, al_delta, gap_pct, json.dumps(per_type), rec,
+             base_rank, meas_rank, rank_delta)).fetchone()
         conn.execute("UPDATE content_batches SET status='measured', updated_at=now() WHERE id=%s",
                      (batch_id,))
         conn.commit()
@@ -149,6 +201,7 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
             "baseline_sov": base_sov, "measured_sov": meas_sov, "sov_delta": sov_delta,
             "baseline_alignment": base_al, "measured_alignment": meas_al, "alignment_delta": al_delta,
             "gap_pct_closed": gap_pct, "per_type": per_type, "published_pieces": published_total,
+            "baseline_rank": base_rank, "measured_rank": meas_rank, "rank_delta": rank_delta,
             "recommendation": rec}
 
 

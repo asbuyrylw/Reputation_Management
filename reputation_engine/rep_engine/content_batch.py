@@ -400,7 +400,17 @@ def _types_for_gap(gap: dict, default_types: Optional[list[str]] = None) -> list
 
 def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
     """Snapshot the gap's current Share-of-Voice + alignment from the latest COMPLETE full audit,
-    over the specific prompts the gap owns (or the whole battery if none are named)."""
+    over the specific prompts the gap owns (or the whole battery if none are named). Also snapshots the
+    baseline keyword RANK (dormant/None until a GSC/SERP source is connected) so content_impact can later
+    show ranking MOVEMENT, not just AI-answer lift."""
+    # Baseline rank for these prompts (None-safe, dormant): the SAME signal content_impact re-measures.
+    base_rank = None
+    try:
+        from . import content_impact as _ci
+        with db() as conn:
+            base_rank = _ci._rank_signal(conn, business_id, target_prompts, "")
+    except Exception:  # noqa: BLE001 -- rank baseline is best-effort / dormant
+        base_rank = None
     with db() as conn:
         run = conn.execute(
             "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
@@ -408,8 +418,9 @@ def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
             (business_id,)).fetchone()
         if not run:
             return {"run_id": None, "sov": None, "alignment": None, "owned_rate": None,
-                    "contested_rate": None, "n": 0}
-        return {**_cluster_metrics(conn, business_id, run["id"], target_prompts), "run_id": run["id"]}
+                    "contested_rate": None, "n": 0, "rank": base_rank}
+        return {**_cluster_metrics(conn, business_id, run["id"], target_prompts),
+                "run_id": run["id"], "rank": base_rank}
 
 
 def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
