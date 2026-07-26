@@ -741,10 +741,11 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
             d += c2["drafted"]; p += c2["published"]
         except Exception:  # noqa: BLE001
             pass
-        try:   # visual_assets (gap-tied Veo VIDEO) -- dormant-safe (batch_id column may be absent)
+        try:   # visual_assets: ANY gap-linked visual (video/image/quote_card) -- gate on batch_id, not
+               # kind, so all gap-tied custom visuals count uniformly. Dormant-safe (column may be absent).
             c3 = conn.execute(
                 "SELECT COUNT(*) drafted, COUNT(*) FILTER (WHERE status IN ('approved','published')) published "
-                "FROM visual_assets WHERE batch_id=%s AND kind='video'", (batch_id,)).fetchone()
+                "FROM visual_assets WHERE batch_id=%s", (batch_id,)).fetchone()
             d += c3["drafted"]; p += c3["published"]
         except Exception:  # noqa: BLE001
             pass

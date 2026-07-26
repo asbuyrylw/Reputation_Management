@@ -608,8 +608,12 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     # bigger reputation problem books more appearances -- not a hardcoded 3-5 or a flat 0.5 severity.
     try:
         from . import content_research as _cr_pod
+        from . import content_strategist as _cs_pod
         _sevs = [(c.get("severity") or 0) for c in (strategy.get("campaigns", []) if has_strategy else [])]
-        _sev_norm = min(1.0, (max(_sevs) if _sevs else 0) / 12.0)   # ~2x the cluster-floor severity gate
+        # Normalize against the SHARED, env-tunable severity gate (same divisor video + cadence use), so
+        # podcast severity-scaling can't desync from them when STRATEGIST_CLUSTER_FLOOR_SEVERITY is changed.
+        _sev_div = float(max(1, _cs_pod._CLUSTER_FLOOR_SEVERITY * 2))
+        _sev_norm = min(1.0, (max(_sevs) if _sevs else 0) / _sev_div)
         _pl, _ph, _psrc = _cr_pod.podcast_appearance_target(severity=_sev_norm, months=12)
         _pod_line = f"Book ~{_pl}-{_ph} relevant {geo} / {industry} guest podcast appearances over the year ({_psrc})"
     except Exception:  # noqa: BLE001

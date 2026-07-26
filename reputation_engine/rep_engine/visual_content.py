@@ -256,6 +256,29 @@ def _img_slug(s: str) -> str:
     return base or "image"
 
 
+def _gap_link_for_wo(business_id: int, work_order_id, draft_id, fallback_title: str = ""):
+    """(batch_id, gap_key) for a STANDALONE gap-tied visual so image/quote_card/video ALL join
+    content_impact + earn gap-completion credit uniformly (was video-only). A RE-RENDER (draft_id set)
+    inherits the parent draft's credit -> (None, None) so it isn't double-counted. Best-effort/dormant."""
+    if not work_order_id or draft_id:
+        return None, None
+    try:
+        from . import content_batch as _cb_v
+        with db() as _c:
+            _wr = _c.execute("SELECT title, gap_specifics FROM work_orders WHERE id=%s",
+                             (work_order_id,)).fetchone()
+        _gs = (_wr.get("gap_specifics") if _wr and isinstance(_wr.get("gap_specifics"), dict) else {}) or {}
+        gk = _gs.get("gap_key")
+        if not gk:
+            return None, None
+        bid = _cb_v.ensure_impact_batch(business_id, {
+            "title": (_wr.get("title") if _wr else None) or (fallback_title or "")[:80],
+            "target_query": _gs.get("source_query"), "gap_specifics": _gs})
+        return bid, gk
+    except Exception:  # noqa: BLE001 -- linkage is best-effort; the asset still persists
+        return None, None
+
+
 def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: str = "1024x1024",
                    work_order_id: Optional[int] = None, draft_id: Optional[int] = None,
                    alt: Optional[str] = None, filename: Optional[str] = None) -> dict:
@@ -296,10 +319,11 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
         return {"ok": False, "error": "provider returned no image"}
     fname = (filename or _img_slug(alt or prompt)) + ".png"
     skey, purl, path, fbytes = _store_bytes(business_id, raw, fname, "image/png")
+    _i_batch, _i_gapkey = _gap_link_for_wo(business_id, work_order_id, draft_id, alt or prompt)
     vid = _persist(business_id, kind=kind, provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note, meta=({"alt": alt} if alt else None),
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="image/png",
-                   storage_key=skey, public_url=purl)
+                   storage_key=skey, public_url=purl, batch_id=_i_batch, gap_key=_i_gapkey)
     try:  # itemized cost: one generated image (best-effort)
         from . import cost as _cost
         _cost.record_cost(business_id, None, "image", provider or "image", "generate_image",
@@ -463,10 +487,12 @@ def generate_quote_card(business_id: int, text: str, *, attribution: Optional[st
     _buf = _io.BytesIO()
     img.save(_buf, "PNG")
     skey, purl, raw_path, fbytes = _store_bytes(business_id, _buf.getvalue(), "quote-card.png", "image/png")
+    _q_batch, _q_gapkey = _gap_link_for_wo(business_id, work_order_id, None, text)
     vid = _persist(business_id, kind="quote_card", provider="local", model="pillow",
                    prompt=text, file_path=raw_path, url=None, compliance_note=None,
                    work_order_id=work_order_id, width=W, height=H,
-                   file_bytes=fbytes, mime="image/png", storage_key=skey, public_url=purl)
+                   file_bytes=fbytes, mime="image/png", storage_key=skey, public_url=purl,
+                   batch_id=_q_batch, gap_key=_q_gapkey)
     return {"ok": True, "visual_id": vid, "file_path": raw_path}
 
 
@@ -605,26 +631,9 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
         return {"ok": False, "error": str(e)}
     skey, purl, path, fbytes = _store_bytes(business_id, raw, "video.mp4", "video/mp4")
     # Gap-link a gap-tied video (Veo) into the impact loop like rich media, so it earns gap-completion
-    # credit + joins content_impact instead of orphaning in visual_assets. Best-effort/dormant-safe.
-    _v_batch = _v_gapkey = None
-    try:
-        # Only gap-link a STANDALONE create-content video (draft_id is None). A RE-RENDER of an existing
-        # rich_media_draft (which already earned its batch credit) passes draft_id -> skip, so it inherits
-        # the parent's credit instead of minting a SECOND countable visual_assets row that double-counts
-        # pieces_drafted/published on the same batch (matches HeyGen's render, which credits once).
-        if work_order_id and not draft_id:
-            from . import content_batch as _cb_v
-            with db() as _c:
-                _wr = _c.execute("SELECT title, gap_specifics FROM work_orders WHERE id=%s",
-                                 (work_order_id,)).fetchone()
-            _gs = (_wr.get("gap_specifics") if _wr and isinstance(_wr.get("gap_specifics"), dict) else {}) or {}
-            _v_gapkey = _gs.get("gap_key")
-            if _v_gapkey:
-                _v_batch = _cb_v.ensure_impact_batch(business_id, {
-                    "title": (_wr.get("title") if _wr else None) or prompt[:80],
-                    "target_query": _gs.get("source_query"), "gap_specifics": _gs})
-    except Exception:  # noqa: BLE001 -- linkage is best-effort; the video still persists
-        _v_batch = _v_gapkey = None
+    # credit + joins content_impact instead of orphaning in visual_assets (shared helper; re-renders
+    # skip so they aren't double-counted).
+    _v_batch, _v_gapkey = _gap_link_for_wo(business_id, work_order_id, draft_id, prompt)
     vid = _persist(business_id, kind="video", provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",

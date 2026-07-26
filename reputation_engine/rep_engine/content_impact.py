@@ -143,9 +143,10 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
                 (batch_id,)).fetchall()
         except Exception:  # noqa: BLE001 -- rich_media_drafts dormant/absent
             rm_rows = []
-        try:   # gap-tied Veo VIDEO in visual_assets counts as a live piece too (dormant-safe)
+        try:   # ANY gap-linked visual (video/image/quote_card) counts as a live piece -- gate on
+               # batch_id, not kind, so all gap-tied custom visuals fold in uniformly (dormant-safe).
             rm_rows = list(rm_rows) + list(conn.execute(
-                "SELECT kind AS content_type, status FROM visual_assets WHERE batch_id=%s AND kind='video'",
+                "SELECT kind AS content_type, status FROM visual_assets WHERE batch_id=%s",
                 (batch_id,)).fetchall())
         except Exception:  # noqa: BLE001 -- visual_assets.batch_id dormant/absent
             pass
