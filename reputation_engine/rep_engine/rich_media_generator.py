@@ -142,10 +142,17 @@ def _ensure_table() -> None:
         # attributed to its WO (and, through it, its campaign/gap) for the impact loop -- and so the
         # render paths can pass a real work_order_id to visual_content instead of None.
         conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS work_order_id BIGINT")
+        # Measurement linkage: the content_impact batch this piece belongs to + the canonical gap_key it
+        # closes, so rich media (podcast/video/slide/research_brief/deep_content) earns gap-completion
+        # credit + impact measurement like text drafts do (it was written with only work_order_id, so it
+        # never joined content_impact / gap_completion and its GEO grade never fed the strategist mix).
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS batch_id BIGINT")
+        conn.execute("ALTER TABLE rich_media_drafts ADD COLUMN IF NOT EXISTS gap_key TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_rmedia_biz "
             "ON rich_media_drafts(business_id, status)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rmedia_batch ON rich_media_drafts(batch_id)")
         conn.commit()
 
 
@@ -577,6 +584,8 @@ def _persist(
     business_name: str = "",
     geo: str = "",
     work_order_id: Optional[int] = None,
+    batch_id: Optional[int] = None,
+    gap_key: Optional[str] = None,
 ) -> int:
     # Publish-ready: rich-media scripts/briefs go through the SAME placeholder strip + license-number
     # scrub as text drafts, so a video/slide/infographic never ships with an [INSERT: ...] or a
@@ -683,13 +692,14 @@ def _persist(
             """INSERT INTO rich_media_drafts
                (business_id, asset_type, title, body, audio_url, transcript,
                 duration_secs, sources_used, compliance_pass, compliance_flags, generator,
-                notebook_url, geo_score, quality_notes, status, work_order_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                notebook_url, geo_score, quality_notes, status, work_order_id, batch_id, gap_key)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (business_id, asset_type, title,
              body, audio_url, transcript, duration_secs,
              json.dumps(sources_used or []),
              compliance_pass, json.dumps(compliance_flags or []), generator, notebook_url,
-             geo_grade, json.dumps(quality_notes) if quality_notes else None, _status, work_order_id),
+             geo_grade, json.dumps(quality_notes) if quality_notes else None, _status, work_order_id,
+             batch_id, gap_key),
         ).fetchone()
         conn.commit()
     log.info("rich_media: saved draft %d (%s, generator=%s, compliance=%s, grade=%s)", row["id"],
@@ -706,6 +716,8 @@ def generate(
     asset_types: Optional[list[str]] = None,
     topic: Optional[str] = None,
     work_order_id: Optional[int] = None,
+    batch_id: Optional[int] = None,
+    gap_key: Optional[str] = None,
 ) -> list[int]:
     """Generate rich media drafts for a business.
 
@@ -789,7 +801,7 @@ def generate(
                     compliance_flags=comp_flags,
                     generator=result.get("generator") or "llm",
                     notebook_url=result.get("notebook_url"),
-                    work_order_id=work_order_id,
+                    work_order_id=work_order_id, batch_id=batch_id, gap_key=gap_key,
                 )
                 created.append(draft_id)
                 # If this is a REAL NotebookLM audio overview AND the browser automation is live,
@@ -818,7 +830,7 @@ def generate(
                     generator="llm",
                     business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
                     geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
-                    work_order_id=work_order_id,
+                    work_order_id=work_order_id, batch_id=batch_id, gap_key=gap_key,
                 )
                 created.append(draft_id)
 
@@ -837,7 +849,7 @@ def generate(
                     generator="llm",
                     business_name=(biz.get("name") if isinstance(biz, dict) else "") or "",
                     geo=(biz.get("geo") if isinstance(biz, dict) else "") or "",
-                    work_order_id=work_order_id,
+                    work_order_id=work_order_id, batch_id=batch_id, gap_key=gap_key,
                 )
                 created.append(draft_id)
 

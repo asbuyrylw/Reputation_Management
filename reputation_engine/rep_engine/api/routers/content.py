@@ -704,22 +704,58 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
         import content_batch as _cb  # type: ignore
     gaps = _cb.gaps_for_business(business_id)
     out = []
-    for g in gaps:
+    attributed: set = set()   # batch ids credited to a canonical gap -> don't re-list them below
+
+    def _counts(batch_id: int):
+        """Drafted/published counts across BOTH stores -- content_drafts AND rich_media_drafts -- so
+        rich media (podcast/video/slide/research_brief/deep_content) earns completion credit like text.
+        'published' = actually LIVE (published_status='live'), matching content_impact."""
+        c1 = conn.execute(
+            "SELECT COUNT(*) drafted, COUNT(*) FILTER (WHERE a.published_status='live') published "
+            "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
+            "WHERE d.batch_id=%s", (batch_id,)).fetchone()
+        d, p = c1["drafted"], c1["published"]
+        try:   # rich_media_drafts is dormant-safe: absent table -> text counts only
+            c2 = conn.execute(
+                "SELECT COUNT(*) drafted, COUNT(*) FILTER (WHERE status IN ('approved','published')) published "
+                "FROM rich_media_drafts WHERE batch_id=%s", (batch_id,)).fetchone()
+            d += c2["drafted"]; p += c2["published"]
+        except Exception:  # noqa: BLE001
+            pass
+        return d, p
+
+    def _toks(s):
+        return {t for t in (s or "").lower().replace("/", " ").split() if len(t) > 3}
+
+    def _resolve_batch(g):
+        """The batch that fills this gap: the exact canonical gap_key first, else a campaign/cluster
+        batch whose topic token-overlaps the gap (lineage) -- so a moc:/comp: gap the strategist folded
+        into a camp: campaign still shows the campaign's drafted/published/impact instead of 'not
+        started' forever (the camp:-vs-moc: key mismatch)."""
         b = conn.execute(
             "SELECT id, status FROM content_batches WHERE business_id=%s AND gap_key=%s "
             "ORDER BY id DESC LIMIT 1", (business_id, g["gap_key"])).fetchone()
+        if b:
+            return b
+        gt = _toks(g.get("topic"))
+        if not gt:
+            return None
+        for cand in conn.execute(
+                "SELECT id, status, target_topic, label FROM content_batches WHERE business_id=%s "
+                "AND (gap_key LIKE 'camp:%%' OR gap_key LIKE 'cluster:%%') ORDER BY id DESC LIMIT 100",
+                (business_id,)).fetchall():
+            ct = _toks(cand.get("target_topic")) | _toks(cand.get("label"))
+            if ct and len(gt & ct) >= max(2, len(gt) // 3):
+                return cand
+        return None
+
+    for g in gaps:
+        b = _resolve_batch(g)
         drafted = published = 0
         impact = None
         if b:
-            # "published" means the asset is actually LIVE (published_status='live') -- the same
-            # definition content_impact uses -- not merely approved (which sets published_asset_id).
-            # Counting approved-but-not-live pieces here made the meter contradict the impact panel.
-            cnt = conn.execute(
-                "SELECT COUNT(*) drafted, "
-                "COUNT(*) FILTER (WHERE a.published_status='live') published "
-                "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
-                "WHERE d.batch_id=%s", (b["id"],)).fetchone()
-            drafted, published = cnt["drafted"], cnt["published"]
+            attributed.add(b["id"])
+            drafted, published = _counts(b["id"])
             imp = conn.execute(
                 "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "
                 "WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
@@ -753,11 +789,10 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
             "WHERE business_id=%s AND gap_key <> ALL(%s) ORDER BY id DESC LIMIT 50",
             (business_id, _seen_keys)).fetchall()
         for b in extra:
-            cnt = conn.execute(
-                "SELECT COUNT(*) drafted, COUNT(*) FILTER (WHERE a.published_status='live') published "
-                "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
-                "WHERE d.batch_id=%s", (b["id"],)).fetchone()
-            if not cnt["drafted"]:
+            if b["id"] in attributed:   # already credited to a canonical gap above (lineage) -> no dupe
+                continue
+            drafted, published = _counts(b["id"])   # both content_drafts + rich_media_drafts
+            if not drafted:
                 continue
             imp = conn.execute(
                 "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "
@@ -765,8 +800,8 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
             out.append({"gap_key": b["gap_key"],
                         "topic": b["target_topic"] or b["label"] or b["gap_key"],
                         "gap_source": b["gap_source"], "target_prompts": [], "batch_id": b["id"],
-                        "batch_status": b["status"], "pieces_drafted": cnt["drafted"],
-                        "pieces_published": cnt["published"], "impact": dict(imp) if imp else None,
+                        "batch_status": b["status"], "pieces_drafted": drafted,
+                        "pieces_published": published, "impact": dict(imp) if imp else None,
                         "content_addressable": True})
     except Exception:  # noqa: BLE001 -- extra-batch rows must never break the meter
         pass

@@ -1690,6 +1690,12 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # apply to rich-media pieces — they're not part of the gap batch's content-type spread.)
     cap = (wo.get("capability") or "").lower()
     if cap in _RICH_MEDIA_CAP_MAP:
+        # Rich media now carries the SAME measurement linkage as text drafts: the impact batch_id (from
+        # the caller / ensure_impact_batch) + the canonical gap_key it closes, so podcast/video/slide/
+        # research_brief/deep_content earn gap-completion credit + impact measurement and their GEO grade
+        # feeds the strategist mix -- instead of landing in rich_media_drafts orphaned from the loop.
+        _gs_rm = wo.get("gap_specifics") if isinstance(wo.get("gap_specifics"), dict) else {}
+        _rm_gap_key = _gs_rm.get("gap_key")
         topic = wo.get("title", "")
         if _already_covered(business_id, topic):
             log.info("WO '%s' already covered (pgvector); skipping.", topic)
@@ -1712,7 +1718,8 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         if "rich_media_generator.generate(" in _instr or _instr.startswith("rich_media_generator"):
             _instr = ""
         rm_topic = _instr or None
-        ids = _rmg.generate(business_id, rm_types, topic=rm_topic, work_order_id=wo.get("_db_id"))
+        ids = _rmg.generate(business_id, rm_types, topic=rm_topic, work_order_id=wo.get("_db_id"),
+                            batch_id=batch_id, gap_key=_rm_gap_key)
         log.info("WO %s (cap=%s) -> rich_media_generator(%s): created %s",
                  wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
         return ids[0] if ids else None
