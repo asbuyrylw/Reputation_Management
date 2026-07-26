@@ -170,6 +170,22 @@ def _node_draft(state: RemState) -> dict:
     # finance LLM screen, not just the deterministic rules. reg = the tenant's regulatory_profile.
     _reg = (biz.get("regulatory_profile") if isinstance(biz, dict) else None) or {}
     _comp_system = _cg._compliance_system(_reg, _profile)
+    # Gap-link remediation output so it joins content_impact/gap_completion (was inserted with no
+    # batch_id/gap_key -> orphaned from measurement despite being built from the gap model). Use the top
+    # open content gap's impact batch. No gap -> unlinked (still drafts).
+    _rem_batch_id = _rem_gap_key = None
+    try:
+        from . import content_batch as _cb_rem
+        _gaps = _cb_rem.gaps_for_business(state["business_id"]) or []
+        if _gaps:
+            _g0 = _gaps[0]
+            _rem_gap_key = _g0.get("gap_key")
+            _rem_batch_id = _cb_rem.ensure_impact_batch(state["business_id"], {
+                "title": _g0.get("topic"), "target_query": _g0.get("topic"),
+                "gap_source": _g0.get("gap_source"),
+                "gap_specifics": {"gap_key": _rem_gap_key, "source_query": _g0.get("topic")}})
+    except Exception:  # noqa: BLE001 -- linkage is best-effort; drafts still generate
+        _rem_batch_id = _rem_gap_key = None
     drafts = []
     for a in state.get("plan", [])[:MAX_ASSETS]:
         if tools.over_budget(state["business_id"]):
@@ -182,7 +198,8 @@ def _node_draft(state: RemState) -> dict:
         # rich_media_drafts as pending_review (same human-gate requirement as below).
         if channel in _RICH_MEDIA_CHANNELS:
             try:
-                ids = _rmg.generate(state["business_id"], [channel])
+                ids = _rmg.generate(state["business_id"], [channel],
+                                    batch_id=_rem_batch_id, gap_key=_rem_gap_key)
             except Exception as exc:
                 log.warning("agent_content: rich_media %s failed: %s", channel, exc)
                 ids = []
@@ -214,9 +231,10 @@ def _node_draft(state: RemState) -> dict:
         with db() as conn:
             row = conn.execute(
                 "INSERT INTO content_drafts (business_id, asset_type, title, body, compliance_pass, "
-                "compliance_flags, status) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                "compliance_flags, status, batch_id, content_type) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (state["business_id"], channel, a.get("title"), body, comp.get("pass"),
-                 json.dumps(comp.get("flags", [])), status)).fetchone()
+                 json.dumps(comp.get("flags", [])), status, _rem_batch_id, channel)).fetchone()
             conn.commit()
         drafts.append({"id": row["id"], "channel": channel, "title": a.get("title"),
                        "compliance_pass": comp.get("pass"), "status": status})

@@ -405,12 +405,17 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     biz = business or {}
     geo = (biz.get("geo") or "").strip() or "your local area"
     industry = (biz.get("industry") or "").strip() or "local-business"
-    # The tenant's profile content spread -- the SAME value the batch path passes to _types_for_gap -- so
-    # an uncovered moc/comp gap emits the identical content-type SET on the plan and the batch.
+    # The tenant's profile content spread -- resolved the SAME way the batch (for_business) and strategist
+    # do, INCLUDING any persisted strategy_profile.default_content_types override, so an uncovered moc/comp
+    # gap emits the identical content-type SET on plan and batch even when an operator has customized it
+    # (derive(biz) alone drops the override).
     _prof_types = None
     try:
         from . import business_profile as _bp_t
-        _prof_types = (_bp_t.derive(biz) if biz else {}).get("default_content_types")
+        if biz.get("id"):
+            _prof_types = (_bp_t.for_business(biz["id"]) or {}).get("default_content_types")
+        else:
+            _prof_types = (_bp_t.derive(biz) if biz else {}).get("default_content_types")
     except Exception:  # noqa: BLE001 -- profile is best-effort; None -> module default spread (same as batch)
         _prof_types = None
     # When the Content Strategist produced a program, its cluster CAMPAIGNS replace the deterministic

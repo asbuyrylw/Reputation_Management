@@ -604,6 +604,16 @@ def content_batches(business_id: int = Depends(authorize_business), conn=Depends
         bd["pieces"] = [dict(r) for r in conn.execute(
             "SELECT id, content_type, asset_type, title, status, geo_score, quality_score, "
             "published_asset_id FROM content_drafts WHERE batch_id=%s ORDER BY id", (b["id"],)).fetchall()]
+        # Rich-media pieces belong to the batch too (impact.per_type/completion now count them), so the
+        # detail view must show them or a rich-media-only batch reads as pieces:[] while impact says its
+        # podcast/video is live. Dormant-safe (rich_media_drafts may be absent).
+        try:
+            bd["pieces"] += [dict(r) for r in conn.execute(
+                "SELECT id, asset_type AS content_type, asset_type, title, status, geo_score, "
+                "NULL AS quality_score, NULL AS published_asset_id FROM rich_media_drafts "
+                "WHERE batch_id=%s ORDER BY id", (b["id"],)).fetchall()]
+        except Exception:  # noqa: BLE001 -- rich_media_drafts dormant/absent
+            pass
         imp = conn.execute(
             "SELECT baseline_sov, measured_sov, sov_delta, baseline_alignment, measured_alignment, "
             "alignment_delta, gap_pct_closed, per_type, notes, run_before, run_after, measured_at "

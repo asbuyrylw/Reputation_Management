@@ -2616,17 +2616,24 @@ _CHANNEL_HINTS = {
 _DEFAULT_ATOMIZE_CHANNELS = ["linkedin", "x", "facebook", "instagram"]
 
 
-def _atomize_system(channels: Optional[list] = None) -> str:
+def _atomize_system(channels: Optional[list] = None, per_platform: int = 1) -> str:
     """Build the atomization prompt for the tenant's actual social channels (profile.social_channels).
-    Unknown channels are dropped; an empty/invalid set falls back to the generic 4-channel default."""
+    Unknown channels are dropped; an empty/invalid set falls back to the generic 4-channel default.
+    `per_platform` = how many DISTINCT posts to draft per channel, so a long pillar yields the
+    research-backed repurposing set (~15-20 atoms) instead of one-per-platform (~4) -- the count the
+    caller sizes from content_research."""
     chans = [c for c in (channels or _DEFAULT_ATOMIZE_CHANNELS) if c in _CHANNEL_HINTS]
     chans = list(dict.fromkeys(chans)) or list(_DEFAULT_ATOMIZE_CHANNELS)
+    per = max(1, int(per_platform or 1))
     surfaces = ", ".join(chans)
     hint_lines = "; ".join(_CHANNEL_HINTS[c] for c in chans)
-    atoms_shape = ",".join('{"surface":"%s","text":"..."}' % c for c in chans)
+    # atoms_shape shows `per` distinct entries per channel so the model returns multiple posts each.
+    atoms_shape = ",".join('{"surface":"%s","text":"..."}' % c for c in chans for _ in range(per))
+    count_line = ("ONE per platform" if per == 1 else
+                  f"{per} DISTINCT posts per platform (each a different angle/hook on the article)")
     return (
         "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
-        f"social posts, ONE per platform: {surfaces}. GROUND every claim in the article -- NEVER add "
+        f"social posts, {count_line}: {surfaces}. GROUND every claim in the article -- NEVER add "
         "facts, statistics, offers, credentials, or claims not present in it. Match each platform: "
         f"{hint_lines}. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
         '{"atoms":[' + atoms_shape + "]}"
@@ -2672,13 +2679,10 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
         _channels = _bp.for_business(business_id).get("social_channels") or _DEFAULT_ATOMIZE_CHANNELS
     except Exception:  # noqa: BLE001
         _channels = _DEFAULT_ATOMIZE_CHANNELS
-    res = llm.orchestrator_json(_atomize_system(_channels), payload, tier="mid",
-                                bill={"business_id": business_id, "operation": "atomize"}) or {}
-    atoms = res.get("atoms") if isinstance(res, dict) else None
-    if not isinstance(atoms, list) or not atoms:
-        return {"ok": False, "error": "could not generate social posts (content LLM unavailable)"}
-    # How many atoms to keep: caller value, else the research-backed repurposing yield for this body
-    # length (~15-20 per 2k words) -- NOT a hardcoded 6 that discarded a long pillar's social program.
+    # Target atom count: caller value, else the research-backed repurposing yield for this body length
+    # (~15-20 per 2k words). Compute it BEFORE generation so the PROMPT actually requests that many
+    # (per_platform distinct posts per channel) -- else the one-per-platform prompt caps output at
+    # ~len(channels) and the clamp below is dead code.
     if max_posts is None:
         try:
             from . import content_research as _cr_a
@@ -2686,6 +2690,12 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
         except Exception:  # noqa: BLE001
             max_posts = 20
     max_posts = max(1, int(max_posts))
+    _per_platform = max(1, min(6, round(max_posts / max(1, len(_channels)))))   # distinct posts/channel
+    res = llm.orchestrator_json(_atomize_system(_channels, per_platform=_per_platform), payload, tier="mid",
+                                bill={"business_id": business_id, "operation": "atomize"}) or {}
+    atoms = res.get("atoms") if isinstance(res, dict) else None
+    if not isinstance(atoms, list) or not atoms:
+        return {"ok": False, "error": "could not generate social posts (content LLM unavailable)"}
     created: list[int] = []
     with db() as conn:
         for a in atoms[:max_posts]:

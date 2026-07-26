@@ -27,6 +27,8 @@ log = logging.getLogger("content_impact")
 # Below this fraction of the gap closed, a published batch that didn't move the number gets an
 # "adjust: produce more / different content" recommendation (the closed-loop signal).
 _LOW_MOVEMENT = 0.15
+# A share-of-voice lift (owned-content surfacing rate, 0..1) at/above this counts as a real SoV win.
+_SOV_MOVE = 0.05
 # The goal_alignment level that counts as "goal reached" for % gap closed. Set high enough that a
 # still-negative/neutral business isn't reported as already-closed. Configurable; NOT the businesses
 # table (which has no such column) nor the SoV-unit dominance_target (a different metric).
@@ -194,6 +196,10 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
     # rank movement is a first-class outcome: a rank regression is an 'adjust' signal even if AI alignment
     # held flat, and a strong rank gain corroborates 'keep going' -- so the loop reacts to rankings, not
     # just AI-answer alignment (the north-star 'move rankings' half).
+    # A material share-of-voice lift (owned content surfacing more often) is a real win even if alignment
+    # held flat -- so it corroborates 'keep going' and vetoes the 'barely moved' branch, like rank does.
+    _sov_up = sov_delta is not None and sov_delta >= _SOV_MOVE
+    _rank_up = rank_delta is not None and rank_delta >= 1.0
     if published_total == 0:
         rec = "Not measurable yet — approve & publish the batch, then the next audit will show its lift."
     elif al_delta is not None and al_delta < -0.02:
@@ -201,13 +207,16 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
     elif rank_delta is not None and rank_delta <= -1.0:
         rec = ("Keyword rank got WORSE since publishing (dropped "
                f"~{abs(rank_delta):.0f} positions) — strengthen on-page optimization + authority/links for this gap.")
-    elif gap_pct is not None and gap_pct < _LOW_MOVEMENT and not (rank_delta is not None and rank_delta >= 1.0):
+    elif gap_pct is not None and gap_pct < _LOW_MOVEMENT and not (_rank_up or _sov_up):
         rec = "Published but the gap barely moved — produce more/different content for this gap or strengthen citations/entity clarity."
     elif gap_pct is not None and gap_pct >= 0.75:
         rec = "Gap largely closed — hold and monitor; redeploy effort to the next gap."
-    elif rank_delta is not None and rank_delta >= 1.0:
+    elif _rank_up:
         rec = (f"Keyword rank IMPROVED (~+{rank_delta:.0f} positions) — the program is working; keep "
                "producing for this gap and re-measure next audit.")
+    elif _sov_up:
+        rec = ("Share of voice IMPROVED — your owned content is surfacing more for this gap; keep "
+               "producing and re-measure next audit.")
     else:
         rec = "Moving in the right direction — keep producing for this gap and re-measure next audit."
 
@@ -261,8 +270,8 @@ def recent_signals(business_id: int, limit: int = 10) -> list[dict]:
         with db() as conn:
             _ensure_rank_cols(conn)   # idempotent -> rank_delta column exists so the re-planner can read it
             rows = conn.execute(
-                "SELECT ci.gap_pct_closed, ci.alignment_delta, ci.rank_delta, ci.notes AS recommendation, "
-                "cb.gap_source "
+                "SELECT ci.gap_pct_closed, ci.alignment_delta, ci.sov_delta, ci.rank_delta, "
+                "ci.notes AS recommendation, cb.gap_source "
                 "FROM content_impact ci JOIN content_batches cb ON cb.id = ci.batch_id "
                 "WHERE ci.business_id=%s ORDER BY ci.id DESC LIMIT %s", (business_id, limit)).fetchall()
     except Exception:  # noqa: BLE001 -- table not migrated yet / no data -> no feedback signal
@@ -273,6 +282,9 @@ def recent_signals(business_id: int, limit: int = 10) -> list[dict]:
             "gap": r.get("gap_source"),
             "gap_pct_closed": float(r["gap_pct_closed"]) if r.get("gap_pct_closed") is not None else None,
             "alignment_delta": float(r["alignment_delta"]) if r.get("alignment_delta") is not None else None,
+            # SoV lift (owned-content surfacing rate) -- a real win the re-planner should double down on
+            # even when alignment held flat (was computed + stored but never fed back).
+            "sov_delta": float(r["sov_delta"]) if r.get("sov_delta") is not None else None,
             # rank movement (positive = moved up toward #1) so the re-planner reacts to ranking outcomes,
             # not just AI-answer alignment. None until a GSC/SERP source is connected.
             "rank_delta": float(r["rank_delta"]) if r.get("rank_delta") is not None else None,
