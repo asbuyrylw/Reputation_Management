@@ -319,7 +319,11 @@ def generate_image(business_id: int, prompt: str, *, kind: str = "image", size: 
         return {"ok": False, "error": "provider returned no image"}
     fname = (filename or _img_slug(alt or prompt)) + ".png"
     skey, purl, path, fbytes = _store_bytes(business_id, raw, fname, "image/png")
-    _i_batch, _i_gapkey = _gap_link_for_wo(business_id, work_order_id, draft_id, alt or prompt)
+    # Only a STANDALONE gap-tied image earns independent gap credit. An INLINE article image
+    # (kind='content_image') rides inside an article body whose draft already counts for the gap, so it
+    # must NOT gap-link -- else each decorative image double-counts pieces_drafted (up to +3/article).
+    _i_batch, _i_gapkey = ((None, None) if kind == "content_image"
+                           else _gap_link_for_wo(business_id, work_order_id, draft_id, alt or prompt))
     vid = _persist(business_id, kind=kind, provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note, meta=({"alt": alt} if alt else None),
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="image/png",

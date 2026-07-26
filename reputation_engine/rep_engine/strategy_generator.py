@@ -418,6 +418,19 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             _prof_types = (_bp_t.derive(biz) if biz else {}).get("default_content_types")
     except Exception:  # noqa: BLE001 -- profile is best-effort; None -> module default spread (same as batch)
         _prof_types = None
+    # New-domain proxy (same signal content_strategist.plan uses for cadence): few published pieces ->
+    # 'new', so backlink velocity uses the SAFETY-capped 2-4 RD/mo band instead of an unsafe 4-8 for a
+    # thin-inventory tenant. Fail-safe -> 'established' (no throttle) if the count can't be read.
+    _new_domain = False
+    try:
+        if biz.get("id"):
+            with db() as _c_nd:
+                _pub = _c_nd.execute(
+                    "SELECT COUNT(*) n FROM content_drafts WHERE business_id=%s AND status IN "
+                    "('approved','published')", (biz["id"],)).fetchone()["n"]
+            _new_domain = _pub < 3
+    except Exception:  # noqa: BLE001
+        _new_domain = False
     # When the Content Strategist produced a program, its cluster CAMPAIGNS replace the deterministic
     # one-WO-per-gap owned-content + competitor-defense loops (the strategist read those same gaps and
     # fanned them into a real multi-piece program). Everything else (baseline, schema, corroboration,
@@ -605,7 +618,8 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             from . import content_strategist as _cs_bl
             _bl_sevs = [(c.get("severity") or 0) for c in (strategy.get("campaigns", []) if has_strategy else [])]
             _bl_norm = min(1.0, (max(_bl_sevs) if _bl_sevs else 0) / float(max(1, _cs_bl._CLUSTER_FLOOR_SEVERITY * 2)))
-            _bl_lo, _bl_hi, _bl_src = _cr_bl.backlink_target_for(authority="established", severity=_bl_norm)
+            _bl_lo, _bl_hi, _bl_src = _cr_bl.backlink_target_for(
+                authority=("new" if _new_domain else "established"), severity=_bl_norm)
             _bl_line = (f"Target ~{_bl_lo}-{_bl_hi} NEW referring domains/month ({_bl_src}) via the media "
                         f"list + guest posts / digital PR -- referring-domain count is the strongest-"
                         f"correlated ranking lever. Never buy links or spike velocity.")

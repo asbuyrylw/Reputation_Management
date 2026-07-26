@@ -184,7 +184,11 @@ def _compute(rows: list) -> dict:
     n = len(rows)
     contested_rate = sum(1 for r in rows if r["mentions_contested"]) / n if n else 0.0
     negative_rate = sum(1 for r in rows if (r["sentiment"] or "").lower() == "negative") / n if n else 0.0
-    ga_vals = [float(r["goal_alignment"]) for r in rows if r["goal_alignment"] is not None]
+    # EXCLUDE wrong-entity answers from alignment (the same _ec rule _compute applies to
+    # awareness/negativity and the shared codebase denominator): a same-named OTHER business's positive
+    # answers must not inflate avg_alignment and flip the primary challenge to established_positive/DEFEND
+    # instead of a remediation plan.
+    ga_vals = [float(r["goal_alignment"]) for r in rows if r["goal_alignment"] is not None and not _ec(r)]
     avg_alignment = sum(ga_vals) / len(ga_vals) if ga_vals else 0.0
 
     aware_known = [r for r in rows if r["awareness"] is not None]

@@ -2621,24 +2621,28 @@ _CHANNEL_HINTS = {
 _DEFAULT_ATOMIZE_CHANNELS = ["linkedin", "x", "facebook", "instagram"]
 
 
-def _atomize_system(channels: Optional[list] = None, per_platform: int = 1) -> str:
+def _atomize_system(channels: Optional[list] = None, per_platform=1) -> str:
     """Build the atomization prompt for the tenant's actual social channels (profile.social_channels).
     Unknown channels are dropped; an empty/invalid set falls back to the generic 4-channel default.
-    `per_platform` = how many DISTINCT posts to draft per channel, so a long pillar yields the
-    research-backed repurposing set (~15-20 atoms) instead of one-per-platform (~4) -- the count the
-    caller sizes from content_research."""
+    `per_platform` = how many DISTINCT posts to draft per channel. An INT applies uniformly; a DICT
+    {channel: n} sets a per-channel count (the caller weights this by content_research.social_count_for
+    so the mix is research-backed -- X/TikTok heavier, Reddit gated -- not an even split)."""
     chans = [c for c in (channels or _DEFAULT_ATOMIZE_CHANNELS) if c in _CHANNEL_HINTS]
     chans = list(dict.fromkeys(chans)) or list(_DEFAULT_ATOMIZE_CHANNELS)
-    per = max(1, int(per_platform or 1))
+    if isinstance(per_platform, dict):
+        per_map = {c: max(1, int(per_platform.get(c, 1))) for c in chans}
+    else:
+        per_map = {c: max(1, int(per_platform or 1)) for c in chans}
     surfaces = ", ".join(chans)
     hint_lines = "; ".join(_CHANNEL_HINTS[c] for c in chans)
-    # atoms_shape shows `per` distinct entries per channel so the model returns multiple posts each.
-    atoms_shape = ",".join('{"surface":"%s","text":"..."}' % c for c in chans for _ in range(per))
-    count_line = ("ONE per platform" if per == 1 else
-                  f"{per} DISTINCT posts per platform (each a different angle/hook on the article)")
+    # atoms_shape shows per_map[c] distinct entries per channel so the model returns that many each.
+    atoms_shape = ",".join('{"surface":"%s","text":"..."}' % c for c in chans for _ in range(per_map[c]))
+    count_line = ("ONE per platform" if all(v == 1 for v in per_map.values()) else
+                  "these DISTINCT post counts per platform (each a different angle/hook): "
+                  + ", ".join(f"{per_map[c]}x {c}" for c in chans))
     return (
         "You are a social media strategist. Atomize the given long-form article into short, ready-to-post "
-        f"social posts, {count_line}: {surfaces}. GROUND every claim in the article -- NEVER add "
+        f"social posts, {count_line}. GROUND every claim in the article -- NEVER add "
         "facts, statistics, offers, credentials, or claims not present in it. Match each platform: "
         f"{hint_lines}. Keep the business name/city where natural. Never fabricate. Return ONLY JSON: "
         '{"atoms":[' + atoms_shape + "]}"
@@ -2695,7 +2699,20 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
         except Exception:  # noqa: BLE001
             max_posts = 20
     max_posts = max(1, int(max_posts))
-    _per_platform = max(1, min(6, round(max_posts / max(1, len(_channels)))))   # distinct posts/channel
+    # Per-channel post counts WEIGHTED by the research cadence spread (content_research.social_count_for:
+    # X/TikTok heavy, LinkedIn moderate, Reddit gated), normalized to ~max_posts total -- so the social
+    # mix is research-sized, not an even split. Falls back to an even split if the KB is unavailable.
+    _per_platform: object
+    try:
+        from . import content_research as _cr_s
+        _w = {}
+        for _ch in _channels:
+            _lo, _hi, _ = _cr_s.social_count_for(_ch)
+            _w[_ch] = max(1, (int(_lo) + int(_hi)) // 2)
+        _tot = sum(_w.values()) or 1
+        _per_platform = {_ch: max(1, min(8, round(max_posts * _w[_ch] / _tot))) for _ch in _channels}
+    except Exception:  # noqa: BLE001
+        _per_platform = max(1, min(6, round(max_posts / max(1, len(_channels)))))
     res = llm.orchestrator_json(_atomize_system(_channels, per_platform=_per_platform), payload, tier="mid",
                                 bill={"business_id": business_id, "operation": "atomize"}) or {}
     atoms = res.get("atoms") if isinstance(res, dict) else None
