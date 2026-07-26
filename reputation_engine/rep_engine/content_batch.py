@@ -375,18 +375,27 @@ def noncontent_gaps(business_id: int) -> list[dict]:
 def _types_for_gap(gap: dict, default_types: Optional[list[str]] = None) -> list[str]:
     at = (gap.get("asset_type") or "").lower()
     topic = (gap.get("topic") or "").lower()
+    prof = [t for t in (default_types or []) if t in _TYPE_FRAME]   # the tenant's preferred spread
+
+    def _apply_profile(types: list[str], required: set[str]) -> list[str]:
+        """Honor the tenant profile on EVERY branch (not just default): keep the branch's REQUIRED lead
+        type(s) always, and filter the supporting types to the tenant's preferred spread when one is
+        defined (so a tenant that doesn't do, e.g., social still gets the required local_page/landing_page/
+        video_script, minus formats it never uses). No profile -> the branch's full list."""
+        keep = [t for t in types if t in required or (not prof) or t in prof]
+        return [t for t in keep if t in _TYPE_FRAME] or [t for t in types if t in required] or types
+
     # Video is an explicit asset intent -> a shootable script spread, not a text article.
     if "video" in at or "video" in topic:
-        return _VIDEO_TYPES
+        return _apply_profile(_VIDEO_TYPES, {"video_script"})
     if "local" in at or "local" in topic:
-        return _LOCAL_TYPES
+        return _apply_profile(_LOCAL_TYPES, {"local_page"})
     if at in ("landing_page", "comparison") or "landing" in topic or any(k in topic for k in ("best", "vs", "compare", "top ")):
-        return _COMMERCIAL_TYPES
+        return _apply_profile(_COMMERCIAL_TYPES, {"landing_page"})
     # DEFAULT branch: the tenant's profile-driven content spread (generic drops the finance
     # 'white_paper' and carries 'faq'; finance keeps 'white_paper'), restricted to the content types the
     # batch pipeline can frame + generate so an unknown type never becomes a mislabeled generic blog.
-    dts = [t for t in (default_types or _DEFAULT_TYPES) if t in _TYPE_FRAME]
-    return dts or list(_DEFAULT_TYPES)
+    return prof or [t for t in _DEFAULT_TYPES if t in _TYPE_FRAME] or list(_DEFAULT_TYPES)
 
 
 def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:

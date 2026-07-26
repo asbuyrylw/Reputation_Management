@@ -151,6 +151,7 @@ export interface WorkOrder {
   predicted_seo_impact?: string | null;
   predicted_basis?: string | null;
   superseded?: boolean | null;
+  has_draft?: boolean | null;   // a non-rejected content draft already exists -> not "to produce"
   planned?: boolean | null;
   promoted_at?: string | null;
   progress_notes?: ProgressNote[] | null;

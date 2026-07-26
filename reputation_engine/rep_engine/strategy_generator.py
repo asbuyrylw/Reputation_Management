@@ -357,12 +357,19 @@ def _phase_for_week(week: int) -> str:
     return PHASES[-1][0]
 
 
+# Common words that must NOT count toward coverage overlap -- otherwise 'the/for/your/best/how' shared
+# between a gap topic and any campaign piece produced false 2-token matches that silently DROPPED the
+# dedicated gap task. len>2 keeps domain acronyms (tax/ira/etf/roi/seo/gbp/cpa/llc).
+_STRAT_STOP = {"the", "for", "your", "our", "and", "with", "how", "what", "why", "who", "best", "top",
+               "near", "you", "are", "does", "vs", "guide", "page", "content", "about", "help", "get"}
+
+
 def _strat_tokens(s: str) -> set[str]:
-    """Significant word tokens for coverage matching between a flat gap item and the strategist's
-    campaign pieces (so we only absorb a gap item a campaign really addresses -- never DROP one it
-    missed). len>2 (not >3) so 3-letter domain terms -- tax, ira, etf, roi, seo, gbp, cpa, llc -- are
-    NOT dropped (matches content_strategist._tokens; the old >3 under-counted acronym-heavy verticals)."""
-    return {t for t in _re_tech.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 2}
+    """Significant, stopword-stripped tokens for coverage matching between a flat gap item and the
+    strategist's campaign pieces (so we only absorb a gap item a campaign really addresses -- never DROP
+    one it missed)."""
+    return {t for t in _re_tech.findall(r"[a-z0-9]+", (s or "").lower())
+            if len(t) > 2 and t not in _STRAT_STOP}
 
 
 def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None) -> list[WorkOrder]:
@@ -383,15 +390,28 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     # -- an owned-content / competitor gap the strategist MISSED still gets its own task, so the plan
     # never loses a foundational topic (owner rule: err toward too much content, never too little).
     _covered_tokens: list[set] = []
+    _covered_commercial: list[set] = []   # token sets of comparison / commercial-intent pieces only
     if has_strategy:
         for _camp in strategy.get("campaigns", []):
+            _c_intent = (_camp.get("intent") or "").lower()
             _covered_tokens.append(_strat_tokens(_camp.get("topic", "")))
             for _pc in (_camp.get("pieces") or []):
-                _covered_tokens.append(_strat_tokens(f"{_pc.get('title', '')} {_pc.get('target_query', '')}"))
+                _pt = _strat_tokens(f"{_pc.get('title', '')} {_pc.get('target_query', '')}")
+                _covered_tokens.append(_pt)
+                if _pc.get("role") == "comparison" or _c_intent in ("commercial", "transactional"):
+                    _covered_commercial.append(_pt)
 
-    def _covered(text: str) -> bool:
+    def _covered(text: str, *, commercial: bool = False) -> bool:
+        """A flat gap item is 'covered' by the strategist ONLY when a campaign piece shares a MAJORITY of
+        the gap's significant tokens (>= max(2, 60%)), not just any 2 -- so a loose word overlap can't
+        silently drop a real gap task. `commercial=True` (competitor-defense) further requires the match
+        to come from a comparison / commercial-intent piece that actually competes for the query."""
         t = _strat_tokens(text)
-        return bool(t) and any(len(t & c) >= 2 for c in _covered_tokens)
+        if not t:
+            return False
+        need = max(2, round(0.6 * len(t)))
+        pool = _covered_commercial if commercial else _covered_tokens
+        return any(len(t & c) >= need for c in pool)
 
     def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
             source="audited gap", area=None, platform="", source_query="", campaign=None,
@@ -677,7 +697,9 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     # fallback.
     for i, g in enumerate(gap.get("competitor_defense", []) or []):
         q = g.get("query", f"query {i + 1}")
-        if has_strategy and _covered(q):
+        # A competitor-won query is only 'covered' when a comparison / commercial piece actually competes
+        # for it -- an informational pillar sharing a few words does NOT defend the query, so keep the task.
+        if has_strategy and _covered(q, commercial=True):
             continue
         rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
         add(f"Compete for '{q}'", "content_writing",

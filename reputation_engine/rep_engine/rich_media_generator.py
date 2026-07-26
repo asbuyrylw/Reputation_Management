@@ -184,13 +184,15 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
         # Authoritative citation sources + real statistics. The authoritative_sources registry is the
         # FINANCE source pack, so inject it ONLY for a tenant whose profile selects it
         # (authoritative_source_pack == 'financial'); a generic tenant gets none (no finance-source leak).
+        # grounding_block ALWAYS includes the UNIVERSAL pack (GBP/FTC/BLS) + tag-filters vertical sources,
+        # so every tenant (finance OR not) gets named authoritative citations -- the ==financial gate left
+        # non-finance rich media with none.
         try:
-            if (_bp.derive(biz).get("authoritative_source_pack") or "") == "financial":
-                from . import authoritative_sources as _authsrc
-                _auth = _authsrc.grounding_block(biz.get("services") or "", biz.get("industry") or "",
-                                                 biz.get("geo") or "")
-                if _auth:
-                    sources.append({"title": "Authoritative Sources to Cite + Real Statistics", "text": _auth})
+            from . import authoritative_sources as _authsrc
+            _auth = _authsrc.grounding_block(biz.get("services") or "", biz.get("industry") or "",
+                                             biz.get("geo") or "")
+            if _auth:
+                sources.append({"title": "Authoritative Sources to Cite + Real Statistics", "text": _auth})
         except Exception as e:  # noqa: BLE001
             log.debug("rich_media: authoritative sources unavailable: %s", e)
 

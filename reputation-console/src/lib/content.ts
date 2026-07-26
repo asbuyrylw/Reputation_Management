@@ -31,10 +31,21 @@ export const CAP_LABEL: Record<string, string> = {
 };
 
 // The single definition of "what content is left to produce": non-superseded, non-skipped content
-// work orders, highest predicted AI impact first. BOTH the Content hub and the Briefs page call this,
-// so the "produce next" list / KPI tile and the canonical "To Produce" set can never disagree.
+// work orders that DON'T already have a draft, highest predicted AI impact first. BOTH the Content hub
+// and the Briefs page call this, so the "produce next" list / KPI tile and the canonical "To Produce"
+// set can never disagree. Excluding has_draft (and done/verified statuses) stops a produced piece from
+// appearing as "to produce" AND "in draft" at once (the KPI double-count) and from showing a Generate
+// button for something the Drafts view already lists.
+const PRODUCED_STATUSES = new Set(["done", "verified", "approved", "published"]);
 export function contentToProduce(workOrders: WorkOrder[] | undefined): WorkOrder[] {
   return (workOrders ?? [])
-    .filter((w) => CONTENT_CAPS.has(w.capability ?? "") && !w.superseded && w.status !== "skipped")
+    .filter(
+      (w) =>
+        CONTENT_CAPS.has(w.capability ?? "") &&
+        !w.superseded &&
+        w.status !== "skipped" &&
+        !w.has_draft &&
+        !PRODUCED_STATUSES.has(w.status),
+    )
     .sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1));
 }

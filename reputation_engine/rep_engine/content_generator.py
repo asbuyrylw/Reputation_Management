@@ -438,16 +438,15 @@ def _grounding_context(business_id: int, target_query: str | None = None, biz: d
     # it ONLY for a tenant whose profile selects that pack (authoritative_source_pack == 'financial').
     # A generic tenant gets '' here -- the prompt still tells it to cite .gov/official sources inline,
     # sourced dynamically -- so no finance sources leak into a dentist's or SaaS's draft.
+    # authoritative_sources.grounding_for_business ALWAYS includes the UNIVERSAL pack (Google Business
+    # Profile / FTC / BLS) and tag-filters vertical sources, so it adds finance sources ONLY for a finance
+    # tenant and universal-only for everyone else. Call it for EVERY tenant -- gating on
+    # authoritative_source_pack=='financial' left non-finance tenants with NO named authoritative
+    # citations (the universal pack existed but was never injected for them).
     authoritative = ""
     try:
-        from . import business_profile as _bp
-        # Use the already-loaded biz row (pure derive, no query) when the caller passes it; only fall
-        # back to a for_business load when it doesn't -- avoids a duplicate profile query per piece.
-        _pack = (_bp.derive(biz) if biz is not None else _bp.for_business(business_id)
-                 ).get("authoritative_source_pack") or ""
-        if _pack == "financial":
-            from . import authoritative_sources as _authsrc
-            authoritative = _authsrc.grounding_for_business(business_id)
+        from . import authoritative_sources as _authsrc
+        authoritative = _authsrc.grounding_for_business(business_id)
     except Exception:  # noqa: BLE001 -- best-effort
         authoritative = ""
     # Content-effectiveness research (UNIVERSAL, not finance-gated): the cited GEO/AEO tactics the writer

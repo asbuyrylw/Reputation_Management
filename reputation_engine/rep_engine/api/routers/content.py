@@ -391,7 +391,12 @@ def work_orders(business_id: int = Depends(authorize_business), conn=Depends(get
         "COALESCE(superseded, false) AS superseded, "
         "COALESCE(planned, false) AS planned, promoted_at, assignee_user_id, "
         "COALESCE(progress_notes, '[]'::jsonb) AS progress_notes, "
-        "COALESCE(subtasks, '[]'::jsonb) AS subtasks "
+        "COALESCE(subtasks, '[]'::jsonb) AS subtasks, "
+        # has_draft: a non-rejected content draft already exists for this WO, so the FE 'To Produce' set
+        # can drop it instead of showing a Generate button for a piece the Drafts view already lists (and
+        # the KPI tiles double-counting it in toProduce AND inDraft).
+        "EXISTS(SELECT 1 FROM content_drafts d WHERE d.work_order_id = work_orders.id "
+        "       AND COALESCE(d.status,'') <> 'rejected') AS has_draft "
         "FROM work_orders WHERE business_id=%s ORDER BY id",
         (business_id,),
     ).fetchall()
