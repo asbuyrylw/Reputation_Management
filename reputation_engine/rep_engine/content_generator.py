@@ -615,6 +615,44 @@ def _keyword_coverage(body: str, grounding: dict) -> dict:
             "rate": round(len(covered) / total, 2) if total else None}
 
 
+def _verified_nap(business_id: int, biz: dict) -> str:
+    """The business's VERIFIED contact block, sourced ONLY from the owner's own TRUSTED record
+    (businesses row + locations, via review_requests.nap) -- NEVER a blind corpus scrape. A phone or
+    address that happens to appear in an uploaded testimonial, a competitor comparison, or a carrier
+    document must never be published as the CLIENT's own 'verified' contact (a reputation-safety defect
+    for a reputation-management product). An email is accepted from the corpus ONLY when its domain
+    matches the business's own domain; otherwise it is omitted and the writer uses an [INSERT] placeholder
+    (a blank is safer than a wrong number). Returns '' when nothing is trustworthy."""
+    parts: list[str] = []
+    nap = {}
+    try:
+        from . import review_requests as _rr
+        nap = _rr.nap(business_id) or {}
+    except Exception:  # noqa: BLE001 -- trusted read is best-effort; no trusted data -> no block
+        nap = {}
+    addr = (nap.get("address") or "").strip()
+    phone = (nap.get("phone") or "").strip()
+    if addr:
+        parts.append("Address: " + addr)
+    if phone:
+        parts.append("Phone: " + phone)
+    # Email: accept ONLY a corpus email whose domain matches the business's own domain (never an
+    # arbitrary address that could belong to a competitor/testimonial/carrier in the source material).
+    try:
+        domain = (biz.get("domain") or nap.get("website") or "") if isinstance(biz, dict) else (nap.get("website") or "")
+        domain = re.sub(r"^https?://", "", (domain or "").lower()).lstrip("www.").strip("/").split("/")[0]
+        if domain:
+            from . import source_material as _sm
+            corpus = _sm.corpus(business_id, max_tokens=6000) or ""
+            for m in re.finditer(r"[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})", corpus):
+                if m.group(1).lower().endswith(domain):
+                    parts.append("Email: " + m.group(0).strip())
+                    break
+    except Exception:  # noqa: BLE001 -- email cross-check is best-effort
+        pass
+    return " | ".join(parts)
+
+
 def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
                 outline: str = "", voice: str = "") -> str:
     grounding = grounding or {"site_facts": "", "gap_focus": "", "keywords": []}
@@ -1585,12 +1623,20 @@ COMPLIANCE_FIX_SYSTEM = _compliance_fix_system()   # finance-free GENERIC alias 
 
 
 def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None,
-                        license_policy: str = "", regulated_financial: bool = False) -> Optional[str]:
+                        license_policy: str = "", regulated_financial: bool = False,
+                        asset_type: str = "") -> Optional[str]:
     """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
     disclosures (using what we know about the business + its regulatory profile). A generic tenant gets
     the universal editor and no broker-dealer-disclosure instruction; a regulated-finance tenant gets
     the finance editor + firm-type framing. Returns the revised body, or None. The caller re-screens
-    the result -- this never decides compliance."""
+    the result -- this never decides compliance.
+
+    FOCUSED + non-truncating: the editor is told to make MINIMAL, SURGICAL edits (fix only the offending
+    sentences, return the rest verbatim) instead of rewriting the whole piece, and the output cap is
+    SIZED TO THE BODY with a content-type-aware ceiling (long-form white_paper/deep_article gets more
+    headroom) so a rewrite is never clipped mid-draft. A result that comes back materially shorter than
+    the input (< 60%) is treated as a clipped/gutted rewrite and REJECTED (return None -> the draft is
+    held for a human, never shipped truncated-but-'passing')."""
     reg = reg or {}
     ft = (reg.get("firm_type") or "").lower()
     disc = reg.get("disclosures") or []
@@ -1608,11 +1654,27 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
         f"{reg_line}\n"
         f"Narratives working against them (context only): {biz.get('contested_terms', '')}.\n"
         "Compliance issues to resolve:\n- " + "\n- ".join(str(f) for f in (flags or []))
+        + "\n\nMake the MINIMAL, SURGICAL edits needed: rewrite ONLY the specific sentences that trip "
+        "the listed issues (plus one short disclosure block at the very end if required) and return the "
+        "ENTIRE piece otherwise VERBATIM — same sections, same headings, same length. Do NOT summarize, "
+        "condense, or drop any section."
         + f"\n\nContent to revise:\n{body}"
     )
-    revised = llm.orchestrator_text(_compliance_fix_system(license_policy, regulated_financial),
-                                    ctx, max_tokens=2400, tier="mid")
-    return (revised or "").strip() or None
+    # A surgical rewrite is ~as long as the input; size the cap to the body (~3 chars/token) + headroom,
+    # with a higher ceiling for long-form so white_paper/deep_article aren't truncated (the fixed 2400
+    # silently clipped them mid-sentence and the caller accepted the chopped result as 'compliant').
+    ceiling = 9000 if (asset_type or "").lower() in ("white_paper", "deep_article") else 6500
+    max_tokens = max(2600, min(int(len(body or "") / 3.0) + 800, ceiling))
+    revised = (llm.orchestrator_text(_compliance_fix_system(license_policy, regulated_financial),
+                                     ctx, max_tokens=max_tokens, tier="mid") or "").strip()
+    if not revised:
+        return None
+    # Reject a clipped/gutted rewrite: a compliant-LOOKING but truncated draft must never be accepted.
+    if len(body or "") and len(revised) < 0.6 * len(body):
+        log.warning("compliance autofix produced a %d-char rewrite of a %d-char draft (<60%%) -- "
+                    "rejecting as clipped; draft will be held for a human.", len(revised), len(body))
+        return None
+    return revised
 
 
 # ----------------------------------------------------------------------------
@@ -1727,23 +1789,17 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         if _facts:
             _cm_parts.append("SOURCE MATERIAL — the client's own facts most relevant to THIS topic; "
                              "ground the content in these and do not contradict them:\n" + _facts)
-        # Pull the VERIFIED NAP straight from the FULL corpus so pieces use it verbatim instead of
-        # leaving a blank / [INSERT] placeholder for contact info (a recurring defect: the contact
-        # facts sit in the source material but the writer left them empty).
+        # VERIFIED NAP — sourced ONLY from the owner's own trusted record (businesses/locations), NOT a
+        # blind corpus regex: a phone/address in an uploaded testimonial, competitor comparison, or carrier
+        # doc must never be published as the CLIENT's 'verified' contact (reputation-safety). Missing
+        # fields are simply omitted so the writer uses an [INSERT] placeholder (a blank beats a wrong number).
         try:
-            _corpus_all = _sm.corpus(business_id, max_tokens=6000) or ""
-            _phone = re.search(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", _corpus_all)
-            _email = re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", _corpus_all)
-            _addr = re.search(r"\d{3,6}\s+[A-Z][A-Za-z0-9.\s]+?(?:Rd|Road|St|Street|Ave|Avenue|Blvd|Dr|Drive|Way|Ln|Lane|Ct|Pkwy|Hwy)\b[A-Za-z0-9.,#\s]{0,45}?\b\d{5}\b", _corpus_all)
-            _nap = " | ".join(x for x in [
-                ("Address: " + re.sub(r"\s+", " ", _addr.group(0)).strip()) if _addr else "",
-                ("Phone: " + _phone.group(0).strip()) if _phone else "",
-                ("Email: " + _email.group(0).strip()) if _email else ""] if x)
+            _nap = _verified_nap(business_id, biz)
             if _nap:
                 _cm_parts.append("VERIFIED CONTACT DETAILS (use these EXACT values wherever the piece "
                                  "needs contact/address/phone/email — NEVER write a blank, ____, TBD, "
                                  "or [INSERT] placeholder for them):\n" + _nap)
-        except Exception:  # noqa: BLE001 -- NAP extraction is best-effort; the corpus is already fed
+        except Exception:  # noqa: BLE001 -- NAP is best-effort; the corpus is already fed
             pass
         _cm_parts.append(
             "GLOBAL WRITING RULES (obey exactly):\n"
@@ -1865,7 +1921,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     highlighted: list = []
     if comp_pass is False and not eval_unavailable:
         fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic,
-                                    regulated_financial=_reg_fin)
+                                    regulated_financial=_reg_fin, asset_type=asset_type)
         if fixed and fixed != body:
             recheck = _compliance(fixed, system=comp_system, regulated_financial=_reg_fin)
             if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews

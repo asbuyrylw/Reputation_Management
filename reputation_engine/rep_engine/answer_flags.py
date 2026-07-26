@@ -27,6 +27,16 @@ from __future__ import annotations
 CONTESTED_GA = -0.15
 
 
+# The SINGLE SQL predicate that excludes wrong-entity answers from any HEADLINE goal_alignment
+# aggregation (the 0-100 AI-Reputation score + its per-run / per-engine / per-prompt rollups). A
+# name-colliding tenant's "that's a different company" answers describe someone else, so counting them
+# dilutes the denominator and drags the headline toward 50 -- exactly what is_wrong_entity() excludes in
+# Python. Interpolate this literal into the score SQL so every surface shares ONE denominator and the
+# exclusion can never drift between report_generator, run_metrics, and the audits router. Pair it with
+# the usual `NOT COALESCE(failed,false)`. (Safe to f-string: a fixed literal, no user input.)
+NOT_WRONG_ENTITY_SQL = "NOT COALESCE(entity_confusion,false)"
+
+
 def is_wrong_entity(row) -> bool:
     """True IFF this answer is flagged as describing a DIFFERENT same-named entity
     (`entity_confusion` is TRUE). A NULL or a missing column -- unknown, failed, or a legacy

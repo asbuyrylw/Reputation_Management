@@ -188,17 +188,22 @@ def _build_sources(business_id: int, biz: dict) -> list[dict]:
             log.debug("rich_media: authoritative sources unavailable: %s", e)
 
         # Brand guardrails + owner-uploaded source material (trusted) -> so NotebookLM rich media is
-        # on-brand and grounded in the client's real docs, not generic web filler.
+        # on-brand and grounded in the client's real docs, not generic web filler. source_material
+        # already returns '' when DORMANT and deliberately RE-RAISES a real read error; do NOT swallow
+        # that re-raise here -- a transient DB failure must FAIL the job (so it retries) rather than
+        # silently shipping an ungrounded / off-brand deep_article / podcast / video (the exact harm the
+        # product sells against). Only the loose-script ImportError is tolerated.
         try:
             from . import source_material as _sm
+        except ImportError:  # pragma: no cover -- loose-script fallback
+            _sm = None
+        if _sm is not None:
             _g = _sm.guardrails(business_id)
             if _g:
                 sources.append({"title": "BRAND RULES (absolute)", "text": _g})
             _c = _sm.corpus(business_id, max_tokens=8000)
             if _c:
                 sources.append({"title": "Client Source Material", "text": _c})
-        except Exception as e:  # noqa: BLE001
-            log.debug("rich_media: brand/source material unavailable: %s", e)
 
         # Gap model (trusted output from the engine)
         gm = conn.execute(

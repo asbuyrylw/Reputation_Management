@@ -2441,9 +2441,15 @@ def diff(business_id: int) -> dict:
             log.info("Need two completed runs to diff.")
             return {}
         cur, prev = runs[0]["id"], runs[1]["id"]
+        try:
+            from .answer_flags import NOT_WRONG_ENTITY_SQL as _NWE
+        except ImportError:  # pragma: no cover
+            from answer_flags import NOT_WRONG_ENTITY_SQL as _NWE  # type: ignore
         def agg(rid):
+            # goal_alignment excludes wrong-entity answers (shared predicate) so the run-over-run headline
+            # delta uses the same denominator as the score itself.
             row = conn.execute(
-                "SELECT AVG(goal_alignment) ga, "
+                f"SELECT AVG(goal_alignment) FILTER (WHERE {_NWE}) ga, "
                 "AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested_rate, "
                 "AVG(CASE WHEN surfaces_owned THEN 1 ELSE 0 END) owned_rate "
                 "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (rid,)
@@ -2550,17 +2556,23 @@ def per_engine_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
         # scope by business_id too: tenant-safe even if a caller passes a run_id that
         # belongs to another business (returns no rows rather than leaking metrics).
         rows = conn.execute(
-            "SELECT engine, goal_alignment, mentions_contested, surfaces_owned, grounded "
+            "SELECT engine, goal_alignment, mentions_contested, surfaces_owned, grounded, entity_confusion "
             "FROM answers WHERE run_id=%s AND business_id=%s AND NOT COALESCE(failed,false)",
             (run_id, business_id),
         ).fetchall()
+    try:
+        from .answer_flags import is_wrong_entity as _iwe
+    except ImportError:  # pragma: no cover
+        from answer_flags import is_wrong_entity as _iwe  # type: ignore
     by: dict = {}
     for r in rows:
         by.setdefault(r["engine"], []).append(r)
     engines = {}
     for name, rs in by.items():
         n = len(rs)
-        gas = [float(r["goal_alignment"]) for r in rs if r["goal_alignment"] is not None]
+        # goal_alignment EXCLUDES wrong-entity answers (they describe a different same-named business),
+        # matching the headline score's denominator; n/contested/owned stay whole-run rates.
+        gas = [float(r["goal_alignment"]) for r in rs if r["goal_alignment"] is not None and not _iwe(r)]
         contested = sum(1 for r in rs if r["mentions_contested"])
         owned = sum(1 for r in rs if r["surfaces_owned"])
         known = [r for r in rs if r["grounded"] is not None]   # grounding is tri-state
@@ -2602,11 +2614,15 @@ def per_prompt_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
             run_id = run["id"]
         rows = conn.execute(
             "SELECT prompt, engine, persona, location, goal_alignment, sentiment, "
-            "awareness, surfaces_owned, mentions_contested "
+            "awareness, surfaces_owned, mentions_contested, entity_confusion "
             "FROM answers WHERE run_id=%s AND business_id=%s AND NOT COALESCE(failed,false) "
             "ORDER BY prompt, persona, location, engine, id",   # deterministic grouping/lens pick
             (run_id, business_id),
         ).fetchall()
+    try:
+        from .answer_flags import is_wrong_entity as _iwe
+    except ImportError:  # pragma: no cover
+        from answer_flags import is_wrong_entity as _iwe  # type: ignore
 
     # Group by the FULL lens identity (prompt, persona, location): different audiences can
     # share the exact same prompt text (the generic and prospective_client lenses do), and
@@ -2624,7 +2640,8 @@ def per_prompt_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
     prompts = []
     for (prompt, persona, location), rs in by.items():
         n = len(rs)
-        gas = [float(r["goal_alignment"]) for r in rs if r["goal_alignment"] is not None]
+        # goal_alignment excludes wrong-entity answers (headline denominator); rates stay whole-run.
+        gas = [float(r["goal_alignment"]) for r in rs if r["goal_alignment"] is not None and not _iwe(r)]
         owned = sum(1 for r in rs if r["surfaces_owned"])
         contested = sum(1 for r in rs if r["mentions_contested"])
         # keep the standard keys always present; count any other label (e.g. 'mixed') too,
@@ -2638,7 +2655,7 @@ def per_prompt_metrics(business_id: int, run_id: Optional[int] = None) -> dict:
             ebucket.setdefault(r["engine"], []).append(r)
         eng = {}
         for ename, ers in ebucket.items():
-            egas = [float(r["goal_alignment"]) for r in ers if r["goal_alignment"] is not None]
+            egas = [float(r["goal_alignment"]) for r in ers if r["goal_alignment"] is not None and not _iwe(r)]
             eng[ename] = {
                 "n": len(ers),
                 "visibility": _visibility(ers),

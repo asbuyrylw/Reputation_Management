@@ -32,14 +32,21 @@ def _f(v) -> Optional[float]:
 
 
 def _compute(conn, run_id: int):
+    # goal_alignment (the persisted headline score + its per-engine trend) EXCLUDES wrong-entity answers
+    # -- one shared predicate (answer_flags.NOT_WRONG_ENTITY_SQL) so this rollup, report_generator, and
+    # the audits router all use the SAME denominator. contested/owned/grounded stay whole-run rates.
+    try:
+        from .answer_flags import NOT_WRONG_ENTITY_SQL as _NWE
+    except ImportError:  # pragma: no cover
+        from answer_flags import NOT_WRONG_ENTITY_SQL as _NWE  # type: ignore
     o = conn.execute(
-        "SELECT AVG(goal_alignment) ga, "
+        f"SELECT AVG(goal_alignment) FILTER (WHERE {_NWE}) ga, "
         "AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested, "
         "AVG(CASE WHEN surfaces_owned THEN 1 ELSE 0 END) owned, "
         "AVG(CASE WHEN grounded THEN 1 ELSE 0 END) grounded "
         "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (run_id,)).fetchone()
     per = conn.execute(
-        "SELECT engine, AVG(goal_alignment) ga, COUNT(*) n FROM answers "
+        f"SELECT engine, AVG(goal_alignment) FILTER (WHERE {_NWE}) ga, COUNT(*) n FROM answers "
         "WHERE run_id=%s AND NOT COALESCE(failed,false) GROUP BY engine", (run_id,)).fetchall()
     per_engine = {r["engine"]: {"ga": _f(r["ga"]), "n": r["n"]} for r in per if r["engine"]}
     return o, per_engine

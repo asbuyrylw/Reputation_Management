@@ -58,8 +58,11 @@ def _run_series(conn, business_id: int) -> list:
     ).fetchall()
     series = []
     for r in runs:
+        # goal_alignment EXCLUDES wrong-entity answers (entity_confusion) -- a name-colliding tenant's
+        # "someone else" answers must not dilute the headline reputation score, matching the exclusion
+        # narrative_score/challenge already apply so every surface shares ONE denominator (answer_flags).
         m = conn.execute(
-            "SELECT AVG(goal_alignment) ga, "
+            "SELECT AVG(goal_alignment) FILTER (WHERE NOT COALESCE(entity_confusion,false)) ga, "
             "AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested, "
             "AVG(CASE WHEN surfaces_owned THEN 1 ELSE 0 END) owned "
             "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (r["id"],),

@@ -154,7 +154,7 @@ def set_budget(body: BudgetUpdate, business_id: int = Depends(authorize_business
 def list_audit_runs(business_id: int = Depends(authorize_business), conn=Depends(get_conn)):
     rows = conn.execute(
         """SELECT r.id, r.started_at, r.finished_at, r.status,
-                  AVG(a.goal_alignment) FILTER (WHERE NOT COALESCE(a.failed,false)) AS goal_alignment,
+                  AVG(a.goal_alignment) FILTER (WHERE NOT COALESCE(a.failed,false) AND NOT COALESCE(a.entity_confusion,false)) AS goal_alignment,
                   AVG((a.mentions_contested)::int) FILTER (WHERE NOT COALESCE(a.failed,false)) AS contested_rate,
                   AVG((a.surfaces_owned)::int) FILTER (WHERE NOT COALESCE(a.failed,false)) AS owned_rate,
                   COUNT(a.id) FILTER (WHERE NOT COALESCE(a.failed,false)) AS n_answers,
