@@ -690,6 +690,21 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             f"An FAQ answering the top questions people ask about '{q}' in this area.{_AEO_CHECKLIST}", 6,
             gap_source="local search ranking", why=why_l, source_query=f"{q} faq", gap_key=_local_gk,
             campaign={**_lmeta, "role": "cluster", "content_type": "faq", "publish_week": 6, "ordinal": 90})
+        # GBP + reviews: the PRIMARY local-ranking levers. Bind them to THIS local gap (same gap_key +
+        # campaign) so a page-1 program always includes the Google Business Profile + review work, not
+        # just content -- content alone rarely wins the local pack. (Was only emitted, un-linked, in the
+        # separate surface_actions loop and only if the gap model happened to populate it.)
+        add(f"Optimize Google Business Profile for '{q}'", "social_publishing",
+            f"Complete/dial in the GBP for '{q}': correct categories, services, service-area, photos, "
+            f"NAP consistency, Q&A, and weekly GBP posts -- the primary local-pack ranking lever.", 4,
+            gap_source="local search ranking", why=why_l, source_query=q, gap_key=_local_gk,
+            area="local", platform="gbp",
+            campaign={**_lmeta, "role": "gbp", "publish_week": 4, "ordinal": 95})
+        add(f"Drive Google reviews for '{q}'", "review_generation",
+            f"Run the review-request sequence so happy local clients leave Google reviews mentioning the "
+            f"service + locale for '{q}' -- review count/recency/velocity is a top local-pack signal.", 4,
+            gap_source="local search ranking", why=why_l, source_query=q, gap_key=_local_gk,
+            area="local", campaign={**_lmeta, "role": "reviews", "publish_week": 4, "ordinal": 96})
 
     # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
     # Absorbed into the strategist's campaigns when one COVERS the query (comparison / defense

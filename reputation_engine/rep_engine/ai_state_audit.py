@@ -2397,9 +2397,24 @@ def build_gap_model(business_id: int) -> dict:
     # ~12k-token/240s LLM pass, the dominant cost of this job. GAP_CRITIC_ENABLED still gates it
     # inside _gap_critic_refine for the runs that do need it.
     cov = model.get("coverage") if isinstance(model.get("coverage"), dict) else None
+    # A coverage dimension counts as ADDRESSED only when it's a dict explicitly marked addressed=True.
+    # A NON-dict value (a bare bool/string the LLM sometimes emits) must NOT be read as 'addressed' --
+    # that type-slip silently skipped the completeness critic for that dimension (#10).
     needs_critic = (not cov) or any(
-        isinstance(v, dict) and not v.get("addressed", False) for v in cov.values()
+        not (isinstance(v, dict) and v.get("addressed", False)) for v in cov.values()
     )
+    # HOLLOW-MODEL guard (#9): if the LLM returned a confident summary but EMPTY gap arrays while the
+    # DETERMINISTIC signals (local rank gaps, competitor gaps, site-crawl gaps) show real problems, the
+    # synthesis under-captured -- force the critic to fill it rather than persist a plausible-looking but
+    # empty gap model that reads as 'nothing to fix'.
+    _GAP_ARRAYS = ("weak_queries", "missing_owned_content", "local_seo_gaps", "competitor_defense",
+                   "schema_gaps", "site_technical_gaps", "thin_corroboration")
+    _model_has_gaps = any(model.get(k) for k in _GAP_ARRAYS)
+    _deterministic_signal = bool(local_rank_gaps or competitor_gaps or site_crawl_gaps)
+    if _deterministic_signal and not _model_has_gaps:
+        log.warning("Gap model for business %d has a summary but NO gap items while deterministic signals "
+                    "show real gaps -- forcing the completeness critic (hollow-model guard).", business_id)
+        needs_critic = True
     if needs_critic:
         model = _gap_critic_refine(model, {
             "local_rank_gaps": local_rank_gaps, "competitor_gaps": competitor_gaps,

@@ -105,7 +105,11 @@ def test_video_plan_per_campaign():
         vids = [p for p in c["pieces"] if p["role"] == "video"]
         assert vids, f"campaign {c['id']} has no video plan"
         assert all(p["capability"] == "explainer_video" and p.get("on_click") for p in vids)
-        assert len(vids) <= 1 + cs._VIDEO_CLUSTERS          # pillar + up to N clusters
+        # Video count is RESEARCH-sized (content_research.video_count_for): 1 flagship pillar video + the
+        # high-video-intent share (~40-60%) of clusters, scaled by severity -- so it can exceed the old
+        # flat cap, but never more than a video per pillar+cluster.
+        n_cl = len([p for p in c["pieces"] if p["role"] == "cluster"])
+        assert 1 <= len(vids) <= 1 + max(1, round(0.6 * n_cl))
         # a video sits beside its source article (inherits its cadence week, within the plan range)
         assert all(isinstance(p["week"], int) for p in vids)
 

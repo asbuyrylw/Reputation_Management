@@ -78,17 +78,25 @@ def retrieve(business_id: int, topic: str, *, limit: int = 6, floor: float | Non
     except Exception as e:  # noqa: BLE001
         if _is_dormant(e):
             return []   # table/column/index not migrated yet -- legitimately no grounding
+        # A real (non-dormant) read failure must NOT return [] -- that is indistinguishable from a
+        # legitimate no-match and made coverage() report a FALSE 'ungrounded' (telling the owner to add
+        # source material they may already have) and the generator ship ungrounded. RE-RAISE so the
+        # advisory degrades to 'unknown' (coverage() catches it) and generation fails loud + retries.
         log.error("grounding.retrieve FAILED for business %s (NOT empty -- a broken read): %s",
                   business_id, e, exc_info=True)
-        return []
+        raise
     return [dict(r) for r in rows if float(r.get("rank") or 0.0) >= floor]
 
 
 def has_grounding(business_id: int, topic: str, *, floor: float | None = None) -> bool:
     """True when the client's verified facts actually cover this topic (>= floor). The signal the
     pre-spend coverage gate reads to block ungrounded generation. Uses the SAME retrieval path the
-    writer will use, so 'grounded' on the plan screen == 'generation will find facts'."""
-    return bool(retrieve(business_id, topic, limit=1, floor=floor))
+    writer will use, so 'grounded' on the plan screen == 'generation will find facts'. A transient read
+    error degrades to False (conservative: 'not grounded') rather than crashing the caller."""
+    try:
+        return bool(retrieve(business_id, topic, limit=1, floor=floor))
+    except Exception:  # noqa: BLE001 -- a broken read -> conservatively 'not grounded', never a crash
+        return False
 
 
 def facts_block(business_id: int, topic: str, *, max_docs: int = 4, max_chars: int = 2400) -> str:
