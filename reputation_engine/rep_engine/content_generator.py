@@ -2624,12 +2624,17 @@ _SURFACE_LABEL = {"linkedin": "LinkedIn", "x": "X/Twitter", "twitter": "X/Twitte
                   "gbp": "Google Business Profile"}
 
 
-def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = None) -> dict:
-    """Derive human-gated social posts from a long-form draft (Phase-5 atomization): one grounded
-    post per platform, stored as pending_review drafts (compliance UNscreened -> a principal must
-    sign off to approve). NEVER auto-posts -- AUTOPOST_GLOBAL_ENABLED still governs any posting.
-    batch_id links the posts into a content batch ATOMICALLY at insert (so a later grading failure
-    can't orphan them from the batch)."""
+def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = None,
+                  max_posts: Optional[int] = None) -> dict:
+    """Derive human-gated social posts from a long-form draft (Phase-5 atomization): grounded posts per
+    platform, stored as pending_review drafts (compliance UNscreened -> a principal must sign off to
+    approve). NEVER auto-posts -- AUTOPOST_GLOBAL_ENABLED still governs any posting. batch_id links the
+    posts into a content batch ATOMICALLY at insert (so a later grading failure can't orphan them).
+
+    `max_posts` caps how many atoms are kept; when None it's SIZED FROM RESEARCH
+    (content_research.social_atoms_per_piece, ~15-20 per 2k-word pillar) instead of a hardcoded 6 -- so a
+    long pillar yields its full research-backed repurposing set. Every created post is GEO-graded here so
+    it's visible to the score->mix loop no matter which path (batch or the /atomize endpoint) created it."""
     _ensure_table()
     with db() as conn:
         d = conn.execute("SELECT id, work_order_id, title, body, target_query FROM content_drafts "
@@ -2652,9 +2657,18 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
     atoms = res.get("atoms") if isinstance(res, dict) else None
     if not isinstance(atoms, list) or not atoms:
         return {"ok": False, "error": "could not generate social posts (content LLM unavailable)"}
+    # How many atoms to keep: caller value, else the research-backed repurposing yield for this body
+    # length (~15-20 per 2k words) -- NOT a hardcoded 6 that discarded a long pillar's social program.
+    if max_posts is None:
+        try:
+            from . import content_research as _cr_a
+            max_posts = _cr_a.social_atoms_per_piece(len(body.split()))[1]
+        except Exception:  # noqa: BLE001
+            max_posts = 20
+    max_posts = max(1, int(max_posts))
     created: list[int] = []
     with db() as conn:
-        for a in atoms[:6]:
+        for a in atoms[:max_posts]:
             if not isinstance(a, dict):
                 continue
             surface = str(a.get("surface") or "social").lower().strip()
@@ -2676,6 +2690,27 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
                  hashlib.sha256(text.encode("utf-8")).hexdigest(), batch_id)).fetchone()
             created.append(int(row["id"]))
         conn.commit()
+    # GEO-grade every created post (deterministic, no LLM) so social posts made via the /atomize endpoint
+    # are graded like the content_batch path's -- visible to _type_performance / the score->mix loop
+    # instead of shipping ungraded. Best-effort per post; a grading hiccup never orphans the post.
+    try:
+        from . import content_quality as _cq_a
+        for sid in created:
+            try:
+                with db() as conn:
+                    r = conn.execute("SELECT body, quality_notes FROM content_drafts WHERE id=%s", (sid,)).fetchone()
+                    if not r:
+                        continue
+                    qn = r["quality_notes"] if isinstance(r["quality_notes"], dict) else json.loads(r["quality_notes"] or "{}")
+                    g = _cq_a.geo_score(r["body"] or "", content_type="social_post")
+                    qn["geo"] = g
+                    conn.execute("UPDATE content_drafts SET geo_score=%s, quality_notes=%s WHERE id=%s",
+                                 (g.get("score"), json.dumps(qn), sid))
+                    conn.commit()
+            except Exception as e:  # noqa: BLE001
+                log.debug("atomize: grade skipped for post %s: %s", sid, e)
+    except Exception:  # noqa: BLE001
+        pass
     log.info("Atomized draft %d -> %d social posts", draft_id, len(created))
     return {"ok": True, "created": len(created), "draft_ids": created, "source_draft_id": draft_id}
 

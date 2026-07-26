@@ -91,18 +91,31 @@ def clusters(business_id: int) -> dict:
         # coverage: how many owned pieces share >=2 tokens with the cluster theme
         covered_by = sum(1 for p in published if len(p & theme_tokens) >= 2)
         vol = sum(int(m.get("search_volume") or 0) for m in c["members"])
+        # WINNABILITY: avg keyword_difficulty (0..100) across the cluster, so selection factors in whether
+        # we can realistically rank -- not just demand + priority. opportunity = volume x (1 - difficulty)
+        # (high volume + LOW difficulty = the winnable, high-leverage cluster to build first). Difficulty
+        # was loaded then discarded here, so the selector could chase unwinnable head terms.
+        diffs = [int(m["keyword_difficulty"]) for m in c["members"] if m.get("keyword_difficulty") is not None]
+        avg_diff = round(sum(diffs) / len(diffs)) if diffs else None
+        winnability = (1.0 - (avg_diff / 100.0)) if avg_diff is not None else 0.5   # unknown -> neutral
+        opportunity = (vol or 0) * winnability
         out.append({
             "topic": pillar["keyword"],
             "pillar": pillar["keyword"],
             "spokes": [m["keyword"] for m in members[1:]],
             "keyword_count": len(members),
             "total_search_volume": vol or None,
+            "avg_difficulty": avg_diff,
+            "opportunity": round(opportunity) if opportunity else None,
             "owned_pieces": covered_by,
             "needs_content": covered_by == 0,
             "priority": pillar.get("priority") or 0,
         })
-    # rank: uncovered + high-priority + big clusters first
-    out.sort(key=lambda c: (0 if c["needs_content"] else 1, -(c["priority"]), -c["keyword_count"]))
+    # rank: uncovered first, then by OPPORTUNITY (volume x winnability) so we build the high-demand,
+    # RANKABLE clusters before hard/low-value ones; priority + size break ties (and lead when there's no
+    # volume/difficulty data yet, preserving prior behavior).
+    out.sort(key=lambda c: (0 if c["needs_content"] else 1, -(c.get("opportunity") or 0),
+                            -(c["priority"]), -c["keyword_count"]))
     uncovered = sum(1 for c in out if c["needs_content"])
     return {"clusters": out, "summary": {"keywords": len(kws), "topics": len(out), "uncovered": uncovered}}
 

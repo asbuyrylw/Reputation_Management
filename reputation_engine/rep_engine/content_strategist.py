@@ -471,7 +471,6 @@ def _assign_cadence(campaigns: list[dict], *, new_domain: bool = False) -> None:
     the initial dump touches several topics fast); the remainder drips ~DRIP_PER_WEEK per week,
     round-robin across campaigns, out to the horizon -- so content posts out gradually, not all at
     once. week -> target_date downstream, so the calendar shows the rollout with no FE change."""
-    drip = max(1, _DRIP_PER_WEEK - (1 if new_domain else 0))
     # BURST: pillar + first clusters of each campaign inside the front-load window.
     for ci, camp in enumerate(campaigns):
         start = min(_BURST_WEEKS, 1 + ci)                       # stagger campaign starts (wk1, wk2, ...)
@@ -485,6 +484,14 @@ def _assign_cadence(campaigns: list[dict], *, new_domain: bool = False) -> None:
         for q in queues:
             if q:
                 ordered.append(q.pop(0))
+    # Drip RATE derived from the research cadence AND the plan size: target the research band (HubSpot:
+    # 16+/mo ~ 3.5x traffic ~ 4/week) but raise it enough that a LARGE plan fills the whole year instead
+    # of draining the calendar by mid-year and leaving the back half empty (was a flat 2/week mislabeled
+    # 'research-backed'). A new domain drips one slower for indexation safety.
+    weeks_available = max(1, _HORIZON_WEEKS - _BURST_WEEKS)
+    needed_weekly = math.ceil(len(ordered) / weeks_available) if ordered else 1
+    research_ceiling = max(1, 4 - (1 if new_domain else 0))     # ~16/mo (3/wk for a new domain)
+    drip = max(1, min(research_ceiling, max(_DRIP_PER_WEEK - (1 if new_domain else 0), needed_weekly)))
     for k, pc in enumerate(ordered):
         pc["week"] = min(_HORIZON_WEEKS, _BURST_WEEKS + 1 + (k // drip))
     for camp in campaigns:
@@ -499,18 +506,32 @@ def _add_video_plan(campaigns: list[dict]) -> None:
     a pillar video), and scale the number of cluster videos by severity (1.._VIDEO_CLUSTERS). Generating
     one yields a script + SRT + VideoObject schema; rendering an MP4 is a separate on-demand click
     (on_click=True). Each video inherits its source piece's cadence week."""
+    try:
+        from . import content_research as _cr_v
+    except Exception:  # noqa: BLE001
+        _cr_v = None
     for camp in campaigns:
         pieces = camp.get("pieces") or []
         atom = camp.get("atomization") if isinstance(camp.get("atomization"), dict) else {}
         wants_video = bool(atom.get("video_script", True))   # default True (back-compat) unless LLM said no
         sev = camp.get("severity") or 0
-        if not wants_video and sev < 6:
+        # Same shared high-severity gate as the cluster floor (was a bare literal 6 that silently
+        # diverged from _CLUSTER_FLOOR_SEVERITY when the env knob was changed).
+        if not wants_video and sev < _CLUSTER_FLOOR_SEVERITY:
             continue   # strategist judged video not warranted AND not a high-severity topic -> no video
         pillar = next((p for p in pieces if p.get("role") == "pillar"), None)
-        # scale cluster videos by severity; when the LLM didn't want video but severity forced a pillar
-        # video, add no cluster videos (pillar-only).
-        n_clusters = max(1, min(_VIDEO_CLUSTERS, int(sev // 3))) if wants_video else 0
-        clusters = [p for p in pieces if p.get("role") == "cluster"][:n_clusters]
+        cluster_pieces = [p for p in pieces if p.get("role") == "cluster"]
+        # How many videos comes from RESEARCH (content_research.video_count_for: 1 flagship pillar video +
+        # videos for the high-video-intent share of clusters), scaled by severity -- not the old uncited
+        # sev//3 / _VIDEO_CLUSTERS. When the LLM didn't want video but severity forced one, pillar-only.
+        _sev_norm = min(1.0, sev / float(max(1, _CLUSTER_FLOOR_SEVERITY * 2)))
+        if wants_video and _cr_v is not None:
+            _vlo, _vhi, _ = _cr_v.video_count_for(len(cluster_pieces), severity=_sev_norm)
+            total_videos = _vhi if _sev_norm >= 0.66 else _vlo
+            n_clusters = max(0, int(total_videos) - 1)   # minus the 1 flagship pillar video
+        else:
+            n_clusters = 0
+        clusters = cluster_pieces[:n_clusters]
         vids = []
         for src in ([pillar] if pillar else []) + clusters:
             vids.append({
