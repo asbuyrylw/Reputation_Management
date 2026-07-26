@@ -122,8 +122,11 @@ def _competitor_surges(business_id: int, threshold: float = 0.15) -> list[tuple[
 
 
 def _avg_alignment(conn, run_id: int) -> Optional[float]:
+    # Exclude wrong-entity answers (canonical denominator) so an alignment-drop alert fires on the
+    # business's OWN answers, not diluted/masked by a same-named other entity.
     v = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s "
-                     "AND NOT COALESCE(failed,false)", (run_id,)).fetchone()["g"]
+                     "AND NOT COALESCE(failed,false) AND NOT COALESCE(entity_confusion,false)",
+                     (run_id,)).fetchone()["g"]
     return float(v) if v is not None else None
 
 
