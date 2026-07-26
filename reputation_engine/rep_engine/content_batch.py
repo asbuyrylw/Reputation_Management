@@ -174,6 +174,51 @@ def _local_spokes(business_id: int, query: str, target: int) -> list[dict]:
     return out[:target]
 
 
+def _avg_local_difficulty(business_id: int, query: str) -> Optional[float]:
+    """Average keyword_difficulty (0..100) of the local target keywords that overlap this geo query, or
+    None when no difficulty data exists (provider unpopulated / dormant). The competitiveness signal that
+    sizes how much content a local ranking needs."""
+    qtoks = _tu.word_set(query, stop=_STOPW)
+    if not qtoks:
+        return None
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT keyword, keyword_difficulty FROM target_keywords WHERE business_id=%s "
+                "AND keyword_difficulty IS NOT NULL", (business_id,)).fetchall()
+    except Exception:  # noqa: BLE001 -- no table / no data -> unknown competitiveness
+        return None
+    diffs = []
+    for r in rows:
+        if qtoks & _tu.word_set(r.get("keyword") or "", stop=_STOPW):
+            try:
+                diffs.append(float(r["keyword_difficulty"]))
+            except (TypeError, ValueError):
+                pass
+    return (sum(diffs) / len(diffs)) if diffs else None
+
+
+def local_spoke_target(business_id: int, query: str) -> int:
+    """How many SUPPORTING pieces a local pillar needs -- DYNAMIC, not a fixed cap. Starts at the
+    research band MIN (content_research.cluster_count_for) and scales UP toward the strong-pillar max by
+    the geo query's COMPETITIVENESS (avg keyword_difficulty of the matching local keywords): a harder
+    ranking needs MORE content to win, an easier one needs less ('if the data says fewer, go with
+    fewer'). Falls back to the band MIN when difficulty data is absent. Used by BOTH the plan path
+    (strategy_generator) and the batch path (gaps_for_business) so they can never diverge on local size."""
+    base, band_max = 8, 24
+    try:
+        from . import content_research as _cr
+        base = int(_cr.cluster_count_for("topical_authority")[0])          # 8
+        band_max = int(_cr.cluster_count_for("topical_authority", strong=True)[1])  # 24
+    except Exception:  # noqa: BLE001
+        pass
+    diff = _avg_local_difficulty(business_id, query)
+    if diff is None:
+        return base
+    # difficulty 0 -> base; 100 -> strong max; linear in between, clamped to the band.
+    return max(base, min(band_max, round(base + (max(0.0, min(100.0, diff)) / 100.0) * (band_max - base))))
+
+
 def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
     """Snap gap-model prompt strings (LLM-authored, often paraphrased) to the ACTUAL battery prompt
     text stored in `answers`, so the cluster query (`prompt = ANY`) matches instead of silently
@@ -254,7 +299,11 @@ def gaps_for_business(business_id: int) -> list[dict]:
             "gap_source": "local search ranking",
             "why": item.get("recommendation") or item.get("why") or "",
             "target_prompts": _match_prompts(q, weak),
-            "keywords": _local_keywords(business_id, q),   # the ranking keyword cluster for this geo goal
+            # The SUPPORTING-piece set for this geo program -- sized DYNAMICALLY by competitiveness via
+            # the SAME helper the plan path uses (local_spoke_target + _local_spokes), so the batch and
+            # the plan never diverge on local size, and real ranking keywords are backfilled with distinct
+            # local sub-topic angles to the research target (no fixed limit=3 / [:3] cap).
+            "keywords": [sp["topic"] for sp in _local_spokes(business_id, q, local_spoke_target(business_id, q))],
         })
     # Questions a rival wins -> competing owned content.
     for i, item in enumerate(gm.get("competitor_defense") or []):
@@ -540,9 +589,11 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
         except Exception as e:  # noqa: BLE001 -- collect per-piece errors, don't abort the batch
             log.warning("batch %d: %s piece failed: %s", batch_id, ct, e)
             errors.append({"content_type": ct, "reason": str(e)[:200]})
-    # Keyword-driven local program: a supporting blog per RANKING KEYWORD so the geo goal is backed by
-    # a content cluster (multiple ranking assets), not one page. Only local gaps carry `keywords`.
-    for kw in (gap.get("keywords") or [])[:3]:
+    # Keyword-driven local program: a supporting blog per RANKING KEYWORD/ANGLE so the geo goal is backed
+    # by a real content cluster, not one page. `keywords` is already sized dynamically by competitiveness
+    # (gaps_for_business -> local_spoke_target + _local_spokes), so NO fixed [:3] cap here — that was the
+    # batch-vs-plan divergence (batch capped at 3 while the plan built the research-sized program).
+    for kw in (gap.get("keywords") or []):
         if not kw or _norm(kw) == _norm(topic):
             continue
         wo = {"title": f"Blog: {kw}", "capability": "content_writing", "execution": "auto",
@@ -629,6 +680,13 @@ def generate_cluster(business_id: int, cluster: dict, *, max_spokes: Optional[in
     if not pillar_topic:
         raise ValueError("cluster has no pillar topic")
     spoke_topics = [s.strip() for s in (cluster.get("spokes") or []) if s and str(s).strip()][:max_spokes]
+    # Capture a REAL baseline (like generate_batch) so this cluster's AI-visibility lift is MEASURABLE and
+    # re-enters the strategist's content_performance loop. Was baseline={}/target_prompts=[], which made
+    # every cluster / recommended-topic program permanently unmeasurable (measure_batch's guard skipped it)
+    # -- the highest-VOLUME content earning zero gap-completion credit. Reuse a stamped gap_key from the
+    # caller (so a recommended topic can join its canonical gap) else the cluster: lineage key.
+    cluster_prompts = resolve_prompts(business_id, [pillar_topic] + spoke_topics)
+    cluster_baseline = capture_baseline(business_id, cluster_prompts)
     with db() as conn:
         biz_row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
         if not biz_row:
@@ -636,13 +694,15 @@ def generate_cluster(business_id: int, cluster: dict, *, max_spokes: Optional[in
         biz = dict(biz_row)
         pillar_slug = _cg._slugify(pillar_topic)
         spoke_plan = [{"title": st, "slug": _cg._slugify(st), "query": st} for st in spoke_topics]
+        _cluster_gk = (cluster.get("gap_key") or "").strip() or f"cluster:{pillar_slug}"
+        _cluster_src = (cluster.get("gap_source") or "").strip() or "topical_authority"
         b = conn.execute(
             "INSERT INTO content_batches (business_id, gap_key, gap_source, label, target_topic, "
             "target_prompts, content_types, baseline, status, created_by) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'generating',%s) RETURNING id",
-            (business_id, f"cluster:{pillar_slug}", "topical_authority",
-             f"Topic cluster: {pillar_topic}", pillar_topic, json.dumps([]),
-             json.dumps(["article"] + ["blog"] * len(spoke_plan)), json.dumps({}), created_by)).fetchone()
+            (business_id, _cluster_gk, _cluster_src,
+             f"Topic cluster: {pillar_topic}", pillar_topic, json.dumps(cluster_prompts),
+             json.dumps(["article"] + ["blog"] * len(spoke_plan)), json.dumps(cluster_baseline), created_by)).fetchone()
         batch_id = b["id"]
         conn.commit()
 

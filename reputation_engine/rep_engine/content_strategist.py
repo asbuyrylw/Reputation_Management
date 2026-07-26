@@ -87,6 +87,14 @@ _VIDEO_CLUSTERS = int(os.getenv("STRATEGIST_VIDEO_CLUSTERS", "3"))
 _INTENT_WEIGHT = {"commercial": 3, "transactional": 3, "investigational": 3,
                   "local": 2, "navigational": 2, "informational": 1, "unknown": 1}
 
+# Fold the 6-value keyword-intent taxonomy onto the 4-value CAMPAIGN taxonomy so demand from
+# investigational / navigational / unknown keywords isn't silently DROPPED from campaign severity (the
+# campaign only carries informational|commercial|transactional|local). investigational = research-
+# before-purchase -> commercial funnel; navigational/unknown -> informational.
+_INTENT_TO_CAMPAIGN = {"commercial": "commercial", "transactional": "transactional",
+                       "investigational": "commercial", "informational": "informational",
+                       "navigational": "informational", "local": "local", "unknown": "informational"}
+
 _STOP = {"the", "a", "an", "of", "for", "in", "on", "to", "and", "or", "best", "near", "me",
          "top", "how", "what", "is", "are", "with", "your", "you", "my", "do", "does", "vs",
          "why", "who", "page", "overview"}
@@ -202,19 +210,38 @@ def _type_performance(business_id: int) -> list:
         from .db import db
     except ImportError:  # pragma: no cover
         from db import db  # type: ignore
+    # Grades come from BOTH stores: content_drafts (text) AND rich_media_drafts (podcast/video/slide/
+    # research_brief/deep_content). Reading only content_drafts made the score->mix loop one-sided --
+    # rich media was graded but its grade never biased the plan, so the strategist could never learn that
+    # (e.g.) video is highly citable for this tenant. Merge both, dormant-safe (rich_media may not exist).
+    agg: dict = {}
+
+    def _fold(pairs):
+        for ct, g in pairs:
+            if not ct or g is None:
+                continue
+            a = agg.setdefault(ct, [0.0, 0])
+            a[0] += float(g); a[1] += 1
+
     try:
         with db() as conn:
-            rows = conn.execute(
-                "SELECT content_type, round(avg(geo_score)::numeric, 1) AS avg_geo, count(*) AS n "
-                "FROM content_drafts WHERE business_id=%s AND geo_score IS NOT NULL "
-                "AND content_type IS NOT NULL GROUP BY content_type ORDER BY avg_geo DESC NULLS LAST",
-                (business_id,)).fetchall()
-        return [{"content_type": r["content_type"],
-                 "avg_geo": float(r["avg_geo"]) if r["avg_geo"] is not None else None, "n": r["n"]}
-                for r in rows][:10]
+            _fold((r["content_type"], r["geo_score"]) for r in conn.execute(
+                "SELECT content_type, geo_score FROM content_drafts WHERE business_id=%s "
+                "AND geo_score IS NOT NULL AND content_type IS NOT NULL", (business_id,)).fetchall())
     except Exception as e:  # noqa: BLE001
-        log.warning("strategist: type performance unavailable (%s)", e)
+        log.warning("strategist: type performance (content_drafts) unavailable (%s)", e)
         return []
+    try:
+        with db() as conn:
+            _fold((r["asset_type"], r["geo_score"]) for r in conn.execute(
+                "SELECT asset_type, geo_score FROM rich_media_drafts WHERE business_id=%s "
+                "AND geo_score IS NOT NULL AND asset_type IS NOT NULL", (business_id,)).fetchall())
+    except Exception:  # noqa: BLE001 -- rich_media_drafts dormant/absent -> text grades only
+        pass
+    out = [{"content_type": ct, "avg_geo": round(s / n, 1) if n else None, "n": n}
+           for ct, (s, n) in agg.items()]
+    out.sort(key=lambda x: (x["avg_geo"] is None, -(x["avg_geo"] or 0)))
+    return out[:10]
 
 
 def _signals(business_id: int) -> dict:
@@ -318,55 +345,91 @@ def _norm_title(s: str) -> str:
     return " ".join(sorted(_tokens(s)))
 
 
-def _floor_clusters(camp: dict, raw: list[dict]) -> list[dict]:
-    """Enforce the research cluster FLOOR on a high-severity campaign: a hub meant to rank / crowd out a
-    negative needs ~8-12 supporting pieces (content_research.cluster_count_for) to build topical
-    authority. If the LLM returned fewer, backfill -- FIRST from the campaign's own uncovered
-    target_queries (grounded in the gap model), THEN from distinct sub-topic angles. Low-severity or
-    narrow campaigns are returned unchanged, honoring 'if the data says fewer, go with fewer'."""
+def _floor_target(camp: dict) -> int:
+    """The cluster FLOOR for a campaign, SCALED BY SEVERITY: a routine high-leverage hub earns the band
+    MIN (~8), while a very high-severity campaign (a large negative to bury / high demand) scales toward
+    the STRONG-pillar band (up to ~24) -- the research says a strong pillar anchors 20-30. Below the
+    floor-severity gate the caller doesn't backfill at all ('if the data says fewer, go with fewer')."""
     try:
         from . import content_research as _cr
-        floor = int(_cr.cluster_count_for("topical_authority")[0])   # min of the band (8)
+        lo = int(_cr.cluster_count_for("topical_authority")[0])            # 8
+        strong_hi = int(_cr.cluster_count_for("topical_authority", strong=True)[1])  # 24
     except Exception:  # noqa: BLE001
-        floor = 8
+        lo, strong_hi = 8, 24
     sev = camp.get("_severity") or 0
-    if sev < _CLUSTER_FLOOR_SEVERITY or len(raw) >= floor:
+    if sev <= _CLUSTER_FLOOR_SEVERITY:
+        return lo
+    # scale lo -> strong_hi as severity goes from the floor gate to ~2x it, clamped.
+    frac = min(1.0, (sev - _CLUSTER_FLOOR_SEVERITY) / float(max(1, _CLUSTER_FLOOR_SEVERITY)))
+    return int(max(lo, min(strong_hi, round(lo + frac * (strong_hi - lo)))))
+
+
+# Backfilled clusters cycle a DISTINCT-FORMAT mix (not 100% blog) so the most-backfilled = highest-
+# severity campaigns still get format variety the research rewards (FAQ wins snippets, article carries
+# original data); _flatten_pieces re-biases toward the tenant's best-scoring type when known.
+_BACKFILL_TYPES = ["blog", "faq", "article"]
+
+
+def _floor_clusters(camp: dict, raw: list[dict], best_type: str = "") -> list[dict]:
+    """Enforce the SEVERITY-SCALED research cluster floor on a high-severity campaign (see _floor_target):
+    a hub meant to rank / crowd out a negative needs the research-sized supporting set to build topical
+    authority. If the LLM returned fewer, backfill -- FIRST from the campaign's own uncovered
+    target_queries (grounded in the gap model), THEN from distinct sub-topic angles -- across a DISTINCT
+    content-type mix (led by the tenant's best-scoring type when known), NOT blog-only. Low-severity or
+    narrow campaigns are returned unchanged, honoring 'if the data says fewer, go with fewer'."""
+    sev = camp.get("_severity") or 0
+    target = _floor_target(camp)
+    if sev <= _CLUSTER_FLOOR_SEVERITY or len(raw) >= target:
         return raw
+    # Type mix for backfilled pieces: lead with the tenant's demonstrably-best-scoring type (from
+    # type_performance) so backfill isn't blindly blog; then the distinct-format fallbacks.
+    mix = ([best_type] if best_type and best_type in _TYPE_FRAME_TYPES else []) + \
+          [t for t in _BACKFILL_TYPES if t != best_type]
     out = list(raw)
     seen = {_norm_title(c.get("title")) for c in out if c.get("title")}
     topic = camp.get("topic") or (camp.get("pillar") or {}).get("title") or ""
     intent = (camp.get("intent") or "informational").lower()
+
+    def _ctype():
+        return mix[(len(out) - len(raw)) % len(mix)] if mix else "blog"
+
     # 1) grounded backfill: the campaign's own target_queries not yet turned into a cluster
     for q in (camp.get("target_queries") or []):
-        if len(out) >= floor:
+        if len(out) >= target:
             break
         q = (str(q) or "").strip()
         n = _norm_title(q)
         if not n or n in seen:
             continue
         seen.add(n)
-        out.append({"title": q, "content_type": "blog", "intent": intent, "target_query": q,
+        out.append({"title": q, "content_type": _ctype(), "intent": intent, "target_query": q,
                     "why": "Answers a specific weak AI query this topic must win.", "_backfilled": True})
     # 2) distinct sub-topic angles from the pillar topic (only if still short)
     for tpl in _CLUSTER_ANGLES:
-        if len(out) >= floor:
+        if len(out) >= target:
             break
         title = tpl.format(t=topic)
         n = _norm_title(title)
         if not n or n in seen:
             continue
         seen.add(n)
-        out.append({"title": title, "content_type": "blog", "intent": intent, "target_query": title,
+        out.append({"title": title, "content_type": _ctype(), "intent": intent, "target_query": title,
                     "why": f"Supporting piece that builds topical authority for '{topic}'.",
                     "_backfilled": True})
     return out
 
 
-def _flatten_pieces(camp: dict, rank: int) -> list[dict]:
+# The content types _flatten_pieces / the generator can actually frame + produce (guards a bogus
+# best_type from leaking into a backfill).
+_TYPE_FRAME_TYPES = {"blog", "faq", "article", "white_paper", "local_page", "landing_page"}
+
+
+def _flatten_pieces(camp: dict, rank: int, best_type: str = "") -> list[dict]:
     """Turn one ranked campaign into an ordered list of content PIECES (pillar, clusters, comparison)
     with a per-piece cadence WEEK (basic burst-then-drip for Phase 1; Phase 2 extends to a full
     52-week calendar). Higher-ranked campaigns roll out earlier (the 'initial dump' front-load), then
-    a campaign's clusters drip ~2/week after its pillar."""
+    a campaign's clusters drip ~2/week after its pillar. `best_type` = the tenant's best-scoring content
+    type (from type_performance) so backfilled clusters lead with what's demonstrably citable here."""
     intent = (camp.get("intent") or "informational").lower()
     is_local = intent == "local"
     cap = "local_content_creation" if is_local else "content_writing"
@@ -378,10 +441,13 @@ def _flatten_pieces(camp: dict, rank: int) -> list[dict]:
                    "content_type": pillar.get("content_type") or "article",
                    "target_query": camp.get("topic") or p_title,
                    "why": pillar.get("why") or camp.get("why") or ""})
-    # clusters drip after the pillar, ~2 per week -- LLM clusters first, then the severity-aware FLOOR
-    # backfill so a high-leverage hub reaches the research-backed 8-12 supporting pieces.
+    # clusters drip after the pillar, ~2 per week -- LLM clusters first, then the SEVERITY-SCALED FLOOR
+    # backfill so a high-leverage hub reaches its research-sized supporting set (up to a strong pillar).
+    # The ceiling rises with the floor target so a strong pillar's clusters aren't clipped back to 12,
+    # while still guarding a hallucinated 40-cluster LLM response.
     raw_clusters = [c for c in (camp.get("clusters") or []) if isinstance(c, dict) and c.get("title")]
-    for i, cl in enumerate(_floor_clusters(camp, raw_clusters)[:_MAX_CLUSTERS]):
+    _ceiling = max(_MAX_CLUSTERS, _floor_target(camp))
+    for i, cl in enumerate(_floor_clusters(camp, raw_clusters, best_type=best_type)[:_ceiling]):
         title = cl.get("title")
         if not title:
             continue
@@ -460,10 +526,11 @@ def _add_video_plan(campaigns: list[dict]) -> None:
 
 
 def _postprocess(model: dict, gap: dict, *, new_domain: bool = False,
-                 demand_by_intent: Optional[dict] = None) -> dict:
+                 demand_by_intent: Optional[dict] = None, best_type: str = "") -> dict:
     """Deterministic guards + enrichment over the raw LLM plan: clamp counts, rank campaigns by
     severity (SoV-gap x value), assign each campaign a stable id + cadence-weeked pieces, and cap
-    total pieces. Returns the finished ContentStrategy the planner materializes."""
+    total pieces. Returns the finished ContentStrategy the planner materializes. `best_type` = the
+    tenant's best-scoring content type (type_performance) so backfilled clusters lead with it."""
     campaigns = model.get("campaigns")
     if not isinstance(campaigns, list) or not campaigns:
         return {}
@@ -476,7 +543,7 @@ def _postprocess(model: dict, gap: dict, *, new_domain: bool = False,
     total = 0
     for rank, c in enumerate(campaigns):
         cid = f"C{rank + 1:02d}"
-        pieces = _flatten_pieces(c, rank)
+        pieces = _flatten_pieces(c, rank, best_type=best_type)
         if not pieces:
             continue
         if total + len(pieces) > _MAX_TOTAL_PIECES:
@@ -592,9 +659,20 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
     # new_domain drips slower (indexation-safety): a business with almost no published inventory is
     # treated as new, so the cadence front-loads less aggressively. Proxy = few existing pieces.
     # demand_by_intent feeds real search volume into campaign severity so high-demand gaps lead.
-    _demand = {(g.get("intent") or "").lower(): int(g.get("total_search_volume") or 0)
-               for g in _sig.get("keyword_intents", [])}
-    strategy = _postprocess(model, gap, new_domain=(len(_existing) < 3), demand_by_intent=_demand)
+    # Bucket keyword demand into the CAMPAIGN taxonomy (folding investigational/navigational/unknown) so
+    # no intent's search volume is dropped from severity ranking.
+    _demand: dict = {}
+    for g in _sig.get("keyword_intents", []):
+        _ci = _INTENT_TO_CAMPAIGN.get((g.get("intent") or "").lower(), "informational")
+        _demand[_ci] = _demand.get(_ci, 0) + int(g.get("total_search_volume") or 0)
+    # The tenant's demonstrably-best-scoring content type (from type_performance, now including rich
+    # media) leads cluster BACKFILL so the highest-severity campaigns aren't padded blindly with blogs
+    # -- the score->plan loop reaches the deterministic backfill, not just the LLM prompt.
+    _tp = _sig.get("type_performance") or []
+    _best_type = next((t.get("content_type") for t in _tp
+                       if t.get("avg_geo") is not None and (t.get("n") or 0) >= 2), "")
+    strategy = _postprocess(model, gap, new_domain=(len(_existing) < 3),
+                            demand_by_intent=_demand, best_type=_best_type)
     if strategy.get("campaigns"):
         log.info("strategist: business %s -> %d campaigns, %d pieces",
                  business_id, strategy["counts"]["campaigns"], strategy["counts"]["pieces"])

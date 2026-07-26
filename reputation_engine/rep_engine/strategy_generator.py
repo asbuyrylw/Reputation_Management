@@ -628,14 +628,6 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         from . import content_batch as _cb_local
     except Exception:  # noqa: BLE001 -- keyword enrichment is best-effort; the pillar still emits
         _cb_local = None
-    # How many SUPPORTING pieces a local pillar needs comes from the research KB (pillar + N clusters),
-    # NOT from the seed-keyword count -- so a page-1 program is sized to actually rank + crowd out the
-    # negative narrative. Falls back to a sane floor if the KB is unavailable.
-    try:
-        from . import content_research as _cr_local
-        _local_spoke_target = _cr_local.cluster_count_for("topical_authority")[0]  # min of the band (8)
-    except Exception:  # noqa: BLE001
-        _local_spoke_target = 8
     for i, g in enumerate(gap.get("local_seo_gaps", []) or []):
         q = g.get("query", f"local query {i + 1}")
         rec = g.get("recommendation", "Create geo-specific content + strengthen GBP / local citations.")
@@ -652,14 +644,14 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             f"{rec} Current position: {g.get('current_rank', 'off page 1')}.{_AEO_CHECKLIST}", 4,
             gap_source="local search ranking", why=why_l, source_query=q, gap_key=_local_gk,
             campaign={**_lmeta, "role": "pillar", "content_type": "local_page", "publish_week": 4, "ordinal": 0})
-        # SPOKES: supporting blogs sized to the RESEARCH target (pillar + N clusters), NOT to the
-        # seed-keyword count -- real ranking keywords first, then distinct local sub-topic angles to
-        # reach the target, cross-linked up to the local page. This is what makes the program big enough
-        # to rank + crowd out the negative instead of "check the box" with one or two posts.
+        # SPOKES: supporting blogs sized DYNAMICALLY by competitiveness via the SAME shared helper the
+        # batch path uses (content_batch.local_spoke_target + _local_spokes) -- real ranking keywords
+        # first, then distinct local sub-topic angles to the target. A harder geo ranking earns more
+        # content; an easier one fewer. Plan and batch now compute local size identically (no divergence).
         spokes_l: list = []
         if _cb_local is not None and _biz_id is not None:
             try:
-                spokes_l = _cb_local._local_spokes(_biz_id, q, _local_spoke_target) or []
+                spokes_l = _cb_local._local_spokes(_biz_id, q, _cb_local.local_spoke_target(_biz_id, q)) or []
             except Exception:  # noqa: BLE001
                 spokes_l = []
         for j, sp in enumerate(spokes_l):
