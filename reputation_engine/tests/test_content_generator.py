@@ -41,11 +41,16 @@ def test_generate_creates_pending_review_draft(fresh_schema, monkeypatch):
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
+    # This test isolates the QA-score/compliance ROUTING (high score + compliant -> pending_review).
+    # Neutralize the orthogonal citation-readiness HOLD gate so a deliberately trivial test body isn't
+    # 'held' for being un-citable (that gate has its own coverage). Mocks take *a,**k because the real
+    # orchestrator wrappers now accept bill=/max_tokens= (downstream graders pass them).
+    monkeypatch.setattr(cg, "CITATION_READY_MIN", 0)
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": "# How We Help Families\n\nQuality content here.")
+                        lambda system, user, *a, **k: "# How We Help Families\n\nQuality content here.")
     # high score, compliant -> should land pending_review
     monkeypatch.setattr(cg.llm, "orchestrator_json",
-                        lambda system, user, tier="full": {"score": 0.9, "accuracy": True, "answers_query": True,
+                        lambda system, user, *a, **k: {"score": 0.9, "accuracy": True, "answers_query": True,
                                               "structure": True, "tone": True, "issues": [], "fixes": []}
                         if "QA reviewer" in system else {"pass": True, "flags": []})
 
@@ -59,16 +64,16 @@ def test_generate_creates_pending_review_draft(fresh_schema, monkeypatch):
 
 
 @requires_db
-def test_low_quality_triggers_revision_then_needs_fix(fresh_schema, monkeypatch):
+def test_low_quality_triggers_revision_then_held(fresh_schema, monkeypatch):
     conn = fresh_schema
     from rep_engine import content_generator as cg
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": "draft body")
+                        lambda system, user, *a, **k: "draft body")
     # eval always returns low score with fixes -> exhausts revisions -> needs_fix
-    def fake_json(system, user, tier="full"):
+    def fake_json(system, user, *a, **k):
         if "QA reviewer" in system:
             return {"score": 0.3, "fixes": ["add specifics"], "issues": ["too thin"]}
         return {"pass": True, "flags": []}
@@ -76,20 +81,21 @@ def test_low_quality_triggers_revision_then_needs_fix(fresh_schema, monkeypatch)
 
     created = cg.generate(bid)
     d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
-    assert d["status"] == "needs_fix"
+    # 'needs_fix' is folded into 'held' so the review queue only ever holds clean drafts.
+    assert d["status"] == "held"
     assert d["revision_count"] == cg.MAX_REVISIONS  # bounded auto-revision ran
 
 
 @requires_db
-def test_compliance_failure_sets_needs_fix(fresh_schema, monkeypatch):
+def test_compliance_failure_is_held(fresh_schema, monkeypatch):
     conn = fresh_schema
     from rep_engine import content_generator as cg
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": "Guaranteed 20% returns!")
-    def fake_json(system, user, tier="full"):
+                        lambda system, user, *a, **k: "Guaranteed 20% returns!")
+    def fake_json(system, user, *a, **k):
         if "QA reviewer" in system:
             return {"score": 0.9, "fixes": []}
         return {"pass": False, "flags": ["implied guaranteed returns"]}
@@ -97,7 +103,8 @@ def test_compliance_failure_sets_needs_fix(fresh_schema, monkeypatch):
 
     created = cg.generate(bid)
     d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
-    assert d["status"] == "needs_fix"
+    # A draft that fails compliance is HELD (needs_fix folded into held) — kept out of the review queue.
+    assert d["status"] == "held"
     assert d["compliance_pass"] is False
     assert "implied guaranteed returns" in json.dumps(d["compliance_flags"])
 
@@ -151,7 +158,9 @@ def test_approve_after_edit_promotes_edited_content(fresh_schema):
     ).fetchone()["id"]
     conn.commit()
     cg.update_draft(did, title="Edited title", body="Edited body", business_id=bid)
-    cg.approve(did, reviewer="Logan")
+    # A clean edit leaves compliance_pass NULL ('not screened yet'), so approve() now requires a
+    # principal sign-off (override_reason) to promote it — mirror that real contract here.
+    cg.approve(did, reviewer="Logan", override_reason="manual editorial review OK")
     d = conn.execute("SELECT title, body, published_asset_id FROM content_drafts WHERE id=%s", (did,)).fetchone()
     assert d["title"] == "Edited title" and d["body"] == "Edited body"
     # the asset carries the EDITED title (approve snapshots title -> assets)
@@ -217,10 +226,12 @@ def test_eval_malformed_routes_to_human_not_needs_fix(fresh_schema, monkeypatch)
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
+    # Isolate the eval-routing behavior from the orthogonal citation-readiness hold gate.
+    monkeypatch.setattr(cg, "CITATION_READY_MIN", 0)
     monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": "decent content")
+                        lambda system, user, *a, **k: "decent content")
 
-    def fake_json(system, user, tier="full"):
+    def fake_json(system, user, *a, **k):
         if "QA reviewer" in system:
             return {"score": "high"}          # malformed -> EvalResult validation fails
         return {"pass": True, "flags": []}
@@ -282,31 +293,38 @@ def test_deterministic_compliance_overrides_llm_pass(fresh_schema, monkeypatch):
 
 @requires_db
 def test_keep_best_persists_highest_scoring_revision(fresh_schema, monkeypatch):
-    """A later revision can score LOWER than an earlier one; the persisted draft
-    must be the highest-scoring candidate seen across rounds, not merely the last."""
+    """A later revision can score LOWER than an earlier one; the persisted draft must be the
+    highest-scoring candidate seen across rounds, not merely the last. The QA score is keyed to the
+    body TEXT (not call order), so the test is robust to the extra pre-draft LLM call (outline) that
+    would otherwise shift which round is 'best'. The downstream keyword / GEO / citation passes are
+    neutralized so this test isolates ONLY the QA keep-best behavior it is named for."""
     import itertools
     conn = fresh_schema
     from rep_engine import content_generator as cg
     bid = _seed_business(conn)
     _seed_workorder(conn, bid)
 
-    # distinct body per generate/revise call so we can tell which one is kept
-    bodies = itertools.chain(["ROUND1 original draft", "ROUND2 BEST draft"],
-                             (f"ROUND{n} worse draft" for n in itertools.count(3)))
-    monkeypatch.setattr(cg.llm, "orchestrator_text",
-                        lambda system, user, max_tokens=2200, tier="full": next(bodies))
-    # eval scores climb then fall: 0.50 -> 0.70 -> 0.40...  all < 0.75 with fixes so
-    # the loop runs to MAX_REVISIONS; round 2 (0.70) is the best. compliance passes.
-    scores = itertools.chain([0.50, 0.70], itertools.repeat(0.40))
-    def fake_json(system, user, tier="full"):
-        if "QA reviewer" in system:
-            return {"score": next(scores), "fixes": ["tighten"]}
+    monkeypatch.setattr(cg, "CITATION_READY_MIN", 0)                                  # no citation-hold revise
+    monkeypatch.setattr(cg, "_keyword_coverage", lambda body, grounding: {
+        "covered": [], "missing": [], "important_missing": [], "rate": None})         # no keyword-coverage revise
+    monkeypatch.setattr(cg, "_maximize_geo", lambda body, *a, **k: body)              # no GEO-maximize revise
+
+    # One body carries the PEAK marker; the QA scorer gives that body 0.70 and every other 0.40 -- all
+    # < QUALITY_THRESHOLD (0.75) so the loop runs to MAX_REVISIONS. PEAK sits at position 3 so it lands
+    # inside the scored window regardless of how many pre-draft (outline) calls consume earlier bodies.
+    bodies = itertools.chain(["draft one", "draft two", "draft PEAK three", "draft four", "draft five"],
+                             (f"draft worse {n}" for n in itertools.count(6)))
+    monkeypatch.setattr(cg.llm, "orchestrator_text", lambda system, user, *a, **k: next(bodies))
+
+    def fake_json(system, user, *a, **k):
+        if "QA reviewer" in system:                     # _evaluate embeds the draft body in `user`
+            return {"score": 0.70 if "PEAK" in user else 0.40, "fixes": ["tighten"]}
         return {"pass": True, "flags": []}
     monkeypatch.setattr(cg.llm, "orchestrator_json", fake_json)
 
     created = cg.generate(bid)
     d = conn.execute("SELECT * FROM content_drafts WHERE id=%s", (created[0],)).fetchone()
     assert float(d["quality_score"]) == pytest.approx(0.70)   # the best, NOT the last (0.40)
-    assert "ROUND2 BEST" in d["body"]                          # best body kept
-    assert "worse draft" not in d["body"]
+    assert "PEAK" in d["body"]                                 # best body kept
+    assert "worse" not in d["body"]
     assert d["revision_count"] == cg.MAX_REVISIONS             # revisions ATTEMPTED, unchanged
