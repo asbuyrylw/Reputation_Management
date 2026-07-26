@@ -247,9 +247,14 @@ def measure_all(business_id: int) -> dict:
     """Re-measure every batch that has an audit newer than its baseline. Called after an audit
     completes so impact refreshes automatically. Best-effort per batch."""
     with db() as conn:
+        # Include 'generating': ensure_impact_batch (the MAINLINE generate_drafts / agent / in-cycle
+        # rich-media paths) opens its baseline batch as 'generating' and nothing promotes it, so those
+        # batches were captured then NEVER measured -- impact stuck None forever, silently defeating the
+        # close-the-loop-for-ALL-content feature. A truly empty 'generating' batch just measures as
+        # pending (published_total=0), harmless, and this also rescues already-stranded batches.
         batches = conn.execute(
             "SELECT id FROM content_batches WHERE business_id=%s AND status IN "
-            "('drafted','measured') ORDER BY id", (business_id,)).fetchall()
+            "('generating','drafted','measured') ORDER BY id", (business_id,)).fetchall()
     measured, pending, errors = [], [], []
     for b in batches:
         try:

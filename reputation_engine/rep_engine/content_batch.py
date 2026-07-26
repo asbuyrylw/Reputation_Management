@@ -499,16 +499,23 @@ def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
 
 
 def _cluster_metrics(conn, business_id: int, run_id: int, prompts: list[str]) -> dict:
-    """Aggregate AI-visibility metrics for a run over a set of prompts (empty = whole run)."""
+    """Aggregate AI-visibility metrics for a run over a set of prompts (empty = whole run). goal_alignment
+    EXCLUDES wrong-entity answers via the SAME shared predicate every headline surface uses, so a batch's
+    alignment_delta / gap_pct / recommendation share the ONE denominator the reputation score is on (a
+    name-colliding tenant's 'different company' answers no longer distort batch credit)."""
+    try:
+        from .answer_flags import NOT_WRONG_ENTITY_SQL as _NWE
+    except ImportError:  # pragma: no cover
+        from answer_flags import NOT_WRONG_ENTITY_SQL as _NWE  # type: ignore
     if prompts:
         row = conn.execute(
-            "SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) align, "
+            f"SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) FILTER (WHERE {_NWE}) align, "
             "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
             "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false) AND prompt = ANY(%s)",
             (business_id, run_id, prompts)).fetchone()
     else:
         row = conn.execute(
-            "SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) align, "
+            f"SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) FILTER (WHERE {_NWE}) align, "
             "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
             "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false)",
             (business_id, run_id)).fetchone()

@@ -684,13 +684,18 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
         return {}
     # new_domain drips slower (indexation-safety): a business with almost no published inventory is
     # treated as new, so the cadence front-loads less aggressively. Proxy = few existing pieces.
-    # demand_by_intent feeds real search volume into campaign severity so high-demand gaps lead.
-    # Bucket keyword demand into the CAMPAIGN taxonomy (folding investigational/navigational/unknown) so
-    # no intent's search volume is dropped from severity ranking.
+    # demand_by_intent feeds real search volume into campaign severity so high-demand gaps lead. Bucket
+    # keyword demand into the CAMPAIGN taxonomy (folding investigational/navigational/unknown) so no
+    # intent's volume is dropped, and WEIGHT it by winnability (1 - avg_difficulty/100) -- the same
+    # opportunity curve topical_authority uses -- so the deterministic re-rank leads with high-volume,
+    # RANKABLE gaps instead of unwinnable head terms (rule 8). Unknown difficulty -> neutral 0.5 weight.
     _demand: dict = {}
     for g in _sig.get("keyword_intents", []):
         _ci = _INTENT_TO_CAMPAIGN.get((g.get("intent") or "").lower(), "informational")
-        _demand[_ci] = _demand.get(_ci, 0) + int(g.get("total_search_volume") or 0)
+        _vol = int(g.get("total_search_volume") or 0)
+        _diff = g.get("avg_difficulty")
+        _winnability = (1.0 - max(0.0, min(100.0, float(_diff))) / 100.0) if _diff is not None else 0.5
+        _demand[_ci] = _demand.get(_ci, 0) + round(_vol * _winnability)
     # The tenant's demonstrably-best-scoring content type (from type_performance, now including rich
     # media) leads cluster BACKFILL so the highest-severity campaigns aren't padded blindly with blogs
     # -- the score->plan loop reaches the deterministic backfill, not just the LLM prompt.

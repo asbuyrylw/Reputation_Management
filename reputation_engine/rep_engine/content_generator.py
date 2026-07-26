@@ -817,9 +817,10 @@ def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict
     # The model reliably writes ~2x its target length, and max_tokens is a CAP (no cost unless used),
     # so size generously: ~2.5 tokens/target-word + a high floor, clamped. Undersizing truncates the
     # draft mid-sentence; oversizing is free.
+    # The token CAP must track the SAME length the outline + prompt are driven by, or a competitive draft
+    # planned/prompted at the SERP-benchmark length truncates mid-draft. Precedence mirrors _gen_prompt/
+    # _outline: SERP benchmark (real ranking-page length) > research word_count > module constant.
     target_words = _BRIEF_WORDS.get(asset_type, 1200)
-    # Prefer the research-backed length so the token CAP tracks the same evidence-driven target the
-    # prompt asks for (a cap, not a cost — no spend unless used). Falls back to the module constant.
     try:
         from . import content_research as _cr
         _rw, _ = _cr.word_count_for(asset_type)
@@ -827,7 +828,11 @@ def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict
             target_words = _rw
     except Exception:  # noqa: BLE001
         pass
-    max_tokens = max(3200, min(int(target_words * 2.5) + 800, 6500))
+    _serp_words = (grounding or {}).get("serp_target_words")
+    if isinstance(_serp_words, (int, float)) and _serp_words > 0:
+        target_words = max(target_words, int(_serp_words))
+    # Raise the clamp ceiling so a long SERP/pillar target isn't itself capped short (~2.5 tok/word).
+    max_tokens = max(3200, min(int(target_words * 2.5) + 800, 9000))
     return llm.orchestrator_text(_gen_system(license_policy, regulated_financial),
                                  _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
                                  max_tokens=max_tokens, tier=tier)
