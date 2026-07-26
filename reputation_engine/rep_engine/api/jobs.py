@@ -206,12 +206,15 @@ def _run_generate_clusters(business_id: int, args: dict):
     generate just that pillar+spoke program instead of the whole uncovered set."""
     cb = _imp("content_batch")
     topic = (args.get("topic") or "").strip()
+    # max_spokes absent -> None -> content_batch sizes the hub to the research target (~12), not a
+    # check-the-box 4. An explicit caller value still wins.
+    max_spokes = args.get("max_spokes")
     if topic:
         return cb.generate_cluster(business_id, {"pillar": topic, "spokes": args.get("spokes") or []},
-                                   max_spokes=args.get("max_spokes") or 4,
+                                   max_spokes=max_spokes,
                                    created_by=args.get("requested_by"))
     return cb.generate_clusters(business_id, max_clusters=args.get("max_clusters"),
-                                max_spokes=args.get("max_spokes") or 4,
+                                max_spokes=max_spokes,
                                 created_by=args.get("requested_by"))
 
 

@@ -137,10 +137,17 @@ def by_intent(business_id: int) -> dict:
 
 
 def next_to_write(business_id: int, limit: int = 5) -> list[dict]:
-    """The highest-leverage uncovered topics to write next (pillar-first)."""
+    """The highest-leverage uncovered topics to write next (pillar-first). Each carries its supporting
+    spokes up to the research target (a hub needs ~8-12 supporting pieces to build topical authority),
+    so 'produce this topic as a program' generates a real hub -- not a pillar + a couple of spokes."""
+    try:
+        from . import content_research as _cr
+        _spoke_cap = int(_cr.cluster_count_for("topical_authority")[1])   # 12
+    except Exception:  # noqa: BLE001
+        _spoke_cap = 12
     cs = clusters(business_id)["clusters"]
     return [{"topic": c["topic"], "covers_keywords": c["keyword_count"],
-             "spokes": c["spokes"][:6], "why": "No owned content covers this topic cluster yet."}
+             "spokes": c["spokes"][:_spoke_cap], "why": "No owned content covers this topic cluster yet."}
             for c in cs if c["needs_content"]][:limit]
 
 

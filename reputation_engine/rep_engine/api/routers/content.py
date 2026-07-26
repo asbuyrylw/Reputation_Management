@@ -576,8 +576,8 @@ class BatchGenerateRequest(BaseModel):
 
 
 class ClusterGenerateRequest(BaseModel):
-    max_clusters: Optional[int] = 1          # topic clusters (pillar+spokes) to build; default 1 (a hub is ~5 pieces)
-    max_spokes: Optional[int] = 4            # spoke pages per pillar
+    max_clusters: Optional[int] = 1          # topic clusters (pillar+spokes) to build; default 1 (a hub is a program)
+    max_spokes: Optional[int] = None         # spoke pages per pillar; None -> research target (~12), not a check-the-box cap
     topic: Optional[str] = None              # produce ONE specific recommended topic as a pillar+spokes program
     spokes: Optional[list[str]] = None       # the supporting spokes for that topic (from next_to_write)
 

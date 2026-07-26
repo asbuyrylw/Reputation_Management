@@ -168,7 +168,9 @@ def _system_prompt(profile: dict) -> str:
     research = ""
     try:
         from . import content_research as _cr
-        rb = _cr.research_block(limit=14)
+        # broad=True: the strategist plans the WHOLE mix, so it needs word-count-by-intent + which
+        # content types move which channel + GEO tactics, not just global claims.
+        rb = _cr.research_block(limit=14, broad=True)
         if rb:
             research = ("\n\nUse this evidence to justify HOW MUCH content, WHICH types, and WHAT structure "
                         "each campaign needs (cite it in the `why` where relevant):\n" + rb)
@@ -287,6 +289,79 @@ def _campaign_severity(camp: dict, gap: dict, demand_by_intent: Optional[dict] =
     return covers * 2.0 + intent_w + pri_bonus * 0.5 + demand_bonus
 
 
+# A campaign this severe (or more) is one meant to WIN a ranking / overwhelm a negative narrative, so it
+# earns a full topical-authority hub -- we backfill it to the research cluster FLOOR when the LLM
+# under-produces. Below this, respect the LLM's smaller count ("if the data says fewer, go with fewer").
+_CLUSTER_FLOOR_SEVERITY = int(os.getenv("STRATEGIST_CLUSTER_FLOOR_SEVERITY", "6"))
+
+# Distinct generic sub-topic angles for backfilling a high-severity pillar to the research floor when the
+# LLM under-produces AND the campaign's own target_queries run out. Each is a genuinely DIFFERENT search
+# intent (how / cost / vs / mistakes / for-whom / checklist), never a keyword variant -- GEO penalizes
+# near-duplicate pages (~-8%), so program breadth must come from distinct subtopics.
+_CLUSTER_ANGLES = [
+    "How {t} works: a step-by-step guide",
+    "What {t} costs and what drives the price",
+    "{t} vs. the alternatives: how to choose",
+    "Common mistakes to avoid with {t}",
+    "Who {t} is right for (and who it isn't)",
+    "Questions to ask about {t}",
+    "{t}: a practical checklist",
+    "{t} explained in plain language",
+    "Signs you need {t}",
+    "{t}: what to expect, step by step",
+]
+
+
+def _norm_title(s: str) -> str:
+    """Order-independent token signature for de-duping cluster titles/queries (so 'How X works' and
+    'How does X work' collapse, and a backfill angle never duplicates an LLM cluster)."""
+    return " ".join(sorted(_tokens(s)))
+
+
+def _floor_clusters(camp: dict, raw: list[dict]) -> list[dict]:
+    """Enforce the research cluster FLOOR on a high-severity campaign: a hub meant to rank / crowd out a
+    negative needs ~8-12 supporting pieces (content_research.cluster_count_for) to build topical
+    authority. If the LLM returned fewer, backfill -- FIRST from the campaign's own uncovered
+    target_queries (grounded in the gap model), THEN from distinct sub-topic angles. Low-severity or
+    narrow campaigns are returned unchanged, honoring 'if the data says fewer, go with fewer'."""
+    try:
+        from . import content_research as _cr
+        floor = int(_cr.cluster_count_for("topical_authority")[0])   # min of the band (8)
+    except Exception:  # noqa: BLE001
+        floor = 8
+    sev = camp.get("_severity") or 0
+    if sev < _CLUSTER_FLOOR_SEVERITY or len(raw) >= floor:
+        return raw
+    out = list(raw)
+    seen = {_norm_title(c.get("title")) for c in out if c.get("title")}
+    topic = camp.get("topic") or (camp.get("pillar") or {}).get("title") or ""
+    intent = (camp.get("intent") or "informational").lower()
+    # 1) grounded backfill: the campaign's own target_queries not yet turned into a cluster
+    for q in (camp.get("target_queries") or []):
+        if len(out) >= floor:
+            break
+        q = (str(q) or "").strip()
+        n = _norm_title(q)
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        out.append({"title": q, "content_type": "blog", "intent": intent, "target_query": q,
+                    "why": "Answers a specific weak AI query this topic must win.", "_backfilled": True})
+    # 2) distinct sub-topic angles from the pillar topic (only if still short)
+    for tpl in _CLUSTER_ANGLES:
+        if len(out) >= floor:
+            break
+        title = tpl.format(t=topic)
+        n = _norm_title(title)
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        out.append({"title": title, "content_type": "blog", "intent": intent, "target_query": title,
+                    "why": f"Supporting piece that builds topical authority for '{topic}'.",
+                    "_backfilled": True})
+    return out
+
+
 def _flatten_pieces(camp: dict, rank: int) -> list[dict]:
     """Turn one ranked campaign into an ordered list of content PIECES (pillar, clusters, comparison)
     with a per-piece cadence WEEK (basic burst-then-drip for Phase 1; Phase 2 extends to a full
@@ -303,8 +378,10 @@ def _flatten_pieces(camp: dict, rank: int) -> list[dict]:
                    "content_type": pillar.get("content_type") or "article",
                    "target_query": camp.get("topic") or p_title,
                    "why": pillar.get("why") or camp.get("why") or ""})
-    # clusters drip after the pillar, ~2 per week
-    for i, cl in enumerate((camp.get("clusters") or [])[:_MAX_CLUSTERS]):
+    # clusters drip after the pillar, ~2 per week -- LLM clusters first, then the severity-aware FLOOR
+    # backfill so a high-leverage hub reaches the research-backed 8-12 supporting pieces.
+    raw_clusters = [c for c in (camp.get("clusters") or []) if isinstance(c, dict) and c.get("title")]
+    for i, cl in enumerate(_floor_clusters(camp, raw_clusters)[:_MAX_CLUSTERS]):
         title = cl.get("title")
         if not title:
             continue

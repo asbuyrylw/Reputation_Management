@@ -128,6 +128,52 @@ def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
     return out
 
 
+# Distinct local content-angle templates. Each is a genuinely DIFFERENT search intent a local-service
+# prospect has (cost, how-to-choose, what-to-expect, who-it's-for, vetting, mistakes) -- NOT a keyword
+# variant of the same query. GEO research penalizes near-duplicate / keyword-stuffed pages (~-8%), so a
+# program's breadth must come from distinct subtopics, not re-phrasings. Used to size a local program up
+# to the research target when the tenant's seed-keyword set is thinner than that target.
+_LOCAL_ANGLES = [
+    "How to choose {q}",
+    "What does {q} cost? Fees and pricing explained",
+    "Questions to ask before hiring {q}",
+    "{q}: what to expect at your first meeting",
+    "Signs of a trustworthy {q}",
+    "{q} for young families just starting out",
+    "{q} for retirees and pre-retirees",
+    "Working with a local {q} vs. a national firm",
+    "Common mistakes when choosing {q}",
+    "Credentials and licensing to verify in {q}",
+    "How to check the reputation and reviews of {q}",
+    "A checklist for your first year with {q}",
+]
+
+
+def _local_spokes(business_id: int, query: str, target: int) -> list[dict]:
+    """The SUPPORTING pieces for a local pillar, sized to the RESEARCH target
+    (`content_research.cluster_count_for`) -- NOT to however many seed keywords happen to exist. Real
+    ranking keywords (`target_keywords`) come first; when the tenant has fewer than the target, we
+    backfill with DISTINCT local sub-topic angles (cost / how-to-choose / what-to-expect / who-it's-for
+    / vetting) so the program is big enough to build topical authority and crowd out the negative
+    narrative, instead of stopping at 'however many seeds exist' (the under-production the audit flagged).
+    Each item: {topic, kind: 'keyword'|'angle'}."""
+    q = (query or "").strip()
+    target = max(1, int(target or 1))
+    seeds = _local_keywords(business_id, q, limit=target)   # real ranking keywords, best first
+    out: list[dict] = [{"topic": kw, "kind": "keyword"} for kw in seeds]
+    seen = {_norm(q)} | {_norm(kw) for kw in seeds}
+    for tpl in _LOCAL_ANGLES:
+        if len(out) >= target:
+            break
+        topic = tpl.format(q=q)
+        n = _norm(topic)
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        out.append({"topic": topic, "kind": "angle"})
+    return out[:target]
+
+
 def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
     """Snap gap-model prompt strings (LLM-authored, often paraphrased) to the ACTUAL battery prompt
     text stored in `answers`, so the cluster query (`prompt = ANY`) matches instead of silently
@@ -322,7 +368,16 @@ def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
         topic = (wo.get("title") or src_q or "").strip()
         if not (src_q or topic):
             return None
-        gap_key = gs.get("gap_key") or _tu.gid("moc", topic or src_q)
+        # Prefer the planner-stamped canonical gap_key (so a whole PROGRAM shares one batch that joins to
+        # the real gap). Absent that, DERIVE the canonical key (same scheme as gaps_for_business) from the
+        # WO's gap_source + its SOURCE QUERY -- never the piece title, which used to mint a unique
+        # 'moc:<title>' key per piece that matched no gap (no collective measurement, no completion credit).
+        gap_key = gs.get("gap_key")
+        if not gap_key:
+            rat = wo.get("rationale") if isinstance(wo.get("rationale"), dict) else {}
+            src_low = (wo.get("gap_source") or gs.get("gap_source") or rat.get("gap_source") or "").lower()
+            prefix = "local" if "local" in src_low else ("comp" if "competitor" in src_low else "moc")
+            gap_key = _tu.gid(prefix, src_q or topic)
         with db() as conn:
             row = conn.execute(
                 "SELECT id FROM content_batches WHERE business_id=%s AND gap_key=%s "
@@ -536,15 +591,40 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
             "errors": errors, "baseline": baseline}
 
 
-def generate_cluster(business_id: int, cluster: dict, *, max_spokes: int = 4,
+def _default_spoke_cap() -> int:
+    """Research-backed max supporting pieces per pillar. A hub earns topical authority at ~8-12 clusters
+    (a strong pillar anchors 20-30); we cap generation at the top of the 'start' band (12) so a program
+    is sized to actually rank + crowd out the negative narrative, not throttled to a check-the-box 4.
+    Falls back to 12 if the KB is unavailable (dormant-safe)."""
+    try:
+        from . import content_research as _cr
+    except Exception:  # noqa: BLE001
+        try:
+            import content_research as _cr  # type: ignore
+        except Exception:  # noqa: BLE001
+            return 12
+    try:
+        return int(_cr.cluster_count_for("topical_authority")[1])
+    except Exception:  # noqa: BLE001
+        return 12
+
+
+def generate_cluster(business_id: int, cluster: dict, *, max_spokes: Optional[int] = None,
                      created_by: Optional[int] = None) -> dict:
     """Generate a topic CLUSTER as a connected hub: one comprehensive PILLAR page for the cluster's
     core topic + a focused SPOKE page per subtopic, CROSS-LINKED (pillar<->spokes). This is the
     research-backed content model — a pillar/cluster architecture with internal linking builds the
     topical authority AI answer engines reward (HubSpot: more internal links -> better rankings), vs.
     isolated one-off pieces. Each piece carries the pipeline's info-gain differentiators (real
-    attributed stats + expert quotes + business specifics). Fail-loud if EVERY piece fails."""
+    attributed stats + expert quotes + business specifics). Fail-loud if EVERY piece fails.
+
+    `max_spokes=None` (the default) sizes the hub to the research target (`_default_spoke_cap`, =12) so a
+    program uses ALL the real spokes the caller provides up to that band -- it is a ceiling on a large
+    cluster, NOT a floor that pads a small one: a cluster with 3 real spokes still produces 3 (honoring
+    'if the data says fewer, go with fewer')."""
     _budget_or_raise(business_id)
+    if max_spokes is None:
+        max_spokes = _default_spoke_cap()
     pillar_topic = (cluster.get("pillar") or cluster.get("topic") or "").strip()
     if not pillar_topic:
         raise ValueError("cluster has no pillar topic")
@@ -619,11 +699,14 @@ def generate_cluster(business_id: int, cluster: dict, *, max_spokes: int = 4,
             "pieces": len(made), "produced": made, "errors": errors}
 
 
-def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *, max_spokes: int = 4,
-                      created_by: Optional[int] = None) -> dict:
+def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *,
+                      max_spokes: Optional[int] = None, created_by: Optional[int] = None) -> dict:
     """Plan + generate the highest-leverage UNCOVERED topic clusters (pillar-first), using the
     topical-authority planner. This is the CLUSTER-DRIVEN content pipeline (vs. one-off gap pieces):
-    it only builds real hubs (a pillar WITH subtopics), not lone keywords."""
+    it only builds real hubs (a pillar WITH subtopics), not lone keywords. `max_spokes=None` sizes each
+    hub to the research target (see generate_cluster) rather than a check-the-box cap."""
+    if max_spokes is None:
+        max_spokes = _default_spoke_cap()
     try:
         from . import topical_authority as _ta
     except ImportError:  # pragma: no cover

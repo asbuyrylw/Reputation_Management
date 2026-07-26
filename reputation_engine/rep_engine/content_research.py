@@ -176,40 +176,72 @@ WORD_COUNTS: dict[str, tuple[int, str]] = {
 
 _GOAL_TERMS = {"aeo", "seo", "geo", "topical_authority"}
 
+# Research-backed piece-count target for a topical-authority PROGRAM (pillar + N supporting clusters),
+# so EVERY builder sizes a program from the evidence -- not from "however many seed keywords happen to
+# exist" (the under-production the audit flagged). Sourced from the cluster_count claim above:
+# 8-12 clusters to start (5 = activation minimum, ~15 = authority threshold), 20-30 for a strong pillar.
+CLUSTER_COUNT_MIN, CLUSTER_COUNT_MAX = 8, 12
+CLUSTER_COUNT_STRONG = 24
+AUTHORITY_THRESHOLD = 15
 
-def _relevant(applies_to: str, *, intent: str = "", content_type: str = "", goal: str = "") -> bool:
-    """True when a claim's applies_to matches the requested intent/content_type/goal (or is global)."""
+
+def cluster_count_for(goal: str = "topical_authority", *, strong: bool = False) -> tuple[int, int, str]:
+    """Research-backed (min, max, source) number of SUPPORTING pieces a pillar program needs. Builders
+    (local program, generate_cluster, the strategist floor) size from this so a program is big enough to
+    build authority and crowd out the negative narrative, instead of stopping at a small literal."""
+    if strong:
+        return CLUSTER_COUNT_MAX, CLUSTER_COUNT_STRONG, "HubSpot topic clusters: 20-30 for a strong pillar"
+    return (CLUSTER_COUNT_MIN, CLUSTER_COUNT_MAX,
+            "HubSpot topic clusters: 8-12 to start (5=activation minimum, ~15=authority threshold)")
+
+
+def _relevant(applies_to: str, *, intent: str = "", content_type: str = "", goal: str = "",
+              broad: bool = False) -> bool:
+    """True when a claim's applies_to matches the requested intent/content_type/goal (or is global).
+    `broad=True` (PLAN-level use, e.g. the strategist) includes EVERY claim so the plan can justify the
+    whole mix -- word-count-by-intent, which types move which channel, GEO tactics -- not just globals."""
     a = (applies_to or "").lower()
     if a == "global":
         return True
     if a.startswith("intent:"):
-        return bool(intent) and a.split(":", 1)[1] == intent.lower()
+        return broad or (bool(intent) and a.split(":", 1)[1] == intent.lower())
     if a.startswith("content_type:"):
-        return bool(content_type) and a.split(":", 1)[1] == content_type.lower()
+        return broad or (bool(content_type) and a.split(":", 1)[1] == content_type.lower())
     if a.startswith("goal:"):
+        # No goal requested -> include all goal-tagged claims (broad plan-level context). A goal
+        # requested -> scope to THAT goal only. (The old `or g in _GOAL_TERMS` made this a no-op:
+        # every goal claim leaked into every goal-scoped query, so goal filtering never happened.)
         g = a.split(":", 1)[1]
-        return (not goal) or g == goal.lower() or g in _GOAL_TERMS
+        return broad or (not goal) or g == goal.lower()
     return False
 
 
-def research_for(intent: str = "", content_type: str = "", goal: str = "", limit: int = 14) -> list[dict]:
-    """The research claims relevant to a piece/plan, primary + academic tiers first."""
+def research_for(intent: str = "", content_type: str = "", goal: str = "", limit: int = 14,
+                 *, broad: bool = False) -> list[dict]:
+    """The research claims relevant to a piece/plan, primary + academic tiers first. `broad=True` returns
+    the full cross-category set for PLAN-level use (the strategist)."""
     picked = [r for r in RESEARCH if _relevant(r.get("applies_to", ""),
-                                               intent=intent, content_type=content_type, goal=goal)]
+                                               intent=intent, content_type=content_type, goal=goal,
+                                               broad=broad)]
     tier_rank = {"primary": 0, "academic": 1, "industry": 2, "editorial": 3}
     picked.sort(key=lambda r: tier_rank.get(r.get("tier"), 9))
     return picked[:limit]
 
 
-def research_block(intent: str = "", content_type: str = "", goal: str = "", limit: int = 12) -> str:
+def research_block(intent: str = "", content_type: str = "", goal: str = "", limit: int = 12,
+                   *, broad: bool = False) -> str:
     """An injectable prompt block of cited, applicable content-effectiveness guidance. The model should
-    APPLY these and MAY cite them. Returns '' when nothing applies (dormant-safe)."""
-    picked = research_for(intent=intent, content_type=content_type, goal=goal, limit=limit)
+    APPLY these and MAY cite them. Returns '' when nothing applies (dormant-safe). `broad=True` for
+    plan-level breadth (the strategist justifying the whole content mix)."""
+    picked = research_for(intent=intent, content_type=content_type, goal=goal, limit=limit, broad=broad)
     if not picked:
         return ""
     lines = ["CONTENT-EFFECTIVENESS RESEARCH (apply these; each is a real, dated finding you may cite):"]
     for r in picked:
-        lines.append(f"- {r['claim']} [{r['source']}, {r.get('as_of', '')}]")
+        # Flag lower-confidence (single-vendor blog / editorial) claims so the model weights them below
+        # Google's own docs + peer-reviewed findings rather than treating every line as equally settled.
+        conf = " — lower-confidence (single-vendor)" if r.get("tier") == "editorial" else ""
+        lines.append(f"- {r['claim']} [{r['source']}, {r.get('as_of', '')}{conf}]")
     return "\n".join(lines)
 
 

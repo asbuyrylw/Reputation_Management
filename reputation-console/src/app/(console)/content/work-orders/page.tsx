@@ -13,7 +13,7 @@ import { Badge, Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { DirectoryCitationsSection } from "@/components/DirectoryCitationsSection";
 import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, RoadmapItem } from "@/lib/types";
-import { DRAFTABLE } from "@/lib/content";   // single shared draftable-content set (see content.ts)
+import { DRAFTABLE, CONTENT_CAPS } from "@/lib/content";   // single shared content-capability sets (see content.ts)
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
 // task -> draft -> published asset).
@@ -34,10 +34,9 @@ function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset })
 
 // DRAFTABLE (the per-item "Generate draft" set) is the shared content.ts constant now — see content.ts.
 // Copy we draft IN-APP — point these at OUR pipeline (Generate draft → Drafts), not external tools.
-const IN_APP_CONTENT = new Set([
-  "content_writing", "local_content_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "research_brief",
-]);
+// "Content the platform produces in-app" = the shared CONTENT_CAPS (was a local copy here that had
+// drifted — it omitted video_creation, so video WOs fell to the external-tool branch). One source now.
+const IN_APP_CONTENT = CONTENT_CAPS;
 
 const COLUMNS = ["pending", "in_progress", "done", "verified", "blocked", "skipped"];
 const LABEL: Record<string, string> = {

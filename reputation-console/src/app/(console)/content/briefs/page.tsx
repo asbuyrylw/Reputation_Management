@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
 import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords, useRenderRichMediaVideo, useAtomizeDraft } from "@/lib/hooks";
-import { CONTENT_CAPS, DRAFTABLE, CAP_LABEL } from "@/lib/content";
+import { CONTENT_CAPS, DRAFTABLE, CAP_LABEL, contentToProduce } from "@/lib/content";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
@@ -477,9 +477,9 @@ export default function BriefsPage() {
   const assetByWo = new Map<number, Asset>();
   for (const a of assets ?? []) if (a.work_order_id != null && !assetByWo.has(a.work_order_id)) assetByWo.set(a.work_order_id, a);
 
-  const contentItems = workOrders
-    .filter((w) => CONTENT_CAPS.has(w.capability ?? "") && !w.superseded && !["skipped"].includes(w.status))
-    .sort((a, b) => (b.predicted_ai_points ?? -1) - (a.predicted_ai_points ?? -1));
+  // The canonical "To Produce" set — shared with the Content hub's "produce next" via contentToProduce
+  // so the two surfaces can never drift (was a duplicated inline filter here).
+  const contentItems = contentToProduce(workOrders);
   const recipes = briefs ?? [];
 
   // Group the specific pieces by area so each one is organized, not a flat wall.

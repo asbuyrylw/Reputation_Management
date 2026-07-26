@@ -34,8 +34,10 @@ from typing import Optional
 
 try:
     from .db import db
+    from . import textutils as _tu
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
+    import textutils as _tu  # type: ignore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("strategy_generator")
@@ -393,7 +395,7 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
 
     def add(title, capability, instruction, week, deps=None, *, gap_source="baseline setup", why="",
             source="audited gap", area=None, platform="", source_query="", campaign=None,
-            execution=None):
+            execution=None, gap_key=None):
         # Foundational Phase-0 tasks (AI-visibility baseline, GBP claim, review sequence) legitimately
         # trace to no single gap, so they default to gap_source='baseline setup' -> the console shows
         # "From: baseline setup" instead of a blank "why". Gap-derived add() calls pass gap_source
@@ -410,6 +412,13 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             specifics["source_query"] = source_query
         if campaign:
             specifics.update(campaign)
+        # Stamp the CANONICAL gap key (same scheme as content_batch.gaps_for_business: local:/moc:/comp:)
+        # so every piece of a PROGRAM shares ONE content_impact batch and the gap-completion meter joins
+        # the batch to the real gap. Without this, ensure_impact_batch fell back to gid("moc", <title>),
+        # giving each piece its own single-piece batch that matched no canonical gap (no collective
+        # measurement + the gap showed 0 content produced).
+        if gap_key:
+            specifics["gap_key"] = gap_key
         wos.append(WorkOrder(
             wo_id=f"WO-{n:03d}", title=title, capability=capability,
             # execution override lets an opt-in piece (e.g. a per-campaign video plan) be 'manual'
@@ -452,6 +461,10 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             # The campaign's real gap origin (missing owned content / competitor analysis / topical
             # authority / keyword intent) for the "From:" traceability, instead of a generic label.
             _camp_gs = f"content strategy: {camp.get('gap_source')}" if camp.get("gap_source") else "content strategy"
+            # ONE stable program key per campaign (from its topic, not the rank-based id) so every piece
+            # -- pillar + all clusters -- shares a single content_impact batch and the campaign is
+            # measured as a program. Surfaces via gap_completion's campaign/cluster batch rollup.
+            _camp_gk = _tu.gid("camp", camp.get("topic") or camp.get("id") or "")
             for pc in (camp.get("pieces") or []):
                 title = pc.get("title") or camp.get("topic") or "Content piece"
                 role = pc.get("role") or "cluster"
@@ -462,7 +475,7 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                     f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}",
                     int(pc.get("week") or 3),
                     gap_source=_camp_gs, why=pc.get("why") or camp.get("why") or "",
-                    source_query=pc.get("target_query") or title,
+                    source_query=pc.get("target_query") or title, gap_key=_camp_gk,
                     # ordinal (stable per campaign) drives a churn-proof task key across re-plans.
                     campaign={**cmeta, "role": role, "publish_week": pc.get("week"),
                               "content_type": pc.get("content_type"), "ordinal": pc.get("ordinal")},
@@ -510,7 +523,8 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         add(f"Create owned asset: {topic}", cap,
             f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
             f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
-            gap_source="audited gap: missing owned content", why=why, source_query=topic)
+            gap_source="audited gap: missing owned content", why=why, source_query=topic,
+            gap_key=_tu.gid("moc", topic))
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
@@ -614,6 +628,14 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         from . import content_batch as _cb_local
     except Exception:  # noqa: BLE001 -- keyword enrichment is best-effort; the pillar still emits
         _cb_local = None
+    # How many SUPPORTING pieces a local pillar needs comes from the research KB (pillar + N clusters),
+    # NOT from the seed-keyword count -- so a page-1 program is sized to actually rank + crowd out the
+    # negative narrative. Falls back to a sane floor if the KB is unavailable.
+    try:
+        from . import content_research as _cr_local
+        _local_spoke_target = _cr_local.cluster_count_for("topical_authority")[0]  # min of the band (8)
+    except Exception:  # noqa: BLE001
+        _local_spoke_target = 8
     for i, g in enumerate(gap.get("local_seo_gaps", []) or []):
         q = g.get("query", f"local query {i + 1}")
         rec = g.get("recommendation", "Create geo-specific content + strengthen GBP / local citations.")
@@ -621,30 +643,40 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         _cid = "local:" + (_re_tech.sub(r"[^a-z0-9]+", "-", q.lower()).strip("-")[:48] or f"gap{i}")
         _lmeta = {"campaign_id": _cid, "campaign_topic": q, "campaign_intent": "local",
                   "campaign_rank": 100 + i, "funnel_stage": "decision"}
+        # The CANONICAL local gap key (matches content_batch.gaps_for_business) so the whole program --
+        # pillar + every spoke + FAQ -- shares ONE content_impact batch and the completion meter credits
+        # this real local gap, measuring whether the PROGRAM moved the ranking (not each piece alone).
+        _local_gk = _tu.gid("local", q)
         # PILLAR: the geo landing page that must rank for the query.
         add(f"Local page: {q}", "local_content_creation",
             f"{rec} Current position: {g.get('current_rank', 'off page 1')}.{_AEO_CHECKLIST}", 4,
-            gap_source="local search ranking", why=why_l, source_query=q,
+            gap_source="local search ranking", why=why_l, source_query=q, gap_key=_local_gk,
             campaign={**_lmeta, "role": "pillar", "content_type": "local_page", "publish_week": 4, "ordinal": 0})
-        # SPOKES: one supporting blog per ranking keyword, cross-linked up to the local page.
-        kws_l: list = []
+        # SPOKES: supporting blogs sized to the RESEARCH target (pillar + N clusters), NOT to the
+        # seed-keyword count -- real ranking keywords first, then distinct local sub-topic angles to
+        # reach the target, cross-linked up to the local page. This is what makes the program big enough
+        # to rank + crowd out the negative instead of "check the box" with one or two posts.
+        spokes_l: list = []
         if _cb_local is not None and _biz_id is not None:
             try:
-                kws_l = _cb_local._local_keywords(_biz_id, q) or []
+                spokes_l = _cb_local._local_spokes(_biz_id, q, _local_spoke_target) or []
             except Exception:  # noqa: BLE001
-                kws_l = []
-        for j, kw in enumerate(kws_l[:4]):
+                spokes_l = []
+        for j, sp in enumerate(spokes_l):
+            kw = sp.get("topic") if isinstance(sp, dict) else str(sp)
+            if not kw:
+                continue
             add(f"Blog: {kw}", "content_writing",
                 f"A supporting blog answering '{kw}' that links up to the '{q}' local page.{_AEO_CHECKLIST}",
-                5 + (j // 2),
+                5 + (j // 3),
                 gap_source="local search ranking", why=f"Builds local topical authority for '{q}'.",
-                source_query=kw,
+                source_query=kw, gap_key=_local_gk,
                 campaign={**_lmeta, "role": "cluster", "content_type": "blog",
-                          "publish_week": 5 + (j // 2), "ordinal": j + 1})
+                          "publish_week": 5 + (j // 3), "ordinal": j + 1})
         # FAQ: the People-Also-Ask block for the local query.
         add(f"FAQ: {q}", "content_writing",
             f"An FAQ answering the top questions people ask about '{q}' in this area.{_AEO_CHECKLIST}", 6,
-            gap_source="local search ranking", why=why_l, source_query=f"{q} faq",
+            gap_source="local search ranking", why=why_l, source_query=f"{q} faq", gap_key=_local_gk,
             campaign={**_lmeta, "role": "cluster", "content_type": "faq", "publish_week": 6, "ordinal": 90})
 
     # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
@@ -658,7 +690,8 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
         add(f"Compete for '{q}'", "content_writing",
             f"{rec} A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.", 4,
-            gap_source="competitor analysis", why=g.get("why", ""), source_query=q)
+            gap_source="competitor analysis", why=g.get("why", ""), source_query=q,
+            gap_key=_tu.gid("comp", q))
 
     # --- Site-technical gaps -> tasks (thin/missing pages, schema, weak coverage) ---
     for i, g in enumerate(gap.get("site_technical_gaps", []) or []):

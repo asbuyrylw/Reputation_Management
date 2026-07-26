@@ -626,6 +626,15 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
     contested = biz.get("contested_terms", "")
     instr = wo.get("instruction", "")
     title = wo.get("title", "")
+    # Research-backed target length for this asset type (content_research.word_count_for), so the DRAFT
+    # length is EVIDENCE-driven -- not just the spec's hardcoded inline number. The SERP benchmark (real
+    # ranking-page length) still wins when present; this is the grounded fallback for the rest.
+    _rw_words, _rw_src = None, ""
+    try:
+        from . import content_research as _cr
+        _rw_words, _rw_src = _cr.word_count_for((wo.get("content_type") or asset_type or "").lower() or asset_type)
+    except Exception:  # noqa: BLE001 -- research grounding must never break generation
+        _rw_words, _rw_src = None, ""
     specs = {
         "faq": "Write an FAQ page (6-10 Q&A pairs) in markdown that directly answers "
                "the real questions people ask about this business.",
@@ -642,6 +651,13 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
                 "answer-first, use scannable H2 sections each ending in a takeaway, and add a short "
                 "FAQ. Where the definitive company page already covers the basics, briefly reference "
                 "it rather than restating it, so this reads as a complementary piece, not a duplicate.",
+        "local_page": "Write a LOCAL LANDING PAGE in markdown for a specific city/area + service. Put "
+                      "the city + service in the H1 and the first sentence; open answer-first. Cover the "
+                      "service locally (who it's for, what to expect, why choosing local matters), add "
+                      "local proof (reviews / NAP / service-area), name the areas served EXPLICITLY, and "
+                      "end with a local FAQ (People-Also-Ask style) + a clear CTA. Ground every fact in "
+                      "the real business facts above; use [INSERT: ...] for anything unknown — never "
+                      "fabricate an address, phone number, or review.",
         "white_paper": "Write an in-depth white paper (1,200-1,800 words) in markdown for a "
                        "sophisticated reader: an executive summary, several evidence- and data-backed "
                        "sections that each cite a source, and a conclusion with a CTA. Go materially "
@@ -718,6 +734,11 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         if grounding.get("serp_questions") else "",
         (f"TARGET LENGTH (roughly match the ranking pages): ~{grounding.get('serp_target_words')} words")
         if grounding.get("serp_target_words") else "",
+        # Research-backed length when no live SERP benchmark exists -- overrides any number in the task
+        # spec so the draft length traces to a cited source, while still saying "answer fully, don't pad".
+        (f"TARGET LENGTH: ~{_rw_words} words [{_rw_src}] — write to FULLY answer the query at about this "
+         f"depth (this overrides any word count mentioned in the task); never pad to hit a number.")
+        if (_rw_words and not grounding.get("serp_target_words")) else "",
         "",
         ("FOLLOW THIS OUTLINE (it maps the keywords + gap to sections):\n" + outline) if outline else "",
         ("MATCH THIS BRAND VOICE (a sample of their approved writing — tone/cadence only, do not "
@@ -743,6 +764,15 @@ def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict
     # so size generously: ~2.5 tokens/target-word + a high floor, clamped. Undersizing truncates the
     # draft mid-sentence; oversizing is free.
     target_words = _BRIEF_WORDS.get(asset_type, 1200)
+    # Prefer the research-backed length so the token CAP tracks the same evidence-driven target the
+    # prompt asks for (a cap, not a cost — no spend unless used). Falls back to the module constant.
+    try:
+        from . import content_research as _cr
+        _rw, _ = _cr.word_count_for(asset_type)
+        if _rw:
+            target_words = _rw
+    except Exception:  # noqa: BLE001
+        pass
     max_tokens = max(3200, min(int(target_words * 2.5) + 800, 6500))
     return llm.orchestrator_text(_gen_system(license_policy, regulated_financial),
                                  _gen_prompt(biz, wo, asset_type, grounding, outline=outline, voice=voice),
