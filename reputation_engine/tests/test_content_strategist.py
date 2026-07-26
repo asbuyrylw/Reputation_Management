@@ -161,12 +161,15 @@ def test_build_work_orders_with_strategy():
 
 
 def test_build_work_orders_fallback_without_strategy():
-    """No strategist -> the original deterministic template is unchanged (flat content + competitor
-    tasks reappear; technical reroute still applies)."""
+    """No strategist -> the deterministic template runs. moc/competitor gaps now emit the SAME multi-type
+    content spread the batch path fans them into (sharing the canonical gap_key), so plan and batch never
+    diverge on the content-type set; the technical reroute still applies."""
     wos = sg.build_work_orders(_GAP, {"id": 1}, strategy=None)
     titles = [w.title for w in wos]
-    assert any(t.startswith("Create owned asset: About us") for t in titles)
-    assert any(t.startswith("Compete for") for t in titles)
+    assert any(t.startswith("Create owned asset: About us") for t in titles)   # uncovered moc -> content
+    # the competitor gap produces content bound to its canonical comp: gap_key (was a single "Compete for"
+    # WO; now the typed spread, matching the batch path)
+    assert any((w.gap_specifics or {}).get("gap_key", "").startswith("comp:") for w in wos)
     assert any(w.capability == "technical_seo" for w in wos)
     assert not any((w.gap_specifics or {}).get("campaign_id") for w in wos)
 
