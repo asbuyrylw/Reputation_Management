@@ -602,6 +602,26 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
             f"can cleanly extract facts.", 4, gap_source="audited gap: schema", source_query=str(sg))
 
+    # --- Crowd-out sizing: how much positive content to publish to BURY the page-1 negatives ---
+    # This is the engine's core reputation goal, so it must be sized from ORM evidence
+    # (content_research.displacement_pages_for: ~8-12 positive assets per page-1 negative in 90 days,
+    # more for a high-authority negative), NOT left implicit. Count negatives from the gap model
+    # (competitor-won queries + a contested/negative narrative); emit a concrete, sized crowd-out target
+    # (the last previously-dead sibling helper -> a stated, size-driving decision).
+    _num_neg = len(gap.get("competitor_defense") or []) + (1 if (biz.get("contested_terms") or "").strip() else 0)
+    if _num_neg > 0:
+        try:
+            from . import content_research as _cr_disp
+            _dp_lo, _dp_hi, _dp_src = _cr_disp.displacement_pages_for(_num_neg)
+            add("Crowd-out plan: out-publish the negative results", "content_writing",
+                f"To bury the {_num_neg} page-1 negative(s), publish ~{_dp_lo}-{_dp_hi} original positive/"
+                f"earned, indexed assets in the first 90 days ({_dp_src}) -- enough to control 8-10 of the "
+                f"10 page-1 slots. This is the FLOOR the pillar/cluster + local programs above should sum "
+                f"to; front-load them.{_AEO_CHECKLIST}", 2,
+                gap_source="reputation crowd-out", source_query="crowd-out volume", execution="manual")
+        except Exception:  # noqa: BLE001 -- best-effort sizing line
+            pass
+
     # --- Phase 2: corroboration (press, media list, partner, link) ---
     if gap.get("thin_corroboration"):
         add("Build local media list", "media_list_building",
