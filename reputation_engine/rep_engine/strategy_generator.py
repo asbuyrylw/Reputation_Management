@@ -647,10 +647,14 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         _c0q = (_c0.get("target_queries") or [_c0.get("topic")])[0] or _c0.get("topic") or "reputation"
         _c0gs = f"content strategy: {_c0.get('gap_source', '') or 'amplification'}"
         _c0topic = _c0.get("topic") or "your top campaign"
+        # Share campaign C0's CANONICAL camp: gap_key (same scheme its pillar/cluster pieces use) so the
+        # rich-media amplification pieces join C0's collective impact batch + earn its gap-completion
+        # credit -- not a divergent moc:<query> batch ensure_impact_batch would otherwise derive.
+        _c0gk = _tu.gid("camp", _c0.get("topic") or _c0.get("id") or "")
         for _ri, (_cap, _title, _instr, _wk) in enumerate(_rich_specs):
             add(_title, _cap, _instr.format(t=_c0topic) + _AEO_CHECKLIST, _wk,
                 gap_source=_c0gs, why=f"Amplifies the '{_c0topic}' campaign in another format.",
-                source_query=_c0q,
+                source_query=_c0q, gap_key=_c0gk,
                 campaign={**_c0meta, "role": "amplify", "content_type": _cap,
                           "publish_week": _wk, "ordinal": 50 + _ri}, execution="manual")
     else:

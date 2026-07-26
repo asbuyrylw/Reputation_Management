@@ -222,21 +222,29 @@ def _persist(business_id: int, *, kind: str, provider: Optional[str], model: Opt
              prompt: str, file_path: Optional[str], url: Optional[str], compliance_note: Optional[str],
              work_order_id=None, draft_id=None, width=None, height=None, meta=None,
              file_bytes: Optional[bytes] = None, mime: Optional[str] = None,
-             storage_key: Optional[str] = None, public_url: Optional[str] = None) -> int:
+             storage_key: Optional[str] = None, public_url: Optional[str] = None,
+             batch_id: Optional[int] = None, gap_key: Optional[str] = None) -> int:
     # Durable delivery: object storage (storage_key) when configured, else the DB blob (file_bytes,
     # shared across API/worker) so the file serves even when the generating worker's local disk isn't
     # the one the API reads from. Derive mime from the path ext when not given.
     if mime is None and file_path:
         mime = _MIME_BY_EXT.get(os.path.splitext(file_path)[1].lstrip(".").lower())
     with db() as conn:
+        # Measurement linkage (dormant-safe): a gap-tied video joins content_impact/gap_completion like
+        # rich media, so 'produce a gap-closing video' is measured no matter which path produced it.
+        try:
+            conn.execute("ALTER TABLE visual_assets ADD COLUMN IF NOT EXISTS batch_id BIGINT")
+            conn.execute("ALTER TABLE visual_assets ADD COLUMN IF NOT EXISTS gap_key TEXT")
+        except Exception:  # noqa: BLE001
+            pass
         row = conn.execute(
             "INSERT INTO visual_assets (business_id, work_order_id, draft_id, kind, provider, model, "
             "prompt, file_path, url, width, height, compliance_note, meta, file_bytes, mime, "
-            "storage_key, public_url) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "storage_key, public_url, batch_id, gap_key) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (business_id, work_order_id, draft_id, kind, provider, model, prompt, file_path, url,
              width, height, compliance_note, Json(meta or {}), file_bytes, mime,
-             storage_key, public_url)).fetchone()
+             storage_key, public_url, batch_id, gap_key)).fetchone()
         conn.commit()
     return int(row["id"])
 
@@ -596,10 +604,27 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
     skey, purl, path, fbytes = _store_bytes(business_id, raw, "video.mp4", "video/mp4")
+    # Gap-link a gap-tied video (Veo) into the impact loop like rich media, so it earns gap-completion
+    # credit + joins content_impact instead of orphaning in visual_assets. Best-effort/dormant-safe.
+    _v_batch = _v_gapkey = None
+    try:
+        if work_order_id:
+            from . import content_batch as _cb_v
+            with db() as _c:
+                _wr = _c.execute("SELECT title, gap_specifics FROM work_orders WHERE id=%s",
+                                 (work_order_id,)).fetchone()
+            _gs = (_wr.get("gap_specifics") if _wr and isinstance(_wr.get("gap_specifics"), dict) else {}) or {}
+            _v_gapkey = _gs.get("gap_key")
+            if _v_gapkey:
+                _v_batch = _cb_v.ensure_impact_batch(business_id, {
+                    "title": (_wr.get("title") if _wr else None) or prompt[:80],
+                    "target_query": _gs.get("source_query"), "gap_specifics": _gs})
+    except Exception:  # noqa: BLE001 -- linkage is best-effort; the video still persists
+        _v_batch = _v_gapkey = None
     vid = _persist(business_id, kind="video", provider=provider, model=model, prompt=full_prompt,
                    file_path=path, url=None, compliance_note=note,
                    work_order_id=work_order_id, draft_id=draft_id, file_bytes=fbytes, mime="video/mp4",
-                   storage_key=skey, public_url=purl)
+                   storage_key=skey, public_url=purl, batch_id=_v_batch, gap_key=_v_gapkey)
     try:  # itemized cost: video billed per second (Veo). Default 8s clip unless VIDEO_SECONDS set.
         from . import cost as _cost
         secs = float(os.getenv("VIDEO_SECONDS", "8") or 8)

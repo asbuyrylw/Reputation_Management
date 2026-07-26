@@ -143,6 +143,12 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
                 (batch_id,)).fetchall()
         except Exception:  # noqa: BLE001 -- rich_media_drafts dormant/absent
             rm_rows = []
+        try:   # gap-tied Veo VIDEO in visual_assets counts as a live piece too (dormant-safe)
+            rm_rows = list(rm_rows) + list(conn.execute(
+                "SELECT kind AS content_type, status FROM visual_assets WHERE batch_id=%s AND kind='video'",
+                (batch_id,)).fetchall())
+        except Exception:  # noqa: BLE001 -- visual_assets.batch_id dormant/absent
+            pass
 
     # Guard against an UNMATCHED cluster: if the baseline OR measured run matched 0 answers for this
     # gap's prompts, there's nothing comparable — return pending WITHOUT writing an all-null impact
