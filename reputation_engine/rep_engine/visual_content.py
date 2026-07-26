@@ -608,7 +608,11 @@ def generate_video(business_id: int, prompt: str, *, work_order_id: Optional[int
     # credit + joins content_impact instead of orphaning in visual_assets. Best-effort/dormant-safe.
     _v_batch = _v_gapkey = None
     try:
-        if work_order_id:
+        # Only gap-link a STANDALONE create-content video (draft_id is None). A RE-RENDER of an existing
+        # rich_media_draft (which already earned its batch credit) passes draft_id -> skip, so it inherits
+        # the parent's credit instead of minting a SECOND countable visual_assets row that double-counts
+        # pieces_drafted/published on the same batch (matches HeyGen's render, which credits once).
+        if work_order_id and not draft_id:
             from . import content_batch as _cb_v
             with db() as _c:
                 _wr = _c.execute("SELECT title, gap_specifics FROM work_orders WHERE id=%s",

@@ -604,10 +604,13 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                 f"Draft pitch; route via outreach tool; human approves before send.", 6,
                 gap_source="audited gap: thin corroboration", why=c, source_query=c)
     # Podcast-appearance volume is RESEARCH-sized (content_research.podcast_appearance_target: quarterly
-    # floor -> 1-2/mo), not a hardcoded 3-5, so the count + its cited basis match the evidence base.
+    # floor -> 1-2/mo) AND SEVERITY-SCALED like the other non-text surfaces (video/cadence/backlink), so a
+    # bigger reputation problem books more appearances -- not a hardcoded 3-5 or a flat 0.5 severity.
     try:
         from . import content_research as _cr_pod
-        _pl, _ph, _psrc = _cr_pod.podcast_appearance_target(months=12)
+        _sevs = [(c.get("severity") or 0) for c in (strategy.get("campaigns", []) if has_strategy else [])]
+        _sev_norm = min(1.0, (max(_sevs) if _sevs else 0) / 12.0)   # ~2x the cluster-floor severity gate
+        _pl, _ph, _psrc = _cr_pod.podcast_appearance_target(severity=_sev_norm, months=12)
         _pod_line = f"Book ~{_pl}-{_ph} relevant {geo} / {industry} guest podcast appearances over the year ({_psrc})"
     except Exception:  # noqa: BLE001
         _pod_line = f"Identify 3-5 relevant {geo} / {industry} podcasts"
@@ -784,9 +787,22 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         add(f"Fix site: {issue}", scap, rec, 3,
             gap_source="site crawl", why=g.get("why", ""))
 
-    # --- Phase 3: steady-state monitoring ---
+    # --- Phase 3: steady-state monitoring + FRESHNESS ---
     add("Recurring AI-visibility monitor", "ai_visibility_tracking",
         "Schedule monthly Module 1 audit + diff; generate the monthly progress report.", 12)
+    # Refresh clock: keep cornerstone content fresh on the RESEARCH-backed interval so AI engines keep
+    # citing it (they cite recently-updated content far more). Makes content_research.refresh_interval_for
+    # an actual scheduled decision, not a computed-then-ignored signal; GEO-tightened to <= quarterly.
+    try:
+        from . import content_research as _cr_ref
+        _rlo, _rhi, _rsrc = _cr_ref.refresh_interval_for("competitive", goal="geo")
+        add(f"Refresh cornerstone content (every ~{_rlo}-{_rhi} months)", "content_writing",
+            f"On a ~{_rlo}-{_rhi} month clock, UPDATE the pillar/cornerstone pages -- refresh stats, dates, "
+            f"and answers so AI engines keep citing them ({_rsrc}). Aim ~60% net-new / ~40% refresh of "
+            f"existing pieces.{_AEO_CHECKLIST}", 12,
+            gap_source="content freshness", source_query="content refresh", execution="manual")
+    except Exception:  # noqa: BLE001 -- freshness WO is best-effort
+        pass
     return wos
 
 
