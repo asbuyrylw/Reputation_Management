@@ -84,3 +84,23 @@ def test_local_spokes_prefers_real_keywords_then_backfills(monkeypatch):
 
 def test_default_spoke_cap_is_research_max():
     assert cb._default_spoke_cap() == cr.cluster_count_for("topical_authority")[1]  # 12
+
+
+# --- FE/BE capability drift guard (#30): the shared FE content.ts CONTENT_CAPS must equal the backend
+#     strategy_generator.CONTENT_CAPABILITIES, so the 'what counts as content' set can never drift again.
+def test_fe_content_caps_match_backend():
+    import os
+    import re as _re
+    from rep_engine import strategy_generator as sg
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+    ts = os.path.join(here, "reputation-console", "src", "lib", "content.ts")
+    if not os.path.exists(ts):
+        import pytest as _pt
+        _pt.skip("console content.ts not present in this checkout")
+    src = open(ts, encoding="utf-8").read()
+    m = _re.search(r"CONTENT_CAPS\s*=\s*new Set<string>\(\[(.*?)\]\)", src, _re.S)
+    assert m, "could not find CONTENT_CAPS in content.ts"
+    fe = set(_re.findall(r'"([a-z_]+)"', m.group(1)))
+    assert fe == set(sg.CONTENT_CAPABILITIES), (
+        f"FE content.ts CONTENT_CAPS drifted from backend CONTENT_CAPABILITIES: "
+        f"FE-only={fe - set(sg.CONTENT_CAPABILITIES)}, BE-only={set(sg.CONTENT_CAPABILITIES) - fe}")

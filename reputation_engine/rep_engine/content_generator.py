@@ -579,7 +579,22 @@ _OUTLINE_SYSTEM = (
 def _outline(biz: dict, wo: dict, asset_type: str, grounding: dict) -> str:
     """Pass 1 of the multi-pass pipeline (long-form only): a keyword-mapped outline the draft
     pass then writes from, so structure + keyword coverage are planned, not accidental."""
-    prompt = _gen_prompt(biz, wo, asset_type, grounding) + "\n\nProduce ONLY the outline."
+    # Long-form (white_paper/deep_article) must PLAN to fit its length target so the draft doesn't get
+    # truncated mid-section at the token cap: give the outline a per-section word budget that sums to the
+    # target, so it plans fewer/deeper sections that fit rather than more than the budget allows.
+    _budget = grounding.get("serp_target_words")
+    if not _budget:
+        try:
+            from . import content_research as _cr
+            _budget = _cr.word_count_for((wo.get("content_type") or asset_type or "").lower() or asset_type)[0]
+        except Exception:  # noqa: BLE001
+            _budget = None
+    _fit = ""
+    if _budget and asset_type in ("white_paper", "deep_article", "article"):
+        _fit = (f"\n\nPLAN TO FIT ~{_budget} words: assign each section an approximate word budget that "
+                f"SUMS to about {_budget}; prefer fewer, deeper sections that fit rather than more than "
+                f"can be written completely -- the draft must finish within its length, not truncate.")
+    prompt = _gen_prompt(biz, wo, asset_type, grounding) + _fit + "\n\nProduce ONLY the outline."
     return (llm.orchestrator_text(_OUTLINE_SYSTEM, prompt, max_tokens=700, tier="mid") or "").strip()
 
 
@@ -769,13 +784,15 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         ("QUESTIONS THE TOP PAGES ANSWER (answer these in the piece): "
          + " | ".join(str(q) for q in (grounding.get("serp_questions") or [])[:8]))
         if grounding.get("serp_questions") else "",
-        (f"TARGET LENGTH (roughly match the ranking pages): ~{grounding.get('serp_target_words')} words")
-        if grounding.get("serp_target_words") else "",
-        # Research-backed length when no live SERP benchmark exists -- overrides any number in the task
-        # spec so the draft length traces to a cited source, while still saying "answer fully, don't pad".
-        (f"TARGET LENGTH: ~{_rw_words} words [{_rw_src}] — write to FULLY answer the query at about this "
-         f"depth (this overrides any word count mentioned in the task); never pad to hit a number.")
-        if (_rw_words and not grounding.get("serp_target_words")) else "",
+        # ONE authoritative TARGET LENGTH so the writer never gets two competing numbers (the SERP
+        # benchmark vs the spec's inline count). SERP (real ranking-page length) wins when present, else
+        # the research-backed length; either way it OVERRIDES any number in the task spec. Single source.
+        ((f"TARGET LENGTH (match the ranking pages): ~{grounding.get('serp_target_words')} words — this "
+          f"OVERRIDES any word count mentioned in the task; write to fully answer the query, never pad.")
+         if grounding.get("serp_target_words") else
+         (f"TARGET LENGTH: ~{_rw_words} words [{_rw_src}] — this OVERRIDES any word count mentioned in the "
+          f"task; write to FULLY answer the query at about this depth, never pad to hit a number.")
+         if _rw_words else ""),
         "",
         ("FOLLOW THIS OUTLINE (it maps the keywords + gap to sections):\n" + outline) if outline else "",
         ("MATCH THIS BRAND VOICE (a sample of their approved writing — tone/cadence only, do not "
