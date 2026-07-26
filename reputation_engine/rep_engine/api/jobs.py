@@ -210,7 +210,10 @@ def _run_generate_clusters(business_id: int, args: dict):
     # check-the-box 4. An explicit caller value still wins.
     max_spokes = args.get("max_spokes")
     if topic:
-        return cb.generate_cluster(business_id, {"pillar": topic, "spokes": args.get("spokes") or []},
+        # Carry avg_difficulty so generate_cluster sizes this recommended hub by competitiveness -- the
+        # SAME curve the auto sweep uses -- instead of a flat cap (was 12 regardless of difficulty).
+        return cb.generate_cluster(business_id, {"pillar": topic, "spokes": args.get("spokes") or [],
+                                                 "avg_difficulty": args.get("avg_difficulty")},
                                    max_spokes=max_spokes,
                                    created_by=args.get("requested_by"))
     return cb.generate_clusters(business_id, max_clusters=args.get("max_clusters"),

@@ -1698,7 +1698,7 @@ export interface TopicalCluster {
 export interface TopicalAuthority {
   clusters: TopicalCluster[];
   summary: { keywords: number; topics: number; uncovered: number };
-  next_to_write: { topic: string; covers_keywords: number; spokes: string[]; why: string }[];
+  next_to_write: { topic: string; covers_keywords: number; spokes: string[]; why: string; avg_difficulty?: number | null }[];
 }
 
 // Internal-linking opportunities — under-linked owned pages + concrete link suggestions.

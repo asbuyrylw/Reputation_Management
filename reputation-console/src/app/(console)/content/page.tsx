@@ -23,7 +23,7 @@ function Tile({ k, value, sub, color }: { k: string; value: string; sub: string;
 // A recommended topic -> a real pillar + supporting-spokes PROGRAM (not one article). Producing it runs
 // the same cluster builder the strategist uses: a comprehensive pillar page + cross-linked spoke pages,
 // recorded as a measured content batch — so "add recommended content" builds real topical authority.
-function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_keywords?: number; spokes?: string[]; why?: string }; businessId: number | null; canEdit: boolean }) {
+function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_keywords?: number; spokes?: string[]; why?: string; avg_difficulty?: number | null }; businessId: number | null; canEdit: boolean }) {
   const produce = useProduceTopicCluster(businessId);
   const nPieces = 1 + Math.min((r.spokes?.length ?? 0), 4);
   return (
@@ -35,9 +35,9 @@ function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_k
       ) : (
         <button
           type="button"
-          onClick={() => produce.mutate({ topic: r.topic, spokes: r.spokes })}
+          onClick={() => produce.mutate({ topic: r.topic, spokes: r.spokes, avg_difficulty: r.avg_difficulty })}
           disabled={produce.isPending}
-          title={`Builds a pillar page + ${Math.min((r.spokes?.length ?? 0), 4)} supporting posts, cross-linked`}
+          title={`Builds a pillar page + ${r.spokes?.length ?? 0} supporting posts, cross-linked (sized to how competitive this topic is)`}
           className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo hover:bg-indigo-050 disabled:opacity-50"
         >
           {produce.isPending ? "Starting…" : "Produce program"}

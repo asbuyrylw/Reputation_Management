@@ -489,14 +489,25 @@ def _assign_cadence(campaigns: list[dict], *, new_domain: bool = False) -> None:
         for q in queues:
             if q:
                 ordered.append(q.pop(0))
-    # Drip RATE derived from the research cadence AND the plan size: target the research band (HubSpot:
-    # 16+/mo ~ 3.5x traffic ~ 4/week) but raise it enough that a LARGE plan fills the whole year instead
-    # of draining the calendar by mid-year and leaving the back half empty (was a flat 2/week mislabeled
-    # 'research-backed'). A new domain drips one slower for indexation safety.
+    # Drip RATE derived from (a) the research cadence SCALED BY SEVERITY, (b) the plan size. The monthly
+    # band comes from content_research.publishing_cadence_for(max campaign severity) -- so a small but
+    # HIGH-severity crisis plan still drips at the 12-16/mo research pace instead of a calm ~8/mo (the
+    # computed severity was previously ignored, and the ceiling was a bare literal 4). Plan size can still
+    # raise it to fill the year; a new domain drips one slower for indexation safety.
     weeks_available = max(1, _HORIZON_WEEKS - _BURST_WEEKS)
     needed_weekly = math.ceil(len(ordered) / weeks_available) if ordered else 1
-    research_ceiling = max(1, 4 - (1 if new_domain else 0))     # ~16/mo (3/wk for a new domain)
-    drip = max(1, min(research_ceiling, max(_DRIP_PER_WEEK - (1 if new_domain else 0), needed_weekly)))
+    _sev_norm = 0.5
+    try:
+        _sevs = [(c.get("severity") or 0) for c in campaigns]
+        _max_sev = max(_sevs) if _sevs else 0
+        _sev_norm = min(1.0, _max_sev / float(max(1, _CLUSTER_FLOOR_SEVERITY * 2)))
+        from . import content_research as _cr_cad
+        _mo_lo, _mo_hi, _ = _cr_cad.publishing_cadence_for(_sev_norm, has_base_corpus=not new_domain)
+    except Exception:  # noqa: BLE001
+        _mo_lo, _mo_hi = 8, 16
+    _floor_weekly = max(1, round(_mo_lo / 4.3) - (1 if new_domain else 0))   # research monthly floor -> weekly
+    _ceiling_weekly = max(_floor_weekly, round(_mo_hi / 4.3))                # research monthly ceiling -> weekly
+    drip = max(_floor_weekly, min(_ceiling_weekly, max(needed_weekly, _floor_weekly)))
     for k, pc in enumerate(ordered):
         pc["week"] = min(_HORIZON_WEEKS, _BURST_WEEKS + 1 + (k // drip))
     for camp in campaigns:

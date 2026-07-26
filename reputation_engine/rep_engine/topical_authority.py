@@ -151,17 +151,26 @@ def by_intent(business_id: int) -> dict:
 
 def next_to_write(business_id: int, limit: int = 5) -> list[dict]:
     """The highest-leverage uncovered topics to write next (pillar-first). Each carries its supporting
-    spokes up to the research target (a hub needs ~8-12 supporting pieces to build topical authority),
-    so 'produce this topic as a program' generates a real hub -- not a pillar + a couple of spokes."""
+    spokes sized DYNAMICALLY by the cluster's COMPETITIVENESS (content_batch.difficulty_to_target on
+    avg_difficulty) -- the SAME curve the auto sweep uses -- so 'produce this topic as a program' builds
+    the same-size hub whether produced on demand or by the sweep (a hard cluster earns up to ~24, an easy
+    one ~8). avg_difficulty rides along so generate_cluster sizes identically. Falls back to the band max."""
     try:
-        from . import content_research as _cr
-        _spoke_cap = int(_cr.cluster_count_for("topical_authority")[1])   # 12
+        from . import content_batch as _cb
+        _size = _cb.difficulty_to_target
     except Exception:  # noqa: BLE001
-        _spoke_cap = 12
+        def _size(_d):
+            return 12
     cs = clusters(business_id)["clusters"]
-    return [{"topic": c["topic"], "covers_keywords": c["keyword_count"],
-             "spokes": c["spokes"][:_spoke_cap], "why": "No owned content covers this topic cluster yet."}
-            for c in cs if c["needs_content"]][:limit]
+    out = []
+    for c in cs:
+        if not c["needs_content"]:
+            continue
+        _ad = c.get("avg_difficulty")
+        out.append({"topic": c["topic"], "covers_keywords": c["keyword_count"],
+                    "avg_difficulty": _ad, "spokes": c["spokes"][:_size(_ad)],
+                    "why": "No owned content covers this topic cluster yet."})
+    return out[:limit]
 
 
 def score_draft_topic_coverage(business_id: int, draft_body: str, target_query: str = "") -> dict:

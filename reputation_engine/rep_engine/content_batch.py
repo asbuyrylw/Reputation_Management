@@ -728,7 +728,11 @@ def generate_cluster(business_id: int, cluster: dict, *, max_spokes: Optional[in
     'if the data says fewer, go with fewer')."""
     _budget_or_raise(business_id)
     if max_spokes is None:
-        max_spokes = _default_spoke_cap()
+        # Size by the cluster's OWN competitiveness when it carries avg_difficulty (shared curve), so the
+        # on-demand 'produce this recommended topic' path and the auto sweep size the SAME hub the same
+        # way (a hard cluster earns up to 24, not a flat 12). Falls back to the research max otherwise.
+        _ad = cluster.get("avg_difficulty")
+        max_spokes = difficulty_to_target(_ad) if _ad is not None else _default_spoke_cap()
     pillar_topic = (cluster.get("pillar") or cluster.get("topic") or "").strip()
     if not pillar_topic:
         raise ValueError("cluster has no pillar topic")

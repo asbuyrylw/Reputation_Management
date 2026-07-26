@@ -283,7 +283,7 @@ export function useGenerateContentBatch(businessId: number | null) {
 export function useProduceTopicCluster(businessId: number | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { topic: string; spokes?: string[] }) =>
+    mutationFn: (body: { topic: string; spokes?: string[]; avg_difficulty?: number | null }) =>
       apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/content-clusters/generate`, { method: "POST", body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["content-batches", businessId] });
