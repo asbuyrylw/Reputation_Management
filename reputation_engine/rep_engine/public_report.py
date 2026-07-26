@@ -41,7 +41,8 @@ def public_summary(business_id: int) -> dict:
         ga = None
         if run:
             r = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s AND "
-                            "goal_alignment IS NOT NULL", (run["id"],)).fetchone()
+                            "goal_alignment IS NOT NULL AND NOT COALESCE(failed,false) "
+                            "AND NOT COALESCE(entity_confusion,false)", (run["id"],)).fetchone()
             ga = r["g"] if r else None
         gap = conn.execute("SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
                           (business_id,)).fetchone()

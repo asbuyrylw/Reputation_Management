@@ -143,7 +143,8 @@ def _observed_velocity(conn, business_id: int) -> dict:
 
     def ga(rid):
         v = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s "
-                         "AND NOT COALESCE(failed,false)", (rid,)).fetchone()["g"]
+                         "AND NOT COALESCE(failed,false) AND NOT COALESCE(entity_confusion,false)",
+                         (rid,)).fetchone()["g"]
         return float(v) if v is not None else None
 
     first, last = runs[0], runs[-1]
@@ -176,7 +177,8 @@ def estimate(business_id: int, quiet: bool = False) -> dict:
             _rid = audit_runs.latest_display_run(conn, business_id)
             if _rid:
                 v = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s "
-                                 "AND NOT COALESCE(failed,false)", (_rid,)).fetchone()["g"]
+                                 "AND NOT COALESCE(failed,false) AND NOT COALESCE(entity_confusion,false)",
+                                 (_rid,)).fetchone()["g"]
                 cur = float(v) if v is not None else 0.0
             else:
                 cur = 0.0

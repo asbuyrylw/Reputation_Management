@@ -596,6 +596,24 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             f"from this business's real differentiators and community involvement (what makes it "
             f"credible and locally newsworthy).", 5,
             gap_source="audited gap: thin corroboration", source_query="local media list")
+        # Link-building velocity is RESEARCH-sized (content_research.backlink_target_for): a NEW
+        # referring-domains/month target, severity-scaled like video/podcast/cadence, so the earned-link
+        # line carries a concrete cited target instead of a purely qualitative instruction (the helper was
+        # otherwise computed-but-never-called).
+        try:
+            from . import content_research as _cr_bl
+            from . import content_strategist as _cs_bl
+            _bl_sevs = [(c.get("severity") or 0) for c in (strategy.get("campaigns", []) if has_strategy else [])]
+            _bl_norm = min(1.0, (max(_bl_sevs) if _bl_sevs else 0) / float(max(1, _cs_bl._CLUSTER_FLOOR_SEVERITY * 2)))
+            _bl_lo, _bl_hi, _bl_src = _cr_bl.backlink_target_for(authority="established", severity=_bl_norm)
+            _bl_line = (f"Target ~{_bl_lo}-{_bl_hi} NEW referring domains/month ({_bl_src}) via the media "
+                        f"list + guest posts / digital PR -- referring-domain count is the strongest-"
+                        f"correlated ranking lever. Never buy links or spike velocity.")
+        except Exception:  # noqa: BLE001
+            _bl_line = ("Earn new referring domains steadily via the media list + guest posts / digital PR; "
+                        "never buy links or spike velocity.")
+        add("Earn editorial backlinks (digital PR)", "link_building", _bl_line + _AEO_CHECKLIST, 6,
+            gap_source="audited gap: thin corroboration", source_query="referring domains", execution="manual")
         for i, claim in enumerate(gap.get("thin_corroboration", [])):
             c = claim.get("claim", f"claim {i+1}")
             where = claim.get("where_to_get_it", "")

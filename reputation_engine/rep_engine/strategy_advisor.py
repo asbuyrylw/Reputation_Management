@@ -100,7 +100,8 @@ def _goal_state(business_id: int) -> dict:
         cur_align = None
         if run:
             r = conn.execute("SELECT AVG(goal_alignment) a FROM answers WHERE run_id=%s AND "
-                             "goal_alignment IS NOT NULL AND NOT COALESCE(failed,false)", (run["id"],)).fetchone()
+                             "goal_alignment IS NOT NULL AND NOT COALESCE(failed,false) "
+                             "AND NOT COALESCE(entity_confusion,false)", (run["id"],)).fetchone()
             cur_align = _f(r["a"]) if r else None
     model = {}
     if gm:

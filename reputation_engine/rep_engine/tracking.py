@@ -473,7 +473,9 @@ def log_asset(business_id: int, asset_type: str, title: str, url: str | None,
 # ----------------------------------------------------------------------------
 def _run_metrics(conn, run_id: int) -> dict:
     r = conn.execute(
-        "SELECT AVG(goal_alignment) ga, "
+        # goal_alignment excludes wrong-entity answers (canonical denominator) so the attribution
+        # section's alignment delta matches the entity-safe trend series in the same client report.
+        "SELECT AVG(goal_alignment) FILTER (WHERE NOT COALESCE(entity_confusion,false)) ga, "
         "AVG(CASE WHEN mentions_contested THEN 1 ELSE 0 END) contested_rate, "
         "AVG(CASE WHEN surfaces_owned THEN 1 ELSE 0 END) owned_rate "
         "FROM answers WHERE run_id=%s AND NOT COALESCE(failed,false)", (run_id,)

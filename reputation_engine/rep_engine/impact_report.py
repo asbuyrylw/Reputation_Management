@@ -35,7 +35,8 @@ def _owned_share(conn, business_id: int, run_id: int):
 
 def _avg_ga(conn, run_id: int):
     r = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s "
-                     "AND NOT COALESCE(failed,false)", (run_id,)).fetchone()
+                     "AND NOT COALESCE(failed,false) AND NOT COALESCE(entity_confusion,false)",
+                     (run_id,)).fetchone()
     return round(float(r["g"]), 3) if r and r["g"] is not None else None
 
 

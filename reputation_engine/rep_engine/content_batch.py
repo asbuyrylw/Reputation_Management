@@ -31,7 +31,11 @@ log = logging.getLogger("content_batch")
 
 # A sensible default multi-type spread per gap. Tailored by gap intent in _types_for_gap().
 _DEFAULT_TYPES = ["blog", "article", "white_paper", "social_post"]
-_LOCAL_TYPES = ["local_page", "blog", "faq", "social_post"]
+# Local: the geo PILLAR + an FAQ. The supporting blogs come from the per-keyword/angle spoke loop (sized
+# by competitiveness), NOT a generic top-level blog, and social/GBP/reviews are handled as their own
+# work (plan side), so the batch's DRAFTABLE local set matches the plan's for the same local: gap_key
+# (was [local_page, blog, faq, social_post] -> a divergent extra blog + auto-atomized social).
+_LOCAL_TYPES = ["local_page", "faq"]
 _COMMERCIAL_TYPES = ["landing_page", "article", "social_post"]
 # A video gap can't be auto-published as a finished video (Veo is paid/dormant), so we produce the
 # generatable, honest deliverable -- a shootable VIDEO SCRIPT -- plus a supporting blog + social,

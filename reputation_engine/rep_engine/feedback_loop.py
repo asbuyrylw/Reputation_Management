@@ -86,7 +86,8 @@ def _confidence(n_windows: int) -> str:
 
 def _ga(conn, run_id: int):
     v = conn.execute("SELECT AVG(goal_alignment) g FROM answers WHERE run_id=%s "
-                     "AND NOT COALESCE(failed,false)", (run_id,)).fetchone()["g"]
+                     "AND NOT COALESCE(failed,false) AND NOT COALESCE(entity_confusion,false)",
+                     (run_id,)).fetchone()["g"]
     return float(v) if v is not None else None
 
 
