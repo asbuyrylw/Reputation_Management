@@ -279,7 +279,12 @@ def _signals(business_id: int) -> dict:
         "topic_clusters": [{"topic": c.get("topic"), "spokes": (c.get("spokes") or [])[:8],
                             "needs_content": c.get("needs_content"),
                             "keyword_count": c.get("keyword_count"),
-                            "total_search_volume": c.get("total_search_volume")}
+                            "total_search_volume": c.get("total_search_volume"),
+                            # forward WINNABILITY too (avg_difficulty + opportunity) so the strategist can
+                            # lead with high-volume, RANKABLE clusters -- and so system-prompt rule 8's
+                            # stated contract ('topic_clusters carry ... avg_difficulty') is actually true.
+                            "avg_difficulty": c.get("avg_difficulty"),
+                            "opportunity": c.get("opportunity")}
                            for c in clusters[:12]],
     }
 

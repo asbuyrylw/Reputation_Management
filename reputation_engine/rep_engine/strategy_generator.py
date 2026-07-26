@@ -372,15 +372,18 @@ def _strat_tokens(s: str) -> set[str]:
             if len(t) > 2 and t not in _STRAT_STOP}
 
 
-def _emit_typed_program(add, topic: str, atype: str, gap_source: str, why: str, gap_key: str) -> None:
+def _emit_typed_program(add, topic: str, atype: str, gap_source: str, why: str, gap_key: str,
+                        default_types=None) -> None:
     """Emit the SAME multi-type content spread the BATCH path (content_batch._types_for_gap) fans an
     uncovered moc/competitor gap into, so plan and batch produce the same content-type SET for one
     gap_key (was 1 WO on the plan vs ~4 typed pieces in the batch -- a plan-vs-batch divergence). Each
     piece shares the canonical gap_key (measured together) and carries its content_type so generation
-    uses the right per-type template; social is atomized from the long-form, not a standalone WO."""
+    uses the right per-type template; social is atomized from the long-form, not a standalone WO.
+    `default_types` MUST be the tenant's profile default_content_types (the same value the batch passes)
+    so the type SET matches for non-module-default tenants (generic keeps faq / drops white_paper)."""
     try:
         from . import content_batch as _cb_t
-        types = _cb_t._types_for_gap({"topic": topic, "asset_type": atype}) or ["article"]
+        types = _cb_t._types_for_gap({"topic": topic, "asset_type": atype}, default_types) or ["article"]
     except Exception:  # noqa: BLE001
         types = ["article"]
     _titles = {"blog": f"Blog: {topic}", "white_paper": f"White paper: {topic}", "faq": f"{topic}: FAQ",
@@ -402,6 +405,14 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     biz = business or {}
     geo = (biz.get("geo") or "").strip() or "your local area"
     industry = (biz.get("industry") or "").strip() or "local-business"
+    # The tenant's profile content spread -- the SAME value the batch path passes to _types_for_gap -- so
+    # an uncovered moc/comp gap emits the identical content-type SET on the plan and the batch.
+    _prof_types = None
+    try:
+        from . import business_profile as _bp_t
+        _prof_types = (_bp_t.derive(biz) if biz else {}).get("default_content_types")
+    except Exception:  # noqa: BLE001 -- profile is best-effort; None -> module default spread (same as batch)
+        _prof_types = None
     # When the Content Strategist produced a program, its cluster CAMPAIGNS replace the deterministic
     # one-WO-per-gap owned-content + competitor-defense loops (the strategist read those same gaps and
     # fanned them into a real multi-piece program). Everything else (baseline, schema, corroboration,
@@ -567,7 +578,7 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         # here vs ~4 typed pieces in the batch (a plan-vs-batch divergence). All share the canonical
         # gap_key so they measure together.
         _emit_typed_program(add, topic, atype, "audited gap: missing owned content", why,
-                            _tu.gid("moc", topic))
+                            _tu.gid("moc", topic), default_types=_prof_types)
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
@@ -751,7 +762,8 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         # + social), so plan and batch produce the same content-type SET for one comp: gap_key.
         _why_c = (f"{g.get('recommendation', 'Publish accurate owned content that answers this question well.')} "
                   f"A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.")
-        _emit_typed_program(add, q, "comparison", "competitor analysis", _why_c, _tu.gid("comp", q))
+        _emit_typed_program(add, q, "comparison", "competitor analysis", _why_c, _tu.gid("comp", q),
+                            default_types=_prof_types)
 
     # --- Site-technical gaps -> tasks (thin/missing pages, schema, weak coverage) ---
     for i, g in enumerate(gap.get("site_technical_gaps", []) or []):

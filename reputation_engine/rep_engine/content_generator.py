@@ -2653,10 +2653,14 @@ def atomize_draft(business_id: int, draft_id: int, batch_id: Optional[int] = Non
     it's visible to the score->mix loop no matter which path (batch or the /atomize endpoint) created it."""
     _ensure_table()
     with db() as conn:
-        d = conn.execute("SELECT id, work_order_id, title, body, target_query FROM content_drafts "
+        d = conn.execute("SELECT id, work_order_id, title, body, target_query, batch_id FROM content_drafts "
                          "WHERE id=%s AND business_id=%s", (draft_id, business_id)).fetchone()
     if not d:
         return {"ok": False, "error": "draft not found"}
+    # Inherit the PARENT draft's batch when the caller didn't pass one (the /atomize endpoint doesn't),
+    # so endpoint-atomized social posts join the same gap batch as their source -> counted in
+    # content_impact/gap_completion + measured, matching the content_batch path (was batch_id=NULL).
+    batch_id = batch_id or d.get("batch_id")
     body = (d.get("body") or "").strip()
     if len(body) < 120:
         return {"ok": False, "error": "draft is too short to atomize into social posts"}

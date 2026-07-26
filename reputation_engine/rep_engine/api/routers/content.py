@@ -313,6 +313,9 @@ def create_custom_content(body: CustomContentBody, background: BackgroundTasks,
             business_id, title, instruction=desc, capability=cap,
             gap_source=("user_content" if body.gap_key else None),
             source_query=(body.gap_label or None),
+            # persist the canonical gap_key so a piece the owner tied to a local:/comp:/moc: gap joins
+            # THAT gap in ensure_impact_batch / gap_completion (was dropped -> orphan moc:<label> batch).
+            gap_key=(body.gap_key or None),
             why_helps_ai_rep=(f"Owner-requested {label.lower()} to close the '{body.gap_label}' gap."
                               if body.gap_label else "Owner-requested content."))
     except ValueError as e:

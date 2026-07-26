@@ -110,13 +110,29 @@ def _maybe_agentic_steps(rs, bid: int) -> None:
     if _agent_enabled("AGENT_RICH_MEDIA_IN_CYCLE"):
         def _run():
             from . import rich_media_generator as a
+            from . import content_batch as _cb
             from .config import settings
             s = settings()
             types = (
                 [t.strip() for t in s.rich_media_types.split(",") if t.strip()]
                 if s.rich_media_types else None
             )
-            return a.generate(bid, types)
+            # GAP-LINK the cycle's rich media to the top open content gap (find-or-create its impact
+            # batch) so podcast/slides/etc. earn gap-completion credit + are measurable, instead of
+            # landing in rich_media_drafts with batch_id/gap_key=NULL. No gap -> general amplification.
+            batch_id = gap_key = None
+            try:
+                gaps = _cb.gaps_for_business(bid) or []
+                if gaps:
+                    g0 = gaps[0]
+                    gap_key = g0.get("gap_key")
+                    batch_id = _cb.ensure_impact_batch(bid, {
+                        "title": g0.get("topic"), "target_query": g0.get("topic"),
+                        "gap_source": g0.get("gap_source"),
+                        "gap_specifics": {"gap_key": gap_key, "source_query": g0.get("topic")}})
+            except Exception:  # noqa: BLE001 -- linkage is best-effort; rich media still generates
+                batch_id = gap_key = None
+            return a.generate(bid, types, batch_id=batch_id, gap_key=gap_key)
         rs.step("rich_media", lambda: _safe_agentic("rich_media", _run),
                 "CYCLE rich-media drafts (podcast, slides, infographic, articles via NotebookLM)")
 

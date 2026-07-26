@@ -245,7 +245,7 @@ def create_work_order(business_id: int, title: str, *, instruction: str | None =
                       target_date: str | None = None, assignee: str | None = None,
                       gap_source: str | None = None, source_query: str | None = None,
                       area: str | None = None, why_helps_ai_rep: str | None = None,
-                      why_helps_seo: str | None = None) -> int:
+                      why_helps_seo: str | None = None, gap_key: str | None = None) -> int:
     """Add a manual work order (an ad-hoc task the owner/admin wants tracked alongside the
     plan-generated ones), carrying gap lineage when it comes from a gap item ("turn into task").
     plan_id is NULL; wo_code is a per-business MANUAL-<n>. IDEMPOTENT: if an OPEN task with the same
@@ -268,7 +268,15 @@ def create_work_order(business_id: int, title: str, *, instruction: str | None =
             "SELECT COUNT(*) c FROM work_orders WHERE business_id=%s AND wo_code LIKE 'MANUAL-%%'",
             (business_id,),
         ).fetchone()["c"]
-        gs = json.dumps({"source_query": source_query}) if source_query else None
+        # Persist gap_key (the canonical local:/comp:/moc: key) alongside source_query so a custom
+        # "Create content" piece the owner tied to a real gap joins THAT gap in ensure_impact_batch /
+        # gap_completion (was dropped -> ensure_impact_batch minted a moc:<label> orphan that never joined).
+        _gs_obj = {}
+        if source_query:
+            _gs_obj["source_query"] = source_query
+        if gap_key:
+            _gs_obj["gap_key"] = gap_key
+        gs = json.dumps(_gs_obj) if _gs_obj else None
         row = conn.execute(
             """INSERT INTO work_orders (business_id, wo_code, title, capability, instruction,
                 recommended_tool, target_date, assignee, gap_source, gap_specifics, area,

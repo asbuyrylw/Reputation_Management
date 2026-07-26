@@ -316,7 +316,10 @@ def gaps_for_business(business_id: int) -> list[dict]:
         out.append({
             "gap_key": _tu.gid("comp", q),
             "topic": q,
-            "asset_type": "article",
+            # 'comparison' so _types_for_gap hits the SAME COMMERCIAL branch (landing/comparison + article
+            # + social) the plan's _emit_typed_program uses for a comp gap -- so batch and plan produce the
+            # same content-type SET + lead type for the same comp: gap_key (was 'article' -> text spread).
+            "asset_type": "comparison",
             "gap_source": "competitor analysis",
             "why": item.get("recommendation") or item.get("why") or "",
             "target_prompts": _match_prompts(q, weak),
