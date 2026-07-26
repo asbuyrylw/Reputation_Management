@@ -140,7 +140,10 @@ _SYSTEM_BASE = (
     "DOWN on gaps/topics that moved the score up, PIVOT or strengthen (more authoritative citations + "
     "clearer entity disambiguation) topics that regressed or barely moved, and DEPRIORITIZE gaps "
     "already largely closed. (8) Prioritize by real DEMAND: keyword_intents/topic_clusters carry "
-    "total_search_volume + avg_difficulty -- lead with high-volume, winnable topics. JSON only."
+    "total_search_volume + avg_difficulty -- lead with high-volume, winnable topics. "
+    "(9) If 'type_performance' is provided (each content_type's average GEO/citability grade for THIS "
+    "business), bias the content-type MIX toward the formats scoring HIGHEST here (produce more of what "
+    "is demonstrably citable for this tenant) and ease off formats that consistently score low. JSON only."
 )
 
 
@@ -160,7 +163,19 @@ def _system_prompt(profile: dict) -> str:
                     "performance guarantees, no specific license/credential numbers, legitimacy via "
                     "general licensing statements + third-party corroboration, and require any "
                     "disclosures the profile lists.")
-    return _SYSTEM_BASE + fin_note + lic + _audit.NO_NEGATIVE_DISAMBIGUATION_POLICY + _audit.UNTRUSTED_INSTRUCTION
+    # Ground the amount/type/structure decisions in real, cited research (Google + the Princeton GEO
+    # paper + SEO studies) instead of priors -- the strategist must justify counts/mix against evidence.
+    research = ""
+    try:
+        from . import content_research as _cr
+        rb = _cr.research_block(limit=14)
+        if rb:
+            research = ("\n\nUse this evidence to justify HOW MUCH content, WHICH types, and WHAT structure "
+                        "each campaign needs (cite it in the `why` where relevant):\n" + rb)
+    except Exception:  # noqa: BLE001 -- research grounding must never break the prompt
+        research = ""
+    return (_SYSTEM_BASE + fin_note + lic + research
+            + _audit.NO_NEGATIVE_DISAMBIGUATION_POLICY + _audit.UNTRUSTED_INSTRUCTION)
 
 
 def _existing_titles(business_id: int, limit: int = 40) -> list[str]:
@@ -174,6 +189,29 @@ def _existing_titles(business_id: int, limit: int = 40) -> list[str]:
                 (business_id, business_id)).fetchall()
         return [r["title"] for r in rows if r.get("title")][:limit]
     except Exception:  # noqa: BLE001 -- no table yet / read error -> nothing known owned
+        return []
+
+
+def _type_performance(business_id: int) -> list:
+    """Per-content-type average GEO grade + volume from produced drafts, so the strategist can bias the
+    content-type MIX toward the formats that actually score well (are citable) for THIS tenant -- half of
+    the score->plan loop (the other half, measured SoV lift, is content_performance). Best-effort -> []."""
+    try:
+        from .db import db
+    except ImportError:  # pragma: no cover
+        from db import db  # type: ignore
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT content_type, round(avg(geo_score)::numeric, 1) AS avg_geo, count(*) AS n "
+                "FROM content_drafts WHERE business_id=%s AND geo_score IS NOT NULL "
+                "AND content_type IS NOT NULL GROUP BY content_type ORDER BY avg_geo DESC NULLS LAST",
+                (business_id,)).fetchall()
+        return [{"content_type": r["content_type"],
+                 "avg_geo": float(r["avg_geo"]) if r["avg_geo"] is not None else None, "n": r["n"]}
+                for r in rows][:10]
+    except Exception as e:  # noqa: BLE001
+        log.warning("strategist: type performance unavailable (%s)", e)
         return []
 
 
@@ -203,6 +241,7 @@ def _signals(business_id: int) -> dict:
     # opportunity, not just bucket size (was dropped entirely before).
     return {
         "content_performance": content_perf,
+        "type_performance": _type_performance(business_id),   # which FORMATS score well here (score->plan)
         "keyword_intents": [{"intent": g.get("intent"), "keywords": g.get("keywords"),
                              "examples": g.get("examples"), "needs_content": g.get("needs_content"),
                              "total_search_volume": g.get("total_search_volume"),
@@ -311,15 +350,24 @@ def _assign_cadence(campaigns: list[dict], *, new_domain: bool = False) -> None:
 
 
 def _add_video_plan(campaigns: list[dict]) -> None:
-    """Plan a VIDEO option for each campaign's pillar + top clusters (Phase 5). Generating one yields
-    a script + SRT captions + VideoObject schema (content_quality); rendering an MP4 (HeyGen/Veo) is a
-    separate on-demand click. Opt-in (on_click=True) so a LOT of video options surface without being
-    auto-drafted -- the owner picks which to produce. Each video inherits its source piece's cadence
-    week so it sits beside its article."""
+    """Plan a VIDEO option per campaign, HONORING the strategist's own judgment + severity instead of a
+    flat every-campaign template. The LLM sets atomization.video_script (does this topic warrant video?);
+    we plan videos when it said yes OR the campaign is high-severity (so the top topics always get at least
+    a pillar video), and scale the number of cluster videos by severity (1.._VIDEO_CLUSTERS). Generating
+    one yields a script + SRT + VideoObject schema; rendering an MP4 is a separate on-demand click
+    (on_click=True). Each video inherits its source piece's cadence week."""
     for camp in campaigns:
         pieces = camp.get("pieces") or []
+        atom = camp.get("atomization") if isinstance(camp.get("atomization"), dict) else {}
+        wants_video = bool(atom.get("video_script", True))   # default True (back-compat) unless LLM said no
+        sev = camp.get("severity") or 0
+        if not wants_video and sev < 6:
+            continue   # strategist judged video not warranted AND not a high-severity topic -> no video
         pillar = next((p for p in pieces if p.get("role") == "pillar"), None)
-        clusters = [p for p in pieces if p.get("role") == "cluster"][:_VIDEO_CLUSTERS]
+        # scale cluster videos by severity; when the LLM didn't want video but severity forced a pillar
+        # video, add no cluster videos (pillar-only).
+        n_clusters = max(1, min(_VIDEO_CLUSTERS, int(sev // 3))) if wants_video else 0
+        clusters = [p for p in pieces if p.get("role") == "cluster"][:n_clusters]
         vids = []
         for src in ([pillar] if pillar else []) + clusters:
             vids.append({

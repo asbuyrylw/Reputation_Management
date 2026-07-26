@@ -13,6 +13,7 @@ import { Badge, Button, EmptyState, ToneBar } from "@/components/primitives";
 import { JobProgressBanner } from "@/components/JobProgressBanner";
 import { DirectoryCitationsSection } from "@/components/DirectoryCitationsSection";
 import type { WorkOrder, ProgressNote, ContentDraft, Asset, ActionTaken, RoadmapItem } from "@/lib/types";
+import { DRAFTABLE } from "@/lib/content";   // single shared draftable-content set (see content.ts)
 
 // The draft/asset a task produced, as a small deep-linked status (the execution narrative:
 // task -> draft -> published asset).
@@ -31,13 +32,7 @@ function ProducedLink({ draft, asset }: { draft?: ContentDraft; asset?: Asset })
   return null;
 }
 
-// Producible content the AI drafts for you (the per-item "Generate draft" button). MUST mirror the
-// backend source of truth (strategy_generator.CONTENT_CAPABILITIES) so every surface agrees on what is
-// content. Technical work (schema_markup, technical_seo) is excluded — it's a website/dev task.
-const DRAFTABLE = new Set([
-  "content_writing", "video_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "research_brief",
-]);
+// DRAFTABLE (the per-item "Generate draft" set) is the shared content.ts constant now — see content.ts.
 // Copy we draft IN-APP — point these at OUR pipeline (Generate draft → Drafts), not external tools.
 const IN_APP_CONTENT = new Set([
   "content_writing", "local_content_creation", "explainer_video", "deep_content",

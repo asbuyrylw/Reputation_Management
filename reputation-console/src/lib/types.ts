@@ -228,6 +228,7 @@ export interface UngroundedPiece {
   topic: string | null;
   primary_keyword?: string | null;
   keywords?: string[];
+  status?: "ungrounded" | "thin";   // whether the piece has NO material or only THIN material
   needed: string;   // human "what to provide" — the specific source material to add for this piece
 }
 export interface PlanCoverage {
@@ -238,8 +239,10 @@ export interface PlanCoverage {
   ungrounded: number;
   unknown: number;
   ungrounded_topics: string[];
+  thin_topics?: string[];
   // Per-piece "what to provide" (preferred over ungrounded_topics): tells the owner the specific
-  // source material to add, not just the piece name. Synthesis pieces are excluded (false positives).
+  // source material to add, not just the piece name. Covers ungrounded AND thin pieces (each tagged
+  // with `status`). Synthesis pieces are excluded (false positives).
   ungrounded_pieces?: UngroundedPiece[];
   reason: string | null;
 }
@@ -562,6 +565,7 @@ export interface ContentBrief {
   primary_keyword: string | null;
   keywords: string[];
   word_count_target: number;
+  word_count_basis?: string;   // the cited research the length is based on (content_research.py)
   readability_target: string;
   structure: string;
   closes_gap: string | null;

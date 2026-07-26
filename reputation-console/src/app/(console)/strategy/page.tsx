@@ -160,7 +160,7 @@ export default function StrategyPage() {
             <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
           </svg>
           <div>
-            <div className="text-[13px] font-bold text-amber-900">Some pieces have no source material</div>
+            <div className="text-[13px] font-bold text-amber-900">{strat.coverage?.status === "thin" ? "Some pieces need more source material" : "Some pieces have no source material"}</div>
             <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800">
               {strat.coverage?.reason || "Some planned pieces have no source material for their topic, so they'll be written without your verified facts."}
             </p>
@@ -174,7 +174,7 @@ export default function StrategyPage() {
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
                     <span>
                       <span className="font-semibold capitalize">{(p.content_type || "piece").replace(/_/g, " ")}</span>
-                      <span> — provide {p.needed}</span>
+                      <span> — {p.status === "thin" ? "strengthen with" : "provide"} {p.needed}</span>
                     </span>
                   </li>
                 ))}

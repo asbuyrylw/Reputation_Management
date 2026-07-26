@@ -278,6 +278,22 @@ export function useGenerateContentBatch(businessId: number | null) {
   });
 }
 
+// Produce ONE recommended topic as a real pillar + supporting-spokes PROGRAM (not a single article) —
+// routes through content_batch.generate_cluster, which cross-links the hub and records a measured batch.
+export function useProduceTopicCluster(businessId: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { topic: string; spokes?: string[] }) =>
+      apiFetch<{ job_id?: number; status?: string }>(`/businesses/${businessId}/content-clusters/generate`, { method: "POST", body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["content-batches", businessId] });
+      qc.invalidateQueries({ queryKey: ["gap-completion", businessId] });
+      qc.invalidateQueries({ queryKey: ["jobs", businessId] });
+      qc.invalidateQueries({ queryKey: ["work-orders", businessId] });
+    },
+  });
+}
+
 export function useProductionBriefs(businessId: number | null) {
   return useApiQuery<ProductionBrief[]>(["production-briefs", businessId], businessId ? `/businesses/${businessId}/production-briefs` : null);
 }

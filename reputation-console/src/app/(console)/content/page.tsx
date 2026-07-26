@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useContentDrafts, useProductionBriefs, useTopicalAuthority, useFreshnessQueue, useAddWorkOrder, useVisuals, useRichMediaDrafts } from "@/lib/hooks";
+import { useContentDrafts, useWorkOrders, useTopicalAuthority, useFreshnessQueue, useProduceTopicCluster, useVisuals, useRichMediaDrafts } from "@/lib/hooks";
 import { apiBase } from "@/lib/api";
+import { contentToProduce, CAP_LABEL } from "@/lib/content";
 import { Card, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
 import { EmptyState } from "@/components/primitives";
@@ -19,24 +20,27 @@ function Tile({ k, value, sub, color }: { k: string; value: string; sub: string;
   );
 }
 
-// A recommended topic -> a real content task (so "needs content" actually produces content):
-// adds it to the board, where it shows up on the briefs page with Generate + its spec.
-function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_keywords?: number; why?: string }; businessId: number | null; canEdit: boolean }) {
-  const add = useAddWorkOrder(businessId);
+// A recommended topic -> a real pillar + supporting-spokes PROGRAM (not one article). Producing it runs
+// the same cluster builder the strategist uses: a comprehensive pillar page + cross-linked spoke pages,
+// recorded as a measured content batch — so "add recommended content" builds real topical authority.
+function RecommendRow({ r, businessId, canEdit }: { r: { topic: string; covers_keywords?: number; spokes?: string[]; why?: string }; businessId: number | null; canEdit: boolean }) {
+  const produce = useProduceTopicCluster(businessId);
+  const nPieces = 1 + Math.min((r.spokes?.length ?? 0), 4);
   return (
     <div className="flex items-center gap-3 border-b border-indigo-100 py-2.5 last:border-0">
       <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={r.why}>{r.topic}</span>
-      <span className="shrink-0 font-mono text-[11px] text-ink-4">{r.covers_keywords} kw</span>
-      {!canEdit ? null : add.isSuccess ? (
-        <Link href="/content/briefs" className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-good hover:bg-indigo-050">✓ Added — produce →</Link>
+      <span className="shrink-0 font-mono text-[11px] text-ink-4">{r.covers_keywords} kw · {nPieces} pieces</span>
+      {!canEdit ? null : produce.isSuccess ? (
+        <Link href="/content/briefs" className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-good hover:bg-indigo-050">✓ Producing — drafts →</Link>
       ) : (
         <button
           type="button"
-          onClick={() => add.mutate({ title: `Create content: ${r.topic}`, capability: "content_writing", gap_source: "topic authority", source_query: r.topic, area: "content", instruction: r.why, why_helps_ai_rep: r.why })}
-          disabled={add.isPending}
+          onClick={() => produce.mutate({ topic: r.topic, spokes: r.spokes })}
+          disabled={produce.isPending}
+          title={`Builds a pillar page + ${Math.min((r.spokes?.length ?? 0), 4)} supporting posts, cross-linked`}
           className="shrink-0 rounded-[8px] border border-indigo-100 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo hover:bg-indigo-050 disabled:opacity-50"
         >
-          {add.isPending ? "Adding…" : "+ Add as task"}
+          {produce.isPending ? "Starting…" : "Produce program"}
         </button>
       )}
     </div>
@@ -77,7 +81,7 @@ function RecentMediaCard({ businessId }: { businessId: number | null }) {
 export default function ContentOverviewPage() {
   const { businessId, businesses, loading, canEdit } = useBusiness();
   const { data: drafts } = useContentDrafts(businessId);
-  const { data: briefs } = useProductionBriefs(businessId);
+  const { data: workOrders } = useWorkOrders(businessId);
   const { data: topical } = useTopicalAuthority(businessId);
   const { data: freshness } = useFreshnessQueue(businessId);
 
@@ -91,7 +95,9 @@ export default function ContentOverviewPage() {
     );
   }
 
-  const toProduce = briefs ?? [];
+  // Same source + filter the Briefs "To Produce" page uses (via the shared contentToProduce helper), so
+  // the hub's "produce next" list + KPI tile can never disagree with the Briefs page again.
+  const toProduce = contentToProduce(workOrders);
   const recommended = topical?.next_to_write ?? [];
   const inDraft = (drafts ?? []).filter((d) => d.status === "pending_review" || d.status === "needs_fix" || d.status === "held");
   // "Published" = actually LIVE (matches the backend's live-only definition in gap_completion /
@@ -115,7 +121,7 @@ export default function ContentOverviewPage() {
 
       {/* KPI tiles */}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Tile k="To produce" value={String(toProduce.length)} sub="Added from your tasks" />
+        <Tile k="To produce" value={String(toProduce.length)} sub="Content on your plan" />
         <Tile k="Recommended" value={String(recommended.length)} sub="Not yet on your board" color="var(--indigo)" />
         <Tile k="In draft" value={String(inDraft.length)} sub="Awaiting review" />
         <Tile k="Published" value={String(published.length)} sub={approvedNotLive.length ? `Live · ${approvedNotLive.length} approved awaiting go-live` : "Live & earning traffic"} color="var(--good)" />
@@ -129,10 +135,10 @@ export default function ContentOverviewPage() {
             <p className="text-[13px] text-ink-4">No content tasks queued. Add one from your plan.</p>
           ) : (
             <div>
-              {toProduce.slice(0, 5).map((b) => (
-                <div key={b.id} className="flex items-center gap-3 border-b border-line py-2.5 last:border-0">
-                  <span className="shrink-0 rounded-[5px] border border-line-2 bg-paper px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink-2">{b.platform || b.channel}</span>
-                  <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{b.title || b.target_query || "Untitled piece"}</span>
+              {toProduce.slice(0, 5).map((w) => (
+                <div key={w.id} className="flex items-center gap-3 border-b border-line py-2.5 last:border-0">
+                  <span className="shrink-0 rounded-[5px] border border-line-2 bg-paper px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink-2">{CAP_LABEL[w.capability ?? ""] ?? "Content"}</span>
+                  <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{w.title || "Untitled piece"}</span>
                   <Link href="/content/briefs" className="shrink-0 rounded-[8px] bg-indigo px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-indigo-strong">Generate</Link>
                 </div>
               ))}

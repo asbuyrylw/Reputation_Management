@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBusiness } from "@/lib/business";
-import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords, useRenderRichMediaVideo } from "@/lib/hooks";
+import { useProductionBriefs, useWorkOrders, useContentDrafts, useAssets, useGenerateDraftForWo, useTopicalAuthority, useKeywordIntent, useSetBriefStatus, useContentBrief, useGenerateContentBatch, useTargetKeywords, useRenderRichMediaVideo, useAtomizeDraft } from "@/lib/hooks";
+import { CONTENT_CAPS, DRAFTABLE, CAP_LABEL } from "@/lib/content";
 import { downloadCsv } from "@/lib/download";
 import { Button, Card, Chip, PageHeader, Spinner } from "@/components/ui";
 import { SecHead } from "@/components/DashboardV2";
@@ -219,35 +220,9 @@ function groupByPlatform(recipes: ProductionBrief[]): { key: string; label: stri
     .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
 }
 
-// PRODUCIBLE CONTENT = every draftable/generatable piece (article, video, podcast, blog series, slide
-// deck, infographic, research brief, local page). This set MUST mirror the backend source of truth
-// (strategy_generator.CONTENT_CAPABILITIES) so the Strategy plan's "content to produce" and this page
-// can never disagree. Technical/structural work (schema, site speed/freshness/titles, internal links,
-// alt-text) is deliberately NOT here — it lives on the website-fixes board, not in the content section.
-const CONTENT_CAPS = new Set([
-  "content_writing", "video_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "research_brief", "local_content_creation",
-]);
-// The pieces that generate on click (content_writing + all rich-media route through generate_for_wo →
-// rich_media_generator). local_content_creation is a multi-piece PROGRAM, handled separately below.
-const DRAFTABLE = new Set([
-  "content_writing", "video_creation", "explainer_video", "deep_content",
-  "podcast_creation", "slide_deck", "research_brief",
-]);
-
-const CAP_LABEL: Record<string, string> = {
-  content_writing: "Article / web page",
-  video_creation: "Video",
-  explainer_video: "Explainer video",
-  deep_content: "Blog series + long-form",
-  podcast_creation: "Podcast",
-  slide_deck: "Slide deck",
-  research_brief: "Research brief",
-  local_content_creation: "Local / geo page",
-  review_generation: "Reviews",
-  schema_markup: "Website code (schema)",
-  technical_seo: "Website fix",
-};
+// PRODUCIBLE CONTENT capability sets + labels now live in ONE place — src/lib/content.ts (imported at
+// the top of this file) — so the hub, this page, the calendar and work-orders can never drift again
+// (that drift is how the removed infographic lingered).
 
 // Lifecycle stage for a content item, derived from its latest draft + any published asset.
 function stageOf(draft: ContentDraft | undefined, asset: Asset | undefined): { label: string; cls: string } {
@@ -286,6 +261,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
   const gen = useGenerateDraftForWo(businessId);
   const renderVideo = useRenderRichMediaVideo(businessId);
   const genProgram = useGenerateContentBatch(businessId);
+  const atomize = useAtomizeDraft(businessId);
   const [showSpec, setShowSpec] = useState(false);
   const brief = useContentBrief(businessId, showSpec ? wo.id : null);
   const stage = stageOf(draft, asset);
@@ -329,7 +305,7 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
                   <div className="flex flex-wrap items-center gap-1.5"><span className="font-semibold text-ink-3">Target keywords:</span> <KeywordChips keywords={brief.data.keywords} businessId={businessId} /></div>
                 )}
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5">
-                  <span><span className="font-semibold text-ink-3">Length:</span> ~{brief.data.word_count_target} words</span>
+                  <span title={brief.data.word_count_basis || undefined}><span className="font-semibold text-ink-3">Length:</span> ~{brief.data.word_count_target} words{brief.data.word_count_basis ? " ⓘ" : ""}</span>
                   <span><span className="font-semibold text-ink-3">Readability:</span> {brief.data.readability_target}</span>
                 </div>
                 <div><span className="font-semibold text-ink-3">Structure:</span> {brief.data.structure}</div>
@@ -381,6 +357,19 @@ function ContentItem({ wo, draft, asset, businessId, canEdit }: {
         {genProgram.isSuccess && isLocalGoal && <span className="text-[11px] text-emerald-700">Multi-piece program queued — track it under Content impact.</span>}
         {draft && !published && (
           <Link href="/content/drafts" className="font-medium text-indigo hover:underline">Review draft →</Link>
+        )}
+        {/* Once a long-form draft exists, spin per-platform SOCIAL posts off it (human-gated, never
+            auto-posted). They then appear in the Social group + the Drafts flow. */}
+        {canEdit && draft && !isVideo && !isLocalGoal && (wo.capability === "content_writing" || wo.capability === "deep_content") && (
+          <button
+            type="button"
+            onClick={() => atomize.mutate({ draftId: draft.id })}
+            disabled={atomize.isPending || atomize.isSuccess}
+            className="font-medium text-indigo hover:underline disabled:opacity-60"
+            title="Create per-platform social posts from this piece"
+          >
+            {atomize.isPending ? "Creating social…" : atomize.isSuccess ? "Social posts created ✓" : "+ Create social posts"}
+          </button>
         )}
         {published && asset?.published_url ? (
           <a href={asset.published_url} target="_blank" rel="noreferrer" className="font-medium text-emerald-700 hover:underline">View published →</a>
@@ -498,6 +487,9 @@ export default function BriefsPage() {
     .map((k) => ({ key: k, label: AREA_LABEL[k], items: contentItems.filter((w) => areaKey(w.area) === k) }))
     .filter((g) => g.items.length > 0);
   const notStarted = contentItems.filter((w) => !draftByWo.get(w.id) && !assetByWo.get(w.id)).length;
+  // Social posts ARE produced (by atomizing a long-form piece / a content batch) — surface them here
+  // so social is visible in To-Produce, not hidden in the Drafts flow. They are human-gated drafts.
+  const socialDrafts = (drafts ?? []).filter((d) => d.content_type === "social_post" && d.status !== "rejected");
 
   // "By section" filter: All + each area that has pieces.
   const areaChips = [
@@ -505,11 +497,11 @@ export default function BriefsPage() {
     ...grouped.map((g) => ({ key: g.key, label: g.label })),
   ];
   const visibleGroups = areaFilter === "all" ? grouped : grouped.filter((g) => g.key === areaFilter);
-  // The strategist now creates VIDEO (+ atomized social) as WORK ORDERS with a clickable Generate ->
-  // HeyGen flow, so the legacy production-brief "recipes" (which only had a manual "Mark produced"
-  // button, not a Generate) are no longer the produce path. Hide them so the page shows only the
-  // actionable, generatable pieces. (Social posts are created automatically when a long-form piece is
-  // approved -> atomized, so they don't need a separate to-produce card.)
+  // The strategist now creates VIDEO as WORK ORDERS with a clickable Generate -> HeyGen flow, so the
+  // legacy production-brief "recipes" (which only had a manual "Mark produced" button, not a Generate)
+  // are no longer the produce path. Hide them so the page shows only the actionable, generatable pieces.
+  // (Social posts are produced by atomizing a long-form piece -- via the "Create social posts" action --
+  // and then appear in the Social group below; they are NOT auto-created on approve.)
   const showRecipes = false;
 
   return (
@@ -622,6 +614,26 @@ export default function BriefsPage() {
                       ))}
                     </div>
                   </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Social — the per-platform posts atomized from long-form pieces. Human-gated (never
+              auto-posted); create them with "+ Create social posts" on a content card above. */}
+          {socialDrafts.length > 0 && (
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-[15px] font-semibold text-ink">Social posts</h2>
+                <span className="text-xs text-ink-4">{socialDrafts.length}</span>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {socialDrafts.slice(0, 12).map((d) => (
+                  <Link key={d.id} href="/content/drafts" className="flex items-center gap-2 rounded-[10px] border border-line bg-card px-3 py-2 hover:bg-paper">
+                    <span className="shrink-0 rounded bg-line px-1.5 py-0.5 text-[10px] font-semibold uppercase text-ink-3">{(d.asset_type || "social").replace(/_post$/, "")}</span>
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{d.title || "Social post"}</span>
+                    <span className="shrink-0 text-[11px] text-ink-4">{(d.status || "").replace(/_/g, " ")}</span>
+                  </Link>
                 ))}
               </div>
             </section>

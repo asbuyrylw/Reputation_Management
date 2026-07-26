@@ -578,6 +578,8 @@ class BatchGenerateRequest(BaseModel):
 class ClusterGenerateRequest(BaseModel):
     max_clusters: Optional[int] = 1          # topic clusters (pillar+spokes) to build; default 1 (a hub is ~5 pieces)
     max_spokes: Optional[int] = 4            # spoke pages per pillar
+    topic: Optional[str] = None              # produce ONE specific recommended topic as a pillar+spokes program
+    spokes: Optional[list[str]] = None       # the supporting spokes for that topic (from next_to_write)
 
 
 @router.get("/content-batches")
@@ -653,6 +655,19 @@ def generate_content_clusters(payload: ClusterGenerateRequest, background: Backg
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
 
 
+@router.get("/content-capabilities")
+def content_capabilities(business_id: int = Depends(authorize_business)):
+    """The AUTHORITATIVE producible-content capability set (strategy_generator.CONTENT_CAPABILITIES) +
+    labels. The FE mirrors this in src/lib/content.ts; exposing it here lets the console read the single
+    source of truth (or validate against it) so FE and backend can never drift -- the class of bug that
+    left a removed 'infographic' capability lingering on some pages."""
+    try:
+        from ... import strategy_generator as _sg
+    except ImportError:  # pragma: no cover
+        import strategy_generator as _sg  # type: ignore
+    return {"capabilities": sorted(_sg.CONTENT_CAPABILITIES)}
+
+
 @router.post("/content-impact/measure", status_code=202)
 def measure_content_impact(background: BackgroundTasks,
                            business_id: int = Depends(require_business_editor),
@@ -726,6 +741,34 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
                         "content_addressable": False, "category": ng.get("category"),
                         "where": ng.get("where"), "why": ng.get("why")})
     except Exception:  # noqa: BLE001 -- the advisory rows must never break the completion meter
+        pass
+    # Cluster / recommended-topic / local-program batches use their OWN gap_key (e.g. 'cluster:slug',
+    # 'local:...') that isn't in gaps_for_business, so their pieces earned NO completion credit before.
+    # Surface every such non-empty batch as its own content-addressable row, so ALL production paths --
+    # not only the classic gap batches -- show up in the meter with their drafted/published + impact.
+    try:
+        _seen_keys = [g["gap_key"] for g in gaps] or [""]
+        extra = conn.execute(
+            "SELECT id, gap_key, gap_source, label, target_topic, status FROM content_batches "
+            "WHERE business_id=%s AND gap_key <> ALL(%s) ORDER BY id DESC LIMIT 50",
+            (business_id, _seen_keys)).fetchall()
+        for b in extra:
+            cnt = conn.execute(
+                "SELECT COUNT(*) drafted, COUNT(*) FILTER (WHERE a.published_status='live') published "
+                "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
+                "WHERE d.batch_id=%s", (b["id"],)).fetchone()
+            if not cnt["drafted"]:
+                continue
+            imp = conn.execute(
+                "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "
+                "WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
+            out.append({"gap_key": b["gap_key"],
+                        "topic": b["target_topic"] or b["label"] or b["gap_key"],
+                        "gap_source": b["gap_source"], "target_prompts": [], "batch_id": b["id"],
+                        "batch_status": b["status"], "pieces_drafted": cnt["drafted"],
+                        "pieces_published": cnt["published"], "impact": dict(imp) if imp else None,
+                        "content_addressable": True})
+    except Exception:  # noqa: BLE001 -- extra-batch rows must never break the meter
         pass
     return _floats_deep(out)
 

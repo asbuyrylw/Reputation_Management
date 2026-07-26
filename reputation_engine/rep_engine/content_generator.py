@@ -450,8 +450,16 @@ def _grounding_context(business_id: int, target_query: str | None = None, biz: d
             authoritative = _authsrc.grounding_for_business(business_id)
     except Exception:  # noqa: BLE001 -- best-effort
         authoritative = ""
+    # Content-effectiveness research (UNIVERSAL, not finance-gated): the cited GEO/AEO tactics the writer
+    # must apply (answer-first 40-60w, one quote + one real stat per section, cite sources, fluency).
+    research = ""
+    try:
+        from . import content_research as _cr
+        research = _cr.research_block(goal="geo")
+    except Exception:  # noqa: BLE001
+        research = ""
     return {"site_facts": site_facts, "gap_focus": gap_focus, "keywords": keywords,
-            "authoritative": authoritative}
+            "authoritative": authoritative, "research": research}
 
 
 _BRIEF_WORDS = {"white_paper": 1500, "blog": 800, "article": 700, "faq": 600, "local_page": 650,
@@ -495,11 +503,23 @@ def piece_brief(business_id: int, wo: dict) -> dict:
         coverage = _gc.coverage(business_id, tq)
     except Exception:  # noqa: BLE001
         coverage = None
+    # Word-count target: prefer the research-backed number (with its cited source) so the length carries
+    # a real basis; fall back to the module constant for types the research KB doesn't cover.
+    _wc = _BRIEF_WORDS.get(ct, _BRIEF_WORDS.get(at, 700))
+    _wc_basis = ""
+    try:
+        from . import content_research as _cr
+        _rw, _rsrc = _cr.word_count_for(ct if ct else at)
+        if _rw:
+            _wc, _wc_basis = _rw, _rsrc
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "asset_type": at, "content_type": ct,
         "primary_keyword": keywords[0] if keywords else None,
         "keywords": keywords,
-        "word_count_target": _BRIEF_WORDS.get(ct, _BRIEF_WORDS.get(at, 700)),
+        "word_count_target": _wc,
+        "word_count_basis": _wc_basis,
         "readability_target": _BRIEF_READ.get(ct, _BRIEF_READ.get(at, "Grade 8-10 (plain, scannable)")),
         "structure": _BRIEF_STRUCT.get(ct, _BRIEF_STRUCT.get(at, "Answer-first; clear H2/H3 headings; a short FAQ.")),
         "closes_gap": (wo.get("gap_specifics") or {}).get("source_query"),
@@ -510,6 +530,15 @@ def piece_brief(business_id: int, wo: dict) -> dict:
 
 def _asset_type_for(wo: dict) -> Optional[str]:
     cap = (wo.get("capability") or "").lower()
+    # The strategist's per-piece content_type (persisted in gap_specifics, mirrored onto wo["content_type"]
+    # by generate()) is the AUTHORITATIVE template choice: a campaign "blog"/"faq"/"local_page" must
+    # generate with THAT per-type spec, not the generic "article" the capability+title fallback picks.
+    # Only honored for a content_type the single-source text path actually renders (in _CT_ASSET_OVERRIDE);
+    # rich-media types (video_script/deep_article/…) route by capability elsewhere and fall through.
+    _gs = wo.get("gap_specifics") if isinstance(wo.get("gap_specifics"), dict) else {}
+    _ct = (wo.get("content_type") or _gs.get("content_type") or "").lower()
+    if _ct in _CT_ASSET_OVERRIDE:
+        return _CT_ASSET_OVERRIDE[_ct]
     if cap in GENERATABLE:
         # refine via title
         title = (wo.get("title") or "").lower()
@@ -671,9 +700,10 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         if wo.get("target_query") else "",
         grounding.get("gap_focus") or "(general trust & visibility)",
         "",
-        # Authoritative sources to cite inline + real statistics to quote -- the biggest AI-citation lever.
-        grounding.get("authoritative") or "",
-        "" if grounding.get("authoritative") else "",
+        # Authoritative sources to cite inline + real statistics to quote + the cited content-effectiveness
+        # research (apply the GEO/AEO tactics) -- the biggest AI-citation levers.
+        ("\n\n".join(x for x in (grounding.get("authoritative"), grounding.get("research")) if x)) or "",
+        "" if (grounding.get("authoritative") or grounding.get("research")) else "",
         f"Work order: {title}",
         f"Instruction: {instr}" if instr else "",
         kw_line + f"Target question this should answer when someone asks AI: "

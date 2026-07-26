@@ -201,8 +201,15 @@ def _run_generate_content_batches(business_id: int, args: dict):
 
 def _run_generate_clusters(business_id: int, args: dict):
     """Cluster-driven content: plan the highest-leverage uncovered TOPIC CLUSTERS (pillar + spokes,
-    cross-linked) from the topical-authority planner and generate each as a connected hub."""
+    cross-linked) from the topical-authority planner and generate each as a connected hub. When a
+    specific `topic` (+ optional `spokes`) is given -- e.g. an owner producing ONE recommended topic --
+    generate just that pillar+spoke program instead of the whole uncovered set."""
     cb = _imp("content_batch")
+    topic = (args.get("topic") or "").strip()
+    if topic:
+        return cb.generate_cluster(business_id, {"pillar": topic, "spokes": args.get("spokes") or []},
+                                   max_spokes=args.get("max_spokes") or 4,
+                                   created_by=args.get("requested_by"))
     return cb.generate_clusters(business_id, max_clusters=args.get("max_clusters"),
                                 max_spokes=args.get("max_spokes") or 4,
                                 created_by=args.get("requested_by"))

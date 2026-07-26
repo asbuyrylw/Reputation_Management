@@ -644,7 +644,10 @@ def _persist(
                 log.debug("rich_media: caption/schema build skipped: %s", e2)
         except Exception as e:  # noqa: BLE001 -- grading must never block persistence
             log.debug("rich_media: video grading skipped: %s", e)
-    elif body and asset_type not in ("podcast", "report_audio"):
+    elif body and (asset_type not in ("podcast", "report_audio") or len((body or "").split()) >= 120):
+        # ALSO score substantial audio TRANSCRIPTS (an LLM two-host podcast script, 600-900 words) with
+        # the same GEO/citability grade -- the transcript IS the citable content. The short NotebookLM
+        # "open in Studio to listen" link message (~50 words) is naturally excluded by the word gate.
         # TEXT-like rich media (deep_article, research_brief, slide_deck, infographic) was shipping
         # UNSCORED -- geo_score + quality_notes both null, so no GEO/AEO/citation grade on half the
         # content library. Grade it with the same GEO scorer as an article. Best-effort.
@@ -927,7 +930,10 @@ def _grade_body(asset_type: str, body: Optional[str], business_name: str = "", g
             vg = _cq.video_score(body, target_query=f"{business_name} {geo}".strip(),
                                  business_name=business_name, geo=geo, asset_type=asset_type)
             quality_notes, geo_grade = vg, vg.get("score")
-        elif body and asset_type not in ("podcast", "report_audio"):
+        elif body and (asset_type not in ("podcast", "report_audio") or len((body or "").split()) >= 120):
+        # ALSO score substantial audio TRANSCRIPTS (an LLM two-host podcast script, 600-900 words) with
+        # the same GEO/citability grade -- the transcript IS the citable content. The short NotebookLM
+        # "open in Studio to listen" link message (~50 words) is naturally excluded by the word gate.
             _geo = _cq.geo_score(body, target_query=f"{business_name} {geo}".strip(),
                                  content_type=asset_type, asset_type=asset_type,
                                  business_name=business_name, geo=geo)

@@ -1,6 +1,10 @@
 """
-Authoritative citation sources + real statistics for financial / insurance / investing content
+Authoritative citation sources + real statistics (finance vertical + a UNIVERSAL business pack)
 ================================================================================================
+Finance/insurance/investing sources dominate the registry (the pilot vertical), but a UNIVERSAL pack
+(Google Business Profile, FTC, BLS) is always included via _relevant_tags so a NON-finance tenant still
+grounds its content in real authorities. Add more industry packs by tagging new SOURCES entries.
+
 AI answer engines (ChatGPT, Perplexity, Gemini, Google AI Overviews) decide WHOM to cite largely by
 source authority: .gov/regulator, official industry data, and peer-reviewed research rank highest.
 The single biggest GEO/citability lever for a page is INLINE links to authoritative primary sources +
@@ -108,6 +112,17 @@ SOURCES: list[dict] = [
     {"name": "Primerica Financial Security Monitor", "url": "https://www.primerica.com/public/financial-security-monitor.html", "tier": "industry",
      "provides": "quarterly survey of middle-income ($30k-$130k) households", "cite_when": "on-brand middle-income debt/savings/retirement-confidence trends (Primerica-affiliated)",
      "tags": ["debt", "financial_literacy", "primerica"]},
+    # --- UNIVERSAL: authoritative for ANY local/service business (not vertical-specific), so a
+    #     non-finance tenant still gets grounded citations for local presence, consumer trust + market data.
+    {"name": "Google Business Profile Help", "url": "https://support.google.com/business", "tier": "primary",
+     "provides": "official guidance on local presence, reviews, and Google Search/Maps eligibility", "cite_when": "local-SEO / reviews / how customers find the business",
+     "tags": ["general", "local", "consumer_trust"]},
+    {"name": "FTC Consumer Advice", "url": "https://consumer.ftc.gov", "tier": "primary",
+     "provides": "federal consumer-protection + honest-advertising guidance", "cite_when": "trust, avoiding scams, truthful claims for any business",
+     "tags": ["general", "consumer_trust"]},
+    {"name": "U.S. Bureau of Labor Statistics", "url": "https://www.bls.gov", "tier": "primary",
+     "provides": "official occupation, wage, industry + local-area economic data", "cite_when": "industry/occupation/local market facts for any vertical",
+     "tags": ["general", "macro_data", "local"]},
 ]
 
 # Real, verified, DATABLE statistics. `stat` is quoted as-is; `source` names the authority; `as_of` is
@@ -163,7 +178,10 @@ def _relevant_tags(services: str, industry: str = "", geo: str = "") -> set:
     # a financial/insurance business always benefits from the trust + macro anchors
     if tags:
         tags.update({"consumer_trust", "macro_data"})
-    return tags or {"consumer_trust"}
+    # UNIVERSAL pack: every tenant (finance OR not) gets the industry-agnostic authorities (Google
+    # Business Profile, FTC, BLS) so non-finance businesses are never left without grounded citations.
+    tags.update({"general"})
+    return tags
 
 
 def sources_for(services: str = "", industry: str = "", geo: str = "", limit: int = 12) -> list[dict]:

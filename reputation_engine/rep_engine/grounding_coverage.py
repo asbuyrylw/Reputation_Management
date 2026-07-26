@@ -106,6 +106,9 @@ def plan_coverage(signals: list) -> dict:
     ungrounded = sum(1 for s in sigs if s.get("status") == "ungrounded")
     unknown = sum(1 for s in sigs if s.get("status") == "unknown")
     ungrounded_topics = [s.get("topic") for s in sigs if s.get("status") == "ungrounded" and s.get("topic")][:10]
+    # THIN topics too, so the "N of M have only thin material" banner can name WHICH pieces + what to add
+    # (the per-piece "what to provide" list is built in strategy_view for both ungrounded and thin).
+    thin_topics = [s.get("topic") for s in sigs if s.get("status") == "thin" and s.get("topic")][:10]
     if total == 0 or unknown == total:
         status, reason = "unknown", None
     elif ungrounded > 0:
@@ -121,7 +124,7 @@ def plan_coverage(signals: list) -> dict:
         status, reason = "ok", None
     return {"status": status, "total_topics": total, "grounded": grounded, "thin": thin,
             "ungrounded": ungrounded, "unknown": unknown,
-            "ungrounded_topics": ungrounded_topics, "reason": reason}
+            "ungrounded_topics": ungrounded_topics, "thin_topics": thin_topics, "reason": reason}
 
 
 def needed_material(content_type, topic, keywords=None, gap_hint=None) -> str:

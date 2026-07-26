@@ -472,8 +472,9 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                     execution=("manual" if pc.get("on_click") else None))
             # Materialize the atomization (repurposing) plan into opt-in work orders (email/newsletter)
             # so "create once, distribute many" is real work, not a stored-then-ignored spec. Social
-            # atoms are created automatically when a long-form piece is approved (atomize_draft), so they
-            # need no separate WO. Opt-in (manual) -> generate on click.
+            # atoms are NOT auto-created on approve -- atomize_draft runs only inside content_batch or via
+            # the explicit /atomize endpoint (surfaced as the "Create social posts" action on To-Produce).
+            # Opt-in (manual) -> generate on click.
             # NOTE: infographics are intentionally NOT materialized -- the owner removed infographics
             # from the content strategy (NotebookLM can't render an infographic image and the platform
             # doesn't produce one), so any `atomization.infographic` the planner emits is ignored.
@@ -540,30 +541,46 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     # button (generate_for_wo routes these capabilities to rich_media_generator). Text-only types
     # need no external key; NotebookLM types require NOTEBOOKLM_API_KEY or GEMINI_API_KEY and fall
     # back to the in-house LLM when absent — so the whole block is dormant-safe.
-    add("Generate deep-content bundle (long-form article + blog series + newsletter)", "deep_content",
-        "rich_media_generator.generate(['deep_article','blog_series','newsletter']): engine-native LLM "
-        "writes a 1,500-2,500 word thought-leadership article, three blog-post outlines, and a "
-        "newsletter brief from audit + gap context. No external key required. Saved as pending_review.", 6,
-        gap_source="rich-media amplification", source_query="deep content bundle")
-    add("Generate AI reputation podcast (Audio Overview)", "podcast_creation",
-        "rich_media_generator.generate(['podcast']): NotebookLM Audio Overview synthesizes a two-host "
-        "AI podcast from audit answers, gap model, competitor data + strategy plan. Requires "
-        "NOTEBOOKLM_API_KEY or GEMINI_API_KEY. Output: MP3 + transcript, pending_review.", 7,
-        gap_source="rich-media amplification", source_query="reputation podcast")
-    add("Generate executive slide-deck brief", "slide_deck",
-        "rich_media_generator.generate(['slide_deck']): NotebookLM study-guide synthesis across audit "
-        "sources -> 10-12 slide executive deck brief. Falls back to in-house LLM if no key.", 8,
-        gap_source="rich-media amplification", source_query="slide deck")
-    add("Generate PR/content-team research brief", "research_brief",
-        "rich_media_generator.generate(['research_brief']): NotebookLM briefing-doc synthesis across "
-        "audit + competitor sources -> deep research brief for PR teams/journalists. LLM fallback.", 8,
-        gap_source="rich-media amplification", source_query="research brief")
-    # Infographics were removed from the content strategy (owner decision): NotebookLM cannot render an
-    # infographic image and the platform doesn't produce one, so no infographic WO is emitted.
-    add("Generate explainer video script", "explainer_video",
-        "rich_media_generator.generate(['explainer_video']): NotebookLM study-guide synthesis -> "
-        "explainer video script skeleton (2-4 min). Pair with the video production brief. LLM fallback.", 9,
-        gap_source="rich-media amplification", source_query="explainer video script")
+    # Bind each rich-media synthesis piece to the HIGHEST-SEVERITY campaign (C01) it amplifies -- real
+    # target query, real gap_source, campaign metadata -- so it nests under that campaign's tree with a
+    # human reason, instead of the old "Other" bucket with a capability-label as its fake query. When the
+    # strategist is unavailable (no campaigns) they fall back to standalone WOs with human instruction/why.
+    _rich_specs = [
+        ("deep_content", "Generate deep-content bundle (long-form article + blog series + newsletter)",
+         "A 1,500-2,500 word thought-leadership article + three blog outlines + a newsletter that amplify "
+         "the '{t}' campaign so AI answer engines have deep, citable owned content on it.", 6),
+        ("podcast_creation", "Generate AI reputation podcast (Audio Overview)",
+         "A two-host AI podcast (Audio Overview) on the '{t}' campaign, synthesised from the audit + gap "
+         "model + strategy -- an audio format that widens reach and reinforces authority.", 7),
+        ("slide_deck", "Generate executive slide-deck brief",
+         "A 10-12 slide executive deck brief on the '{t}' campaign for sales/partner enablement.", 8),
+        ("research_brief", "Generate PR/content-team research brief",
+         "A deep research brief on the '{t}' campaign for PR teams / journalists to pitch earned coverage.", 8),
+    ]
+    _rich_campaigns = strategy.get("campaigns", []) if has_strategy else []
+    if _rich_campaigns:
+        _c0 = _rich_campaigns[0]
+        _c0meta = {"campaign_id": _c0.get("id"), "campaign_topic": _c0.get("topic"),
+                   "campaign_intent": _c0.get("intent"), "campaign_rank": _c0.get("priority_rank", 0),
+                   "funnel_stage": _c0.get("funnel_stage")}
+        _c0q = (_c0.get("target_queries") or [_c0.get("topic")])[0] or _c0.get("topic") or "reputation"
+        _c0gs = f"content strategy: {_c0.get('gap_source', '') or 'amplification'}"
+        _c0topic = _c0.get("topic") or "your top campaign"
+        for _ri, (_cap, _title, _instr, _wk) in enumerate(_rich_specs):
+            add(_title, _cap, _instr.format(t=_c0topic) + _AEO_CHECKLIST, _wk,
+                gap_source=_c0gs, why=f"Amplifies the '{_c0topic}' campaign in another format.",
+                source_query=_c0q,
+                campaign={**_c0meta, "role": "amplify", "content_type": _cap,
+                          "publish_week": _wk, "ordinal": 50 + _ri}, execution="manual")
+    else:
+        for _cap, _title, _instr, _wk in _rich_specs:
+            add(_title, _cap, _instr.format(t="your reputation") + _AEO_CHECKLIST, _wk,
+                gap_source="rich-media amplification",
+                why="A rich-media format that widens reach and reinforces authority.",
+                source_query=f"reputation {_cap.replace('_', ' ')}")
+    # Infographics were removed from the content strategy (owner decision). The explainer VIDEO is now
+    # emitted per-campaign by the strategist (content_strategist._add_video_plan), gated on its
+    # atomization.video_script judgment -- not as a standalone baseline piece.
 
     # --- Per-surface actions straight from the gap model (ethical, accurate only) ---
     # Each surface becomes a PER-PLATFORM task tagged with its area + platform so the plan breaks
@@ -588,13 +605,47 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                 gap_source=f"recommended social presence ({surface})", why="",
                 source="recommendation", area=area, platform=platform)
 
-    # --- Local-SEO gaps -> tasks (from first-party SERP reads, via the gap model) ---
+    # --- Local-SEO gaps -> a specific multi-piece LOCAL PROGRAM (a geo landing PAGE + supporting BLOGS
+    # (one per ranking keyword) + an FAQ), all grouped under ONE synthetic `local:` campaign so the
+    # strategy view renders the program's actual pieces (like a campaign's pillar+cluster tree) instead
+    # of one flat "Reach page 1 for X" bucket. Reuses content_batch._local_keywords for the spoke set. ---
+    _biz_id = biz.get("id")
+    try:
+        from . import content_batch as _cb_local
+    except Exception:  # noqa: BLE001 -- keyword enrichment is best-effort; the pillar still emits
+        _cb_local = None
     for i, g in enumerate(gap.get("local_seo_gaps", []) or []):
         q = g.get("query", f"local query {i + 1}")
         rec = g.get("recommendation", "Create geo-specific content + strengthen GBP / local citations.")
-        add(f"Reach page 1 for '{q}'", "local_content_creation",
-            f"{rec} Current position: {g.get('current_rank', 'off page 1')}.", 4,
-            gap_source="local search ranking", why=g.get("why", ""), source_query=q)
+        why_l = g.get("why", "")
+        _cid = "local:" + (_re_tech.sub(r"[^a-z0-9]+", "-", q.lower()).strip("-")[:48] or f"gap{i}")
+        _lmeta = {"campaign_id": _cid, "campaign_topic": q, "campaign_intent": "local",
+                  "campaign_rank": 100 + i, "funnel_stage": "decision"}
+        # PILLAR: the geo landing page that must rank for the query.
+        add(f"Local page: {q}", "local_content_creation",
+            f"{rec} Current position: {g.get('current_rank', 'off page 1')}.{_AEO_CHECKLIST}", 4,
+            gap_source="local search ranking", why=why_l, source_query=q,
+            campaign={**_lmeta, "role": "pillar", "content_type": "local_page", "publish_week": 4, "ordinal": 0})
+        # SPOKES: one supporting blog per ranking keyword, cross-linked up to the local page.
+        kws_l: list = []
+        if _cb_local is not None and _biz_id is not None:
+            try:
+                kws_l = _cb_local._local_keywords(_biz_id, q) or []
+            except Exception:  # noqa: BLE001
+                kws_l = []
+        for j, kw in enumerate(kws_l[:4]):
+            add(f"Blog: {kw}", "content_writing",
+                f"A supporting blog answering '{kw}' that links up to the '{q}' local page.{_AEO_CHECKLIST}",
+                5 + (j // 2),
+                gap_source="local search ranking", why=f"Builds local topical authority for '{q}'.",
+                source_query=kw,
+                campaign={**_lmeta, "role": "cluster", "content_type": "blog",
+                          "publish_week": 5 + (j // 2), "ordinal": j + 1})
+        # FAQ: the People-Also-Ask block for the local query.
+        add(f"FAQ: {q}", "content_writing",
+            f"An FAQ answering the top questions people ask about '{q}' in this area.{_AEO_CHECKLIST}", 6,
+            gap_source="local search ranking", why=why_l, source_query=f"{q} faq",
+            campaign={**_lmeta, "role": "cluster", "content_type": "faq", "publish_week": 6, "ordinal": 90})
 
     # --- Competitor-defense gaps -> tasks (questions a rival wins and you don't) ---
     # Absorbed into the strategist's campaigns when one COVERS the query (comparison / defense
@@ -902,14 +953,18 @@ def strategy_view(business_id: int) -> dict:
                 is_synth = (w.get("capability") or "") in _SYNTHESIS_CAPS
                 if isinstance(cov, dict) and not is_synth:
                     cov_sigs.append(cov)
-                    if cov.get("status") == "ungrounded":
+                    # Build the per-piece "what source to provide" entry for BOTH ungrounded (no material)
+                    # AND thin (weak material) pieces -- so the "N of M have only thin material" banner
+                    # can name which piece + exactly what to upload, not just a bare count. `status` is
+                    # tagged so the FE can word it ("provide"/"strengthen").
+                    if cov.get("status") in ("ungrounded", "thin"):
                         hint = approach_idx.get(_norm_q(specs_q), {})
                         kws = b.get("keywords") or []
                         ungrounded_pieces.append({
                             "wo_id": w["id"], "title": w.get("title"),
                             "content_type": b.get("content_type") or b.get("asset_type"),
                             "topic": cov.get("topic"), "primary_keyword": b.get("primary_keyword"),
-                            "keywords": kws[:4],
+                            "keywords": kws[:4], "status": cov.get("status"),
                             "needed": _gc.needed_material(
                                 b.get("content_type") or b.get("asset_type"), cov.get("topic"),
                                 kws, hint.get("why") or hint.get("approach")),
