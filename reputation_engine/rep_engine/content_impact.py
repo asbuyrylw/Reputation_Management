@@ -130,6 +130,17 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
             "SELECT d.content_type, d.status, a.published_status "
             "FROM content_drafts d LEFT JOIN assets a ON a.id = d.published_asset_id "
             "WHERE d.batch_id=%s", (batch_id,)).fetchall()
+        # RICH-MEDIA pieces count toward published_total too, else a rich-media-ONLY batch (podcast/
+        # slide/explainer/deep_content) is stuck at published_total=0 -> gap_pct nulled -> 'not
+        # measurable yet' forever even after the media is live (the exact non-text blind spot). Dormant-
+        # safe: rich_media_drafts may be absent. A rich-media draft is 'live' once approved/published.
+        rm_rows = []
+        try:
+            rm_rows = conn.execute(
+                "SELECT asset_type AS content_type, status FROM rich_media_drafts WHERE batch_id=%s",
+                (batch_id,)).fetchall()
+        except Exception:  # noqa: BLE001 -- rich_media_drafts dormant/absent
+            rm_rows = []
 
     # Guard against an UNMATCHED cluster: if the baseline OR measured run matched 0 answers for this
     # gap's prompts, there's nothing comparable — return pending WITHOUT writing an all-null impact
@@ -149,6 +160,14 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
             t["approved"] += 1
         if (r["published_status"] or "") == "live":
             t["published"] += 1
+    # Fold rich-media pieces in: 'live' == approved/published (rich media has no assets-row publish flag).
+    for r in rm_rows:
+        ct = r["content_type"] or "rich_media"
+        t = per_type.setdefault(ct, {"pieces": 0, "approved": 0, "published": 0})
+        t["pieces"] += 1
+        if r["status"] in ("approved", "published"):
+            t["approved"] += 1
+            t["published"] += 1
     published_total = sum(t["published"] for t in per_type.values())
 
     base_sov, meas_sov = baseline.get("sov"), measured.get("sov")
@@ -166,22 +185,32 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
     if published_total == 0:
         gap_pct = None
 
-    # the adjust signal (closed-loop: keep producing / adjust / hold)
-    if published_total == 0:
-        rec = "Not measurable yet — approve & publish the batch, then the next audit will show its lift."
-    elif al_delta is not None and al_delta < -0.02:
-        rec = "Regressed since publishing — the AI answers for this gap got WORSE. Revisit the content/claims, add authoritative citations + clearer entity disambiguation."
-    elif gap_pct is not None and gap_pct < _LOW_MOVEMENT:
-        rec = "Published but the gap barely moved — produce more/different content for this gap or strengthen citations/entity clarity."
-    elif gap_pct is not None and gap_pct >= 0.75:
-        rec = "Gap largely closed — hold and monitor; redeploy effort to the next gap."
-    else:
-        rec = "Moving in the right direction — keep producing for this gap and re-measure next audit."
-
     # Keyword-RANK delta: baseline rank (captured at batch creation, if a source was connected then) vs
     # now. Positive rank_delta = moved UP toward #1 (rank is 1=best, so base - measured). None-safe/dormant.
     base_rank = baseline.get("rank")
     rank_delta = (base_rank - meas_rank) if (isinstance(base_rank, (int, float)) and isinstance(meas_rank, (int, float))) else None
+
+    # the adjust signal (closed-loop: keep producing / adjust / hold). When a rank source IS connected,
+    # rank movement is a first-class outcome: a rank regression is an 'adjust' signal even if AI alignment
+    # held flat, and a strong rank gain corroborates 'keep going' -- so the loop reacts to rankings, not
+    # just AI-answer alignment (the north-star 'move rankings' half).
+    if published_total == 0:
+        rec = "Not measurable yet — approve & publish the batch, then the next audit will show its lift."
+    elif al_delta is not None and al_delta < -0.02:
+        rec = "Regressed since publishing — the AI answers for this gap got WORSE. Revisit the content/claims, add authoritative citations + clearer entity disambiguation."
+    elif rank_delta is not None and rank_delta <= -1.0:
+        rec = ("Keyword rank got WORSE since publishing (dropped "
+               f"~{abs(rank_delta):.0f} positions) — strengthen on-page optimization + authority/links for this gap.")
+    elif gap_pct is not None and gap_pct < _LOW_MOVEMENT and not (rank_delta is not None and rank_delta >= 1.0):
+        rec = "Published but the gap barely moved — produce more/different content for this gap or strengthen citations/entity clarity."
+    elif gap_pct is not None and gap_pct >= 0.75:
+        rec = "Gap largely closed — hold and monitor; redeploy effort to the next gap."
+    elif rank_delta is not None and rank_delta >= 1.0:
+        rec = (f"Keyword rank IMPROVED (~+{rank_delta:.0f} positions) — the program is working; keep "
+               "producing for this gap and re-measure next audit.")
+    else:
+        rec = "Moving in the right direction — keep producing for this gap and re-measure next audit."
+
     with db() as conn:
         _ensure_rank_cols(conn)
         rowid = conn.execute(
@@ -230,8 +259,9 @@ def recent_signals(business_id: int, limit: int = 10) -> list[dict]:
     regressed/stalled -- instead of re-planning blind to results. Fail-safe -> []."""
     try:
         with db() as conn:
+            _ensure_rank_cols(conn)   # idempotent -> rank_delta column exists so the re-planner can read it
             rows = conn.execute(
-                "SELECT ci.gap_pct_closed, ci.alignment_delta, ci.notes AS recommendation, "
+                "SELECT ci.gap_pct_closed, ci.alignment_delta, ci.rank_delta, ci.notes AS recommendation, "
                 "cb.gap_source "
                 "FROM content_impact ci JOIN content_batches cb ON cb.id = ci.batch_id "
                 "WHERE ci.business_id=%s ORDER BY ci.id DESC LIMIT %s", (business_id, limit)).fetchall()
@@ -243,6 +273,9 @@ def recent_signals(business_id: int, limit: int = 10) -> list[dict]:
             "gap": r.get("gap_source"),
             "gap_pct_closed": float(r["gap_pct_closed"]) if r.get("gap_pct_closed") is not None else None,
             "alignment_delta": float(r["alignment_delta"]) if r.get("alignment_delta") is not None else None,
+            # rank movement (positive = moved up toward #1) so the re-planner reacts to ranking outcomes,
+            # not just AI-answer alignment. None until a GSC/SERP source is connected.
+            "rank_delta": float(r["rank_delta"]) if r.get("rank_delta") is not None else None,
             "recommendation": r.get("recommendation"),
         })
     return out

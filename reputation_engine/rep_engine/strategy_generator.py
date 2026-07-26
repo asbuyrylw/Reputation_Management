@@ -372,6 +372,29 @@ def _strat_tokens(s: str) -> set[str]:
             if len(t) > 2 and t not in _STRAT_STOP}
 
 
+def _emit_typed_program(add, topic: str, atype: str, gap_source: str, why: str, gap_key: str) -> None:
+    """Emit the SAME multi-type content spread the BATCH path (content_batch._types_for_gap) fans an
+    uncovered moc/competitor gap into, so plan and batch produce the same content-type SET for one
+    gap_key (was 1 WO on the plan vs ~4 typed pieces in the batch -- a plan-vs-batch divergence). Each
+    piece shares the canonical gap_key (measured together) and carries its content_type so generation
+    uses the right per-type template; social is atomized from the long-form, not a standalone WO."""
+    try:
+        from . import content_batch as _cb_t
+        types = _cb_t._types_for_gap({"topic": topic, "asset_type": atype}) or ["article"]
+    except Exception:  # noqa: BLE001
+        types = ["article"]
+    _titles = {"blog": f"Blog: {topic}", "white_paper": f"White paper: {topic}", "faq": f"{topic}: FAQ",
+               "landing_page": f"{topic} — overview page", "video_script": f"Video: {topic}",
+               "article": f"Create owned asset: {topic}"}
+    for k, ct in enumerate([t for t in types if t != "social_post"]):
+        cap = "video_creation" if (ct == "video_script" or "video" in (atype or "").lower()) else "content_writing"
+        add(_titles.get(ct, f"Create owned asset: {topic} ({ct})"), cap,
+            f"Produce a {ct} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; fact-check "
+            f"trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
+            gap_source=gap_source, why=why, source_query=topic, gap_key=gap_key,
+            campaign={"content_type": ct, "role": ("pillar" if k == 0 else "cluster"), "ordinal": k})
+
+
 def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None) -> list[WorkOrder]:
     wos: list[WorkOrder] = []
     n = 0
@@ -539,12 +562,12 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         # its own task -- never dropped.
         if has_strategy and _covered(f"{topic} {atype}"):
             continue
-        cap = "video_creation" if "video" in atype.lower() else "content_writing"
-        add(f"Create owned asset: {topic}", cap,
-            f"Produce a {atype} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; "
-            f"fact-check trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
-            gap_source="audited gap: missing owned content", why=why, source_query=topic,
-            gap_key=_tu.gid("moc", topic))
+        # Emit the SAME multi-type content spread the BATCH path (content_batch._types_for_gap) fans this
+        # gap into, so plan and batch produce the same content-type SET for a moc: gap_key -- was 1 WO
+        # here vs ~4 typed pieces in the batch (a plan-vs-batch divergence). All share the canonical
+        # gap_key so they measure together.
+        _emit_typed_program(add, topic, atype, "audited gap: missing owned content", why,
+                            _tu.gid("moc", topic))
     for sg in gap.get("schema_gaps", []) or []:
         add(f"Add schema: {sg}", "schema_markup",
             f"Generate and deploy JSON-LD ({sg}) on the relevant pages so answer engines "
@@ -564,9 +587,17 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
                 f"Secure third-party coverage/mention supporting '{c}'. Source: {where}. "
                 f"Draft pitch; route via outreach tool; human approves before send.", 6,
                 gap_source="audited gap: thin corroboration", why=c, source_query=c)
+    # Podcast-appearance volume is RESEARCH-sized (content_research.podcast_appearance_target: quarterly
+    # floor -> 1-2/mo), not a hardcoded 3-5, so the count + its cited basis match the evidence base.
+    try:
+        from . import content_research as _cr_pod
+        _pl, _ph, _psrc = _cr_pod.podcast_appearance_target(months=12)
+        _pod_line = f"Book ~{_pl}-{_ph} relevant {geo} / {industry} guest podcast appearances over the year ({_psrc})"
+    except Exception:  # noqa: BLE001
+        _pod_line = f"Identify 3-5 relevant {geo} / {industry} podcasts"
     add(f"Book relevant podcast appearances ({industry})", "press_outreach",
-        f"Identify 3-5 relevant {geo} / {industry} podcasts; pitch the principal as guest; "
-        f"each episode yields an indexed third-party positive page.", 7,
+        f"{_pod_line}; pitch the principal as guest; publish a transcript page per episode (audio alone "
+        f"isn't AI-citable) so each yields an indexed third-party positive page.", 7,
         gap_source="audited gap: thin corroboration", source_query="podcast appearances")
 
     # --- Phase 2: rich-media amplification via NotebookLM API + in-house LLM ---
@@ -716,11 +747,11 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
         # for it -- an informational pillar sharing a few words does NOT defend the query, so keep the task.
         if has_strategy and _covered(q, commercial=True):
             continue
-        rec = g.get("recommendation", "Publish accurate owned content that answers this question well.")
-        add(f"Compete for '{q}'", "content_writing",
-            f"{rec} A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.", 4,
-            gap_source="competitor analysis", why=g.get("why", ""), source_query=q,
-            gap_key=_tu.gid("comp", q))
+        # Same multi-type spread the batch fans a comp: gap into (commercial: landing/comparison + article
+        # + social), so plan and batch produce the same content-type SET for one comp: gap_key.
+        _why_c = (f"{g.get('recommendation', 'Publish accurate owned content that answers this question well.')} "
+                  f"A competitor ({g.get('competitor', 'a rival')}) appears here and you don't.")
+        _emit_typed_program(add, q, "comparison", "competitor analysis", _why_c, _tu.gid("comp", q))
 
     # --- Site-technical gaps -> tasks (thin/missing pages, schema, weak coverage) ---
     for i, g in enumerate(gap.get("site_technical_gaps", []) or []):

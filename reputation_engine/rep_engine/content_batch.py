@@ -198,13 +198,11 @@ def _avg_local_difficulty(business_id: int, query: str) -> Optional[float]:
     return (sum(diffs) / len(diffs)) if diffs else None
 
 
-def local_spoke_target(business_id: int, query: str) -> int:
-    """How many SUPPORTING pieces a local pillar needs -- DYNAMIC, not a fixed cap. Starts at the
-    research band MIN (content_research.cluster_count_for) and scales UP toward the strong-pillar max by
-    the geo query's COMPETITIVENESS (avg keyword_difficulty of the matching local keywords): a harder
-    ranking needs MORE content to win, an easier one needs less ('if the data says fewer, go with
-    fewer'). Falls back to the band MIN when difficulty data is absent. Used by BOTH the plan path
-    (strategy_generator) and the batch path (gaps_for_business) so they can never diverge on local size."""
+def difficulty_to_target(avg_difficulty) -> int:
+    """The DYNAMIC supporting-piece count for a hub, scaled by COMPETITIVENESS: research band MIN at
+    difficulty 0, up to the strong-pillar MAX at difficulty 100 (a harder ranking needs more content to
+    win). None difficulty -> band MIN. The SINGLE sizing curve shared by the local program, the
+    topic-cluster generator, and (indirectly) the strategist floor, so no path sizes a hub differently."""
     base, band_max = 8, 24
     try:
         from . import content_research as _cr
@@ -212,11 +210,18 @@ def local_spoke_target(business_id: int, query: str) -> int:
         band_max = int(_cr.cluster_count_for("topical_authority", strong=True)[1])  # 24
     except Exception:  # noqa: BLE001
         pass
-    diff = _avg_local_difficulty(business_id, query)
-    if diff is None:
+    if avg_difficulty is None:
         return base
-    # difficulty 0 -> base; 100 -> strong max; linear in between, clamped to the band.
-    return max(base, min(band_max, round(base + (max(0.0, min(100.0, diff)) / 100.0) * (band_max - base))))
+    d = max(0.0, min(100.0, float(avg_difficulty)))
+    return max(base, min(band_max, round(base + (d / 100.0) * (band_max - base))))
+
+
+def local_spoke_target(business_id: int, query: str) -> int:
+    """How many SUPPORTING pieces a local pillar needs -- DYNAMIC, sized by the geo query's
+    COMPETITIVENESS (avg keyword_difficulty of the matching local keywords) via the shared
+    difficulty_to_target curve. Used by BOTH the plan path (strategy_generator) and the batch path
+    (gaps_for_business) so they can never diverge on local size."""
+    return difficulty_to_target(_avg_local_difficulty(business_id, query))
 
 
 def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
@@ -423,6 +428,21 @@ def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
                 "run_id": run["id"], "rank": base_rank}
 
 
+def _prompts_for_gap(business_id: int, gap_key: str, fallback: str = "") -> list[str]:
+    """The gap's FULL resolved prompt cluster (the weak AI answers it should move), derived from the
+    CANONICAL gap topic (the part after the gap_key prefix) so BOTH the mainline path (ensure_impact_batch)
+    and the batch path (generate_batch via gaps_for_business) baseline over the identical prompt window
+    for a shared gap_key. Falls back to [fallback] when no weak-query cluster matches."""
+    topic = gap_key.split(":", 1)[1] if (gap_key and ":" in gap_key) else (gap_key or fallback or "")
+    try:
+        with db() as conn:
+            gm = _latest_gap_model(conn, business_id)
+        matched = _match_prompts(topic, gm.get("weak_queries") or [])
+    except Exception:  # noqa: BLE001
+        matched = []
+    return resolve_prompts(business_id, matched or ([fallback] if fallback else []))
+
+
 def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
     """Find-or-create a content_batches baseline for the gap a work order targets, so a draft made by
     the MAINLINE generate() path (not just the content_batch fan-out) is measured for AI-visibility lift
@@ -453,7 +473,10 @@ def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
                 "AND status <> 'measured' ORDER BY id DESC LIMIT 1", (business_id, gap_key)).fetchone()
             if row:
                 return row["id"]
-        prompts = resolve_prompts(business_id, [src_q] if src_q else [])
+        # Baseline over the gap's FULL prompt cluster (the same window generate_batch uses), derived from
+        # the canonical gap topic -- so whichever path creates the batch first for a shared gap_key sets
+        # the SAME measurement window (was [src_q] here vs the full _match_prompts cluster in the batch).
+        prompts = _prompts_for_gap(business_id, gap_key, src_q)
         baseline = capture_baseline(business_id, prompts)
         with db() as conn:
             b = conn.execute(
@@ -783,10 +806,10 @@ def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *,
                       max_spokes: Optional[int] = None, created_by: Optional[int] = None) -> dict:
     """Plan + generate the highest-leverage UNCOVERED topic clusters (pillar-first), using the
     topical-authority planner. This is the CLUSTER-DRIVEN content pipeline (vs. one-off gap pieces):
-    it only builds real hubs (a pillar WITH subtopics), not lone keywords. `max_spokes=None` sizes each
-    hub to the research target (see generate_cluster) rather than a check-the-box cap."""
-    if max_spokes is None:
-        max_spokes = _default_spoke_cap()
+    it only builds real hubs (a pillar WITH subtopics), not lone keywords. `max_spokes=None` sizes EACH
+    hub DYNAMICALLY by its own competitiveness (topical_authority's per-cluster avg_difficulty, via the
+    shared difficulty_to_target curve) -- a hard, high-opportunity cluster earns more supporting pieces
+    than an easy one, mirroring the local path -- instead of one flat check-the-box cap."""
     try:
         from . import topical_authority as _ta
     except ImportError:  # pragma: no cover
@@ -795,8 +818,10 @@ def generate_clusters(business_id: int, max_clusters: Optional[int] = None, *,
     targets = [c for c in cl if c.get("needs_content") and c.get("spokes")][:(max_clusters or 3)]
     results, errors = [], []
     for c in targets:
+        # Per-cluster size from ITS competitiveness (shared curve) unless the caller forced max_spokes.
+        _cap = max_spokes if max_spokes is not None else difficulty_to_target(c.get("avg_difficulty"))
         try:
-            results.append(generate_cluster(business_id, c, max_spokes=max_spokes, created_by=created_by))
+            results.append(generate_cluster(business_id, c, max_spokes=_cap, created_by=created_by))
         except SystemExit as e:   # over-budget stop (BaseException) -> stop the sweep, like generate_all_gaps
             log.warning("generate_clusters: budget stop after %d cluster(s): %s", len(results), e)
             errors.append({"cluster": c.get("topic"), "reason": "monthly budget reached"})
