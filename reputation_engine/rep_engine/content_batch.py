@@ -435,11 +435,16 @@ def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
                 "run_id": run["id"], "rank": base_rank}
 
 
-def _prompts_for_gap(business_id: int, gap_key: str, fallback: str = "") -> list[str]:
-    """The gap's FULL resolved prompt cluster (the weak AI answers it should move), derived from the
-    CANONICAL gap topic (the part after the gap_key prefix) so BOTH the mainline path (ensure_impact_batch)
-    and the batch path (generate_batch via gaps_for_business) baseline over the identical prompt window
-    for a shared gap_key. Falls back to [fallback] when no weak-query cluster matches."""
+def _prompts_for_gap(business_id: int, gap_key: str, fallback: str = "",
+                     prematched: Optional[list] = None) -> list[str]:
+    """The gap's FULL resolved prompt cluster (the weak AI answers it should move), so BOTH the mainline
+    path (ensure_impact_batch) and the batch path (generate_batch) baseline over the IDENTICAL window for
+    a shared gap_key -- same weak-query resolution AND the same fallback. `prematched` (a gap's already-
+    computed target_prompts) is used verbatim when non-empty; otherwise the cluster is derived from the
+    CANONICAL gap topic (the part after the gap_key prefix), falling back to [fallback] (NEVER a silent
+    whole-run baseline, which is what generate_batch used to do on an empty match)."""
+    if prematched:
+        return resolve_prompts(business_id, prematched)
     topic = gap_key.split(":", 1)[1] if (gap_key and ":" in gap_key) else (gap_key or fallback or "")
     try:
         with db() as conn:
@@ -601,9 +606,12 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
         _default_types = None
     types = content_types or _types_for_gap(gap, _default_types)
     topic = gap.get("topic") or ""
-    # Resolve LLM-authored gap prompts to the actual battery prompt text so impact measures a real
-    # cluster (not a silent 0-row match). Empty -> whole-run fallback (coarser but valid).
-    prompts = resolve_prompts(business_id, gap.get("target_prompts") or [])
+    # Resolve the baseline prompt window through the SHARED resolver so the batch path and the mainline
+    # ensure_impact_batch path baseline over the IDENTICAL window for a shared gap_key (was: batch used
+    # target_prompts with a silent WHOLE-RUN fallback; mainline used the weak-query cluster + [src_q] --
+    # so the same gap could get two different baselines depending on which path opened it).
+    prompts = _prompts_for_gap(business_id, gap.get("gap_key") or _tu.gid("moc", topic), topic,
+                               prematched=gap.get("target_prompts"))
     baseline = capture_baseline(business_id, prompts)
     with db() as conn:
         biz_row = conn.execute("SELECT * FROM businesses WHERE id=%s", (business_id,)).fetchone()
