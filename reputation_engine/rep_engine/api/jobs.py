@@ -807,8 +807,8 @@ def run_job(job_id: int) -> Optional[str]:
             (status, err, json.dumps(result, default=str) if result is not None else None, job_id),
         )
         conn.commit()
-    # Fan out a job.finished event to the client's stack (GHL/Zapier/...). No-op until
-    # WEBHOOK_URL is set; best-effort -- never let a webhook affect job recording.
+    # Fan out a job.finished event to the client's stack (GHL/Zapier/...). No-op until a tenant webhook
+    # is configured; best-effort -- never let a webhook affect job recording.
     try:
         _imp("webhooks").emit(job["business_id"], "job.finished",
                               {"job_type": job["job_type"], "status": status, "result": result})

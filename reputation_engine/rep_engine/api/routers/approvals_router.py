@@ -113,7 +113,8 @@ def _pressranger_enabled() -> bool:
 # Fields whose change requires org-manager (they arm or widen automated posting).
 _GATED_FIELDS = {"allow_owned_autopost", "auto_reply_reviews", "auto_reply_mentions",
                  "auto_platforms", "daily_autopost_cap", "hourly_auto_cap", "auto_reply_min_stars",
-                 "auto_reply_max_len", "warmup_manual_count", "never_auto_sentiments", "blocked_channels"}
+                 "auto_reply_max_len", "warmup_manual_count", "never_auto_sentiments", "blocked_channels",
+                 "webhook_url", "webhook_secret"}
 # Columns that take a JSONB value.
 _JSON_FIELDS = {"auto_platforms", "never_auto_sentiments", "quiet_hours", "banned_phrases",
                 "allowed_channels", "blocked_channels"}
@@ -139,6 +140,8 @@ class IntegrationSettingsUpdate(BaseModel):
     disclosure_text: Optional[str] = None
     notify_email: Optional[bool] = None
     notify_on_auto: Optional[bool] = None
+    webhook_url: Optional[str] = None
+    webhook_secret: Optional[str] = None
 
 
 def _is_org_manager(user: dict) -> bool:

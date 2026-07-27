@@ -361,7 +361,7 @@ export default function OutreachPage() {
                         </button>
                         <button onClick={() => push.mutate(t.id, { onSuccess: (r) => setPushed((s) => ({ ...s, [t.id]: r.sent })) })} disabled={push.isPending}
                           className="rounded border border-line px-2 py-0.5 text-[11px] text-ink-3 hover:bg-line disabled:opacity-50"
-                          title="Send to your CRM/stack via webhook (needs WEBHOOK_URL)">
+                          title="Send to your CRM/stack via the tenant webhook">
                           {pushed[t.id] === true ? "Sent ✓" : pushed[t.id] === false ? "Not configured" : "Push to CRM"}
                         </button>
                       </div>

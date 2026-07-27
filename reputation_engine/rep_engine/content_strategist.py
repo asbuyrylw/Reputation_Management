@@ -309,6 +309,10 @@ def _campaign_severity(camp: dict, gap: dict, demand_by_intent: Optional[dict] =
         wt = _tokens(w.get("prompt") or "") | _tokens(w.get("addressed_by") or "")
         if wt and len(tqs & wt) >= 2:
             covers += 1
+    # NEGATIVE DEPTH is sized at the PROGRAM level (strategy_generator's displacement reconciliation:
+    # num_negatives -> a research-sized owned-asset FLOOR the whole plan must sum to), NOT bolted onto this
+    # per-campaign severity -- a fuzzy token-overlap bonus here would double-count that floor AND
+    # destabilize the tuned severity->cluster-floor curve. So severity stays weak-query/intent/demand-driven.
     intent_w = _INTENT_WEIGHT.get((camp.get("intent") or "unknown").lower(), 1)
     try:
         llm_pri = int(camp.get("priority") or 99)
@@ -319,6 +323,25 @@ def _campaign_severity(camp: dict, gap: dict, demand_by_intent: Optional[dict] =
     demand = (demand_by_intent or {}).get((camp.get("intent") or "").lower(), 0) or 0
     demand_bonus = min(3.0, math.log10(demand + 1)) if demand > 0 else 0.0
     return covers * 2.0 + intent_w + pri_bonus * 0.5 + demand_bonus
+
+
+def _ambition_factor(goal: str) -> float:
+    """Scale content AMOUNT by the tenant's stated GOAL ambition (0.8-1.3): an 'aggressive growth /
+    dominate' tenant earns a higher cluster floor than a 'maintain / protect' tenant with the same gap,
+    so the business objective -- not just the gap -- drives volume. Neutral (1.0) when the goal is unset
+    or unrecognized. The goal string previously reached only the LLM prompt, never the deterministic sizing."""
+    g = (goal or "").lower()
+    # Prefix stems (no trailing \b) so 'aggressive'/'domination'/'maximize' all match; whole phrases keep
+    # boundaries. Aggressive > growth > maintain checked in that order.
+    if re.search(r"\b(?:aggressiv|dominat|out-?rank|explos|maximi[sz])|"
+                 r"\b(?:market leader|rapid|scale fast|as fast|fastest)\b", g):
+        return 1.3
+    if re.search(r"\b(?:grow|expand|increas|gain|acquir|scal(?:e|ing))|\b(?:winning|market share)\b", g):
+        return 1.15
+    if re.search(r"\b(?:maintain|protect|defend|preserv|sustain|steady)|"
+                 r"\b(?:reputation management|hold steady)\b", g):
+        return 0.85
+    return 1.0
 
 
 # A campaign this severe (or more) is one meant to WIN a ranking / overwhelm a negative narrative, so it
@@ -362,11 +385,13 @@ def _floor_target(camp: dict) -> int:
     except Exception:  # noqa: BLE001
         lo, strong_hi = 8, 24
     sev = camp.get("_severity") or 0
+    _amb = float(camp.get("_ambition") or 1.0)   # goal-ambition scales the floor (aggressive vs maintain)
     if sev <= _CLUSTER_FLOOR_SEVERITY:
-        return lo
-    # scale lo -> strong_hi as severity goes from the floor gate to ~2x it, clamped.
+        # Even below the severity gate, a high-ambition tenant nudges above the band MIN (never below it).
+        return int(max(lo, min(strong_hi, round(lo * _amb)))) if _amb > 1.0 else lo
+    # scale lo -> strong_hi as severity goes from the floor gate to ~2x it, then apply ambition, clamped.
     frac = min(1.0, (sev - _CLUSTER_FLOOR_SEVERITY) / float(max(1, _CLUSTER_FLOOR_SEVERITY)))
-    return int(max(lo, min(strong_hi, round(lo + frac * (strong_hi - lo)))))
+    return int(max(lo, min(strong_hi, round((lo + frac * (strong_hi - lo)) * _amb))))
 
 
 # Backfilled clusters cycle a DISTINCT-FORMAT mix (not 100% blog) so the most-backfilled = highest-
@@ -563,7 +588,8 @@ def _add_video_plan(campaigns: list[dict]) -> None:
 
 
 def _postprocess(model: dict, gap: dict, *, new_domain: bool = False,
-                 demand_by_intent: Optional[dict] = None, best_type: str = "") -> dict:
+                 demand_by_intent: Optional[dict] = None, best_type: str = "",
+                 ambition: float = 1.0) -> dict:
     """Deterministic guards + enrichment over the raw LLM plan: clamp counts, rank campaigns by
     severity (SoV-gap x value), assign each campaign a stable id + cadence-weeked pieces, and cap
     total pieces. Returns the finished ContentStrategy the planner materializes. `best_type` = the
@@ -572,9 +598,10 @@ def _postprocess(model: dict, gap: dict, *, new_domain: bool = False,
     if not isinstance(campaigns, list) or not campaigns:
         return {}
     campaigns = [c for c in campaigns if isinstance(c, dict) and (c.get("pillar") or c.get("topic"))][:_MAX_CAMPAIGNS]
-    # rank by computed severity (desc), stable on ties
+    # rank by computed severity (desc), stable on ties; stamp goal-ambition so the floor scales with it
     for c in campaigns:
         c["_severity"] = _campaign_severity(c, gap, demand_by_intent)
+        c["_ambition"] = ambition
     campaigns.sort(key=lambda c: -c["_severity"])
     out: list[dict] = []
     total = 0
@@ -714,7 +741,8 @@ def plan(business_id: int, gap: dict, *, business: Optional[dict] = None,
     _best_type = next((t.get("content_type") for t in _tp
                        if t.get("avg_geo") is not None and (t.get("n") or 0) >= 2), "")
     strategy = _postprocess(model, gap, new_domain=(len(_existing) < 3),
-                            demand_by_intent=_demand, best_type=_best_type)
+                            demand_by_intent=_demand, best_type=_best_type,
+                            ambition=_ambition_factor(biz.get("goal") or ""))
     if strategy.get("campaigns"):
         log.info("strategist: business %s -> %d campaigns, %d pieces",
                  business_id, strategy["counts"]["campaigns"], strategy["counts"]["pieces"])

@@ -73,7 +73,7 @@ def notify(business_id: int, kind: str, title: str, body: str = "", severity: st
                     email_service.send_email(to, f"[Reputation] {title}", body or title)
         except Exception as e:  # noqa: BLE001 -- email must never break alerting
             log.debug("alert email skipped: %s", e)
-    # Fan out to the client's stack (GHL/Zapier/...). No-op until WEBHOOK_URL is set; best-effort.
+    # Fan out to the client's stack (GHL/Zapier/...). No-op until a tenant webhook is set; best-effort.
     try:
         from . import webhooks as _wh
         _wh.emit(business_id, "notification", {"kind": kind, "title": title, "severity": severity})

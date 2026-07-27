@@ -17,6 +17,8 @@ is host-pinned + SSRF-guarded. Targets the stable v2 generate + v1 status endpoi
 from __future__ import annotations
 
 import logging
+import hashlib
+import hmac
 import os
 import re
 import time
@@ -405,6 +407,15 @@ def callback_base() -> str:
         return base
     dom = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
     return f"https://{dom}" if dom else ""
+
+
+def signed_callback_id(business_id: int, draft_id: int) -> str:
+    raw = f"{business_id}:{draft_id}"
+    secret = os.getenv("HEYGEN_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        return raw
+    sig = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{raw}:{sig}"
 
 
 def start_agent_session(business_id: int, script: str, *, title: str = "", business_name: str = "",

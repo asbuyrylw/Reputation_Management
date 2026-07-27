@@ -519,3 +519,22 @@ def displacement_pages_for(num_negatives: int = 1, *, high_authority: bool = Fal
     return (max(3, lo), hi,
             "~8-12 original positive/earned assets per page-1 negative in the first 90 days to control "
             "8-10 of 10 slots (ORM-vendor guidance; directional). High-authority negatives take 9-18 mo.")
+
+
+def review_velocity_target(num_negatives: int = 0, *, competitive: bool = False,
+                           deficit: int = 0) -> tuple[int, int, str]:
+    """(min, max, source) NEW Google reviews/MONTH to earn -- review count/recency/velocity is a top
+    local-pack ranking signal AND the sentiment AI reads. Baseline steady velocity ~3-6/mo; push higher
+    for a competitive local market, a review DEFICIT vs the local competitors, and to counter page-1
+    negatives (positive-review flow dilutes a negative narrative). Steady + genuine only -- never a
+    burst (Google filters review spikes)."""
+    lo, hi = 3, 6
+    if competitive:
+        lo, hi = 5, 10
+    # More negatives / a bigger deficit -> a higher sustained velocity to out-weigh them.
+    bump = min(8, max(0, int(num_negatives or 0)) * 2 + (2 if int(deficit or 0) >= 10 else 0))
+    lo, hi = lo + bump, hi + bump
+    return (lo, hi,
+            "Review velocity/recency is a top local-pack signal (Whitespread/BrightLocal local-SEO "
+            "surveys); earn steadily & genuinely -- Google filters review bursts. Raise the rate for a "
+            "competitive market, a review deficit, or to out-weigh a negative narrative.")

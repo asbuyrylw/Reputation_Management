@@ -33,13 +33,13 @@ try:
     from . import http as _http
     from . import cost as _cost
     from .keyword_research import (_dataforseo_auth, dataforseo_balance, _dfs_labs_location,
-                                   _dfs_clean_kw, volume_configured)
+                                   _dfs_clean_kw)
 except ImportError:  # pragma: no cover
     from db import db  # type: ignore
     import http as _http  # type: ignore
     import cost as _cost  # type: ignore
     from keyword_research import (_dataforseo_auth, dataforseo_balance, _dfs_labs_location,  # type: ignore
-                                  _dfs_clean_kw, volume_configured)
+                                  _dfs_clean_kw)
 
 log = logging.getLogger("dataforseo")
 _BASE = "https://api.dataforseo.com/v3"
@@ -137,7 +137,7 @@ def configured() -> bool:
     selection -- that selection only routes which provider fills search_volume; gating the intel jobs
     on it silently turned the whole feature off for an owner who had creds but picked another (or no)
     volume provider."""
-    return volume_configured()
+    return bool(os.getenv("DATAFORSEO_LOGIN") and os.getenv("DATAFORSEO_PASSWORD"))
 
 
 def _guard_ok() -> bool:
@@ -160,6 +160,12 @@ def _post(endpoint: str, body: list, business_id: Optional[int], category: str, 
     """POST to a DataForSEO endpoint, record the EXACT cost it returns, return the parsed data."""
     if not configured() or not _guard_ok():
         return None
+    if business_id is not None:
+        projected, _label = _cost.ext_estimate(category, units)
+        if _cost.would_exceed(business_id, projected):
+            log.warning("dataforseo %s skipped for business %s: projected call would exceed budget",
+                        endpoint, business_id)
+            return None
     res = _http.request_json("POST", f"{_BASE}/{endpoint}",
                              headers={"Authorization": f"Basic {_dataforseo_auth()}", "Content-Type": "application/json"},
                              json=body, timeout=timeout, max_retries=2, guard_redirects=True)

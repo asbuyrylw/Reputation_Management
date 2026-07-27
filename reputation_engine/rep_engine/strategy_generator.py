@@ -381,6 +381,7 @@ def _emit_typed_program(add, topic: str, atype: str, gap_source: str, why: str, 
     uses the right per-type template; social is atomized from the long-form, not a standalone WO.
     `default_types` MUST be the tenant's profile default_content_types (the same value the batch passes)
     so the type SET matches for non-module-default tenants (generic keeps faq / drops white_paper)."""
+    _cb_t = None
     try:
         from . import content_batch as _cb_t
         types = _cb_t._types_for_gap({"topic": topic, "asset_type": atype}, default_types) or ["article"]
@@ -389,13 +390,18 @@ def _emit_typed_program(add, topic: str, atype: str, gap_source: str, why: str, 
     _titles = {"blog": f"Blog: {topic}", "white_paper": f"White paper: {topic}", "faq": f"{topic}: FAQ",
                "landing_page": f"{topic} — overview page", "video_script": f"Video: {topic}",
                "article": f"Create owned asset: {topic}"}
-    for k, ct in enumerate([t for t in types if t != "social_post"]):
+    _nonsocial = [t for t in types if t != "social_post"]
+    for k, ct in enumerate(_nonsocial):
         cap = "video_creation" if (ct == "video_script" or "video" in (atype or "").lower()) else "content_writing"
         add(_titles.get(ct, f"Create owned asset: {topic} ({ct})"), cap,
             f"Produce a {ct} on '{topic}'. Rationale: {why}. Draft via engine-native LLM; fact-check "
             f"trust-sensitive claims; publish on the business domain.{_AEO_CHECKLIST}", 3,
             gap_source=gap_source, why=why, source_query=topic, gap_key=gap_key,
-            campaign={"content_type": ct, "role": ("pillar" if k == 0 else "cluster"), "ordinal": k})
+            # Shared hub rule with the batch path (content_batch.pillar_role) so the plan + the produced
+            # batch designate the SAME piece as the pillar (was: first-emitted vs first-article-like).
+            campaign={"content_type": ct,
+                      "role": (_cb_t.pillar_role(ct, _nonsocial) if _cb_t else ("pillar" if k == 0 else "cluster")),
+                      "ordinal": k})
 
 
 def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None) -> list[WorkOrder]:
@@ -609,18 +615,32 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
     # (competitor-won queries + a contested/negative narrative); emit a concrete, sized crowd-out target
     # (the last previously-dead sibling helper -> a stated, size-driving decision).
     _num_neg = len(gap.get("competitor_defense") or []) + (1 if (biz.get("contested_terms") or "").strip() else 0)
+    # A page-1 negative on a HIGH-AUTHORITY domain (major news, gov, large review/complaint sites, a
+    # lawsuit/regulatory filing) is far harder to displace and takes ~1.5-2x the volume. Detect it from the
+    # negative narrative text (the gap model carries no domain-authority field yet), so displacement_pages_for's
+    # multiplier -- previously DEAD because no caller passed it -- actually fires for a serious negative.
+    _neg_txt = " ".join([
+        (biz.get("contested_terms") or ""),
+        " ".join(str(c.get("query", "")) + " " + str(c.get("why", "")) + " " + str(c.get("recommendation", ""))
+                 for c in (gap.get("competitor_defense") or []) if isinstance(c, dict)),
+    ]).lower()
+    _high_auth = bool(_re_tech.search(
+        r"\b(lawsuit|sued|litigation|settlement|indict|sec |finra|regulator|attorney general|"
+        r"class action|news|times|post|tribune|journal|reuters|bloomberg|\.gov|ripoff|"
+        r"bbb|trustpilot|glassdoor|reddit|complaint)\b", _neg_txt))
+    _dp_lo = _dp_hi = 0
     if _num_neg > 0:
         try:
             from . import content_research as _cr_disp
-            _dp_lo, _dp_hi, _dp_src = _cr_disp.displacement_pages_for(_num_neg)
+            _dp_lo, _dp_hi, _dp_src = _cr_disp.displacement_pages_for(_num_neg, high_authority=_high_auth)
             add("Crowd-out plan: out-publish the negative results", "content_writing",
-                f"To bury the {_num_neg} page-1 negative(s), publish ~{_dp_lo}-{_dp_hi} original positive/"
-                f"earned, indexed assets in the first 90 days ({_dp_src}) -- enough to control 8-10 of the "
-                f"10 page-1 slots. This is the FLOOR the pillar/cluster + local programs above should sum "
-                f"to; front-load them.{_AEO_CHECKLIST}", 2,
+                f"To bury the {_num_neg} page-1 negative(s{', high-authority' if _high_auth else ''}), publish "
+                f"~{_dp_lo}-{_dp_hi} original positive/earned, indexed assets in the first 90 days ({_dp_src}) "
+                f"-- enough to control 8-10 of the 10 page-1 slots. This is the FLOOR the pillar/cluster + "
+                f"local programs above should sum to; front-load them.{_AEO_CHECKLIST}", 2,
                 gap_source="reputation crowd-out", source_query="crowd-out volume", execution="manual")
         except Exception:  # noqa: BLE001 -- best-effort sizing line
-            pass
+            _dp_lo = _dp_hi = 0
 
     # --- Phase 2: corroboration (press, media list, partner, link) ---
     if gap.get("thin_corroboration"):
@@ -800,6 +820,10 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             f"An FAQ answering the top questions people ask about '{q}' in this area.{_AEO_CHECKLIST}", 6,
             gap_source="local search ranking", why=why_l, source_query=f"{q} faq", gap_key=_local_gk,
             campaign={**_lmeta, "role": "cluster", "content_type": "faq", "publish_week": 6, "ordinal": 90})
+        # Competitiveness proxy: local_spoke_target sizes the spoke count by keyword difficulty, so a
+        # program that earned more than the research band MIN (~8) is a competitive local market -> a
+        # higher review-velocity target below.
+        _local_competitive = len(spokes_l) >= 10
         # GBP + reviews: the PRIMARY local-ranking levers. Bind them to THIS local gap (same gap_key +
         # campaign) so a page-1 program always includes the Google Business Profile + review work, not
         # just content -- content alone rarely wins the local pack. (Was only emitted, un-linked, in the
@@ -810,9 +834,21 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             gap_source="local search ranking", why=why_l, source_query=q, gap_key=_local_gk,
             area="local", platform="gbp",
             campaign={**_lmeta, "role": "gbp", "publish_week": 4, "ordinal": 95})
-        add(f"Drive Google reviews for '{q}'", "review_generation",
-            f"Run the review-request sequence so happy local clients leave Google reviews mentioning the "
-            f"service + locale for '{q}' -- review count/recency/velocity is a top local-pack signal.", 4,
+        # Sized review velocity: reviews are a top local-pack + sentiment signal, so target a RESEARCH-
+        # backed rate scaled by local competitiveness + the page-1 negatives to out-weigh (content_research
+        # .review_velocity_target) -- not a bare "get reviews" ask with no number.
+        try:
+            from . import content_research as _cr_rev
+            _rv_lo, _rv_hi, _rv_src = _cr_rev.review_velocity_target(
+                num_negatives=_num_neg, competitive=bool(_local_competitive))
+            _rev_line = (f"Run the review-request sequence so happy local clients leave Google reviews "
+                         f"mentioning the service + locale for '{q}'. Target ~{_rv_lo}-{_rv_hi} NEW reviews/"
+                         f"month ({_rv_src})")
+        except Exception:  # noqa: BLE001
+            _rev_line = (f"Run the review-request sequence so happy local clients leave Google reviews "
+                         f"mentioning the service + locale for '{q}' -- review count/recency/velocity is a "
+                         f"top local-pack signal")
+        add(f"Drive Google reviews for '{q}'", "review_generation", _rev_line + ".", 4,
             gap_source="local search ranking", why=why_l, source_query=q, gap_key=_local_gk,
             area="local", campaign={**_lmeta, "role": "reviews", "publish_week": 4, "ordinal": 96})
 
@@ -859,6 +895,24 @@ def build_work_orders(gap: dict, business=None, strategy: Optional[dict] = None)
             gap_source="content freshness", source_query="content refresh", execution="manual")
     except Exception:  # noqa: BLE001 -- freshness WO is best-effort
         pass
+
+    # --- Crowd-out floor RECONCILIATION (enforce, don't just narrate) ---
+    # The displacement WO above states a FLOOR (how many owned assets are needed to bury the page-1
+    # negatives). Previously nothing checked the plan actually MEETS it, so a plan could silently emit far
+    # fewer owned pieces than its own stated floor. Count the owned indexable content pieces we emitted and,
+    # if the program is under the floor, emit an explicit high-priority backfill task naming the exact
+    # shortfall -- so the crowd-out volume is a measured, actionable gap, not advisory prose.
+    if _dp_lo > 0:
+        _owned = sum(1 for w in wos if getattr(w, "capability", "") in CONTENT_CAPABILITIES)
+        if _owned < _dp_lo:
+            _short = _dp_lo - _owned
+            add("Crowd-out shortfall: add owned assets to reach the displacement floor", "content_writing",
+                f"The plan currently emits {_owned} owned content asset(s) but the crowd-out FLOOR to bury "
+                f"the {_num_neg} page-1 negative(s{', high-authority' if _high_auth else ''}) is {_dp_lo}-"
+                f"{_dp_hi}. Produce ~{_short} MORE original, indexed positive assets (owned pages, FAQs, "
+                f"videos, comparison/answer pages on the business's real strengths) in the first 90 days so "
+                f"the program actually reaches the floor. Front-load these.{_AEO_CHECKLIST}", 2,
+                gap_source="reputation crowd-out", source_query="crowd-out shortfall", execution="manual")
     return wos
 
 

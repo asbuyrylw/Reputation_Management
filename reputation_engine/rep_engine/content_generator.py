@@ -117,8 +117,8 @@ _CT_ASSET_OVERRIDE = {
     # blog + white_paper map to their OWN asset_type (not "article") so each gets a DISTINCT
     # generation spec -- otherwise a gap's multi-type batch (article+blog+white_paper) produced three
     # near-identical "about" pages (duplicate content). See the per-type specs in _gen_prompt().
-    "article": "article", "blog": "blog", "white_paper": "white_paper", "landing_page": "article",
-    "faq": "faq", "local_page": "local_page",
+    "article": "article", "blog": "blog", "white_paper": "white_paper", "landing_page": "landing_page",
+    "faq": "faq", "local_page": "local_page", "video_script": "video_script",
 }
 
 
@@ -392,6 +392,27 @@ def _scope_keywords(allkw: list, target_query: str | None, limit: int = 12) -> l
     return [t[3] for t in (relevant if relevant else scored)[:limit]]
 
 
+_INJECTION_RE = re.compile(
+    r"^\s*(?:system|assistant|developer)\s*:\s*"
+    r"|\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:the\s+)?(?:previous|above|prior|earlier|"
+    r"foregoing)\s+(?:instructions?|prompts?|messages?|context|rules?)\b"
+    r"|\byou\s+are\s+now\b|\bnew\s+instructions?\s*:"
+    r"|\boverride[^.\n]{0,40}\binstructions?\b"
+    r"|\b(?:reveal|print|repeat|output|show)\s+(?:your|the)\s+(?:system\s+)?(?:prompt|instructions?)\b",
+    re.I | re.M)
+
+
+def _neutralize_injection(text: str) -> str:
+    """Defang prompt-injection directives embedded in INGESTED third-party text (crawled site content,
+    uploaded source material) before it is placed in an LLM prompt. A malicious page/source could try to
+    hijack the writer ('ignore previous instructions and ...', 'System: ...'); neutralize the common
+    steering phrases so ingested text is treated as DATA, not instructions. Best-effort defense-in-depth
+    (the prompt also frames this content as reference material only)."""
+    if not text:
+        return text
+    return _INJECTION_RE.sub("[removed]", text)
+
+
 def _grounding_context(business_id: int, target_query: str | None = None, biz: dict | None = None) -> dict:
     """Pull the REAL grounding for content generation, so the writer works from facts and the
     right language instead of generic filler:
@@ -409,7 +430,9 @@ def _grounding_context(business_id: int, target_query: str | None = None, biz: d
                 (business_id,)).fetchone()
             if sa and sa["summary"]:
                 s = sa["summary"] if isinstance(sa["summary"], (dict, list)) else json.loads(sa["summary"])
-                site_facts = json.dumps(s, default=str)[:3500]
+                # Neutralize any prompt-injection directives in the crawled site content before it enters
+                # the writer's prompt (ingested third-party text is DATA, not instructions).
+                site_facts = _neutralize_injection(json.dumps(s, default=str)[:3500])
             gm = conn.execute(
                 "SELECT model FROM gap_models WHERE business_id=%s ORDER BY id DESC LIMIT 1",
                 (business_id,)).fetchone()
@@ -654,12 +677,19 @@ def _verified_nap(business_id: int, biz: dict) -> str:
     # arbitrary address that could belong to a competitor/testimonial/carrier in the source material).
     try:
         domain = (biz.get("domain") or nap.get("website") or "") if isinstance(biz, dict) else (nap.get("website") or "")
-        domain = re.sub(r"^https?://", "", (domain or "").lower()).lstrip("www.").strip("/").split("/")[0]
+        # Strip scheme + a leading "www." PREFIX (re.sub, NOT lstrip: lstrip("www.") is a char-set strip
+        # that would mangle e.g. "wcapital.com" -> "capital.com"), then take the bare host.
+        domain = re.sub(r"^https?://", "", (domain or "").lower()).strip("/").split("/")[0]
+        domain = re.sub(r"^www\.", "", domain)
         if domain:
             from . import source_material as _sm
             corpus = _sm.corpus(business_id, max_tokens=6000) or ""
             for m in re.finditer(r"[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})", corpus):
-                if m.group(1).lower().endswith(domain):
+                # Label-boundary match ONLY (exact host, or a true sub-domain). A bare endswith(domain)
+                # would accept "bluecapital.com" for domain "capital.com" -> a competitor's email
+                # published as the client's own verified contact.
+                d = m.group(1).lower()
+                if d == domain or d.endswith("." + domain):
                     parts.append("Email: " + m.group(0).strip())
                     break
     except Exception:  # noqa: BLE001 -- email cross-check is best-effort
@@ -703,6 +733,11 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
                 "answer-first, use scannable H2 sections each ending in a takeaway, and add a short "
                 "FAQ. Where the definitive company page already covers the basics, briefly reference "
                 "it rather than restating it, so this reads as a complementary piece, not a duplicate.",
+        "landing_page": "Write a conversion-focused LANDING PAGE in markdown, not a generic article. "
+                        "Use a clear value-prop H1, answer-first lead, benefit sections, proof points, "
+                        "comparison/table or bullets where useful, a concise FAQ, and one strong CTA. "
+                        "Ground every claim in the real facts above; use [INSERT: ...] for unknown proof "
+                        "or testimonials and never fabricate a statistic, citation, address, or review.",
         "local_page": "Write a LOCAL LANDING PAGE in markdown for a specific city/area + service. Put "
                       "the city + service in the H1 and the first sentence; open answer-first. Cover the "
                       "service locally (who it's for, what to expect, why choosing local matters), add "
@@ -735,6 +770,11 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
         "newsletter": "Write a newsletter brief (400-600 words) covering reputation progress "
                       "highlights. Include 3 subject-line options, preview text, 3-4 content "
                       "sections, a key takeaway, and a CTA. Tone: warm, credible.",
+        "video_script": "Write a shootable VIDEO SCRIPT in markdown, not an article. Include a keyword-rich "
+                        "video title, a 0:00-style timestamped hook and 3-5 short segments, spoken "
+                        "narration/dialogue, on-screen text or B-roll cues for each segment, caption/SRT "
+                        "and VideoObject schema notes, YouTube description/tags, and a branded end card "
+                        "with CTA. Keep the spoken language grade 6-8 and grounded in the real facts.",
     }
     spec = specs.get(asset_type, "Write the requested asset in markdown.")
     kw = grounding.get("keywords") or []
@@ -804,7 +844,8 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] 
 
 
 # Marquee long-form assets get the best model; short/structured assets stay on the mid tier.
-_ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "full"}
+_ASSET_TIER = {"article": "full", "faq": "full", "bio": "full", "white_paper": "full",
+               "landing_page": "full", "video_script": "full"}
 
 
 def _generate_one(biz: dict, wo: dict, asset_type: str, grounding: Optional[dict] = None,
@@ -874,15 +915,16 @@ REVISE_SYSTEM = (
 )
 
 
-def _revise(body: str, fixes: list) -> str:
+def _revise(body: str, fixes: list, *, bill: Optional[dict] = None) -> str:
     user = "Issues/fixes to address:\n- " + "\n- ".join(fixes or []) + f"\n\nCurrent draft:\n{body}"
     # A rewrite is ~as long as the input, so the output cap MUST scale with the body. A fixed 2200
     # silently truncated (-> empty) any revision of a 9k+ char article, so _maximize_geo AND the
     # readability pass discarded every long-form revision and never actually improved it. Size to the
     # body (~3 chars/token) + headroom, clamped so long-form isn't truncated but a cap still exists.
     max_tokens = max(2600, min(int(len(body or "") / 3.0) + 500, 8000))
-    # creative rewrite -> mid tier (Sonnet/gpt-4o).
-    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=max_tokens, tier="mid")
+    # creative rewrite -> mid tier (Sonnet/gpt-4o). bill= meters this real call (the per-draft estimate
+    # counts only outline+draft+eval passes, so a caller that self-bills its rewrites closes that gap).
+    return llm.orchestrator_text(REVISE_SYSTEM, user, max_tokens=max_tokens, tier="mid", bill=bill)
 
 
 # ----------------------------------------------------------------------------
@@ -896,9 +938,12 @@ UNIVERSAL_DECEPTIVE_SYSTEM = (
     "{\"pass\": bool, \"flags\": [strings]}. Flag any of: demonstrably FALSE or misleading factual "
     "claims; unverifiable superlatives ('best', '#1', 'the leading', 'guaranteed results') stated as "
     "objective fact; testimonials or outcomes presented as typical without context; fabricated "
-    "statistics, credentials, or endorsements. Do NOT demand industry-specific regulatory disclosures "
-    "-- this is the universal deceptive-claims screen; any vertical-specific rules are applied "
-    "separately where they apply. Pass ordinary, accurate, well-sourced marketing content."
+    "statistics, credentials, or endorsements; DISPARAGEMENT of a NAMED competitor -- an accusation or "
+    "pejorative about a specific rival ('X is a scam/fraud', 'avoid X', 'X rips people off') that could "
+    "be defamatory (a neutral, factual feature/price comparison is fine; a personal attack on a named "
+    "rival is not). Do NOT demand industry-specific regulatory disclosures -- this is the universal "
+    "deceptive-claims screen; any vertical-specific rules are applied separately where they apply. Pass "
+    "ordinary, accurate, well-sourced marketing content."
 )
 
 # The FINANCE screener -- selected ONLY for a regulated-finance tenant (compliance_packs contains
@@ -909,7 +954,11 @@ COMPLIANCE_SYSTEM = (
     "guaranteed/implied investment returns or performance promises; claims that imply "
     "the brand is an independent registered firm when it may be a representative of a "
     "broker-dealer; missing required disclosure of the broker-dealer relationship where "
-    "the content markets financial products; unverifiable superlatives ('best', "
+    "the content markets financial products; PERSONALIZED / INDIVIDUALIZED advice or a specific "
+    "product recommendation directed at the reader ('you should buy this annuity', 'you need "
+    "whole life', 'we recommend you invest in X') presented as licensed advice without a "
+    "suitability / 'consult your licensed advisor about your situation' caveat -- marketing must "
+    "not read as individualized investment/insurance advice; unverifiable superlatives ('best', "
     "'#1') stated as fact; testimonials presented without context. If the content is "
     "non-financial or purely informational, pass it unless it makes false claims."
 )
@@ -1555,7 +1604,8 @@ def _scoring_query(wo: dict, business_name: str = "", geo: str = "") -> str:
 
 
 def _maximize_geo(body: str, sq: str, content_type: str, asset_type: str,
-                  business_name: str, geo: str, *, target: int = 75, rounds: int = 2) -> str:
+                  business_name: str, geo: str, *, target: int = 75, rounds: int = 2,
+                  bill: Optional[dict] = None) -> str:
     """AI-FIRST optimization: iteratively revise the draft to MAXIMIZE its GEO (AI-citability) grade --
     the whole point of this content is to be surfaced + CITED by AI answer engines, so we optimize
     directly against the GEO scorer. Each round revises the currently-weak signals (answer-first
@@ -1584,7 +1634,7 @@ def _maximize_geo(body: str, sq: str, content_type: str, asset_type: str,
             "or statistics, changing the meaning, adding [INSERT] placeholders, or keyword-stuffing. "
             "Use only real, attributable numbers (industry/official sources you can name) and inline "
             "links to authoritative primary sources (.gov/.edu/official). Keep the answer-first opener:"
-        ] + [f"{c.get('label')}: {c.get('fix')}" for c in weak])
+        ] + [f"{c.get('label')}: {c.get('fix')}" for c in weak], bill=bill)
         if not rev:
             break
         rev = _strip_placeholders(rev)   # the revision must not (re)introduce placeholders
@@ -1645,7 +1695,7 @@ COMPLIANCE_FIX_SYSTEM = _compliance_fix_system()   # finance-free GENERIC alias 
 
 def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] = None,
                         license_policy: str = "", regulated_financial: bool = False,
-                        asset_type: str = "") -> Optional[str]:
+                        asset_type: str = "", bill: Optional[dict] = None) -> Optional[str]:
     """Attempt to make a flagged draft compliant: strip prohibited claims + insert the missing
     disclosures (using what we know about the business + its regulatory profile). A generic tenant gets
     the universal editor and no broker-dealer-disclosure instruction; a regulated-finance tenant gets
@@ -1687,7 +1737,7 @@ def _compliance_autofix(biz: dict, body: str, flags: list, reg: Optional[dict] =
     ceiling = 9000 if (asset_type or "").lower() in ("white_paper", "deep_article") else 6500
     max_tokens = max(2600, min(int(len(body or "") / 3.0) + 800, ceiling))
     revised = (llm.orchestrator_text(_compliance_fix_system(license_policy, regulated_financial),
-                                     ctx, max_tokens=max_tokens, tier="mid") or "").strip()
+                                     ctx, max_tokens=max_tokens, tier="mid", bill=bill) or "").strip()
     if not revised:
         return None
     # Reject a clipped/gutted rewrite: a compliant-LOOKING but truncated draft must never be accepted.
@@ -1807,7 +1857,10 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         _rules = _sm.guardrails(business_id)
         _doc_rules = _sm.instruction_rules(business_id)
         _topic_facts = _gr.facts_block(business_id, _scope_q)
-        _facts = _topic_facts or _sm.corpus(business_id, max_tokens=3500)
+        # Neutralize prompt-injection directives in ingested SOURCE MATERIAL / retrieved facts (reference
+        # DATA) before it enters the prompt. NOT applied to _rules/_doc_rules below -- those are the
+        # client's OWN intentional brand directives, not untrusted third-party content.
+        _facts = _neutralize_injection(_topic_facts or _sm.corpus(business_id, max_tokens=3500))
         _cm_parts = []
         if _rules:
             _cm_parts.append("BRAND RULES — these are ABSOLUTE and override anything else:\n" + _rules)
@@ -1923,6 +1976,11 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     # a REAL query (not the internal asset label). SEO/keyword coverage above is the secondary benefit.
     _score_q = _scoring_query(wo, (biz.get("name") if isinstance(biz, dict) else "") or "",
                               (biz.get("geo") if isinstance(biz, dict) else "") or "")
+    # Bill the real GEO/compliance rewrite passes (the per-draft estimate below counts only outline+draft+
+    # eval passes -> those rewrites were invisible spend, so a long-form piece could run 2-4x past what the
+    # ledger showed and overshoot the monthly cap). Defined here (before the GEO block) so it is in scope
+    # for the compliance auto-fix calls too, which run for every asset type (incl. social).
+    _bill = {"business_id": business_id, "operation": "content_draft"}
     if asset_type not in ("schema", "social_post", "gbp_post", "x_post", "facebook_post",
                           "instagram_post", "linkedin_post", "pinterest_post"):
         _geo_before = None
@@ -1933,14 +1991,26 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
                            geo=(biz.get("geo") or "")) or {}).get("score")
         except Exception:  # noqa: BLE001
             pass
-        body = _maximize_geo(body, _score_q, content_type, asset_type,
-                             (biz.get("name") if isinstance(biz, dict) else "") or "",
-                             (biz.get("geo") if isinstance(biz, dict) else "") or "")
+        # Skip the OPTIONAL GEO-max pass (up to 2 full-body rewrites) once already over budget -- but NEVER
+        # skip compliance (safety). This is the mid-piece runaway guard between the heavy passes.
+        _over_budget = False
+        try:
+            _over_budget = llm.cost.over_budget(business_id)
+        except Exception:  # noqa: BLE001 -- budget read is best-effort; fail open to preserve behavior
+            _over_budget = False
+        if _over_budget:
+            log.warning("business %d at/over budget -> skipping optional GEO-maximization pass for this draft",
+                        business_id)
+        else:
+            body = _maximize_geo(body, _score_q, content_type, asset_type,
+                                 (biz.get("name") if isinstance(biz, dict) else "") or "",
+                                 (biz.get("geo") if isinstance(biz, dict) else "") or "", bill=_bill)
 
     # compliance gate (profile-adapted: universal for a generic tenant, finance rules for a finance one)
+    _comp_screened_body = body
     comp = _compliance(body, system=comp_system, regulated_financial=_reg_fin)
     comp_pass = comp.get("pass")
-    comp_flags = comp.get("flags", [])
+    comp_flags = list(comp.get("flags") or [])
 
     # Compliance AUTO-FIX: rather than dumping a flagged draft on the human as "needs_fix", try
     # once to resolve the issues (strip prohibited claims + add the missing disclosures) and
@@ -1949,7 +2019,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     highlighted: list = []
     if comp_pass is False and not eval_unavailable:
         fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic,
-                                    regulated_financial=_reg_fin, asset_type=asset_type)
+                                    regulated_financial=_reg_fin, asset_type=asset_type, bill=_bill)
         if fixed and fixed != body:
             recheck = _compliance(fixed, system=comp_system, regulated_financial=_reg_fin)
             if recheck.get("pass") is not False:   # passed, or unknown (no LLM) -> human reviews
@@ -2002,6 +2072,28 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         # Topic-cluster internal linking: cross-link this piece to its pillar/spokes (added LAST so the
         # readability rewrite can't mangle the links). No-op unless the WO carries a `cluster` plan.
         body = _add_cluster_links(body, wo.get("cluster") if isinstance(wo, dict) else None)
+    # Final compliance must describe the exact body that will be stored. Earlier compliance runs before
+    # placeholder stripping, identity scrubs, freshness/byline insertion, readability rewrites, and links.
+    # If any late mutation changed the body, re-screen here and optionally run one surgical autofix.
+    if body != _comp_screened_body:
+        final_comp = _compliance(body, system=comp_system, regulated_financial=_reg_fin)
+        comp_pass = final_comp.get("pass")
+        comp_flags = list(final_comp.get("flags", []))
+        highlighted = []
+        if comp_pass is False and not eval_unavailable:
+            fixed = _compliance_autofix(biz, body, comp_flags, reg=reg, license_policy=_lic,
+                                        regulated_financial=_reg_fin, asset_type=asset_type, bill=_bill)
+            if fixed and fixed != body:
+                recheck = _compliance(fixed, system=comp_system, regulated_financial=_reg_fin)
+                if recheck.get("pass") is not False:
+                    body = fixed
+                    comp_pass = recheck.get("pass")
+                    comp_flags = list(recheck.get("flags", []))
+                    highlighted = [{"type": "compliance", "note": str(f)}
+                                   for f in final_comp.get("flags", [])]
+        if comp_pass is False and comp_flags:
+            highlighted = [{"type": "compliance", "note": str(f)} for f in comp_flags]
+    _comp_screened_body = body
     placeholders = _extract_placeholders(body)
     # Exact-content fingerprint (for dedup): stored on the draft, copied to the asset at approval.
     content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
@@ -2024,6 +2116,19 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         status = "needs_fix"
         comp_flags = list(comp_flags) + [
             "exact duplicate of already-drafted/published content -- don't re-publish the same page"]
+    # HARD grounding gate for REGULATED tenants (finance/insurance): a draft with ZERO tenant-verified
+    # source facts -- no site crawl AND no uploaded source material (the generic authoritative-sources +
+    # research KB are NOT this tenant's facts) -- must not reach the normal review queue on warn-only
+    # banners. Hold it so a human sources the claims first: a regulated claim with no basis is a
+    # reputation/legal risk. 'needs_fix' is folded into 'held' below (kept out of the ready queue).
+    if _reg_fin and asset_type != "schema" and isinstance(grounding, dict):
+        _tenant_facts = bool((grounding.get("site_facts") or "").strip()
+                             or (grounding.get("client_material") or "").strip())
+        if not _tenant_facts:
+            status = "needs_fix"
+            comp_flags = list(comp_flags) + [
+                "regulated tenant: no verified source facts (site crawl + uploaded material both empty) "
+                "-- provide source material before publishing"]
 
     # quality_notes carries the rubric eval + the SEO keyword-coverage scorecard (CI-3 UI reads it)
     # + the Wave-2 draft-quality scorers (on-page SEO, citation-readiness, fact-check).
@@ -2097,6 +2202,32 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
     except Exception as e:  # noqa: BLE001
         log.debug("image marker extraction skipped: %s", e)
 
+    def _apply_fact_check_gate() -> None:
+        """Hold otherwise-ready drafts when the final scorer says factual support is not clean."""
+        nonlocal status, comp_flags
+        if status != "pending_review":
+            return
+        fc = quality_notes.get("fact_check")
+        geo_score = None
+        try:
+            gq = quality_notes.get("geo")
+            geo_score = gq.get("score") if isinstance(gq, dict) else None
+        except Exception:  # noqa: BLE001
+            geo_score = None
+        if isinstance(fc, dict) and int(fc.get("unverified") or 0) > 0:
+            status = "needs_fix"
+            comp_flags = list(comp_flags) + [
+                f"fact-check found {int(fc.get('unverified') or 0)} unverified/contradicted claim(s)"]
+        elif isinstance(fc, dict) and fc.get("skipped") and isinstance(geo_score, (int, float)) and geo_score >= 75:
+            status = "needs_fix"
+            comp_flags = list(comp_flags) + [
+                "fact-check unavailable on a high-GEO draft -- verify claims before approval"]
+
+    # Fact-check gate: GEO/AEO grades are not enough if factual claims are contradicted or unverifiable.
+    # If the fact-checker was unavailable on an otherwise strong GEO draft, hold it for manual review
+    # instead of presenting a high-scoring but ungrounded piece as ready.
+    _apply_fact_check_gate()
+
     # Citation-readiness gate (the on-page lever that decides whether AI will quote the piece).
     # REVISE-UNTIL-CLEAN: rather than immediately flagging a low-scoring draft, take up to
     # MAX_CITATION_REVISIONS targeted passes to lift it over the bar, re-scoring each time and
@@ -2163,6 +2294,51 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         except Exception as e:  # noqa: BLE001 -- re-scoring must never break generation
             log.warning("final-body re-score failed (%s) -- persisted scores may describe the "
                         "pre-revision draft", e)
+
+    _apply_fact_check_gate()
+
+    # Re-screen after citation revisions, which can introduce new claims after the earlier compliance
+    # gate. If an autofix changes the body, refresh placeholders/hash and scores so stored metadata stays
+    # attached to the exact draft.
+    if body != _comp_screened_body:
+        final_comp = _compliance(body, system=comp_system, regulated_financial=_reg_fin)
+        final_pass = final_comp.get("pass")
+        final_flags = list(final_comp.get("flags", []))
+        if final_pass is False and not eval_unavailable:
+            fixed = _compliance_autofix(biz, body, final_flags, reg=reg, license_policy=_lic,
+                                        regulated_financial=_reg_fin, asset_type=asset_type, bill=_bill)
+            if fixed and fixed != body:
+                recheck = _compliance(fixed, system=comp_system, regulated_financial=_reg_fin)
+                if recheck.get("pass") is not False:
+                    body = fixed
+                    final_pass = recheck.get("pass")
+                    final_flags = list(recheck.get("flags", []))
+                    highlighted = [{"type": "compliance", "note": str(f)}
+                                   for f in final_comp.get("flags", [])]
+                    placeholders = _extract_placeholders(body)
+                    content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
+                    if _run_analysis is not None:
+                        try:
+                            quality_notes.update(_run_analysis(body))
+                            _scored_body = body
+                            _g3 = quality_notes.get("geo")
+                            if isinstance(_g3, dict) and isinstance(_g3.get("score"), (int, float)):
+                                geo_val = float(_g3["score"])
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("post-compliance re-score failed (%s) -- persisted scores may "
+                                        "describe the pre-autofix draft", e)
+        comp_pass = final_pass
+        if final_pass is False:
+            status = "needs_fix"
+            for f in final_flags:
+                if f not in comp_flags:
+                    comp_flags.append(f)
+            if final_flags:
+                highlighted = [{"type": "compliance", "note": str(f)} for f in final_flags]
+        placeholders = _extract_placeholders(body)
+        content_hash = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
+        _comp_screened_body = body
+        _apply_fact_check_gate()
 
     # A draft that couldn't clear quality/compliance is HELD (needs a human editorial pass), not shown
     # as a ready-to-review draft with issues. "needs_fix" is folded into "held" so the review queue
@@ -2239,10 +2415,13 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
              batch_id, content_type, geo_val),
         ).fetchone()
         conn.commit()
-    # Ledger the estimated LLM spend for this draft (rec 10b) so content generation shows up in COGS
-    # and counts against the monthly cap -- previously every drafting call was invisible to the ledger.
-    # The passes (outline + draft + 1+revisions full generations + eval/compliance) don't surface
-    # provider usage, so this is an estimate (cost.py is explicitly estimate-grade for budgeting).
+    # Ledger the estimated LLM spend for the BASE passes (outline + draft + the eval/keyword/citation
+    # revisions counted by `revisions`) so content generation shows up in COGS and counts against the
+    # monthly cap. The heavy OPTIONAL rewrites -- _maximize_geo (up to 2 full-body rewrites) and
+    # _compliance_autofix (up to 3) -- are NOT counted here on purpose: they self-bill their REAL usage
+    # via bill= (they were previously invisible spend, letting a long-form piece run 2-4x past the ledger
+    # and overshoot the cap). So DO NOT add geo/compliance passes to _passes below -> that would
+    # double-count. cost.py is explicitly estimate-grade for the base passes.
     try:
         _cm, _ = llm._model_for("mid") if llm.ORCHESTRATOR == "anthropic" else (None, None)
         if _cm is None:
@@ -2250,7 +2429,7 @@ def generate_for_wo(business_id: int, wo: dict, biz: dict,
         _passes = 1 + revisions
         _in = llm.cost.approx_tokens(json.dumps(grounding, default=str)) + \
             llm.cost.approx_tokens(outline or topic)
-        _out = llm.cost.approx_tokens(body) * _passes + 800  # +eval/compliance/keyword overhead
+        _out = llm.cost.approx_tokens(body) * _passes + 800  # +eval/keyword overhead (geo/compliance self-bill)
         llm.cost.record(business_id, None, llm.ORCHESTRATOR, "content_draft", _cm, _in, _out,
                         {"content_type": asset_type, "api": "llm"})
     except Exception as e:  # noqa: BLE001 -- cost logging must never break generation

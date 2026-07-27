@@ -81,10 +81,10 @@ def send(business_id: int, recipients: list[dict]) -> dict:
     except ImportError:  # pragma: no cover
         import webhooks as _wh  # type: ignore
     tpl = templates(business_id)
-    email_on, ghl_on = _es.enabled(), _wh.enabled()
+    email_on, ghl_on = _es.enabled(), _wh.enabled(business_id)
     if not email_on and not ghl_on:
         return {"sent": 0, "skipped": True,
-                "reason": "no review-request channel configured (set SMTP_* for email or WEBHOOK_URL "
+                "reason": "no review-request channel configured (set SMTP_* for email or a tenant webhook "
                           "for SMS/GoHighLevel)",
                 "preview": {"subject": tpl["email_subject"], "body": tpl["email_body"], "sms": tpl["sms"]}}
     sent = failed = ghl = 0

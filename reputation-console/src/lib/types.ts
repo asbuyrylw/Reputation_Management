@@ -454,7 +454,7 @@ export interface ContentBatch {
   baseline: Record<string, unknown>;
   status: string;             // planned | generating | drafted | published | measured | failed
   created_at: string;
-  pieces: { id: number; content_type: string | null; asset_type: string | null; title: string | null; status: string; geo_score: number | null; quality_score: number | null; published_asset_id: number | null }[];
+  pieces: { id: number; content_type: string | null; asset_type: string | null; title: string | null; status: string; geo_score: number | null; quality_score: number | null; published_asset_id: number | null; published?: boolean | null }[];
   impact: ContentImpactRow | null;
 }
 

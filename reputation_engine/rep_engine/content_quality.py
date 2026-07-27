@@ -37,10 +37,20 @@ _HEADING_LVL = re.compile(r"^(\s{0,3})(#{1,6})\s+(.+)$", re.M)
 _FRESH = re.compile(r"(last[-\s]?updated|updated on|as of|reviewed on)\b", re.I)
 _SYLL = re.compile(r"[aeiouy]+", re.I)
 _PASSIVE = re.compile(r"\b(?:was|were|is|are|been|be|being)\s+\w+ed\b", re.I)
+_BAD_CITE = re.compile(r"https?://(?:www\.)?(?:example\.(?:com|org|net)|localhost|127\.0\.0\.1)\b|placeholder|insert|tbd", re.I)
+_ADDRESS = re.compile(
+    r"\b\d{2,6}\s+[A-Za-z0-9 .'-]+(?:street|st\.?|avenue|ave\.?|road|rd\.?|boulevard|blvd\.?|"
+    r"drive|dr\.?|lane|ln\.?|court|ct\.?|way|parkway|pkwy\.?|circle|cir\.?|suite|ste\.?)\b",
+    re.I,
+)
 
 
 def _words(body: str) -> list[str]:
     return re.findall(r"[A-Za-z0-9']+", body or "")
+
+
+def _real_links(body: str) -> list[str]:
+    return [u for u in _EXT_LINK.findall(body or "") if not _BAD_CITE.search(u)]
 
 
 def _terms(q: str) -> list[str]:
@@ -114,7 +124,8 @@ def on_page_score(body: str, target_query: str = "", keywords: Optional[list[str
     wc = len(_words(body))
     h1 = len(_H1.findall(body))
     h2 = len(_H2.findall(body))
-    imgs = _IMG.findall(body)
+    imgs = [(alt, url) for alt, url in _IMG.findall(body)
+            if not (url or "").strip().upper().startswith("IMAGE:")]
     imgs_with_alt = sum(1 for alt, _ in imgs if alt.strip())
     links = _LINK.findall(body)
     first_chunk = " ".join(_words(body)[:120]).lower()
@@ -140,7 +151,7 @@ def on_page_score(body: str, target_query: str = "", keywords: Optional[list[str
     checks.append((len(links) >= 1, 9, "Has internal/outbound links", "Link to a relevant owned page and one authoritative source."))
     checks.append((10 <= avg_sent <= 24, 10, "Readable sentence length", f"Avg sentence is {avg_sent} words — aim for 10–24."))
     if kw:
-        checks.append((kw_present >= max(1, len(kw) // 3), 0, "Target keywords present", "Weave in more target keywords naturally."))
+        checks.append((kw_present >= max(1, len(kw) // 3), 7, "Target keywords present", "Weave in more target keywords naturally."))
 
     earned = sum(w for ok, w, _, _ in checks if ok)
     possible = sum(w for _, w, _, _ in checks)
@@ -163,7 +174,8 @@ def citation_ready(body: str, target_query: str = "") -> dict:
     qterms = _terms(target_query)
     crisp_answer = bool(qterms) and sum(t in first_para.lower() for t in qterms) >= max(1, len(qterms) // 2) \
         and len(_words(first_para)) >= 15
-    has_stat = bool(_STAT.search(body))
+    trusted_cites = _real_links(body)
+    has_stat = bool(_STAT.search(body)) and bool(trusted_cites)
     faq = sum(1 for h in headings if h.strip().endswith("?"))
     has_qa = faq >= 1
     listy = bool(re.search(r"^\s*[-*]\s+\S", body, re.M)) or bool(re.search(r"^\s*\d+\.\s+\S", body, re.M))
@@ -428,15 +440,19 @@ def aeo_score(body: str, target_query: str = "", business_name: str = "", geo: s
                     or (name_hits >= 2 and name_hits / max(1.0, _awc / 100.0) <= 5.0)) and \
                    ((not (geo or "").strip()) or (geo or "").lower() in low)   # named, not stuffed
     fresh = bool(_FRESH.search(body))
+    schema_shape = faq >= 1 or len(headings) >= 3
     pillars = [
         {"name": "Direct answer up top", "ok": crisp, "weight": 25, "fix": "Open with a crisp 40–60 word answer to the target query."},
-        {"name": "Quotable statistic", "ok": has_stat, "weight": 15, "fix": "Add a concrete, attributable number AI can lift."},
+        {"name": "Quotable sourced statistic", "ok": has_stat, "weight": 15, "fix": "Add a concrete number with a real source link, not a placeholder/example citation."},
         {"name": "Q&A / FAQ structure", "ok": faq >= 1, "weight": 20, "fix": "Add question-form headings AI can quote."},
         {"name": "Entity clarity (name + place)", "ok": entity_clear, "weight": 20, "fix": "Name the business + city explicitly and consistently (3+ times)."},
         {"name": "Freshness marker", "ok": fresh, "weight": 10, "fix": "Add a visible ‘Last updated: <month year>’ line."},
-        {"name": "Schema-ready shape", "ok": True, "weight": 10, "fix": ""},
+        {"name": "Schema-ready shape", "ok": schema_shape, "weight": 10, "fix": "Add FAQ-style questions or enough section structure for schema extraction."},
     ]
-    return {"score": sum(p["weight"] for p in pillars if p["ok"]),
+    score = sum(p["weight"] for p in pillars if p["ok"])
+    if len(_words(body)) < 300:
+        score = min(score, 74)
+    return {"score": score,
             "suggested_schema": "FAQPage" if faq else "Article",
             "pillars": [{"name": p["name"], "score": p["weight"] if p["ok"] else 0, "max": p["weight"], "ok": p["ok"]} for p in pillars],
             "tips": [{"label": p["name"], "fix": p["fix"]} for p in pillars if not p["ok"]]}
@@ -461,11 +477,18 @@ _REVIEW = re.compile(r"\b(review|rating|stars?|testimonial|\d(\.\d)?\s?/\s?5)\b"
 # Matches a 20+ char quoted passage, or an "according to <Source>" / "<Source> reports/notes/found"
 # attribution. Both together = an attributed quotation an AI answer engine can lift verbatim.
 _QUOTE_STR = re.compile(r'["“][^"”\n]{20,}["”]')
+# Case-insensitivity is applied ONLY to the literal-prefix attributions via inline (?i:...) groups, so a
+# sentence-INITIAL "According to LIMRA, ..." (the exact form the _GEO_FIX tip tells writers to use) scores.
+# The "<Proper Noun> reports/states" subject branch stays case-SENSITIVE on purpose -- a blanket re.I there
+# would over-match "the report states that" (a non-attribution) and inflate the #1 citation signal.
 _ATTRIB = re.compile(
-    r'\b(?:according to|as (?:noted|reported|stated|found|estimated) (?:by|in)|per (?:the |a )?[A-Z]'
+    r'\b(?:'
+    r'(?i:according to)'
+    r'|(?i:as (?:noted|reported|stated|found|estimated) (?:by|in))'
+    r'|(?i:per (?:the |a )?)[A-Z][A-Za-z.&\'\-]*'            # "per the CDC" -- consume the whole source token
     r'|[A-Z][A-Za-z.&\'\-]{2,}(?:\s+[A-Z][A-Za-z.&\'\-]{2,})?\s+'
     r'(?:reports?|states?|notes?|found|finds?|estimates?|writes?|explains?|warns?|advises?|reported that)'
-    r')\b')
+    r')')
 # An ATTRIBUTED quotation: a quoted passage that sits next to an attribution -- 'Name said, "..."' or
 # '"..." -- Name'. A bare quoted phrase (a search term like "Team Unstoppable Cincinnati" or a label
 # like "scam") is NOT a citable quotation and must NOT score as one (it inflated the GEO quotation
@@ -483,6 +506,13 @@ _GEO_PROFILES: dict[str, dict[str, int]] = {
     "white_paper": {"answer_first": 12, "quotation": 12, "stat_density": 16, "citation_density": 18, "fluency": 8, "entity": 8, "chunkability": 8, "schema": 6, "freshness": 6, "question_headings": 6},
     "landing_page":{"answer_first": 18, "comparison": 12, "entity": 12, "quotation": 8, "fluency": 8, "schema": 8, "question_headings": 10, "citation_density": 10, "freshness": 6, "chunkability": 8},
     "local_page":  {"nap": 18, "entity": 14, "answer_first": 16, "quotation": 6, "fluency": 6, "schema": 8, "reviews": 10, "freshness": 8, "question_headings": 8, "citation_density": 6},
+    # Podcast / report_audio: a SPOKEN transcript, not a markdown document. Weighted on transcript-native
+    # citability signals (answer-first, attributed quotation, quotable stats, entity clarity, conversational
+    # fluency) -- NOT the markdown-structure signals (inline links, '## ?' headings, bullets/tables,
+    # 'Last updated' lines) a spoken piece inherently lacks. Routing audio through the article rubric scored
+    # good audio ~35/100 and poisoned the type-mix loop. (Do NOT route to video_score either: its
+    # production + video_seo dimensions grade on-screen/VideoObject cues that audio has no reason to carry.)
+    "podcast":     {"answer_first": 22, "quotation": 18, "stat_density": 16, "entity": 16, "fluency": 18, "question_headings": 5, "freshness": 5},
 }
 # Social posts are a DISTRIBUTION/authority signal, not a citable document -- graded on their own
 # lightweight rubric (see _geo_social), never the citability rubric.
@@ -493,6 +523,10 @@ def _geo_type_for(content_type: str, asset_type: str = "") -> str:
     ct = (content_type or asset_type or "article").strip().lower()
     if ct in _SOCIAL_TYPES or ct.endswith("_post"):
         return "social"
+    if ct in ("video_script", "explainer_video", "video"):
+        return "video_script"
+    if ct in ("podcast", "podcast_episode", "report_audio", "audio", "audio_summary"):
+        return "podcast"
     aliases = {"owned_page": "landing_page", "page": "landing_page", "landing": "landing_page",
                "local": "local_page", "gbp": "local_page", "whitepaper": "white_paper",
                "white-paper": "white_paper", "guide": "article", "blog_post": "blog"}
@@ -540,12 +574,12 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     # bonus). Do NOT credit vague "consult/see/search/visit X for figures" pointers -- telling the
     # reader to go look something up is not a citation of a claim the page makes; those inflated the
     # score without adding a liftable sourced fact.
-    ext = _EXT_LINK.findall(body)
+    ext = _real_links(body)
     auth = len(_AUTH.findall(body))
     vague = len(re.findall(r'(?i)\b(?:consult|see|search(?:\s+for)?|visit|refer to|check|look up|find (?:it|them|more|current))\b[^.\n]{0,45}\]\(https?://', body))
     real_cit = max(0, len(ext) - vague)
     cit = min(1.0, real_cit / max(1, wc / 300))
-    citation_density = min(1.0, cit + (0.25 if (auth and real_cit) else 0))
+    citation_density = min(1.0, (cit * 0.75) + (0.25 if (auth and real_cit) else 0))
     # schema-ready shape (question headings -> FAQ; else structured Article)
     schema = 1.0 if qh >= 1 else 0.6
     # entity clarity: named ENOUGH for an AI to attribute the facts, but NOT keyword-stuffed. Repeating
@@ -574,7 +608,10 @@ def _geo_signal_score(body: str, target_query: str, business_name: str, geo: str
     chunkability = (0.6 if avg_sec <= 300 else 0.3 if avg_sec <= 450 else 0.0) + (0.4 if (_BULLET.search(body) or _TABLE.search(body)) else 0.0)
     chunkability = min(1.0, chunkability)
     # local: NAP + reviews + comparison (commercial)
-    nap = min(1.0, (0.5 if _PHONE.search(body) else 0) + (0.5 if ((geo or "").lower() in low and (business_name or "").lower() in low) else 0))
+    entity_geo = bool((geo or "").strip() and (geo or "").lower() in low and
+                      (business_name or "").strip() and (business_name or "").lower() in low)
+    nap = min(1.0, (0.4 if _PHONE.search(body) else 0) +
+              (0.3 if entity_geo else 0) + (0.3 if _ADDRESS.search(body) else 0))
     reviews = 1.0 if _REVIEW.search(body) else 0.0
     comparison = 1.0 if (_COMPARE.search(body) and (_TABLE.search(body) or _BULLET.search(body))) else (0.4 if _COMPARE.search(body) else 0.0)
     return {"answer_first": answer_first, "question_headings": question_headings, "stat_density": stat_density,
@@ -629,6 +666,12 @@ def geo_score(body: str, target_query: str = "", content_type: str = "", asset_t
     prof_key = _geo_type_for(content_type, asset_type)
     if prof_key == "social":
         return _geo_social(body)
+    if prof_key == "video_script":
+        v = video_score(body, target_query=target_query, business_name=business_name,
+                        geo=geo, asset_type=(asset_type or content_type or "video_script"))
+        return {"score": v.get("score"), "content_type": "video_script", "profile": "video_script",
+                "band": v.get("band"), "suggested_schema": "VideoObject",
+                "checks": v.get("dimensions", {}), "video": v}
     weights = _GEO_PROFILES[prof_key]
     sig = _geo_signal_score(body, target_query, business_name, geo)
     checks, earned = [], 0.0
@@ -639,6 +682,12 @@ def geo_score(body: str, target_query: str = "", content_type: str = "", asset_t
         checks.append({"label": name.replace("_", " ").title(), "ok": strength >= 0.75,
                        "points": round(pts, 1), "max": w, "fix": (_GEO_FIX.get(name, "") if strength < 0.75 else "")})
     score = round(earned)
+    min_words = {"article": 450, "blog": 450, "landing_page": 400, "local_page": 450,
+                 "white_paper": 900, "faq": 300, "podcast": 200}.get(prof_key, 350)
+    if len(_words(body)) < min_words:
+        score = min(score, 74)
+        checks.append({"label": "Minimum Depth", "ok": False, "points": 0, "max": 0,
+                       "fix": f"Expand this {prof_key.replace('_', ' ')} to at least {min_words} grounded words before calling it strong."})
     return {"score": score, "content_type": prof_key, "profile": prof_key, "band": _band(score),
             "suggested_schema": sig["_suggested_schema"],
             "checks": sorted(checks, key=lambda c: c["max"] - c["points"], reverse=True)}
@@ -755,15 +804,28 @@ def _dim(checks: list[tuple]) -> dict:
 
 
 def video_score(body: str, target_query: str = "", business_name: str = "", geo: str = "",
-                asset_type: str = "explainer_video") -> dict:
+                asset_type: str = "explainer_video", service_terms: Optional[list[str]] = None) -> dict:
     """Grade a video SCRIPT across AI-citability (AEO/GEO), information quality, production quality,
     video SEO, and runtime. Returns per-dimension scorecards + a weighted overall (AI-citability
-    weighted highest, per the reputation goal). Deterministic + dormant-safe."""
+    weighted highest, per the reputation goal). Deterministic + dormant-safe.
+
+    service_terms: this TENANT's real service vocabulary (from business_profile / industry_profiles /
+    the gap topics). Business-AGNOSTIC: the "covers the core services" check credits any of these -- it
+    must NOT hardcode one industry's words (a plumber's script legitimately never says 'insurance')."""
     body = body or ""
     low = body.lower()
     spoken = _spoken_only(body)
     qterms = _terms(target_query)
-    city = (geo or "").split(",")[0].strip().lower()
+    # Parse BOTH city and state from geo ("Cincinnati, OH" / "Dallas, Texas") -- dynamically, never a
+    # hardcoded pilot city. The state recovers the location signal the city-only split used to drop.
+    _geo_parts = [p.strip().lower() for p in (geo or "").split(",") if p.strip()]
+    city = _geo_parts[0] if _geo_parts else ""
+    state = _geo_parts[1] if len(_geo_parts) > 1 else ""
+    # This tenant's service vocabulary; fall back to the query's content terms so a non-finance tenant
+    # still earns coverage credit for what the video is actually about (never the old finance literals).
+    _svc = [str(t).strip().lower() for t in (service_terms or []) if str(t).strip()]
+    if not _svc:
+        _svc = [t for t in qterms if len(t) >= 4]
     headings = _HEADING.findall(body)
     name_hits = low.count((business_name or "").lower()) if (business_name or "").strip() else 0
     runtime = _runtime_secs(body)
@@ -815,12 +877,18 @@ def video_score(body: str, target_query: str = "", business_name: str = "", geo:
     # --- 2) INFORMATION quality (accurate, grounded coverage of who/what/where) ---
     covers = lambda *ws: any(w in low for w in ws)
     grounded = (name_hits >= 1) and (not city or city in low)
+    # Business-AGNOSTIC service coverage: credit the tenant's own service vocabulary (or the query terms).
+    # When we have NO service vocabulary at all, don't penalize (we can't judge coverage without knowing
+    # the services) rather than dock every non-finance tenant with a hardcoded finance word list.
+    covers_services = (any(t in low for t in _svc) if _svc else True)
+    covers_location = bool(city and city in low) or bool(state and state in low) or \
+        bool(re.search(r"\b(serving|service area|serves|based in|located in|surrounding)\b", low))
     info = _dim([
         ("Defines who the business is", (name_hits >= 1) and covers("team", "team of", "we are", "is a"), 18,
          "Clearly state who the business is on first mention."),
-        ("Covers the core services", covers("insurance", "financial", "debt", "investment", "planning", "education"), 18,
+        ("Covers the core services", covers_services, 18,
          "Cover the main services the business offers."),
-        ("States location / service area", bool(city and city in low) or covers("cincinnati", "ohio", "area", "serving"), 16,
+        ("States location / service area", covers_location, 16,
          "Name the city / service area."),
         ("Establishes legitimacy (general licensing/affiliation)", covers("licensed", "regulated", "affiliat", "member", "registered"), 16,
          "Note (generally) that the professionals are licensed/regulated -- no specific license numbers."),

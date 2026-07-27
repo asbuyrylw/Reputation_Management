@@ -293,6 +293,17 @@ def create_custom_content(body: CustomContentBody, background: BackgroundTasks,
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Describe what you'd like created.")
     if ct not in _CONTENT_TYPE_CAP and ct not in _CONTENT_TYPE_VISUAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown content type '{ct}'.")
+    if ct in ("image", "video"):
+        try:
+            from ... import visual_content as _vc_ready
+        except ImportError:  # pragma: no cover
+            import visual_content as _vc_ready  # type: ignore
+        if ct == "image" and not _vc_ready.image_configured():
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "Image generation is not configured. Set an image provider key first.")
+        if ct == "video" and not _vc_ready.video_configured():
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "Video generation is not configured. Set VIDEO_PROVIDER and provider key first.")
     # Billing/quota gate — this spends on LLM/media generation, same gate as batch content.
     ok, reason, code = _billing.check_can_trigger(conn, business_id, "custom_content")
     if not ok:
@@ -603,15 +614,18 @@ def content_batches(business_id: int = Depends(authorize_business), conn=Depends
     for b in batches:
         bd = dict(b)
         bd["pieces"] = [dict(r) for r in conn.execute(
-            "SELECT id, content_type, asset_type, title, status, geo_score, quality_score, "
-            "published_asset_id FROM content_drafts WHERE batch_id=%s ORDER BY id", (b["id"],)).fetchall()]
+            "SELECT d.id, d.content_type, d.asset_type, d.title, d.status, d.geo_score, d.quality_score, "
+            "d.published_asset_id, COALESCE(a.published_status='live', false) AS published "
+            "FROM content_drafts d LEFT JOIN assets a ON a.id=d.published_asset_id "
+            "WHERE d.batch_id=%s ORDER BY d.id", (b["id"],)).fetchall()]
         # Rich-media pieces belong to the batch too (impact.per_type/completion now count them), so the
         # detail view must show them or a rich-media-only batch reads as pieces:[] while impact says its
         # podcast/video is live. Dormant-safe (rich_media_drafts may be absent).
         try:
             bd["pieces"] += [dict(r) for r in conn.execute(
                 "SELECT id, asset_type AS content_type, asset_type, title, status, geo_score, "
-                "NULL AS quality_score, NULL AS published_asset_id FROM rich_media_drafts "
+                "NULL AS quality_score, NULL AS published_asset_id, "
+                "(status IN ('approved','published')) AS published FROM rich_media_drafts "
                 "WHERE batch_id=%s ORDER BY id", (b["id"],)).fetchall()]
         except Exception:  # noqa: BLE001 -- rich_media_drafts dormant/absent
             pass
@@ -754,42 +768,33 @@ def gap_completion(business_id: int = Depends(authorize_business), conn=Depends(
     def _toks(s):
         return {t for t in (s or "").lower().replace("/", " ").split() if len(t) > 3}
 
-    def _resolve_batch(g):
-        """The batch that fills this gap: the exact canonical gap_key first, else a campaign/cluster
-        batch whose topic token-overlaps the gap (lineage) -- so a moc:/comp: gap the strategist folded
-        into a camp: campaign still shows the campaign's drafted/published/impact instead of 'not
-        started' forever (the camp:-vs-moc: key mismatch)."""
-        b = conn.execute(
+    def _resolve_batches(g):
+        """ALL batches that fill this gap_key, newest first. generate_batch INSERTs a NEW batch every call
+        (it is not find-or-create), so one gap accrues 2+ batches whenever the mainline 'Generate draft'
+        path and the 'Fill gaps' sweep both open one. Crediting only the LATEST (LIMIT 1) undercounted the
+        gap's real drafted/published totals -- so sum pieces across every batch for the gap_key."""
+        return conn.execute(
             "SELECT id, status FROM content_batches WHERE business_id=%s AND gap_key=%s "
-            "ORDER BY id DESC LIMIT 1", (business_id, g["gap_key"])).fetchone()
-        if b:
-            return b
-        gt = _toks(g.get("topic"))
-        if not gt:
-            return None
-        for cand in conn.execute(
-                "SELECT id, status, target_topic, label FROM content_batches WHERE business_id=%s "
-                "AND (gap_key LIKE 'camp:%%' OR gap_key LIKE 'cluster:%%') ORDER BY id DESC LIMIT 100",
-                (business_id,)).fetchall():
-            ct = _toks(cand.get("target_topic")) | _toks(cand.get("label"))
-            if ct and len(gt & ct) >= max(2, len(gt) // 3):
-                return cand
-        return None
+            "ORDER BY id DESC", (business_id, g["gap_key"])).fetchall()
 
     for g in gaps:
-        b = _resolve_batch(g)
+        bs = _resolve_batches(g)
         drafted = published = 0
         impact = None
-        if b:
+        newest = bs[0] if bs else None
+        for b in bs:
             attributed.add(b["id"])
-            drafted, published = _counts(b["id"])
+            _d, _p = _counts(b["id"])
+            drafted += _d; published += _p
+        if bs:
             imp = conn.execute(
                 "SELECT gap_pct_closed, alignment_delta, sov_delta FROM content_impact "
-                "WHERE batch_id=%s ORDER BY id DESC LIMIT 1", (b["id"],)).fetchone()
+                "WHERE batch_id = ANY(%s) ORDER BY id DESC LIMIT 1",
+                ([b["id"] for b in bs],)).fetchone()
             impact = dict(imp) if imp else None
         out.append({"gap_key": g["gap_key"], "topic": g["topic"], "gap_source": g["gap_source"],
-                    "target_prompts": g["target_prompts"], "batch_id": b["id"] if b else None,
-                    "batch_status": b["status"] if b else None, "pieces_drafted": drafted,
+                    "target_prompts": g["target_prompts"], "batch_id": newest["id"] if newest else None,
+                    "batch_status": newest["status"] if newest else None, "pieces_drafted": drafted,
                     "pieces_published": published, "impact": impact,
                     "content_addressable": True})
     # Expand to the WHOLE gap analysis: the categories a content piece doesn't close (weak queries,
@@ -1125,7 +1130,7 @@ def update_discovery_target(
 @router.post("/discovery-targets/{target_id}/push")
 def push_target(target_id: int, business_id: int = Depends(require_business_editor), conn=Depends(get_conn)):
     """Push an outreach target out to the client's stack (GoHighLevel/Zapier/...) via the webhook
-    bus — turns a target into a CRM opportunity. No-op (returns sent=false) until WEBHOOK_URL is set."""
+    bus — turns a target into a CRM opportunity. No-op (returns sent=false) until the tenant webhook is set."""
     t = conn.execute(
         "SELECT name, outlet, url, beat, contact_name, contact_email, contact_phone, target_type, capabilities "
         "FROM discovery_targets WHERE id=%s AND business_id=%s", (target_id, business_id)).fetchone()
@@ -1135,7 +1140,7 @@ def push_target(target_id: int, business_id: int = Depends(require_business_edit
         from ... import webhooks as _wh
     except ImportError:  # pragma: no cover
         import webhooks as _wh  # type: ignore
-    sent = _wh.enabled()
+    sent = _wh.enabled(business_id)
     _wh.emit(business_id, "outreach.target", {"target_id": target_id, **{k: t[k] for k in t.keys()}})
     return {"sent": sent}
 
@@ -1154,6 +1159,12 @@ def draft_pitch(target_id: int, business_id: int = Depends(require_business_edit
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Target not found")
     b = conn.execute("SELECT name, services, geo, goal FROM businesses WHERE id=%s", (business_id,)).fetchone()
     try:
+        from ... import cost as _cost
+    except ImportError:  # pragma: no cover
+        import cost as _cost  # type: ignore
+    if _cost.over_budget(business_id):
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, "Monthly budget cap reached.")
+    try:
         from ... import ai_state_audit as _llm
     except ImportError:  # pragma: no cover
         import ai_state_audit as _llm  # type: ignore
@@ -1163,7 +1174,10 @@ def draft_pitch(target_id: int, business_id: int = Depends(require_business_edit
     ctx = (f"From: {b['name']} ({b.get('services','')}) in {b.get('geo','')}. Goal: {b.get('goal','')}.\n"
            f"To: {t['name']} at {t.get('outlet','')} — covers {t.get('beat','')} ({t.get('target_type','')}).\n"
            "Write a pitch proposing a relevant story/contribution that would interest their audience.")
-    pitch = (_llm.orchestrator_text(system, ctx, max_tokens=500, tier="mid") or "").strip()
+    pitch = (_llm.orchestrator_text(
+        system, ctx, max_tokens=500, tier="mid",
+        bill={"business_id": business_id, "operation": "pitch"},
+    ) or "").strip()
     if not pitch:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Drafting is unavailable right now.")
     return {"pitch": pitch}

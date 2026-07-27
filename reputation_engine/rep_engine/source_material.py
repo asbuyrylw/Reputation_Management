@@ -193,24 +193,22 @@ def grounding_block(business_id: int, max_tokens: int = 4500) -> str:
 
 import re as _re
 
-# Imperative sentences in uploaded material that are RULES to obey, not facts to reference:
-# "always mention X", "never say Y", "must include Z", "include this disclaimer", "avoid W".
+# Imperative sentences in explicitly trusted rule documents that are RULES to obey, not facts to
+# reference: "always mention X", "never say Y", "must include Z", "include this disclaimer", "avoid W".
 _RULE_RE = _re.compile(
     r"\b((?:always|never|do not|don't|must not|must|avoid|ensure|be sure to|make sure|"
     r"only use|use only|include|do include|don't include|require[sd]?|no |not )\b.{4,200}?)"
     r"(?:[.!\n]|$)", _re.I)
 
+_TRUSTED_RULE_SOURCE_TYPES = frozenset({
+    "brand_rules", "brand_rule", "guardrails", "guardrail",
+    "trusted_rules", "trusted_rule", "instruction_rules", "rule",
+})
 
-def instruction_rules(business_id: int, limit: int = 20) -> str:
-    """Lift MUST-FOLLOW imperatives out of the uploaded source material (e.g. 'always mention X',
-    'never say Y', 'include this disclaimer') so the writer OBEYS them as rules, not merely treats
-    them as facts to not contradict. Best-effort bulleted list; '' when none / dormant. Built on the
-    fail-loud corpus() read, so a real read error still surfaces to the caller."""
-    c = corpus(business_id, max_tokens=8000)
-    if not c:
-        return ""
+
+def _rules_from_text(text: str, limit: int = 20) -> str:
     rules, seen = [], set()
-    for m in _RULE_RE.finditer(c):
+    for m in _RULE_RE.finditer(text or ""):
         r = " ".join(m.group(1).split()).strip().rstrip(",;:")
         k = r.lower()
         if len(r) >= 8 and k not in seen:
@@ -219,6 +217,45 @@ def instruction_rules(business_id: int, limit: int = 20) -> str:
         if len(rules) >= limit:
             break
     return "\n".join("- " + r for r in rules) if rules else ""
+
+
+def _trusted_rule_corpus(business_id: int, max_tokens: int = 4000) -> str:
+    """Only source_documents explicitly stamped as trusted rules may become generation rules.
+    Crawled pages and normal uploads remain grounding facts, never executable instructions."""
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT title, content, tokens, source_type FROM source_documents "
+                "WHERE business_id=%s AND active AND source_type = ANY(%s) ORDER BY id DESC",
+                (business_id, list(_TRUSTED_RULE_SOURCE_TYPES)),
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        if _is_dormant_schema(e):
+            return ""
+        log.error("source_material.instruction_rules read FAILED for business %s (NOT empty): %s",
+                  business_id, e, exc_info=True)
+        raise
+    parts, used = [], 0
+    for r in rows:
+        t = int(r["tokens"] or _approx_tokens(r["content"]))
+        if used + t > max_tokens:
+            remaining_chars = max(0, (max_tokens - used)) * 4
+            if remaining_chars > 200:
+                parts.append(f"## {r['title']}\n{(r['content'] or '')[:remaining_chars]}")
+            break
+        parts.append(f"## {r['title']}\n{r['content']}")
+        used += t
+    return "\n\n".join(parts).strip()
+
+
+def instruction_rules(business_id: int, limit: int = 20) -> str:
+    """Lift MUST-FOLLOW imperatives only from explicitly trusted rule documents.
+    Website crawls and ordinary uploads are untrusted facts for grounding; treating them as absolute
+    instructions lets client-site text or prompt-injection content steer generation."""
+    c = _trusted_rule_corpus(business_id, max_tokens=4000)
+    if not c:
+        return ""
+    return _rules_from_text(c, limit=limit)
 
 
 def visual_grounding(business_id: int, max_tokens: int = 400) -> str:

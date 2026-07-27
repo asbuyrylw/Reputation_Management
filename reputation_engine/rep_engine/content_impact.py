@@ -65,6 +65,21 @@ def _ensure_rank_cols(conn) -> None:
             conn.execute(f"ALTER TABLE content_impact ADD COLUMN IF NOT EXISTS {col}")
         except Exception:  # noqa: BLE001
             pass
+    try:
+        conn.execute(
+            "DELETE FROM content_impact a USING content_impact b "
+            "WHERE a.id > b.id AND a.business_id=b.business_id "
+            "AND a.batch_id IS NOT DISTINCT FROM b.batch_id "
+            "AND a.run_after IS NOT DISTINCT FROM b.run_after "
+            "AND a.batch_id IS NOT NULL AND a.run_after IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_impact_batch_run "
+            "ON content_impact(business_id, batch_id, run_after) "
+            "WHERE batch_id IS NOT NULL AND run_after IS NOT NULL"
+        )
+    except Exception:  # noqa: BLE001 -- old schemas stay best-effort
+        pass
 
 
 def _rank_signal(conn, business_id: int, prompts: list, topic: str):
@@ -76,9 +91,16 @@ def _rank_signal(conn, business_id: int, prompts: list, topic: str):
     if not terms:
         return None
     try:
+        win = conn.execute(
+            "SELECT MAX(period_end) m FROM gsc_query_stats WHERE business_id=%s",
+            (business_id,)).fetchone()
+        period_end = win["m"] if win else None
+        if not period_end:
+            return None
         rows = conn.execute(
-            "SELECT query, position FROM gsc_query_stats WHERE business_id=%s AND position IS NOT NULL",
-            (business_id,)).fetchall()
+            "SELECT query, position FROM gsc_query_stats "
+            "WHERE business_id=%s AND period_end=%s AND position IS NOT NULL",
+            (business_id, period_end)).fetchall()
     except Exception:  # noqa: BLE001 -- table dormant / no GSC data -> no rank signal
         return None
     if not rows:
@@ -93,8 +115,26 @@ def _rank_signal(conn, business_id: int, prompts: list, topic: str):
         tgt |= _toks(t)
     if not tgt:
         return None
+    target_sets = [_toks(t) for t in terms if _toks(t)]
+
+    def _strong_match(query: str) -> bool:
+        qt = _toks(query)
+        if not qt:
+            return False
+        for tt in target_sets:
+            if not tt:
+                continue
+            if qt == tt:
+                return True
+            if (tt <= qt or qt <= tt) and min(len(qt), len(tt)) >= 2:
+                return True
+            j = len(qt & tt) / len(qt | tt)
+            if j >= 0.6 and len(qt & tt) >= 2:
+                return True
+        return False
+
     positions = [float(r["position"]) for r in rows
-                 if r["position"] is not None and (_toks(r["query"]) & tgt)]
+                 if r["position"] is not None and _strong_match(r["query"])]
     return round(sum(positions) / len(positions), 1) if positions else None
 
 
@@ -110,6 +150,10 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
         baseline = b["baseline"] if isinstance(b["baseline"], dict) else json.loads(b["baseline"] or "{}")
         prompts = b["target_prompts"] if isinstance(b["target_prompts"], list) else json.loads(b["target_prompts"] or "[]")
         base_run = baseline.get("run_id")
+        if not prompts or baseline.get("unresolved_prompts"):
+            return {"pending": True, "batch_id": batch_id,
+                    "reason": "gap prompt cluster unresolved; refusing to measure whole audit",
+                    "baseline_run": base_run}
         # the newest COMPLETE full audit strictly after the baseline run
         run = conn.execute(
             "SELECT id FROM audit_runs WHERE business_id=%s AND kind='ai_audit' AND finished_at IS NOT NULL "
@@ -119,6 +163,7 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
             return {"pending": True, "reason": "no audit newer than the batch baseline yet",
                     "baseline_run": base_run}
         # idempotent: don't re-insert a measurement for a run we've already measured this batch against
+        _ensure_rank_cols(conn)
         dup = conn.execute("SELECT id FROM content_impact WHERE batch_id=%s AND run_after=%s LIMIT 1",
                            (batch_id, run["id"])).fetchone()
         if dup:
@@ -153,8 +198,7 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
 
     # Guard against an UNMATCHED cluster: if the baseline OR measured run matched 0 answers for this
     # gap's prompts, there's nothing comparable — return pending WITHOUT writing an all-null impact
-    # row or flipping the batch to 'measured', so a later good run can still measure it. (Only fires
-    # for a specific prompt cluster; the whole-run fallback always has n>0.)
+    # row or flipping the batch to 'measured', so a later good run can still measure it.
     if baseline.get("n", 0) == 0 or measured.get("n", 0) == 0:
         return {"pending": True, "batch_id": batch_id, "run_after": run["id"],
                 "reason": "gap prompt cluster matched no answers to compare (baseline "
@@ -233,7 +277,10 @@ def measure_batch(business_id: int, batch_id: int) -> dict:
             "INSERT INTO content_impact (business_id, batch_id, run_before, run_after, baseline_sov, "
             "measured_sov, sov_delta, baseline_alignment, measured_alignment, alignment_delta, "
             "gap_pct_closed, per_type, notes, baseline_rank, measured_rank, rank_delta) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (business_id, batch_id, run_after) WHERE batch_id IS NOT NULL "
+            "AND run_after IS NOT NULL DO UPDATE SET measured_at=content_impact.measured_at "
+            "RETURNING id",
             (business_id, batch_id, base_run, run["id"], base_sov, meas_sov, sov_delta,
              base_al, meas_al, al_delta, gap_pct, json.dumps(per_type), rec,
              base_rank, meas_rank, rank_delta)).fetchone()

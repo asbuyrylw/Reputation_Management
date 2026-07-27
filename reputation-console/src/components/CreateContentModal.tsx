@@ -26,6 +26,8 @@ const PLACEHOLDER: Record<string, string> = {
   white_paper: "e.g. A guide to building an emergency fund on a variable income, for working families.",
 };
 
+const EMPTY_TYPES: ContentTypeOption[] = [];
+
 export function CreateContentModal({ businessId, onClose, initialType, initialDescription, initialGapLabel }: {
   businessId: number | null; onClose: () => void;
   initialType?: string; initialDescription?: string; initialGapLabel?: string;
@@ -56,7 +58,7 @@ export function CreateContentModal({ businessId, onClose, initialType, initialDe
     }
   }
 
-  const types = catalogue.data?.types ?? [];
+  const types = catalogue.data?.types ?? EMPTY_TYPES;
   const selected = useMemo(() => types.find((t) => t.content_type === type), [types, type]);
   const isVisualMedia = type === "image" || type === "video";
   const grouped = useMemo(() => {
@@ -67,6 +69,10 @@ export function CreateContentModal({ businessId, onClose, initialType, initialDe
 
   async function generate() {
     if (!type || !description.trim()) return;
+    if (selected && !selected.ready) {
+      setErr(selected.needs || "This content type is not configured yet.");
+      return;
+    }
     setErr(null);
     const gap = (gaps.data ?? []).find((g) => g.gap_key === gapKey);
     try {
@@ -125,9 +131,10 @@ export function CreateContentModal({ businessId, onClose, initialType, initialDe
                         {grouped[fam.key].map((t) => {
                           const active = t.content_type === type;
                           return (
-                            <button key={t.content_type} onClick={() => setType(t.content_type)}
+                            <button key={t.content_type} onClick={() => t.ready && setType(t.content_type)}
+                              disabled={!t.ready}
                               title={t.needs || undefined}
-                              className={`rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition ${active ? "border-indigo bg-indigo text-white" : "border-line bg-paper text-ink-2 hover:border-indigo hover:text-indigo"}`}>
+                              className={`rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${active ? "border-indigo bg-indigo text-white" : "border-line bg-paper text-ink-2 hover:border-indigo hover:text-indigo"}`}>
                               {t.label}
                               {!t.ready && <span className={`ml-1.5 text-[10px] ${active ? "text-indigo-100" : "text-amber-500"}`}>needs key</span>}
                             </button>
@@ -200,7 +207,7 @@ export function CreateContentModal({ businessId, onClose, initialType, initialDe
         {!done && (
           <div className="flex items-center justify-end gap-2 border-t border-line px-6 py-4">
             <button onClick={onClose} className="rounded-[10px] border border-line bg-white px-4 py-2 text-[13px] font-semibold text-ink hover:bg-paper">Cancel</button>
-            <button onClick={generate} disabled={!type || !description.trim() || create.isPending}
+            <button onClick={generate} disabled={!type || !description.trim() || create.isPending || !!(selected && !selected.ready)}
               className="rounded-[10px] bg-indigo px-5 py-2 text-[13px] font-semibold text-white hover:bg-indigo-strong disabled:opacity-50">
               {create.isPending ? "Starting…" : "Generate"}
             </button>

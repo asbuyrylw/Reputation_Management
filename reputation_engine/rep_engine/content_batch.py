@@ -48,7 +48,7 @@ _TYPE_FRAME = {
     "article":      ("{t}", "content_writing"),
     "white_paper":  ("White paper: {t} — an in-depth, cited guide", "content_writing"),
     "landing_page": ("{t} — overview page", "content_writing"),
-    "local_page":   ("{t} in {geo}", "content_writing"),
+    "local_page":   ("{t} in {geo}", "local_content_creation"),
     "faq":          ("{t}: frequently asked questions", "content_writing"),
     "video_script": ("Video script: {t} — a shootable script + shot list", "content_writing"),
     "social_post":  ("{t}", "social_publishing"),
@@ -137,19 +137,23 @@ def _local_keywords(business_id: int, query: str, limit: int = 3) -> list[str]:
 # variant of the same query. GEO research penalizes near-duplicate / keyword-stuffed pages (~-8%), so a
 # program's breadth must come from distinct subtopics, not re-phrasings. Used to size a local program up
 # to the research target when the tenant's seed-keyword set is thinner than that target.
+# Business-AGNOSTIC local backfill angles (distinct search intents, not keyword variants) used only when
+# a local program's real ranking keywords run out. Kept generic across verticals -- a plumber, dentist,
+# restaurant, and law firm all fit -- so no finance/professional-services demographic ('retirees',
+# 'credentials to verify') leaks into a non-finance tenant's program.
 _LOCAL_ANGLES = [
     "How to choose {q}",
-    "What does {q} cost? Fees and pricing explained",
+    "What does {q} cost? Pricing explained",
     "Questions to ask before hiring {q}",
-    "{q}: what to expect at your first meeting",
+    "{q}: what to expect the first time",
     "Signs of a trustworthy {q}",
-    "{q} for young families just starting out",
-    "{q} for retirees and pre-retirees",
-    "Working with a local {q} vs. a national firm",
+    "How to compare {q} options near you",
+    "Local {q} vs. a national chain: which is better",
     "Common mistakes when choosing {q}",
-    "Credentials and licensing to verify in {q}",
+    "What to look for in {q}: a buyer's checklist",
     "How to check the reputation and reviews of {q}",
-    "A checklist for your first year with {q}",
+    "{q}: how the process works, step by step",
+    "Getting started with {q} near you",
 ]
 
 
@@ -220,6 +224,24 @@ def difficulty_to_target(avg_difficulty) -> int:
     return max(base, min(band_max, round(base + (d / 100.0) * (band_max - base))))
 
 
+_PILLAR_TYPES = ("article", "landing_page", "local_page", "video_script")
+
+
+def pillar_role(ct: str, types) -> str:
+    """The role (pillar|cluster) of content-type `ct` within a program's type spread -- the SINGLE rule
+    shared by the plan path (strategy_generator._emit_typed_program) and the batch path (generate_batch),
+    so both designate the SAME piece as the hub. The pillar is the first pillar-eligible type in the
+    spread (article/landing_page/local_page/video_script); if none is eligible, the first type. (Before
+    this, the plan called the FIRST emitted type the pillar while the batch called the first ARTICLE-like
+    type the pillar, so a spread led by 'blog' showed the blog as hub in the plan but built the article
+    as hub in the batch.)"""
+    types = [t for t in (types or []) if t and t != "social_post"]
+    if not types:
+        return "pillar" if ct in _PILLAR_TYPES else "cluster"
+    pillar = next((t for t in types if t in _PILLAR_TYPES), types[0])
+    return "pillar" if ct == pillar else "cluster"
+
+
 def local_spoke_target(business_id: int, query: str) -> int:
     """How many SUPPORTING pieces a local pillar needs -- DYNAMIC, sized by the geo query's
     COMPETITIVENESS (avg keyword_difficulty of the matching local keywords) via the shared
@@ -232,8 +254,8 @@ def resolve_prompts(business_id: int, prompts: list[str]) -> list[str]:
     """Snap gap-model prompt strings (LLM-authored, often paraphrased) to the ACTUAL battery prompt
     text stored in `answers`, so the cluster query (`prompt = ANY`) matches instead of silently
     hitting 0 rows. Exact-normalized match first, then best token-set (Jaccard >= 0.5) fallback.
-    Unresolvable candidates are dropped; if NONE resolve, returns [] so the caller falls back to
-    whole-run (a coarser but valid collective measure) rather than a silent empty cluster."""
+    Unresolvable candidates are dropped; if NONE resolve, returns [] so measurement stays pending
+    instead of widening this gap to the whole audit."""
     prompts = [p for p in (prompts or []) if p]
     if not prompts:
         return []
@@ -281,7 +303,7 @@ def gaps_for_business(business_id: int) -> list[dict]:
       - local_seo_gaps (a page-1 GOAL fans into a geo cluster: local page + blog + FAQ + social),
       - competitor_defense (a rival-won question fans into competing owned content).
     Returns [{gap_key, topic, asset_type, gap_source, why, target_prompts}]. target_prompts are the
-    weak AI answers the gap should move (token-matched); [] falls back to the whole run."""
+    weak AI answers the gap should move (token-matched); [] remains unresolved/pending."""
     with db() as conn:
         gm = _latest_gap_model(conn, business_id)
     weak = gm.get("weak_queries") or []
@@ -412,7 +434,7 @@ def _types_for_gap(gap: dict, default_types: Optional[list[str]] = None) -> list
 
 def capture_baseline(business_id: int, target_prompts: list[str]) -> dict:
     """Snapshot the gap's current Share-of-Voice + alignment from the latest COMPLETE full audit,
-    over the specific prompts the gap owns (or the whole battery if none are named). Also snapshots the
+    over the specific prompts the gap owns. Empty prompt clusters stay unresolved/pending. Also snapshots the
     baseline keyword RANK (dormant/None until a GSC/SERP source is connected) so content_impact can later
     show ranking MOVEMENT, not just AI-answer lift."""
     # Baseline rank for these prompts (None-safe, dormant): the SAME signal content_impact re-measures.
@@ -441,8 +463,8 @@ def _prompts_for_gap(business_id: int, gap_key: str, fallback: str = "",
     path (ensure_impact_batch) and the batch path (generate_batch) baseline over the IDENTICAL window for
     a shared gap_key -- same weak-query resolution AND the same fallback. `prematched` (a gap's already-
     computed target_prompts) is used verbatim when non-empty; otherwise the cluster is derived from the
-    CANONICAL gap topic (the part after the gap_key prefix), falling back to [fallback] (NEVER a silent
-    whole-run baseline, which is what generate_batch used to do on an empty match)."""
+    CANONICAL gap topic (the part after the gap_key prefix), falling back to [fallback]. If nothing
+    resolves, downstream measurement stays pending rather than silently widening to the whole audit."""
     if prematched:
         return resolve_prompts(business_id, prematched)
     topic = gap_key.split(":", 1)[1] if (gap_key and ":" in gap_key) else (gap_key or fallback or "")
@@ -508,7 +530,9 @@ def ensure_impact_batch(business_id: int, wo: dict) -> Optional[int]:
 
 
 def _cluster_metrics(conn, business_id: int, run_id: int, prompts: list[str]) -> dict:
-    """Aggregate AI-visibility metrics for a run over a set of prompts (empty = whole run). goal_alignment
+    """Aggregate AI-visibility metrics for a run over a set of prompts. Empty prompts are unresolved
+    gap lineage and must not widen to the whole audit; callers surface the batch as pending instead.
+    goal_alignment
     EXCLUDES wrong-entity answers via the SAME shared predicate every headline surface uses, so a batch's
     alignment_delta / gap_pct / recommendation share the ONE denominator the reputation score is on (a
     name-colliding tenant's 'different company' answers no longer distort batch credit)."""
@@ -516,18 +540,14 @@ def _cluster_metrics(conn, business_id: int, run_id: int, prompts: list[str]) ->
         from .answer_flags import NOT_WRONG_ENTITY_SQL as _NWE
     except ImportError:  # pragma: no cover
         from answer_flags import NOT_WRONG_ENTITY_SQL as _NWE  # type: ignore
-    if prompts:
-        row = conn.execute(
-            f"SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) FILTER (WHERE {_NWE}) align, "
-            "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
-            "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false) AND prompt = ANY(%s)",
-            (business_id, run_id, prompts)).fetchone()
-    else:
-        row = conn.execute(
-            f"SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) FILTER (WHERE {_NWE}) align, "
-            "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
-            "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false)",
-            (business_id, run_id)).fetchone()
+    if not prompts:
+        return {"sov": None, "owned_rate": None, "alignment": None,
+                "contested_rate": None, "n": 0, "unresolved_prompts": True}
+    row = conn.execute(
+        f"SELECT AVG((surfaces_owned)::int) owned, AVG(goal_alignment) FILTER (WHERE {_NWE}) align, "
+        "AVG((mentions_contested)::int) contested, COUNT(*) n FROM answers "
+        "WHERE business_id=%s AND run_id=%s AND NOT COALESCE(failed,false) AND prompt = ANY(%s)",
+        (business_id, run_id, prompts)).fetchone()
     owned = float(row["owned"]) if row and row["owned"] is not None else None
     align = float(row["align"]) if row and row["align"] is not None else None
     contested = float(row["contested"]) if row and row["contested"] is not None else None
@@ -560,7 +580,8 @@ def _grade_social(business_id: int, draft_ids: list[int]) -> None:
             log.debug("social grade skipped for draft %s: %s", sid, e)
 
 
-def _match_content_wo(business_id: int, topic: str, source_query: str) -> Optional[int]:
+def _match_content_wo(business_id: int, topic: str, source_query: str, *,
+                      gap_key: str = "", content_type: str = "", role: str = "") -> Optional[int]:
     """The open CONTENT work order this gap's batch fills, so the drafts link back to the plan:
     approve() then advances the work order, and the work order is prune-protected while a draft
     exists. Before this, batch drafts had work_order_id=NULL -- so plan progress never moved and a
@@ -577,14 +598,43 @@ def _match_content_wo(business_id: int, topic: str, source_query: str) -> Option
             "SELECT id, title, capability, gap_specifics FROM work_orders "
             "WHERE business_id=%s AND NOT superseded", (business_id,)).fetchall()
     cands = []
+    allowed_caps = {
+        "content_writing", "content_creation", "local_content_creation", "video_creation",
+        "deep_content", "podcast_creation", "slide_deck", "explainer_video", "research_brief",
+    }
     for r in rows:
-        if (r["capability"] or "").lower() not in ("content_writing", "content_creation"):
+        if (r["capability"] or "").lower() not in allowed_caps:
             continue
         gs = r["gap_specifics"]
         gs = gs if isinstance(gs, dict) else (json.loads(gs) if gs else {})
-        cands.append({"id": r["id"], "title": r["title"], "gap_specifics": gs})
+        cands.append({"id": r["id"], "title": r["title"], "gap_specifics": gs,
+                      "capability": (r["capability"] or "").lower()})
     if not cands:
         return None
+    if gap_key:
+        exact = [c for c in cands if (c.get("gap_specifics") or {}).get("gap_key") == gap_key]
+        if exact:
+            if content_type:
+                typed = [c for c in exact if (c.get("gap_specifics") or {}).get("content_type") == content_type]
+                if typed:
+                    pool = typed
+                    if role:
+                        roled = [c for c in typed if (c.get("gap_specifics") or {}).get("role") == role]
+                        pool = roled or typed
+                    # Multiple same-type/role cluster WOs (e.g. one blog per local keyword) -> pick the one
+                    # whose source_query/title best matches THIS piece, so each keyword spoke links to its
+                    # OWN work order instead of all collapsing onto the first candidate.
+                    if len(pool) > 1 and source_query:
+                        best = _pb._match_work_orders(source_query, pool)
+                        if best:
+                            return int(best[0])
+                    return int(pool[0]["id"])
+            if role:
+                roled = [c for c in exact if (c.get("gap_specifics") or {}).get("role") == role]
+                if roled:
+                    return int(roled[0]["id"])
+            if len(exact) == 1:
+                return int(exact[0]["id"])
     ids = _pb._match_work_orders(source_query or topic, cands) or _pb._match_work_orders(topic, cands)
     return int(ids[0]) if ids else None
 
@@ -629,22 +679,28 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
         conn.commit()
 
     geo_val = (biz.get("geo") if isinstance(biz, dict) else "") or ""
-    # Link this gap's pieces to the content work order that tracks it, so approve() advances the plan
-    # and the work order is prune-protected once a draft exists. None -> unlinked (still generates).
-    matched_wo = _match_content_wo(business_id, topic, prompts[0] if prompts else topic)
     made, errors = [], []
     # Long-form pieces are generated directly; social posts are ATOMIZED from the primary long-form
     # piece (social_publishing isn't a generatable content capability -- social derives from a page).
     long_types = [t for t in types if t != "social_post"]
     want_social = "social_post" in types
+    # Init BEFORE the loop: if long_types is empty (e.g. content_types == ['social_post']) the loop never
+    # runs, so referencing matched_wo in the keyword loop below would raise UnboundLocalError -- crashing
+    # the job and orphaning this batch at status='generating' forever (measure_all re-processes it).
+    matched_wo = None
     for ct in long_types:
         frame, _cap = _TYPE_FRAME.get(ct, ("{t}", "content_writing"))
         title = frame.format(t=topic, geo=geo_val or "your area")
-        wo = {"title": title, "capability": "content_writing", "execution": "auto",
+        gap_key = gap.get("gap_key") or _tu.gid("moc", topic)
+        role = pillar_role(ct, long_types)   # shared rule -> plan + batch agree on the hub
+        matched_wo = _match_content_wo(business_id, topic, prompts[0] if prompts else topic,
+                                       gap_key=gap_key, content_type=ct, role=role)
+        wo = {"title": title, "capability": _cap, "execution": "auto",
               "target_query": topic, "content_type": ct, "_db_id": matched_wo,
               "instruction": f"{gap.get('why') or ''} (content type: {ct})".strip(),
               # carry the gap linkage so the draft traces back to the weak answer it fixes
-              "gap_specifics": {"source_query": (prompts[0] if prompts else topic)}}
+              "gap_specifics": {"source_query": (prompts[0] if prompts else topic),
+                                "gap_key": gap_key, "content_type": ct, "role": role}}
         try:
             did = _cg.generate_for_wo(business_id, wo, biz, content_type=ct, batch_id=batch_id)
             if did:
@@ -658,13 +714,19 @@ def generate_batch(business_id: int, gap: dict, content_types: Optional[list[str
     # by a real content cluster, not one page. `keywords` is already sized dynamically by competitiveness
     # (gaps_for_business -> local_spoke_target + _local_spokes), so NO fixed [:3] cap here — that was the
     # batch-vs-plan divergence (batch capped at 3 while the plan built the research-sized program).
+    _kw_gk = gap.get("gap_key") or _tu.gid("moc", topic)
     for kw in (gap.get("keywords") or []):
         if not kw or _norm(kw) == _norm(topic):
             continue
+        # Per-keyword WO lookup: each spoke blog links to ITS OWN cluster work order (was: every spoke
+        # reused matched_wo = the LAST long-type's match -- usually the FAQ -- so only one spoke advanced
+        # plan progress and the real per-keyword cluster WOs never received a draft or prune-protection).
+        matched_wo_kw = _match_content_wo(business_id, topic, kw, gap_key=_kw_gk,
+                                          content_type="blog", role="cluster")
         wo = {"title": f"Blog: {kw}", "capability": "content_writing", "execution": "auto",
-              "target_query": kw, "content_type": "blog", "_db_id": matched_wo,
+              "target_query": kw, "content_type": "blog", "_db_id": matched_wo_kw,
               "instruction": f"Rank for '{kw}' as part of the local content program for '{topic}'.",
-              "gap_specifics": {"source_query": kw}}
+              "gap_specifics": {"source_query": kw, "gap_key": _kw_gk, "content_type": "blog", "role": "cluster"}}
         try:
             did = _cg.generate_for_wo(business_id, wo, biz, content_type="blog", batch_id=batch_id)
             if did:

@@ -88,6 +88,18 @@ def request_json(method: str, url: str, *, headers: dict | None = None,
     follow = not guard_redirects
     attempts_made = 0
     start = time.monotonic()
+    # SSRF: when the caller opts into redirect-guarding it is fetching a semi-trusted / user-supplied URL
+    # (e.g. writing_style._fetch_text). Hop 0 must be validated too -- otherwise a caller can point the
+    # very first request at 169.254.169.254 / an internal host and only the *redirects* are checked.
+    if guard_redirects:
+        try:
+            from . import netguard as _ng
+        except ImportError:  # pragma: no cover
+            import netguard as _ng  # type: ignore
+        try:
+            _ng.assert_url_allowed(url)
+        except _ng.UnsafeURLError as e:
+            return HttpResult(ok=False, error=f"blocked by SSRF guard: {e}", attempts=0)
     for attempt in range(max_retries + 1):
         # With a deadline set, stop once it's spent and bound each attempt's socket
         # timeout by the remaining budget. This whole block is inert when deadline
@@ -185,6 +197,12 @@ def resolve_url(url: str, *, timeout: int = 8, max_hops: int = 5) -> Optional[st
         import netguard as _ng  # type: ignore
     cur = url
     try:
+        # Guard the INITIAL url too (not just the redirect hops below) so an internal/metadata address
+        # supplied as the citation URL is never fetched.
+        try:
+            _ng.assert_url_allowed(cur)
+        except _ng.UnsafeURLError:
+            return None
         for _ in range(max_hops):
             resp = requests.request(
                 "GET", cur, allow_redirects=False, stream=True, timeout=timeout,

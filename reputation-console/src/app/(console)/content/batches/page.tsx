@@ -41,7 +41,7 @@ function ImpactStrip({ impact }: { impact: ContentImpactRow | null }) {
 
 function BatchCard({ batch, businessId }: { batch: ContentBatch; businessId: number | null }) {
   const gen = useGenerateContentBatch(businessId);
-  const published = (batch.pieces || []).filter((p) => p.published_asset_id).length;
+  const published = (batch.pieces || []).filter((p) => p.published || p.published_asset_id).length;
   return (
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-2">

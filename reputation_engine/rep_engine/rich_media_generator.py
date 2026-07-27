@@ -605,11 +605,13 @@ def _persist(
             # lead + title. deep_article/research_brief previously bypassed this entirely, so a
             # long-form piece could bind the brand to the contested token in its most-cited locations.
             _contested = ""
+            _services = ""
             try:
                 with db() as _c2:
-                    _r = _c2.execute("SELECT contested_terms FROM businesses WHERE id=%s",
+                    _r = _c2.execute("SELECT contested_terms, services FROM businesses WHERE id=%s",
                                      (business_id,)).fetchone()
                 _contested = (_r.get("contested_terms") or "") if _r else ""
+                _services = (_r.get("services") or "") if _r else ""
             except Exception:  # noqa: BLE001 -- column may be absent; neutralize is a no-op on clean text
                 _contested = ""
             body = _cg.neutralize_contested(body, _contested)
@@ -637,8 +639,12 @@ def _persist(
         try:
             from . import content_quality as _cq
             _q = f"{business_name} {geo}".strip()   # neutral scoring query (was hardcoded 'financial services')
+            # This tenant's REAL service vocabulary -> business-agnostic "covers the core services" grade
+            # (a plumber is scored on 'burst pipes / water heaters', not a hardcoded finance word list).
+            import re as _re
+            _svc_terms = [t for t in _re.split(r"[^a-z0-9]+", (_services or "").lower()) if len(t) >= 4][:12]
             vg = _cq.video_score(body, target_query=_q, business_name=business_name, geo=geo,
-                                 asset_type=asset_type)
+                                 asset_type=asset_type, service_terms=_svc_terms)
             quality_notes, geo_grade = vg, vg.get("score")
             duration_secs = duration_secs or (vg.get("runtime_secs") or None)
             # Citability layer (no render needed): AI cites a video via its CAPTIONS/transcript, so
@@ -937,17 +943,20 @@ def set_status(business_id: int, draft_id: int, status: str, reviewer: Optional[
     return bool(r)
 
 
-def _grade_body(asset_type: str, body: Optional[str], business_name: str = "", geo: str = "") -> tuple:
+def _grade_body(asset_type: str, body: Optional[str], business_name: str = "", geo: str = "",
+                service_terms: Optional[list[str]] = None) -> tuple:
     """Grade a (possibly edited) rich-media body -> (geo_grade, quality_notes, status). Mirrors the
     grading in _persist so an EDIT re-scores exactly like generation does: video scripts get
-    video_score; other text-like types get geo_score; audio (podcast/report_audio) is unscored; a body
-    that ends mid-sentence is flagged truncated -> needs_fix."""
+    video_score (agnostic, credited on the tenant's own service_terms); other text-like types (incl.
+    podcast/report_audio transcripts, on the spoken GEO profile) get geo_score; a body that ends
+    mid-sentence is flagged truncated -> needs_fix."""
     quality_notes, geo_grade, status = None, None, "pending_review"
     try:
         from . import content_quality as _cq
         if body and asset_type in ("explainer_video", "video_script"):
             vg = _cq.video_score(body, target_query=f"{business_name} {geo}".strip(),
-                                 business_name=business_name, geo=geo, asset_type=asset_type)
+                                 business_name=business_name, geo=geo, asset_type=asset_type,
+                                 service_terms=service_terms)
             quality_notes, geo_grade = vg, vg.get("score")
         elif body and (asset_type not in ("podcast", "report_audio") or len((body or "").split()) >= 120):
         # ALSO score substantial audio TRANSCRIPTS (an LLM two-host podcast script, 600-900 words) with
@@ -979,7 +988,7 @@ def update_draft(business_id: int, draft_id: int, *, body: Optional[str] = None,
     with db() as conn:
         cur = conn.execute("SELECT asset_type, body, transcript FROM rich_media_drafts "
                            "WHERE id=%s AND business_id=%s", (draft_id, business_id)).fetchone()
-        b = conn.execute("SELECT name, geo, contested_terms FROM businesses WHERE id=%s",
+        b = conn.execute("SELECT name, geo, contested_terms, services FROM businesses WHERE id=%s",
                          (business_id,)).fetchone()
     if not cur:
         return None
@@ -999,7 +1008,8 @@ def update_draft(business_id: int, draft_id: int, *, body: Optional[str] = None,
             log.debug("rich_media: edit cleanup skipped: %s", e)
     bn = (b["name"] if b else "") or ""
     geo = (b.get("geo") if b else "") or ""
-    geo_grade, quality_notes, status = _grade_body(asset_type, new_body, bn, geo)
+    _svc_terms = [t for t in re.split(r"[^a-z0-9]+", ((b.get("services") if b else "") or "").lower()) if len(t) >= 4][:12]
+    geo_grade, quality_notes, status = _grade_body(asset_type, new_body, bn, geo, service_terms=_svc_terms)
     comp_pass, comp_flags = None, []
     try:
         comp_pass, comp_flags = _compliance_check(
@@ -1135,7 +1145,7 @@ def render_video_for_draft(business_id: int, draft_id: int, reviewer: Optional[s
                                           business_name=(b or {}).get("name") or "",
                                           geo=(b or {}).get("geo") or "",
                                           callback_url=(f"{cb_base}/webhooks/heygen" if cb_base else None),
-                                          callback_id=f"{business_id}:{draft_id}")
+                                          callback_id=_hg.signed_callback_id(business_id, draft_id))
         if not started.get("ok"):
             return started
         with db() as conn:

@@ -20,9 +20,11 @@ from typing import Optional
 
 try:
     from . import http as _http
+    from . import cost as _cost
     from .db import db
 except ImportError:  # pragma: no cover
     import http as _http  # type: ignore
+    import cost as _cost  # type: ignore
     from db import db  # type: ignore
 
 log = logging.getLogger("serper")
@@ -79,6 +81,12 @@ def cached_post(endpoint: str, body: dict, *, timeout: int = 20, max_retries: in
     hit = _get_cached(ck)
     if hit is not None:
         return hit
+    if business_id is not None:
+        projected, _label = _cost.ext_estimate("search", 1)
+        if _cost.would_exceed(business_id, projected):
+            log.warning("serper %s skipped for business %s: projected call would exceed budget",
+                        endpoint, business_id)
+            return None
     res = _http.request_json("POST", f"{SERPER_BASE}/{endpoint}",
                              headers={"X-API-KEY": key_env, "Content-Type": "application/json"},
                              json=body, timeout=timeout, max_retries=max_retries)
@@ -86,7 +94,6 @@ def cached_post(endpoint: str, body: dict, *, timeout: int = 20, max_retries: in
         return None
     _store(ck, endpoint, res.data)
     try:  # cost tracking is best-effort; must never break a search
-        from . import cost as _cost
         _cost.record_cost(business_id, run_id, "search", "serper", endpoint,
                           units=1, detail={"endpoint": endpoint})
     except Exception:  # noqa: BLE001

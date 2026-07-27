@@ -91,6 +91,7 @@ def _before_after(conn, business_id: int, limit: int = 4) -> list:
         return conn.execute(
             "SELECT engine, answer_text, goal_alignment, mentions_contested FROM answers "
             "WHERE run_id=%s AND prompt=%s AND engine=%s AND answer_text <> '' "
+            "AND NOT COALESCE(entity_confusion,false) "
             "ORDER BY goal_alignment DESC NULLS LAST LIMIT 1", (run_id, prompt, engine),
         ).fetchone()
 
@@ -104,6 +105,7 @@ def _before_after(conn, business_id: int, limit: int = 4) -> list:
             "SELECT a1.engine FROM answers a0 JOIN answers a1 USING (engine) "
             "WHERE a0.run_id=%s AND a1.run_id=%s AND a0.prompt=%s AND a1.prompt=%s "
             "AND a0.answer_text <> '' AND a1.answer_text <> '' "
+            "AND NOT COALESCE(a0.entity_confusion,false) AND NOT COALESCE(a1.entity_confusion,false) "
             "ORDER BY a1.goal_alignment DESC NULLS LAST LIMIT 1",
             (first, last, prompt, prompt),
         ).fetchone()
