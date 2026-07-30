@@ -47,17 +47,53 @@ def _headers(json: bool = True) -> dict:
 
 
 def create_profile(name: str, description: str = "") -> dict:
-    """POST /profiles -> {ok, profile_id, raw}. The container for a client's social accounts."""
+    """POST /profiles -> {ok, profile_id, raw}. The container for a client's social accounts.
+
+    IDEMPOTENT: Zernio rejects a duplicate name with 409 'profile_name_conflict' and returns the
+    existing profile's id. That happens whenever a profile was created on Zernio but our stored
+    connection was lost/revoked -- so ADOPT the existing profile instead of failing, otherwise
+    'Set up social' is permanently stuck (create keeps 409-ing, connect says 'set up first')."""
     if not configured():
         return {"ok": False, "error": "ZERNIA_API_KEY not set"}
     res = _http.request_json("POST", f"{base()}/profiles", headers=_headers(),
                              json={"name": name, "description": description},
                              timeout=20, max_retries=2, guard_redirects=True)
+    if getattr(res, "status", None) == 409 and (res.text or ""):
+        try:
+            import json as _json
+            body = _json.loads(res.text)
+            existing = (((body.get("details") or {}).get("existingProfileId"))
+                        or body.get("existingProfileId"))
+            if existing:
+                return {"ok": True, "profile_id": str(existing), "name": name, "adopted": True}
+        except Exception:  # noqa: BLE001 -- fall through to the generic error below
+            pass
+        # 409 without a parseable existingProfileId -> reuse the one we can find by name.
+        found = _find_profile_by_name(name)
+        if found:
+            return {"ok": True, "profile_id": found, "name": name, "adopted": True}
     if res.failed or not isinstance(res.data, dict):
         return {"ok": False, "error": res.error or "create profile failed"}
     prof = res.data.get("profile") or res.data
     pid = prof.get("_id") or prof.get("id") or res.data.get("profileId")
     return {"ok": bool(pid), "profile_id": pid, "name": prof.get("name") or name}
+
+
+def _find_profile_by_name(name: str) -> Optional[str]:
+    """List Zernio profiles and return the id of the one matching `name` (case-insensitive), or None.
+    Fallback for a 409 conflict whose body didn't carry existingProfileId."""
+    if not configured():
+        return None
+    res = _http.request_json("GET", f"{base()}/profiles", headers=_headers(json=False),
+                             timeout=15, max_retries=1, guard_redirects=True)
+    if res.failed or not isinstance(res.data, dict):
+        return None
+    profs = res.data.get("profiles") or res.data.get("data") or []
+    want = (name or "").strip().lower()
+    for p in profs if isinstance(profs, list) else []:
+        if str(p.get("name", "")).strip().lower() == want:
+            return str(p.get("_id") or p.get("id") or "")
+    return None
 
 
 def connect_url(platform: str, profile_id: str) -> dict:
