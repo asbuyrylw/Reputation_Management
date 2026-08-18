@@ -106,6 +106,18 @@ def _maybe_agentic_steps(rs, bid: int) -> None:
             return a.plan(bid)
         rs.step("production_briefs", lambda: _safe_agentic("production_briefs", _run),
                 "CYCLE video/social production briefs (off-platform specs)")
+    if _agent_enabled("AGENT_RICH_MEDIA_IN_CYCLE"):
+        def _run():
+            from . import rich_media_generator as a
+            from .config import settings
+            s = settings()
+            types = (
+                [t.strip() for t in s.rich_media_types.split(",") if t.strip()]
+                if s.rich_media_types else None
+            )
+            return a.generate(bid, types)
+        rs.step("rich_media", lambda: _safe_agentic("rich_media", _run),
+                "CYCLE rich-media drafts (podcast, slides, infographic, articles via NotebookLM)")
 
 
 

@@ -57,14 +57,39 @@ MAX_REVISIONS = int(os.getenv("CONTENT_MAX_REVISIONS", "2"))                # PH
 
 # Capabilities that this module knows how to generate (others stay manual).
 GENERATABLE = {
-    "content_writing": "article",
-    "schema_markup": "schema",
+    "content_writing":  "article",
+    "schema_markup":    "schema",
     "review_generation": "review_request",
+    # Rich-media capabilities — routed to rich_media_generator (see _RICH_MEDIA_CAP_MAP).
+    # Listed here so work-order capability matching doesn't silently skip them.
+    "deep_content":     "deep_article",
+    "podcast_creation": "podcast",
+    "slide_deck":       "slide_deck",
+    "infographic":      "infographic",
+    "explainer_video":  "explainer_video",
+    "research_brief":   "research_brief",
+}
+
+# Maps work-order capability -> rich_media_generator asset_type list.
+# Any capability present here is routed to rich_media_generator instead of the
+# LLM-only path below.  deep_content requests all three long-form text types at once.
+_RICH_MEDIA_CAP_MAP: dict[str, list[str]] = {
+    "podcast_creation": ["podcast"],
+    "slide_deck":       ["slide_deck"],
+    "infographic":      ["infographic"],
+    "explainer_video":  ["explainer_video"],
+    "research_brief":   ["research_brief"],
+    "deep_content":     ["deep_article", "blog_series", "newsletter"],
 }
 # asset_type inferred from work-order title keywords as a fallback
 TITLE_HINTS = [
     ("faq", "faq"), ("schema", "schema"), ("bio", "bio"),
     ("article", "article"), ("post", "gbp_post"), ("review", "review_request"),
+    # Rich-media types -- surfaced in Module 6 list view; actual generation is
+    # in rich_media_generator.py (NotebookLM path) or _gen_deep_content() below.
+    ("blog", "blog_series"), ("newsletter", "newsletter"),
+    ("podcast", "podcast"), ("slide", "slide_deck"), ("infographic", "infographic"),
+    ("explainer", "explainer_video"), ("brief", "research_brief"),
 ]
 
 
@@ -143,6 +168,19 @@ def _gen_prompt(biz: dict, wo: dict, asset_type: str) -> str:
         "gbp_post": "Write a short Google Business Profile post (80-150 words), friendly and local.",
         "review_request": "Write a short, warm review-request message (SMS + email versions) "
                           "asking a happy client to leave a Google review, with a placeholder for the link.",
+        # Rich-media types generated via in-house LLM path (NotebookLM path is
+        # in rich_media_generator.py and produces richer multi-source output).
+        "deep_article": "Write a long-form thought-leadership article (1 500-2 500 words) "
+                        "in markdown with a clear H1, H2 subheadings, and a concrete "
+                        "conclusion. Use [INSERT: ...] placeholders for unknown facts. "
+                        "No performance promises, guaranteed-return language, or "
+                        "unverifiable superlatives.",
+        "blog_series": "Generate outlines for THREE related blog posts. Each outline: "
+                       "title, target query, 5-7 heading structure, key points, recommended "
+                       "word count, CTA. Format in markdown. No fabricated facts.",
+        "newsletter": "Write a newsletter brief (400-600 words) covering reputation "
+                      "progress highlights. Include 3 subject-line options, preview text, "
+                      "3-4 content sections, key takeaway, and CTA. Tone: warm, credible.",
     }
     spec = specs.get(asset_type, "Write the requested asset in markdown.")
     return (
@@ -272,6 +310,26 @@ def _compliance(body: str) -> dict:
 # Orchestrated generation for a work order
 # ----------------------------------------------------------------------------
 def generate_for_wo(business_id: int, wo: dict, biz: dict) -> Optional[int]:
+    cap = (wo.get("capability") or "").lower()
+
+    # Rich-media capabilities bypass the single-source LLM path and go directly to
+    # rich_media_generator, which assembles multi-source corpus context (audit answers,
+    # gap model, competitor data) and uses the NotebookLM API or its LLM fallback.
+    if cap in _RICH_MEDIA_CAP_MAP:
+        topic = wo.get("title", "")
+        if _already_covered(business_id, topic):
+            log.info("WO '%s' already covered (pgvector); skipping.", topic)
+            return None
+        try:
+            from . import rich_media_generator as _rmg
+        except ImportError:  # pragma: no cover
+            import rich_media_generator as _rmg  # type: ignore
+        rm_types = _RICH_MEDIA_CAP_MAP[cap]
+        ids = _rmg.generate(business_id, rm_types)
+        log.info("WO %s (cap=%s) → rich_media_generator(%s): created %s",
+                 wo.get("wo_code") or wo.get("wo_id"), cap, rm_types, ids)
+        return ids[0] if ids else None
+
     asset_type = _asset_type_for(wo)
     if not asset_type:
         log.info("WO %s not a generatable content type; skipping.", wo.get("wo_code") or wo.get("wo_id"))
@@ -494,7 +552,7 @@ def update_draft(draft_id: int, *, title: Optional[str] = None, body: Optional[s
             sets.append("body=%s"); args.append(body)
         sets += ["quality_score=NULL", "compliance_pass=%s", "compliance_flags=%s", "updated_at=now()"]
         args += [comp_pass, json.dumps(comp_flags)]
-        conn.execute(f"UPDATE content_drafts SET {', '.join(sets)} WHERE id=%s",
+        conn.execute(f"UPDATE content_drafts SET {', '.join(sets)} WHERE id=%s",  # nosec B608
                      tuple(args) + (draft_id,))
         conn.commit()
     log.info("Draft %d edited (re-screened: compliance_pass=%s)", draft_id, comp_pass)
